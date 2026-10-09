@@ -331,7 +331,7 @@ struct AnnualLeaveBalanceHero: View {
     let summary: AnnualLeaveUsageSummary
     var pendingCaption: String = "Yours awaiting approval"
 
-    private var remainingIsOver: Bool { summary.remainingDays < -0.001 }
+    private var remainingIsOver: Bool { summary.hasAllowance && (summary.remainingDays ?? 0) < -0.001 }
 
     private var ringFraction: Double {
         guard summary.entitlementDays > 0 else { return 0 }
@@ -348,10 +348,10 @@ struct AnnualLeaveBalanceHero: View {
                 .clipShape(Capsule())
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(AnnualLeavePolicy.formatAllowanceDays(summary.remainingDays))
+                    Text(AnnualLeavePolicy.formatAllowanceDays(summary.hasAllowance ? (summary.remainingDays ?? 0) : summary.usedThisYear))
                         .font(.largeTitle.weight(.heavy))
                         .foregroundStyle(remainingIsOver ? AnnualLeavePalette.redTint : .white)
-                    Text(remainingIsOver ? "day over" : "days left")
+                    Text(summary.hasAllowance ? (remainingIsOver ? "day over" : "days left") : "Days taken this leave year")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.9))
                 }
@@ -374,9 +374,11 @@ struct AnnualLeaveBalanceHero: View {
             HStack(spacing: 8) {
                 tile("Taken", summary.takenDays)
                 tile(pendingCaption, summary.pendingDays)
-                tile("Allowance", summary.entitlementDays)
+                if summary.hasAllowance {
+                    tile("Allowance", summary.entitlementDays)
+                }
             }
-            if summary.carryOverDays > 0.001 {
+            if summary.hasAllowance && summary.carryOverDays > 0.001 {
                 Text("Includes \(AnnualLeavePolicy.formatAllowanceDays(summary.carryOverDays)) carried forward")
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.9))

@@ -53,6 +53,8 @@ struct AddUserView: View {
     @State private var annualLeaveStartMonth = 1
     @State private var annualLeaveEndMonth = 12
     @State private var annualLeaveCarriesOver = false
+    @State private var annualLeaveEnabledInvite = true
+    @State private var remainingLeaveText = "25"
     @State private var vatNumber = ""
     @State private var utrNumber = ""
     @State private var isCreating = false
@@ -612,6 +614,8 @@ struct AddUserView: View {
         annualLeaveStartMonth = defaults.startMonth
         annualLeaveEndMonth = defaults.endMonth
         annualLeaveCarriesOver = defaults.carriesOver
+        annualLeaveEnabledInvite = true
+        remainingLeaveText = annualLeaveDaysText
     }
 
     private func parseAnnualLeaveDaysForInvite() -> Double {
@@ -620,22 +624,70 @@ struct AddUserView: View {
         return AnnualLeavePolicy.clampDaysPerYear(d)
     }
 
+    private var inviteRemainingOverride: CanonicalBusinessEngine.CanonicalRemainingOverride? {
+        guard annualLeaveEnabledInvite else { return nil }
+        let days = parseAnnualLeaveDaysForInvite()
+        let t = remainingLeaveText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let raw = Double(t), raw >= 0 else { return nil }
+        let remaining = CanonicalBusinessEngine.snapLeaveDays(raw)
+        guard abs(remaining - days) > 0.001 else { return nil }
+        let yearKey = CanonicalBusinessEngine.leaveYearBounds(
+            startMonth: annualLeaveStartMonth,
+            endMonth: annualLeaveEndMonth,
+            onDayKey: CanonicalBusinessEngine.dayKey(for: Date())
+        )?.yearKey ?? ""
+        guard !yearKey.isEmpty else { return nil }
+        return CanonicalBusinessEngine.applyRemainingOverride(
+            remaining: remaining,
+            taken: 0,
+            pending: 0,
+            yearKey: yearKey
+        )
+    }
+
+    private var annualLeaveAllowanceCopy: CanonicalBusinessEngine.CanonicalAnnualLeaveAllowanceCopy {
+        CanonicalBusinessEngine.annualLeaveAllowanceCopy() ?? CanonicalBusinessEngine.CanonicalAnnualLeaveAllowanceCopy(
+            toggleTitle: "Annual leave allowance",
+            toggleDescription: "Turn off annual leave allowances using this toggle. This is generally used for self-employed staff who do not get paid annual leave, therefore they do not have a set number of days per year.",
+            toggleNote: "When off, this person can still book and see annual leave. They see days taken in the company leave year, not a remaining balance or days per year.",
+            remainingTitle: "Manually adjust this user's remaining annual leave allowance for this year",
+            remainingNote: "This number will reset to the Days per year figure at the end of your company year."
+        )
+    }
+
     private var annualLeaveInvitationSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Annual leave")
+            Text(annualLeaveAllowanceCopy.toggleTitle)
                 .font(.headline)
-            Text("Set how many days they receive each leave year, which months the year runs, and whether unused days carry over.")
+            Toggle(annualLeaveAllowanceCopy.toggleTitle, isOn: $annualLeaveEnabledInvite)
+            Text(annualLeaveAllowanceCopy.toggleDescription)
                 .font(.caption)
                 .foregroundColor(.secondary)
-            permissionInviteCard {
-                AnnualLeaveEntitlementEditor(
-                    daysText: $annualLeaveDaysText,
-                    startMonth: $annualLeaveStartMonth,
-                    endMonth: $annualLeaveEndMonth,
-                    carriesOver: $annualLeaveCarriesOver,
-                    isEnabled: true
-                )
-                .padding(12)
+            Text(annualLeaveAllowanceCopy.toggleNote)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if annualLeaveEnabledInvite {
+                permissionInviteCard {
+                    AnnualLeaveEntitlementEditor(
+                        daysText: $annualLeaveDaysText,
+                        startMonth: $annualLeaveStartMonth,
+                        endMonth: $annualLeaveEndMonth,
+                        carriesOver: $annualLeaveCarriesOver,
+                        isEnabled: true
+                    )
+                    .padding(12)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(annualLeaveAllowanceCopy.remainingTitle)
+                            .font(.subheadline.weight(.semibold))
+                        TextField("Remaining", text: $remainingLeaveText)
+                            .keyboardType(.decimalPad)
+                            .textFieldStyle(.roundedBorder)
+                        Text(annualLeaveAllowanceCopy.remainingNote)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(12)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -815,9 +867,7 @@ struct AddUserView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if invitedAccountType == .manager || invitedAccountType == .operative {
-                    annualLeaveInvitationSection
-                }
+                annualLeaveInvitationSection
             }
         }
         .onAppear {
@@ -1109,6 +1159,14 @@ struct AddUserView: View {
             return
         }
         
+        if annualLeaveEnabledInvite {
+            let t = remainingLeaveText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let d = Double(t), d >= 0 else {
+                errorMessage = "Enter the remaining allowance in steps of 0.5."
+                return
+            }
+        }
+
         guard !isCreating else { return }
         
         isCreating = true
@@ -1123,7 +1181,7 @@ struct AddUserView: View {
                 return t.isEmpty ? nil : t
             }()
             let managerIds = hasNoLineManager ? [] : Array(selectedLineManagerUserIds)
-            let passAnnualLeaveInvite = mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager
+            let passAnnualLeaveInvite = true
             let success = await userStore.inviteUser(
                 firstName: firstName,
                 surname: surname,
@@ -1142,6 +1200,9 @@ struct AddUserView: View {
                 annualLeaveYearStartMonth: passAnnualLeaveInvite ? annualLeaveStartMonth : nil,
                 annualLeaveYearEndMonth: passAnnualLeaveInvite ? annualLeaveEndMonth : nil,
                 annualLeaveCarriesOver: passAnnualLeaveInvite ? annualLeaveCarriesOver : nil,
+                annualLeaveEnabled: passAnnualLeaveInvite ? annualLeaveEnabledInvite : nil,
+                annualLeaveYearAllowance: passAnnualLeaveInvite ? inviteRemainingOverride?.annualLeaveYearAllowance : nil,
+                annualLeaveYearAllowanceKey: passAnnualLeaveInvite ? inviteRemainingOverride?.annualLeaveYearAllowanceKey : nil,
                 timesheetsEnabled: AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType),
                 vatNumber: vatNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : vatNumber.trimmingCharacters(in: .whitespacesAndNewlines),
                 utrNumber: utrNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : utrNumber.trimmingCharacters(in: .whitespacesAndNewlines)

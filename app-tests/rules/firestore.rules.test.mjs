@@ -373,6 +373,7 @@ const ORG_COLLECTIONS = [
   { id: "holidayBookings", read: "member", write: "member", del: "member", outsider: "holidayBookings", readGroup: "holidayBookings", writeGroup: "holidayBookings", deleteGroup: "holidayBookings" },
   { id: "operativeProfiles", docId: "user-operative", read: "member", write: "operativeOrStaff", del: "staff", outsider: "tenant-hole", readGroup: "staff-read", writeGroup: "staff-write", deleteGroup: "admin-delete" },
   { id: "siteAudits", read: "member", write: "operativeOrStaff", del: "admin", outsider: "tenant-hole", readGroup: "staff-read", writeGroup: "staff-write", deleteGroup: "admin-delete" },
+  { id: "dismissedWarnings", docId: "qual|op-1|q-1|2026-09-01", read: "member", write: "member", del: "admin", outsider: "tenant-hole", readGroup: "staff-read", writeGroup: "staff-write", deleteGroup: "admin-delete" },
   { id: "variations", read: "assignedStaff", write: "assignedStaff", del: "admin", outsider: "variations", readGroup: "variations", writeGroup: "variations", deleteGroup: "variations" },
   { id: "variationTrackers", docId: "project-1", read: "assignedStaff", write: "assignedStaff", del: "admin", outsider: "variations", readGroup: "variations", writeGroup: "variations", deleteGroup: "variations" },
   { id: "operativeDayRateHistory", read: "staff", write: "staff", del: "admin", outsider: "tenant-hole", readGroup: "staff-read", writeGroup: "staff-write", deleteGroup: "admin-delete" },
@@ -435,6 +436,16 @@ function createBody(col, role, org) {
   if (col.id === "holidayBookings") return { ...base, userId: uid, status: "pending" };
   if (col.id === "operativeDayRateHistory") return { ...base, userId: uid, dayRate: 999 };
   if (col.id === "operativeProfiles") return { ...base, userId: uid };
+  if (col.id === "dismissedWarnings") {
+    return {
+      kind: "qualification_expired",
+      dismissKey: "qual|op-1|q-1|2026-09-01",
+      operativeId: "op-1",
+      qualificationId: "q-1",
+      expiryDayKey: "2026-09-01",
+      dismissedByUserId: uid,
+    };
+  }
   return base;
 }
 

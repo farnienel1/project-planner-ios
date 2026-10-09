@@ -21,32 +21,45 @@ struct AnnualLeaveUsageHeroView: View {
             Text(summary.leaveYearLabel)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(HolidayChrome.ink)
-            HStack(alignment: .firstTextBaseline) {
+            if summary.hasAllowance {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Remaining")
+                            .font(.caption2)
+                            .foregroundStyle(HolidayChrome.muted)
+                        Text(Self.formatLeaveDays(summary.remainingDays ?? 0))
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(HolidayChrome.ink)
+                    }
+                    Spacer(minLength: 12)
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text("Allowance")
+                            .font(.caption2)
+                            .foregroundStyle(HolidayChrome.muted)
+                        Text(Self.formatLeaveDays(summary.entitlementDays))
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(HolidayChrome.accent)
+                    }
+                }
+            } else {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Remaining")
+                    Text("Days taken this leave year")
                         .font(.caption2)
                         .foregroundStyle(HolidayChrome.muted)
-                    Text(Self.formatLeaveDays(summary.remainingDays))
+                    Text(Self.formatLeaveDays(summary.usedThisYear))
                         .font(.title2.weight(.bold))
                         .foregroundStyle(HolidayChrome.ink)
-                }
-                Spacer(minLength: 12)
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Allowance")
-                        .font(.caption2)
-                        .foregroundStyle(HolidayChrome.muted)
-                    Text(Self.formatLeaveDays(summary.entitlementDays))
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(HolidayChrome.accent)
                 }
             }
             HStack(spacing: 0) {
                 heroMetric(title: "Taken", value: summary.takenDays, color: HolidayChrome.taken)
                 heroMetric(title: "Pending", value: summary.pendingDays, color: HolidayChrome.pendingMetric)
             }
-            ProgressView(value: usedPortion, total: 1)
-                .tint(HolidayChrome.accent)
-            if summary.carryOverDays > 0.001 {
+            if summary.hasAllowance {
+                ProgressView(value: usedPortion, total: 1)
+                    .tint(HolidayChrome.accent)
+            }
+            if summary.hasAllowance && summary.carryOverDays > 0.001 {
                 Text("Includes \(Self.formatLeaveDays(summary.carryOverDays)) carried forward")
                     .font(.caption2)
                     .foregroundStyle(HolidayChrome.muted)

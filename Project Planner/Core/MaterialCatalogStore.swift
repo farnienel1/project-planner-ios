@@ -40,8 +40,13 @@ final class MaterialCatalogStore: ObservableObject {
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
     @Published private(set) var importProgress: MaterialCatalogueImportProgress?
+    /// Changes whenever `items` changes, so search can reuse the script's record list.
+    @Published private(set) var searchGeneration = 0
 
     private weak var firebaseBackend: FirebaseBackend?
+    private var searchRecords: [CanonicalBusinessEngine.CanonicalMaterialRecord] = []
+    private var searchMemoKey: String?
+    private var searchMemo: [MaterialCatalogItem] = []
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         firebaseBackend = backend
@@ -57,16 +62,16 @@ final class MaterialCatalogStore: ObservableObject {
             let catalog = try await firebaseBackend.loadMaterialCatalogue(organizationId: organizationId)
             let normalized = catalog.map(normalizeCategory)
             if !normalized.isEmpty {
-                items = normalized
+                replaceItems(normalized)
                 return
             }
             // Bootstrap once for orgs with historical material lines but empty catalogue.
             try? await firebaseBackend.backfillMaterialCatalogueFromExistingMaterials(organizationId: organizationId)
             let refreshed = try await firebaseBackend.loadMaterialCatalogue(organizationId: organizationId)
-            items = refreshed.map(normalizeCategory)
+            replaceItems(refreshed.map(normalizeCategory))
         } catch {
             // Fallback: if catalogue read fails or returns nothing, synthesize from existing materials so users can still see items.
-            items = (try? await fallbackItemsFromMaterialLines(firebaseBackend: firebaseBackend, organizationId: organizationId)) ?? []
+            replaceItems((try? await fallbackItemsFromMaterialLines(firebaseBackend: firebaseBackend, organizationId: organizationId)) ?? [])
             if items.isEmpty {
                 errorMessage = error.localizedDescription
             }
@@ -83,6 +88,7 @@ final class MaterialCatalogStore: ObservableObject {
             items.append(item)
             items.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
+        noteCatalogueChanged()
     }
 
     func delete(_ itemId: UUID) async throws {
@@ -90,6 +96,7 @@ final class MaterialCatalogStore: ObservableObject {
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         try await firebaseBackend.deleteMaterialCatalogueItem(itemId, organizationId: organizationId)
         items.removeAll { $0.id == itemId }
+        noteCatalogueChanged()
     }
 
     func importCSV(
@@ -164,17 +171,34 @@ final class MaterialCatalogStore: ObservableObject {
         return result
     }
 
-    func search(query: String, limit: Int = 12) -> [MaterialCatalogItem] {
-        let q = MaterialCatalogDuplicateDetection.normalizeName(query)
-        guard !q.isEmpty else { return [] }
-        return items.filter { item in
-            MaterialCatalogDuplicateDetection.normalizeName(item.name).contains(q)
-                || MaterialCatalogDuplicateDetection.normalizeName(item.brand).contains(q)
-                || MaterialCatalogDuplicateDetection.normalizeCode(item.productCode).contains(q)
-                || MaterialCatalogDuplicateDetection.normalizeName(item.sizeOrLength ?? "").contains(q)
-        }
-        .prefix(limit)
-        .map { $0 }
+    func search(query: String, limit: Int = 0) -> [MaterialCatalogItem] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cap = limit > 0 ? limit : 0
+        let memoKey = "\(searchGeneration)|\(cap)|\(trimmed)"
+        if memoKey == searchMemoKey { return searchMemo }
+        let hits = CanonicalBusinessEngine.rankMaterialRecords(
+            query: trimmed,
+            records: searchRecords,
+            limit: cap > 0 ? cap : nil,
+            cacheIdentity: searchGeneration
+        ) ?? []
+        let ranked = hits.compactMap { items.indices.contains($0.index) ? items[$0.index] : nil }
+        searchMemoKey = memoKey
+        searchMemo = ranked
+        return ranked
+    }
+
+    private func replaceItems(_ next: [MaterialCatalogItem]) {
+        items = next
+        noteCatalogueChanged()
+    }
+
+    private func noteCatalogueChanged() {
+        searchGeneration = CanonicalBusinessEngine.makeMaterialSearchCacheIdentity()
+        searchRecords = items.map(\.canonicalSearchRecord)
+        searchMemoKey = nil
+        searchMemo = []
+        CanonicalBusinessEngine.installMaterialSearchRecords(searchRecords, cacheIdentity: searchGeneration)
     }
 
     func duplicateKey(name: String, code: String?) -> String {
@@ -321,7 +345,7 @@ final class MaterialCatalogStore: ObservableObject {
         for item in plan.itemsToSave {
             map[item.id] = normalizeCategory(item)
         }
-        items = map.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        replaceItems(map.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
     }
 
     private func item(

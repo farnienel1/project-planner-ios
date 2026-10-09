@@ -1184,20 +1184,14 @@ struct BookLabourFlowView: View {
         guard let ds = timeline.standardWindowStartMinutes,
               let de = timeline.standardWindowEndMinutes,
               de > ds else { return }
-        let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy)
         let breakRemoved = timeline.allHoursAtMultiplier ? true : currentBreakRemoved
         let next: OperativeRectifyDraft
         switch slot {
-        case .fullDay:
-            next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved)
-        case .morning:
-            let start = windows?.morningStart ?? ds
-            let end = windows?.morningEnd ?? (ds + ((de - ds) / 2))
-            next = .init(startMinutes: start, endMinutes: end, breakRemoved: breakRemoved)
-        case .afternoon:
-            let start = windows?.afternoonStart ?? (ds + ((de - ds) / 2))
-            let end = windows?.afternoonEnd ?? de
-            next = .init(startMinutes: start, endMinutes: end, breakRemoved: breakRemoved)
+        case .morning, .afternoon:
+            // AM and PM are the canonical halves of the weekday standard day, on every day.
+            guard let windows = CanonicalBusinessEngine.halfDayWindows(CanonicalStandardDayInput(policy: policy)) else { return }
+            let half = slot == .morning ? windows.am : windows.pm
+            next = .init(startMinutes: half.start, endMinutes: half.end, breakRemoved: breakRemoved)
         default:
             next = .init(startMinutes: ds, endMinutes: de, breakRemoved: breakRemoved)
         }

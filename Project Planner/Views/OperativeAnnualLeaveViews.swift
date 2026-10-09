@@ -797,7 +797,13 @@ struct OperativeAnnualLeaveCalendarView: View {
             endMonth: user?.annualLeaveYearEndMonth ?? defaults.endMonth,
             carriesOver: user?.annualLeaveCarriesOver ?? defaults.carriesOver,
             referenceDate: Date(),
-            calendar: calendar
+            calendar: calendar,
+            annualLeaveEnabled: user?.annualLeaveEnabled ?? true,
+            orgDaysPerYear: defaults.daysPerYear,
+            orgStartMonth: defaults.startMonth,
+            orgEndMonth: defaults.endMonth,
+            yearAllowance: user?.annualLeaveYearAllowance,
+            yearAllowanceKey: user?.annualLeaveYearAllowanceKey
         )
     }
 

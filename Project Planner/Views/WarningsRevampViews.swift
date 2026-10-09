@@ -11,6 +11,7 @@ enum WarningsFilterChip: String, CaseIterable, Identifiable {
     case all = "All"
     case clashes = "Clashes"
     case unbooked = "Unbooked"
+    case annualLeave = "Annual leave"
     case materials = "Materials"
     case qualifications = "Qualifications"
 
@@ -55,7 +56,7 @@ struct WarningsHeroCard: View {
             }
             .padding(.bottom, 12)
 
-            Text("High: operative booking clashes & unbooked labour (approve clashes for the weekly report) · Medium: manager/admin overlaps · Low: materials and qualifications")
+            Text("High: operative booking clashes, unbooked labour, and bookings during annual leave (approve clashes for the weekly report) · Medium: manager/admin overlaps and a half day of leave that is not covered · Low: materials and qualifications")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.white.opacity(0.55))
                 .lineSpacing(2)

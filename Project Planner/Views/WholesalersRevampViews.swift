@@ -807,13 +807,20 @@ struct WholesalerSendHistoryView: View {
                 return calendar.isDate(record.historyDay(calendar: calendar), inSameDayAs: calendar.startOfDay(for: dateFilter))
             }
             .filter { record in
-                let q = materialSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let q = materialSearch.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !q.isEmpty else { return true }
-                return record.lines.contains { line in
-                    line.name.localizedCaseInsensitiveContains(q)
-                        || (line.brand?.localizedCaseInsensitiveContains(q) ?? false)
-                        || (line.productCode?.localizedCaseInsensitiveContains(q) ?? false)
-                }
+                let hits = CanonicalBusinessEngine.rankMaterialRecords(
+                    query: q,
+                    records: record.lines.map { line in
+                        CanonicalBusinessEngine.CanonicalMaterialRecord(
+                            name: line.name,
+                            brand: line.brand ?? "",
+                            productCode: line.productCode ?? "",
+                            length: line.lengthDisplay ?? ""
+                        )
+                    }
+                )
+                return !(hits ?? []).isEmpty
             }
             .sorted { $0.sentAt > $1.sentAt }
     }

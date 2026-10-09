@@ -564,6 +564,13 @@ service cloud.firestore {
         allow delete: if isOrganizationAdmin(organizationId);
       }
 
+      // Expired qualification warnings the organisation has chosen to hide.
+      // Members may read and record a dismissal. Only an org admin may delete one.
+      match /dismissedWarnings/{dismissKey} {
+        allow read, create, update: if canAccessOrganization(organizationId);
+        allow delete: if isOrganizationAdmin(organizationId);
+      }
+
       match /dashboardLayouts/{layoutUserId} {
         allow read: if canAccessOrganization(organizationId);
         allow create, update, delete: if canAccessOrganization(organizationId) &&

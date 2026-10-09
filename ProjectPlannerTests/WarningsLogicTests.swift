@@ -81,6 +81,47 @@ final class WarningsLogicTests: XCTestCase {
         XCTAssertFalse(warnings.contains { $0.message.contains("Inactive") })
     }
 
+    /// A dismissed key hides an already-expired qualification and leaves an upcoming one on the list.
+    func testDismissedExpiredQualificationIsHidden() throws {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        let today = calendar.startOfDay(for: Date())
+        let yesterday = calendar.date(byAdding: .day, value: -3, to: today)!
+        let soon = calendar.date(byAdding: .day, value: 10, to: today)!
+        let activeId = UUID()
+        let expiredQualification = UUID()
+        let soonQualification = UUID()
+
+        func dayKey(_ date: Date) -> String {
+            let parts = calendar.dateComponents([.year, .month, .day], from: date)
+            return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+        }
+        let expiredKey = try XCTUnwrap(CanonicalBusinessEngine.qualificationDismissKey(
+            operativeId: activeId.uuidString,
+            qualificationId: expiredQualification.uuidString,
+            expiryDayKey: dayKey(yesterday)
+        ))
+        let soonKey = try XCTUnwrap(CanonicalBusinessEngine.qualificationDismissKey(
+            operativeId: activeId.uuidString,
+            qualificationId: soonQualification.uuidString,
+            expiryDayKey: dayKey(soon)
+        ))
+
+        var snapshot = qualificationSnapshot(
+            operativeId: activeId,
+            expiries: [
+                (expiredQualification, "IPAF", yesterday),
+                (soonQualification, "CSCS", soon),
+            ]
+        )
+        snapshot.dismissedQualificationKeys = [expiredKey, soonKey]
+        let warnings = WarningsComputation.generate(snapshot)
+        XCTAssertFalse(warnings.contains { $0.message.contains("IPAF") })
+        let upcoming = try XCTUnwrap(warnings.first { $0.message.contains("CSCS") })
+        XCTAssertEqual(upcoming.title, "Qualification expiry")
+        XCTAssertEqual(upcoming.qualificationExpiry?.canDismiss, false)
+        XCTAssertEqual(upcoming.qualificationExpiry?.dismissKey, soonKey)
+    }
+
     func testDismissedWarningsAreNotActive() {
         let suite = "ProjectPlannerTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -97,5 +138,172 @@ final class WarningsLogicTests: XCTestCase {
         XCTAssertTrue(store.shouldShowActive("qual-soon"))
         let visible = ["qual-soon", "qual-expired", "clash-1"].filter { store.shouldShowActive($0) }
         XCTAssertEqual(visible, ["qual-soon"])
+    }
+
+    /// Web fixture: PM leave plus a 07:30–09:30 custom booking is one leave_cover row
+    /// (09:30–12:00 still open, 2.5 hours). An AM booking against that PM leave is silent.
+    func testLeaveCoverageMatchesTheSharedFixture() throws {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        let monday = try XCTUnwrap(CanonicalBusinessEngine.date(fromDayKey: "2026-10-05", calendar: calendar))
+        let operativeId = UUID()
+
+        let covered = warnings(
+            on: monday,
+            operativeId: operativeId,
+            bookingSlot: "CUSTOM_HOURS",
+            workStart: "07:30",
+            workEnd: "09:30"
+        ).filter { $0.type == .annualLeave }
+        XCTAssertEqual(covered.count, 1)
+        let row = try XCTUnwrap(covered.first)
+        XCTAssertEqual(row.title, "Half-day leave not covered")
+        XCTAssertEqual(row.severity, .medium)
+        XCTAssertEqual(row.annualLeave?.kind, "leave_cover")
+        XCTAssertEqual(row.annualLeave?.missingRanges, ["09:30–12:00"])
+        XCTAssertEqual(row.annualLeave?.missingHours ?? -1, 2.5, accuracy: 0.001)
+        XCTAssertTrue(row.message.contains("Ada Lovelace"))
+
+        let silent = warnings(
+            on: monday,
+            operativeId: operativeId,
+            bookingSlot: "AM",
+            workStart: nil,
+            workEnd: nil
+        ).filter { $0.type == .annualLeave }
+        XCTAssertEqual(silent, [])
+    }
+
+    private func qualificationSnapshot(
+        operativeId: UUID,
+        expiries: [(UUID, String, Date)]
+    ) -> WarningsComputationSnapshot {
+        let today = CanonicalBusinessEngine.businessCalendar.startOfDay(for: Date())
+        return WarningsComputationSnapshot(
+            operatives: [
+                .init(
+                    id: operativeId,
+                    name: "Ada Lovelace",
+                    emailLowercased: "ada@example.com",
+                    isActive: true,
+                    qualificationExpiries: expiries.map { expiry in
+                        .init(qualificationId: expiry.0, qualificationName: expiry.1, expiryDate: expiry.2)
+                    }
+                )
+            ],
+            bookings: [],
+            projects: [],
+            users: [],
+            managerSiteBookings: [],
+            holidayBookings: [],
+            payrollTimePolicy: .init(
+                standardPaidHours: 8,
+                standardDayStart: "07:30",
+                standardDayEnd: "16:00",
+                breakWindowStart: "12:00",
+                breakWindowEnd: "12:30",
+                standardUnpaidBreakHours: 0.5,
+                saturdayCountsAsHours: 8,
+                sundayCountsAsHours: 8
+            ),
+            warningDetection: .init(
+                detectClashes: false,
+                includeWeekendsForUnbookedLabour: false,
+                excludedUserIdsFromUnbookedWarnings: []
+            ),
+            coverageStart: today,
+            coverageEnd: today,
+            materialOrderCutOffEnabled: false,
+            materialCutOffOnSaturday: false,
+            materialCutOffOnSunday: false,
+            projectsWithTomorrowBookingIds: [],
+            materialItemsForTomorrow: []
+        )
+    }
+
+    private func warnings(
+        on day: Date,
+        operativeId: UUID,
+        bookingSlot: String,
+        workStart: String?,
+        workEnd: String?
+    ) -> [Warning] {
+        let snapshot = WarningsComputationSnapshot(
+            operatives: [
+                .init(
+                    id: operativeId,
+                    name: "Ada Lovelace",
+                    emailLowercased: "ada@example.com",
+                    isActive: true,
+                    qualificationExpiries: []
+                )
+            ],
+            bookings: [
+                .init(
+                    id: UUID(),
+                    operativeId: operativeId,
+                    projectId: UUID(),
+                    date: day,
+                    dayStart: day,
+                    isActiveStatus: true,
+                    paidHours: 2,
+                    scheduleLabel: "100 · Site",
+                    clashInterval: nil,
+                    timeSlot: bookingSlot,
+                    workStart: workStart,
+                    workEnd: workEnd
+                )
+            ],
+            projects: [],
+            users: [
+                .init(
+                    id: "u1",
+                    emailLowercased: "ada@example.com",
+                    displayName: "Ada Lovelace",
+                    isActive: true,
+                    passwordSet: true,
+                    createdAt: day,
+                    isOperativeMode: true,
+                    isManager: false,
+                    hasAdminAccess: false,
+                    isSuperAdmin: false,
+                    isAdminRole: false
+                )
+            ],
+            managerSiteBookings: [],
+            holidayBookings: [
+                .init(
+                    id: "leave-1",
+                    userId: "u1",
+                    operativeId: operativeId,
+                    startDay: day,
+                    endDay: day,
+                    isApproved: true,
+                    timeSlot: "PM"
+                )
+            ],
+            payrollTimePolicy: .init(
+                standardPaidHours: 8,
+                standardDayStart: "07:30",
+                standardDayEnd: "16:00",
+                breakWindowStart: "12:00",
+                breakWindowEnd: "12:30",
+                standardUnpaidBreakHours: 0.5,
+                saturdayCountsAsHours: 8,
+                sundayCountsAsHours: 8
+            ),
+            warningDetection: .init(
+                detectClashes: false,
+                includeWeekendsForUnbookedLabour: false,
+                excludedUserIdsFromUnbookedWarnings: []
+            ),
+            coverageStart: day,
+            coverageEnd: day,
+            materialOrderCutOffEnabled: false,
+            materialCutOffOnSaturday: false,
+            materialCutOffOnSunday: false,
+            projectsWithTomorrowBookingIds: [],
+            materialItemsForTomorrow: []
+        )
+        return WarningsComputation.generate(snapshot)
     }
 }

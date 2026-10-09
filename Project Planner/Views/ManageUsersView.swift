@@ -111,13 +111,15 @@ struct ManageUsersView: View {
                     .environmentObject(userStore)
             }
             .sheet(item: $selectedUser) { user in
-                OperativeProfileView(user: user)
-                    .environmentObject(userStore)
-                    .environmentObject(bookingStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(holidayStore)
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(notificationService)
+                NavigationStack {
+                    EditUserView(user: user)
+                }
+                .environmentObject(userStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(holidayStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
             }
             .alert("Delete User", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {
@@ -1254,26 +1256,43 @@ private struct EditUserDialogModifier: ViewModifier {
     }
 
     private var employmentTypeEffectiveDateSheet: some View {
-        NavigationStack {
+        let london = CanonicalBusinessEngine.businessCalendar
+        let today = london.startOfDay(for: Date())
+        let tomorrow = london.date(byAdding: .day, value: 1, to: today) ?? today
+        return NavigationStack {
             Form {
-                Section("Employment type starts from") {
-                    DatePicker(
-                        employmentTypeDraft == .selfEmployed
-                            ? "Select the date this user starts as Self-Employed"
-                            : "Select the date this user starts as PAYE",
-                        selection: $employmentTypeEffectiveDate,
-                        in: ...Date.distantFuture,
-                        displayedComponents: .date
-                    )
-                        .accessibilityIdentifier("editUserDialogModifier.selectTheDateThisUserStarts")
+                Section {
+                    Text("When should \(employmentTypeDraft.title) start? Timesheets and the weekly report use the type that applies on each working day.")
+                        .font(.subheadline)
                 }
                 Section {
-                    Text("Timesheets and day-rate application use this date. Days before this date follow the previous employment type.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Button("Today") {
+                        showingEmploymentTypeEffectiveDatePicker = false
+                        onPersistEdits(nil, today)
+                    }
+                    .accessibilityIdentifier("editUser.employmentEffective.today")
+                    Button("Tomorrow") {
+                        showingEmploymentTypeEffectiveDatePicker = false
+                        onPersistEdits(nil, tomorrow)
+                    }
+                    .accessibilityIdentifier("editUser.employmentEffective.tomorrow")
+                }
+                Section("Or pick a working day") {
+                    DatePicker(
+                        "Employment date",
+                        selection: $employmentTypeEffectiveDate,
+                        displayedComponents: .date
+                    )
+                    .accessibilityIdentifier("editUserDialogModifier.selectTheDateThisUserStarts")
+                    Button("Use this date") {
+                        let selected = london.startOfDay(for: employmentTypeEffectiveDate)
+                        showingEmploymentTypeEffectiveDatePicker = false
+                        onPersistEdits(nil, selected)
+                    }
+                    .accessibilityIdentifier("editUserDialogModifier.save")
                 }
             }
-            .navigationTitle("Employment Type Date")
+            .navigationTitle("Employment type")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1281,15 +1300,7 @@ private struct EditUserDialogModifier: ViewModifier {
                         employmentTypeConfirmationAccepted = false
                         showingEmploymentTypeEffectiveDatePicker = false
                     }
-                        .accessibilityIdentifier("editUserDialogModifier.cancel6")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        let selected = calendarStartOfDay(employmentTypeEffectiveDate)
-                        showingEmploymentTypeEffectiveDatePicker = false
-                        onPersistEdits(nil, selected)
-                    }
-                        .accessibilityIdentifier("editUserDialogModifier.save")
+                    .accessibilityIdentifier("editUserDialogModifier.cancel6")
                 }
             }
         }
@@ -1376,6 +1387,8 @@ struct EditUserView: View {
     @State private var annualLeaveEndMonth: Int
     @State private var annualLeaveCarriesOver: Bool
     @State private var annualLeaveEnabledDraft: Bool
+    @State private var remainingLeaveText = ""
+    @State private var baselineRemainingText = ""
     @State private var employmentTypeDraft: EmploymentType
     @State private var showingEmploymentTypeConfirmation = false
     @State private var employmentTypeConfirmationAccepted = false
@@ -1546,20 +1559,30 @@ struct EditUserView: View {
         return annualLeaveEnabledDraft != displayedUser.annualLeaveEnabled
     }
 
+    private var annualLeaveAllowanceCopy: CanonicalBusinessEngine.CanonicalAnnualLeaveAllowanceCopy {
+        CanonicalBusinessEngine.annualLeaveAllowanceCopy() ?? CanonicalBusinessEngine.CanonicalAnnualLeaveAllowanceCopy(
+            toggleTitle: "Annual leave allowance",
+            toggleDescription: "Turn off annual leave allowances using this toggle. This is generally used for self-employed staff who do not get paid annual leave, therefore they do not have a set number of days per year.",
+            toggleNote: "When off, this person can still book and see annual leave. They see days taken in the company leave year, not a remaining balance or days per year.",
+            remainingTitle: "Manually adjust this user's remaining annual leave allowance for this year",
+            remainingNote: "This number will reset to the Days per year figure at the end of your company year."
+        )
+    }
+
     private var annualLeaveAccessSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ManageUserSectionTitle(text: "Annual leave in app")
+            ManageUserSectionTitle(text: annualLeaveAllowanceCopy.toggleTitle)
             ManageUserCard {
                 ManageUserPermissionToggleRow(
                     iconName: "calendar.badge.clock",
                     iconBackground: ManageUserProfilePalette.chipBlueBg,
                     iconForeground: ManageUserProfilePalette.chipBlueFg,
-                    title: "Annual leave enabled",
-                    subtitle: "Turn off for self-employed staff who do not use paid annual leave",
+                    title: annualLeaveAllowanceCopy.toggleTitle,
+                    subtitle: annualLeaveAllowanceCopy.toggleDescription,
                     isOn: $annualLeaveEnabledDraft,
                     isDisabled: !canEditPermissionsMatrix
                 )
-                Text("When turned off, their Annual leave tab and annual leave entry points are hidden until this is turned back on here.")
+                Text(annualLeaveAllowanceCopy.toggleNote)
                     .font(.caption)
                     .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     .padding(.horizontal, 14)
@@ -1573,6 +1596,33 @@ struct EditUserView: View {
         guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
         guard annualLeaveEnabledDraft else { return false }
         return permissions.operativeMode || user.role == .operative || permissions.manager
+    }
+
+    private func currentRemainingDays(for subject: AppUser) -> Double {
+        let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
+        let summary = AnnualLeavePolicy.usageSummary(
+            bookings: holidayStore.bookings,
+            profileUserId: subject.id,
+            operativeId: nil,
+            profileEmail: subject.email,
+            daysPerYear: subject.annualLeaveDaysPerYear,
+            startMonth: subject.annualLeaveYearStartMonth,
+            endMonth: subject.annualLeaveYearEndMonth,
+            carriesOver: subject.annualLeaveCarriesOver,
+            annualLeaveEnabled: true,
+            orgDaysPerYear: org.daysPerYear,
+            orgStartMonth: org.startMonth,
+            orgEndMonth: org.endMonth,
+            yearAllowance: subject.annualLeaveYearAllowance,
+            yearAllowanceKey: subject.annualLeaveYearAllowanceKey
+        )
+        return summary.remainingDays ?? 0
+    }
+
+    private func parsedRemainingForSave() -> Double? {
+        let t = remainingLeaveText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let d = Double(t), d >= 0 else { return nil }
+        return CanonicalBusinessEngine.snapLeaveDays(d)
     }
 
     private func parsedAnnualLeaveDaysForSave() -> Double? {
@@ -1589,6 +1639,7 @@ struct EditUserView: View {
             || annualLeaveStartMonth != s.annualLeaveYearStartMonth
             || annualLeaveEndMonth != s.annualLeaveYearEndMonth
             || annualLeaveCarriesOver != s.annualLeaveCarriesOver
+            || remainingLeaveText != baselineRemainingText
     }
 
     private var annualLeaveEntitlementSection: some View {
@@ -1603,6 +1654,19 @@ struct EditUserView: View {
                     isEnabled: canEditPermissionsMatrix
                 )
                 .padding(14)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(annualLeaveAllowanceCopy.remainingTitle)
+                        .font(.subheadline.weight(.semibold))
+                    TextField("Remaining", text: $remainingLeaveText)
+                        .keyboardType(.decimalPad)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!canEditPermissionsMatrix)
+                    Text(annualLeaveAllowanceCopy.remainingNote)
+                        .font(.caption)
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
             }
         }
     }
@@ -1651,10 +1715,12 @@ struct EditUserView: View {
     }
 
     private var operativeSetupSectionTitle: String {
-        if permissions.operativeMode { return "Operative setup" }
-        if permissions.manager { return "Manager setup" }
-        if permissions.adminAccess { return "Administrator setup" }
-        return "User setup"
+        if displayedUser.isSuperAdmin { return "Super Admin setup" }
+        switch accountKind {
+        case "operative": return "Operative setup"
+        case "admin": return "Administrator setup"
+        default: return "Manager setup"
+        }
     }
 
     private var roleHeaderIconName: String {
@@ -1711,10 +1777,22 @@ struct EditUserView: View {
     }
 
     private var displayRoleLabel: String {
-        if permissions.adminAccess { return UserRole.admin.displayName }
-        if permissions.manager && !permissions.operativeMode { return UserRole.manager.displayName }
-        if permissions.operativeMode { return UserRole.operative.displayName }
-        return user.role.displayName
+        switch accountKind {
+        case "operative": return UserRole.operative.displayName
+        case "admin": return UserRole.admin.displayName
+        case "manager": return UserRole.manager.displayName
+        default: return user.role.displayName
+        }
+    }
+
+    private var accountKind: String {
+        CanonicalBusinessEngine.accountKindFromFlags(
+            isSuperAdmin: displayedUser.isSuperAdmin,
+            role: displayedUser.role.rawValue,
+            adminAccess: permissions.adminAccess,
+            manager: permissions.manager,
+            operativeMode: permissions.operativeMode
+        ) ?? "manager"
     }
 
     private var employmentTypeChanged: Bool {
@@ -1729,12 +1807,11 @@ struct EditUserView: View {
     }
 
     private var employmentTransitionSummary: String {
-        guard let from = displayedUser.employmentTypeTransitionFrom,
-              let effective = displayedUser.employmentTypeEffectiveAt else {
-            return "Effective immediately"
-        }
-        let dateText = effective.formatted(date: .abbreviated, time: .omitted)
-        return "\(from.title) until \(dateText), then \(displayedUser.employmentType.title)"
+        CanonicalBusinessEngine.employmentEffectiveLabel(
+            employmentType: displayedUser.employmentType.rawValue,
+            transitionFrom: displayedUser.employmentTypeTransitionFrom?.rawValue,
+            effectiveAt: displayedUser.employmentTypeEffectiveAt
+        ) ?? "Effective immediately"
     }
     
     // Check if any changes have been made
@@ -1971,13 +2048,13 @@ struct EditUserView: View {
                     operativeAndManagerSetupCard
                 }
             }
-            editUserBillingAndTimesheetsSections
             if shouldShowAnnualLeaveAccessToggle {
                 annualLeaveAccessSection
             }
             if shouldShowAnnualLeaveEntitlementSection {
                 annualLeaveEntitlementSection
             }
+            editUserBillingAndTimesheetsSections
             if canUseAdminAccountTools && !isViewingSuperAdminProfile {
                 activeToggleChromeSection
             }
@@ -2000,7 +2077,7 @@ struct EditUserView: View {
     private var editUserBillingAndTimesheetsSections: some View {
         if canEditPermissionsMatrix {
             VStack(alignment: .leading, spacing: 8) {
-                ManageUserSectionTitle(text: "Billing details")
+                ManageUserSectionTitle(text: "Employment & timesheets")
                 billingDetailsCard
             }
         }
@@ -2051,6 +2128,9 @@ struct EditUserView: View {
         annualLeaveEndMonth = u.annualLeaveYearEndMonth
         annualLeaveCarriesOver = u.annualLeaveCarriesOver
         annualLeaveEnabledDraft = u.annualLeaveEnabled
+        let remaining = EditUserView.formatAnnualLeaveDaysText(currentRemainingDays(for: u))
+        remainingLeaveText = remaining
+        baselineRemainingText = remaining
         employmentTypeDraft = u.employmentType
         vatNumberDraft = u.vatNumber ?? ""
         utrNumberDraft = u.utrNumber ?? ""
@@ -2654,7 +2734,7 @@ struct EditUserView: View {
                         iconName: "calendar",
                         iconBackground: ManageUserProfilePalette.chipAmberBg,
                         iconForeground: ManageUserProfilePalette.chipAmberFg,
-                        label: "Employment transition date",
+                        label: "Employment date",
                         value: employmentTransitionSummary
                     )
                 }
@@ -2677,7 +2757,7 @@ struct EditUserView: View {
                         pendingPayeDayRateText = newValue
                         showingPayeDayRateWarning = true
                     }
-                Text("Payroll uses either a day rate or an hourly rate, not both. Saving updates here applies the organisation rule: setting one clears the other on the account.")
+                Text("Day rate and hourly rate are both kept on the account. Saving one does not remove the other.")
                     .font(.caption2)
                     .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -3231,7 +3311,7 @@ struct EditUserView: View {
                         iconBackground: ManageUserProfilePalette.chipPurpleBg,
                         iconForeground: ManageUserProfilePalette.chipPurpleFg,
                         title: "Admin Access",
-                        description: "Can add and manage users.",
+                        description: "Gives Manage Users.",
                         isOn: $permissions.adminAccess,
                         isDisabled: isManagerLevelAccount,
                         onDisabledTap: {
@@ -3345,7 +3425,7 @@ struct EditUserView: View {
                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                 iconForeground: ManageUserProfilePalette.chipPinkFg,
                 title: "Manage Qualifications",
-                description: "When on, this manager can add and edit organisation qualification templates. When off, Qualifications shows only My Qualifications, and they can still assign templates others have already added.",
+                description: "When on, this manager can add and edit organisational qualification templates. When off, qualifications shows only My Qualifications, and they can still assign templates others have already added.",
                 isOn: $permissions.qualifications,
                 isDisabled: false
             )
@@ -3577,12 +3657,57 @@ struct EditUserView: View {
                 }
                 return
             }
+            let writeRemaining = remainingLeaveText != baselineRemainingText
+            var yearAllowance: Double?
+            var yearAllowanceKey: String?
+            if writeRemaining {
+                guard let remaining = parsedRemainingForSave() else {
+                    await MainActor.run {
+                        isUpdating = false
+                        saveErrorMessage = "Enter the remaining allowance in steps of 0.5."
+                    }
+                    return
+                }
+                let summary = AnnualLeavePolicy.usageSummary(
+                    bookings: holidayStore.bookings,
+                    profileUserId: subjectUser.id,
+                    operativeId: nil,
+                    profileEmail: subjectUser.email,
+                    daysPerYear: days,
+                    startMonth: annualLeaveStartMonth,
+                    endMonth: annualLeaveEndMonth,
+                    carriesOver: annualLeaveCarriesOver,
+                    annualLeaveEnabled: true,
+                    orgDaysPerYear: (firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default).daysPerYear,
+                    orgStartMonth: (firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default).startMonth,
+                    orgEndMonth: (firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default).endMonth,
+                    yearAllowance: subjectUser.annualLeaveYearAllowance,
+                    yearAllowanceKey: subjectUser.annualLeaveYearAllowanceKey
+                )
+                guard let override = CanonicalBusinessEngine.applyRemainingOverride(
+                    remaining: remaining,
+                    taken: summary.takenDays,
+                    pending: summary.pendingDays,
+                    yearKey: summary.yearKey
+                ) else {
+                    await MainActor.run {
+                        isUpdating = false
+                        saveErrorMessage = "Could not save the remaining allowance."
+                    }
+                    return
+                }
+                yearAllowance = override.annualLeaveYearAllowance
+                yearAllowanceKey = override.annualLeaveYearAllowanceKey
+            }
             annualLeaveSuccess = await userStore.updateUserAnnualLeaveEntitlement(
                 userId: user.id,
                 daysPerYear: days,
                 startMonth: annualLeaveStartMonth,
                 endMonth: annualLeaveEndMonth,
-                carriesOver: annualLeaveCarriesOver
+                carriesOver: annualLeaveCarriesOver,
+                yearAllowance: yearAllowance,
+                yearAllowanceKey: yearAllowanceKey,
+                writeYearAllowance: writeRemaining
             )
         }
 

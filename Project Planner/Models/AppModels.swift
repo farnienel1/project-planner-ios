@@ -119,6 +119,15 @@ enum EmploymentType: String, CaseIterable, Codable, Identifiable {
             return "Self-Employed"
         }
     }
+
+    /// Script spelling. `selfEmployed` is accepted only through `normalizeEmploymentType`.
+    static func fromCanonical(_ raw: String?) -> EmploymentType {
+        if let normalized = CanonicalBusinessEngine.normalizeEmploymentType(raw) {
+            if normalized == EmploymentType.paye.rawValue { return .paye }
+            return .selfEmployed
+        }
+        return EmploymentType(rawValue: raw ?? "") ?? .selfEmployed
+    }
 }
 
 nonisolated enum Permission: String, CaseIterable, Sendable {
@@ -393,7 +402,7 @@ struct AppUser: Identifiable, Codable, Hashable {
     var hasNoLineManager: Bool = false
     /// Default day rate for this operative (optional; copied to roster when the operative profile is created).
     var dayRate: Double?
-    /// Hourly pay rate — **mutually exclusive** with `dayRate` (admins choose one or the other).
+    /// Hourly pay rate. A user save writes this when it is set and does not delete it because a day rate is also set.
     var hourlyRate: Double?
     /// `StaffTradeType.rawValue`, or "Other" with `tradeTypeCustom` for free text.
     var tradeTypePreset: String?
@@ -408,7 +417,7 @@ struct AppUser: Identifiable, Codable, Hashable {
     var employmentTypeTransitionFrom: EmploymentType?
     /// Calendar day the employment type switch becomes active.
     var employmentTypeEffectiveAt: Date?
-    /// When false, annual leave is hidden in the app (e.g. self-employed). Only managers/admins with user-management access can turn it back on.
+    /// When false, this person has no paid allowance. Holiday booking stays available.
     var annualLeaveEnabled: Bool
     /// Paid annual leave allowance for the configured leave year (days; supports half-days via bookings).
     var annualLeaveDaysPerYear: Double
@@ -418,6 +427,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     var annualLeaveYearEndMonth: Int
     /// When true, unused allowance from the previous leave year is added to the current year (simple model).
     var annualLeaveCarriesOver: Bool
+    /// Pot that replaces days-per-year + carry for the leave year in `annualLeaveYearAllowanceKey`.
+    var annualLeaveYearAllowance: Double?
+    /// `yearKey` the pot belongs to, for example `2026-01-01`.
+    var annualLeaveYearAllowanceKey: String?
     /// When true, schedule feeds into timesheets and payroll sign-off applies. Operatives default on; managers/admins default off.
     var timesheetsEnabled: Bool
     /// VAT registration number (optional; shown on invoices when set).
@@ -464,6 +477,8 @@ struct AppUser: Identifiable, Codable, Hashable {
         annualLeaveYearStartMonth: Int = AnnualLeavePolicy.defaultStartMonth,
         annualLeaveYearEndMonth: Int = AnnualLeavePolicy.defaultEndMonth,
         annualLeaveCarriesOver: Bool = AnnualLeavePolicy.defaultCarriesOver,
+        annualLeaveYearAllowance: Double? = nil,
+        annualLeaveYearAllowanceKey: String? = nil,
         timesheetsEnabled: Bool? = nil,
         vatNumber: String? = nil,
         utrNumber: String? = nil,
@@ -502,6 +517,8 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.annualLeaveYearStartMonth = AnnualLeavePolicy.clampMonth(annualLeaveYearStartMonth)
         self.annualLeaveYearEndMonth = AnnualLeavePolicy.clampMonth(annualLeaveYearEndMonth)
         self.annualLeaveCarriesOver = annualLeaveCarriesOver
+        self.annualLeaveYearAllowance = annualLeaveYearAllowance
+        self.annualLeaveYearAllowanceKey = annualLeaveYearAllowanceKey
         self.timesheetsEnabled = timesheetsEnabled ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
         self.vatNumber = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.utrNumber = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -531,7 +548,8 @@ extension AppUser {
         case dayRate, hourlyRate, tradeTypePreset, tradeTypeCustom, profilePhotoURL, lastSeenAt
         case employmentType, employmentTypeTransitionFrom, employmentTypeEffectiveAt
         case annualLeaveEnabled, annualLeaveDaysPerYear, annualLeaveYearStartMonth, annualLeaveYearEndMonth
-        case annualLeaveCarriesOver, timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
+        case annualLeaveCarriesOver, annualLeaveYearAllowance, annualLeaveYearAllowanceKey
+        case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
     }
 
     init(from decoder: Decoder) throws {
@@ -568,6 +586,8 @@ extension AppUser {
         annualLeaveYearStartMonth = try container.decode(Int.self, forKey: .annualLeaveYearStartMonth)
         annualLeaveYearEndMonth = try container.decode(Int.self, forKey: .annualLeaveYearEndMonth)
         annualLeaveCarriesOver = try container.decode(Bool.self, forKey: .annualLeaveCarriesOver)
+        annualLeaveYearAllowance = try container.decodeIfPresent(Double.self, forKey: .annualLeaveYearAllowance)
+        annualLeaveYearAllowanceKey = try container.decodeIfPresent(String.self, forKey: .annualLeaveYearAllowanceKey)
         timesheetsEnabled = try container.decode(Bool.self, forKey: .timesheetsEnabled)
         vatNumber = try container.decodeIfPresent(String.self, forKey: .vatNumber)
         utrNumber = try container.decodeIfPresent(String.self, forKey: .utrNumber)
@@ -609,6 +629,8 @@ extension AppUser {
         try container.encode(annualLeaveYearStartMonth, forKey: .annualLeaveYearStartMonth)
         try container.encode(annualLeaveYearEndMonth, forKey: .annualLeaveYearEndMonth)
         try container.encode(annualLeaveCarriesOver, forKey: .annualLeaveCarriesOver)
+        try container.encodeIfPresent(annualLeaveYearAllowance, forKey: .annualLeaveYearAllowance)
+        try container.encodeIfPresent(annualLeaveYearAllowanceKey, forKey: .annualLeaveYearAllowanceKey)
         try container.encode(timesheetsEnabled, forKey: .timesheetsEnabled)
         try container.encodeIfPresent(vatNumber, forKey: .vatNumber)
         try container.encodeIfPresent(utrNumber, forKey: .utrNumber)
@@ -676,17 +698,17 @@ extension AppUser {
         return nil
     }
 
-    /// Returns employment type active on a specific day, respecting scheduled transitions.
+    /// Employment type on a working day. The day rule is `employmentTypeOnDay` in the canonical script.
     func employmentType(on date: Date) -> EmploymentType {
-        guard let from = employmentTypeTransitionFrom,
-              let effectiveAt = employmentTypeEffectiveAt else {
+        guard let raw = CanonicalBusinessEngine.employmentTypeOnDay(
+            employmentType: employmentType.rawValue,
+            transitionFrom: employmentTypeTransitionFrom?.rawValue,
+            effectiveAt: employmentTypeEffectiveAt,
+            date: date
+        ) else {
             return employmentType
         }
-        let cal = Calendar.current
-        if cal.startOfDay(for: date) < cal.startOfDay(for: effectiveAt) {
-            return from
-        }
-        return employmentType
+        return EmploymentType.fromCanonical(raw)
     }
 }
 
@@ -715,6 +737,8 @@ nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
     var bankHolidayRegionId: String?
     /// ISO 4217 currency code for org-wide money display (e.g. GBP).
     var currencyCode: String?
+    /// Company-wide material cut-off (`organizations/{orgId}.settings.materialCutOff`). Nil when that map is absent.
+    var materialCutOff: OrgMaterialCutOff?
     
     nonisolated init(
         allowSelfRegistration: Bool = true,
@@ -729,7 +753,8 @@ nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
         annualLeaveDefaults: OrganizationAnnualLeaveDefaults = .default,
         myScheduleOptions: MyScheduleOptions = MyScheduleOptions(),
         bankHolidayRegionId: String? = "GB-ENG-WLS",
-        currencyCode: String? = "GBP"
+        currencyCode: String? = "GBP",
+        materialCutOff: OrgMaterialCutOff? = nil
     ) {
         self.allowSelfRegistration = allowSelfRegistration
         self.requireEmailVerification = requireEmailVerification
@@ -744,6 +769,7 @@ nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
         self.myScheduleOptions = myScheduleOptions
         self.bankHolidayRegionId = bankHolidayRegionId
         self.currencyCode = currencyCode
+        self.materialCutOff = materialCutOff
     }
 
     nonisolated enum CodingKeys: String, CodingKey {
@@ -756,6 +782,7 @@ nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
         case myScheduleOptions
         case bankHolidayRegionId
         case currencyCode
+        case materialCutOff
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -773,6 +800,7 @@ nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
         myScheduleOptions = try c.decodeIfPresent(MyScheduleOptions.self, forKey: .myScheduleOptions) ?? MyScheduleOptions()
         bankHolidayRegionId = try c.decodeIfPresent(String.self, forKey: .bankHolidayRegionId)
         currencyCode = try c.decodeIfPresent(String.self, forKey: .currencyCode)
+        materialCutOff = try c.decodeIfPresent(OrgMaterialCutOff.self, forKey: .materialCutOff)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -790,6 +818,62 @@ nonisolated struct OrganizationSettings: Codable, Hashable, Sendable {
         try c.encode(myScheduleOptions, forKey: .myScheduleOptions)
         try c.encodeIfPresent(bankHolidayRegionId, forKey: .bankHolidayRegionId)
         try c.encodeIfPresent(currencyCode, forKey: .currencyCode)
+        try c.encodeIfPresent(materialCutOff, forKey: .materialCutOff)
+    }
+}
+
+/// Company-wide material order cut-off. A user’s notification prefs are a copy, not the source.
+nonisolated struct OrgMaterialCutOff: Codable, Hashable, Sendable {
+    var materialOrderCutOff: Bool
+    var materialCutOffHour: Int
+    var materialCutOffMinute: Int
+    var materialCutOffOnSaturday: Bool
+    var materialCutOffOnSunday: Bool
+
+    func applied(to settings: NotificationSettings) -> NotificationSettings {
+        var copy = settings
+        copy.materialOrderCutOff = materialOrderCutOff
+        copy.materialCutOffHour = materialCutOffHour
+        copy.materialCutOffMinute = materialCutOffMinute
+        copy.materialCutOffOnSaturday = materialCutOffOnSaturday
+        copy.materialCutOffOnSunday = materialCutOffOnSunday
+        return copy
+    }
+
+    func asFirestoreDictionary() -> [String: Any] {
+        [
+            "materialOrderCutOff": materialOrderCutOff,
+            "materialCutOffHour": materialCutOffHour,
+            "materialCutOffMinute": materialCutOffMinute,
+            "materialCutOffOnSaturday": materialCutOffOnSaturday,
+            "materialCutOffOnSunday": materialCutOffOnSunday,
+        ]
+    }
+
+    static func fromNotification(_ settings: NotificationSettings) -> OrgMaterialCutOff {
+        OrgMaterialCutOff(
+            materialOrderCutOff: settings.materialOrderCutOff,
+            materialCutOffHour: settings.materialCutOffHour,
+            materialCutOffMinute: settings.materialCutOffMinute,
+            materialCutOffOnSaturday: settings.materialCutOffOnSaturday,
+            materialCutOffOnSunday: settings.materialCutOffOnSunday
+        )
+    }
+
+    static func fromFirestore(_ data: [String: Any]) -> OrgMaterialCutOff {
+        OrgMaterialCutOff(
+            materialOrderCutOff: data["materialOrderCutOff"] as? Bool ?? (data["materialOrderCutOff"] as? NSNumber)?.boolValue ?? true,
+            materialCutOffHour: Self.int(data["materialCutOffHour"]) ?? 16,
+            materialCutOffMinute: Self.int(data["materialCutOffMinute"]) ?? 0,
+            materialCutOffOnSaturday: (data["materialCutOffOnSaturday"] as? Bool) ?? (data["materialCutOffOnSaturday"] as? NSNumber)?.boolValue ?? false,
+            materialCutOffOnSunday: (data["materialCutOffOnSunday"] as? Bool) ?? (data["materialCutOffOnSunday"] as? NSNumber)?.boolValue ?? false
+        )
+    }
+
+    private static func int(_ value: Any?) -> Int? {
+        if let number = value as? Int { return number }
+        if let number = value as? NSNumber { return number.intValue }
+        return nil
     }
 }
 
@@ -956,6 +1040,22 @@ nonisolated struct OrganizationInvoicingSettings: Codable, Hashable, Sendable {
     mutating func refreshRecurringSummaryFromDays() {
         recurringPaymentRunSummary = recurringRunDisplaySummary
     }
+
+    /// Payload for `invoicingToFirestore` / `validateInvoicingSettings`. Days are not rewritten here.
+    func canonicalInvoicingSettings() -> CanonicalBusinessEngine.CanonicalInvoicingSettings {
+        CanonicalBusinessEngine.CanonicalInvoicingSettings(
+            paymentRunMode: paymentRunMode.rawValue,
+            paymentDateMode: paymentDateMode.rawValue,
+            recurringRunStartDay: recurringRunStartDay.rawValue,
+            recurringRunEndDay: recurringRunEndDay.rawValue,
+            recurringPaymentDay: recurringPaymentDay.rawValue,
+            paymentRunDateRanges: paymentRunDateRanges.map {
+                CanonicalBusinessEngine.CanonicalPaymentRunRange(startDay: $0.startDay, endDay: $0.endDay)
+            },
+            paymentDates: paymentDates.map(String.init),
+            noteToUsers: noteToUsers
+        )
+    }
 }
 
 nonisolated struct OrganizationUILabels: Codable, Hashable, Sendable {
@@ -1109,7 +1209,7 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
         let wkMult = (data["weekdayOutsideStandardMultiplier"] as? NSNumber)?.doubleValue ?? (data["weekdayOutsideStandardMultiplier"] as? Double) ?? OrgPayrollTimePolicy.default.weekdayOutsideStandardMultiplier
         let satDict = data["saturday"] as? [String: Any] ?? [:]
         let sunDict = data["sunday"] as? [String: Any] ?? [:]
-        let sundaySame = data["sundaySameAsSaturday"] as? Bool ?? OrgPayrollTimePolicy.default.sundaySameAsSaturday
+        let sundaySame = Self.sundayMatchesSaturday(data, sunday: sunDict)
         return OrgPayrollTimePolicy(
             standardDayStart: start,
             standardDayEnd: end,
@@ -1124,38 +1224,71 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
             sundaySameAsSaturday: sundaySame
         )
     }
+
+    /// `sundaySameAsSaturday` on the policy, or `sunday.sameAsSaturday` when that root key was left out.
+    private static func sundayMatchesSaturday(_ data: [String: Any], sunday: [String: Any]) -> Bool {
+        let explicit = data["sundaySameAsSaturday"]
+        if explicit == nil || explicit is NSNull {
+            return Self.flag(sunday["sameAsSaturday"])
+        }
+        return Self.flag(explicit)
+    }
+
+    fileprivate static func flag(_ value: Any?) -> Bool {
+        if let flag = value as? Bool { return flag }
+        if let number = value as? NSNumber { return number.boolValue }
+        return false
+    }
+
+    fileprivate static func firstText(_ data: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            guard let text = data[key] as? String else { continue }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return nil
+    }
+
+    fileprivate static func firstNumber(_ data: [String: Any], keys: [String]) -> Double? {
+        for key in keys {
+            if let number = data[key] as? Double { return number }
+            if let number = data[key] as? Int { return Double(number) }
+            if let number = data[key] as? NSNumber { return number.doubleValue }
+        }
+        return nil
+    }
 }
 
 private extension OrgWeekendDayPayrollSettings {
     nonisolated func asFirestoreDictionary() -> [String: Any] {
-        var d: [String: Any] = [
+        [
             "allHoursAtMultiplierMode": allHoursAtMultiplierMode,
             "allHoursMultiplier": allHoursMultiplier,
-            "useCustomStandardDayWindow": useCustomStandardDayWindow,
+            "useCustomStandardDayWindow": !allHoursAtMultiplierMode,
+            "customStandardStart": customStandardStart ?? "07:30",
+            "customStandardEnd": customStandardEnd ?? "16:00",
+            "countsAsHours": countsAsHours ?? 8,
             "outsideStandardWindowMultiplier": outsideStandardWindowMultiplier,
         ]
-        if let counts = countsAsHours { d["countsAsHours"] = counts }
-        if let s = customStandardStart { d["customStandardStart"] = s } else { d["customStandardStart"] = NSNull() }
-        if let e = customStandardEnd { d["customStandardEnd"] = e } else { d["customStandardEnd"] = NSNull() }
-        return d
     }
 
     nonisolated static func fromFirestore(_ data: [String: Any]) -> OrgWeekendDayPayrollSettings {
-        let allMode = data["allHoursAtMultiplierMode"] as? Bool ?? true
-        let allMult = (data["allHoursMultiplier"] as? NSNumber)?.doubleValue ?? (data["allHoursMultiplier"] as? Double) ?? 2.0
-        let custom = data["useCustomStandardDayWindow"] as? Bool ?? false
-        let cs = data["customStandardStart"] as? String
-        let ce = data["customStandardEnd"] as? String
-        let counts = (data["countsAsHours"] as? NSNumber)?.doubleValue ?? (data["countsAsHours"] as? Double)
-        let outside = (data["outsideStandardWindowMultiplier"] as? NSNumber)?.doubleValue ?? (data["outsideStandardWindowMultiplier"] as? Double) ?? allMult
+        let allMode = OrgPayrollTimePolicy.flag(data["allHoursAtMultiplierMode"])
+        let allMult = OrgPayrollTimePolicy.firstNumber(data, keys: ["allHoursMultiplier"]) ?? 2
+        let custom = (data["useCustomStandardDayWindow"] as? Bool)
+            ?? (data["useCustomStandardDayWindow"] as? NSNumber)?.boolValue
+            ?? !allMode
         return OrgWeekendDayPayrollSettings(
             allHoursAtMultiplierMode: allMode,
             allHoursMultiplier: allMult,
             useCustomStandardDayWindow: custom,
-            customStandardStart: cs,
-            customStandardEnd: ce,
-            countsAsHours: counts,
-            outsideStandardWindowMultiplier: outside
+            customStandardStart: OrgPayrollTimePolicy.firstText(data, keys: ["customStandardStart", "definedWindowStart"]) ?? "07:30",
+            customStandardEnd: OrgPayrollTimePolicy.firstText(data, keys: ["customStandardEnd", "definedWindowEnd"]) ?? "16:00",
+            countsAsHours: OrgPayrollTimePolicy.firstNumber(data, keys: ["countsAsHours", "countsAsStandardHours"]) ?? 8,
+            outsideStandardWindowMultiplier: OrgPayrollTimePolicy.firstNumber(
+                data,
+                keys: ["outsideStandardWindowMultiplier", "outsideWindowMultiplier"]
+            ) ?? 1.5
         )
     }
 }

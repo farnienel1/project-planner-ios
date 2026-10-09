@@ -235,26 +235,6 @@ struct SchedulingV2BookingCell: View {
     }
 }
 
-struct SchedulingV2AvatarColor {
-    static func color(for key: String) -> Color {
-        let palette: [Color] = [
-            Color(red: 0x2C / 255, green: 0x5B / 255, blue: 0xBF / 255),
-            Color(red: 0x4B / 255, green: 0x7A / 255, blue: 0x5C / 255),
-            Color(red: 0x7A / 255, green: 0x4B / 255, blue: 0x8C / 255),
-            Color(red: 0x8C / 255, green: 0x4B / 255, blue: 0x4B / 255),
-            Color(red: 0x4B / 255, green: 0x6B / 255, blue: 0x8C / 255),
-            Color(red: 0x5C / 255, green: 0x7A / 255, blue: 0x4B / 255),
-            Color(red: 0x5C / 255, green: 0x5C / 255, blue: 0x8C / 255),
-            Color(red: 0x8C / 255, green: 0x6B / 255, blue: 0x4B / 255),
-        ]
-        var hash = 0
-        for u in key.unicodeScalars {
-            hash = (hash &* 31 &+ Int(u.value)) & 0x7fffffff
-        }
-        return palette[hash % palette.count]
-    }
-}
-
 struct SchedulingV2Legend: View {
     var body: some View {
         FlexWrapLegend()

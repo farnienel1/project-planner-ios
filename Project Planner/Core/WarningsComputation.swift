@@ -8,7 +8,7 @@
 import Foundation
 
 // The scan window is CanonicalBusinessEngine.warningBounds (lib/canonical).
-// Qualification, unverified, and unbooked rows come from that script.
+// Qualification, unverified, unbooked, and annual-leave rows come from that script.
 // Clash timelines and material cut-off copy stay here, on the London business calendar.
 
 struct WarningsComputationInput: @unchecked Sendable {
@@ -22,12 +22,15 @@ struct WarningsComputationInput: @unchecked Sendable {
     let warningDetection: OrgWarningDetectionSettings
     let coverageStart: Date
     let coverageEnd: Date
+    /// Saturday and Sunday after a Monday–Friday week, only when unbooked labour includes weekends.
+    var unbookedCoverageEnd: Date? = nil
     let materialOrderCutOffEnabled: Bool
     let materialCutOffOnSaturday: Bool
     let materialCutOffOnSunday: Bool
     let projectsWithTomorrowBookings: [Project]
     /// Material lines dated for tomorrow (loaded when computing warnings).
     let materialItemsForTomorrow: [MaterialItem]
+    var dismissedQualificationKeys: Set<String> = []
 }
 
 struct WarningsComputationSnapshot: Sendable {
@@ -115,11 +118,14 @@ struct WarningsComputationSnapshot: Sendable {
     }
 
     struct HolidaySnapshot: Sendable {
+        let id: String
         let userId: String?
         let operativeId: UUID?
         let startDay: Date
         let endDay: Date
         let isApproved: Bool
+        /// `FULL DAY`, `AM`, or `PM`. The script decides whether that is a clash or an open half.
+        let timeSlot: String
     }
 
     struct MaterialItemSnapshot: Sendable {
@@ -155,11 +161,14 @@ struct WarningsComputationSnapshot: Sendable {
     let warningDetection: WarningDetectionSnapshot
     let coverageStart: Date
     let coverageEnd: Date
+    var unbookedCoverageEnd: Date? = nil
     let materialOrderCutOffEnabled: Bool
     let materialCutOffOnSaturday: Bool
     let materialCutOffOnSunday: Bool
     let projectsWithTomorrowBookingIds: [UUID]
     let materialItemsForTomorrow: [MaterialItemSnapshot]
+    /// Document ids from `organizations/{orgId}/dismissedWarnings`.
+    var dismissedQualificationKeys: Set<String> = []
 }
 
 enum WarningsComputation {
@@ -300,11 +309,13 @@ enum WarningsComputation {
                 return rawUserId
             }()
             return WarningsComputationSnapshot.HolidaySnapshot(
+                id: booking.id.uuidString,
                 userId: resolvedUserId,
                 operativeId: booking.operativeId,
                 startDay: cal.startOfDay(for: booking.startDate),
                 endDay: cal.startOfDay(for: booking.endDate),
-                isApproved: booking.status == .approved
+                isApproved: booking.status == .approved,
+                timeSlot: booking.timeSlot.rawValue
             )
         }
 
@@ -343,11 +354,13 @@ enum WarningsComputation {
             ),
             coverageStart: cal.startOfDay(for: input.coverageStart),
             coverageEnd: cal.startOfDay(for: input.coverageEnd),
+            unbookedCoverageEnd: input.unbookedCoverageEnd.map { cal.startOfDay(for: $0) },
             materialOrderCutOffEnabled: input.materialOrderCutOffEnabled,
             materialCutOffOnSaturday: input.materialCutOffOnSaturday,
             materialCutOffOnSunday: input.materialCutOffOnSunday,
             projectsWithTomorrowBookingIds: input.projectsWithTomorrowBookings.map(\.id),
-            materialItemsForTomorrow: materialItemsForTomorrow
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            dismissedQualificationKeys: input.dismissedQualificationKeys
         )
     }
 
@@ -410,60 +423,12 @@ enum WarningsComputation {
             approvedHolidays: input.holidayBookings.filter(\.isApproved)
         )
 
-        if let rows = qualificationRows(input, reference: now) {
-            for row in rows {
-                generated.append(row)
-            }
-        } else {
-            let oneMonthFromNow = cal.date(byAdding: .month, value: 1, to: today) ?? today
-            for operative in input.operatives where operative.isActive {
-                for expiry in operative.qualificationExpiries {
-                    let expiryDate = expiry.expiryDate
-                    guard expiryDate <= oneMonthFromNow else { continue }
-                    let daysUntilExpiry = cal.dateComponents([.day], from: today, to: expiryDate).day ?? 0
-                    let message: String
-                    if daysUntilExpiry < 0 {
-                        let ago = abs(daysUntilExpiry)
-                        message = "\(operative.name)'s \(expiry.qualificationName) expired \(ago) day\(ago == 1 ? "" : "s") ago"
-                    } else if daysUntilExpiry == 0 {
-                        message = "\(operative.name)'s \(expiry.qualificationName) expires today"
-                    } else {
-                        message = "\(operative.name)'s \(expiry.qualificationName) expires in \(daysUntilExpiry) day\(daysUntilExpiry == 1 ? "" : "s")"
-                    }
-                    let key = "qual-\(operative.id.uuidString)-\(expiry.qualificationId.uuidString)"
-                    generated.append(Warning(
-                        resolutionKey: key,
-                        type: .qualificationExpiry,
-                        title: daysUntilExpiry < 0 ? "Qualification expired" : "Qualification expiry",
-                        message: message,
-                        severity: .low,
-                        occurrenceDate: expiryDate
-                    ))
-                }
-            }
+        if let rows = qualificationRows(input, reference: now, dismissedKeys: input.dismissedQualificationKeys) {
+            generated.append(contentsOf: rows)
         }
 
         if let rows = unverifiedRows(input, reference: now) {
             generated.append(contentsOf: rows)
-        } else {
-            for operative in input.operatives {
-                if let operativeUser = input.users.first(where: {
-                    $0.emailLowercased == operative.emailLowercased && $0.isOperativeMode
-                }), !operativeUser.passwordSet {
-                    let daysSince = workingDaysBetween(operativeUser.createdAt, today, calendar: cal)
-                    if daysSince >= 3 {
-                        let key = "unverified-\(operative.id.uuidString)"
-                        generated.append(Warning(
-                            resolutionKey: key,
-                            type: .operativeNotVerified,
-                            title: "Unverified operative",
-                            message: "\(operative.name) has not verified their account",
-                            severity: .low,
-                            operativeEmail: operativeUser.emailLowercased
-                        ))
-                    }
-                }
-            }
         }
 
         var processedOpClash: Set<String> = []
@@ -577,6 +542,12 @@ enum WarningsComputation {
             generated.append(contentsOf: rows)
         }
 
+        // Leave clash and half-day cover come only from the script. Swift does not decide
+        // which half is open or whether a booking sits inside the leave.
+        if let rows = leaveRows(input, coverageStart: coverageStart, coverageEnd: coverageEnd) {
+            generated.append(contentsOf: rows)
+        }
+
         let hour = cal.component(.hour, from: now)
         if input.materialOrderCutOffEnabled, hour >= 16 {
             let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -632,7 +603,11 @@ enum WarningsComputation {
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
-    nonisolated private static func qualificationRows(_ input: WarningsComputationSnapshot, reference: Date) -> [Warning]? {
+    nonisolated private static func qualificationRows(
+        _ input: WarningsComputationSnapshot,
+        reference: Date,
+        dismissedKeys: Set<String>
+    ) -> [Warning]? {
         let calendar = CanonicalBusinessEngine.businessCalendar
         let operatives: [[String: Any]] = input.operatives.map { operative in
             let expiries: [[String: Any]] = operative.qualificationExpiries.map { expiry in
@@ -659,7 +634,11 @@ enum WarningsComputation {
         ) else {
             return nil
         }
-        return rows.compactMap { row in
+        let visible = CanonicalBusinessEngine.withoutDismissedQualificationRows(
+            rows,
+            dismissedKeys: Array(dismissedKeys)
+        ) ?? rows
+        return visible.compactMap { row in
             guard let id = row["id"] as? String, !id.isEmpty,
                   let title = row["title"] as? String,
                   let message = row["message"] as? String,
@@ -667,13 +646,33 @@ enum WarningsComputation {
                   let date = CanonicalBusinessEngine.date(fromDayKey: dayKey, calendar: calendar) else {
                 return nil
             }
+            let operativeId = row["operativeId"] as? String ?? ""
+            let qualificationId = row["qualificationId"] as? String ?? ""
+            let daysUntilExpiry = (row["daysUntilExpiry"] as? NSNumber)?.intValue
+                ?? (row["daysUntilExpiry"] as? Int)
+                ?? 0
+            let storedKey = (row["dismissKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let dismissKey = storedKey.isEmpty
+                ? (CanonicalBusinessEngine.qualificationDismissKey(
+                    operativeId: operativeId,
+                    qualificationId: qualificationId,
+                    expiryDayKey: dayKey
+                ) ?? "")
+                : storedKey
             return Warning(
                 resolutionKey: id,
                 type: .qualificationExpiry,
                 title: title,
                 message: message,
                 severity: .low,
-                occurrenceDate: date
+                occurrenceDate: date,
+                qualificationExpiry: Warning.QualificationExpiryWarningDetails(
+                    operativeId: operativeId,
+                    qualificationId: qualificationId,
+                    expiryDayKey: dayKey,
+                    dismissKey: dismissKey,
+                    daysUntilExpiry: daysUntilExpiry
+                )
             )
         }
     }
@@ -883,26 +882,15 @@ enum WarningsComputation {
         return ordered
     }
 
-    /// A full-day "missing" row is wrong when this email's bookings already cover the
-    /// standard day. The script looks up one account id and can miss the alias that holds the hours.
-    nonisolated static func unbookedRowIsAlreadyCovered(
-        paidHours: Double,
-        missingHours: Double,
-        requiredHours: Double
-    ) -> Bool {
-        guard requiredHours > 0.08 else { return false }
-        guard paidHours + 0.08 >= requiredHours else { return false }
-        return missingHours + 0.2 >= requiredHours
-    }
-
     nonisolated private static func unbookedRows(
         _ input: WarningsComputationSnapshot,
         coverageStart: Date,
         coverageEnd: Date
     ) -> [Warning]? {
         let calendar = CanonicalBusinessEngine.businessCalendar
+        let rowEnd = input.unbookedCoverageEnd ?? coverageEnd
         var bookings: [[String: Any]] = []
-        for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
+        for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= rowEnd {
             bookings.append([
                 "personId": booking.operativeId.uuidString,
                 "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
@@ -912,7 +900,7 @@ enum WarningsComputation {
                 "workEnd": booking.workEnd ?? "",
             ])
         }
-        for booking in input.managerSiteBookings where booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
+        for booking in input.managerSiteBookings where booking.dayStart >= coverageStart && booking.dayStart <= rowEnd {
             bookings.append([
                 "personId": booking.userId,
                 "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
@@ -962,51 +950,6 @@ enum WarningsComputation {
                 "approved": holiday.isApproved,
             ]
         }
-        var emailById: [String: String] = [:]
-        for user in input.users where !user.emailLowercased.isEmpty {
-            emailById[user.id] = user.emailLowercased
-            for alias in user.sameEmailUserIds where !alias.isEmpty {
-                emailById[alias] = user.emailLowercased
-            }
-        }
-        for operative in input.operatives where !operative.emailLowercased.isEmpty {
-            emailById[operative.id.uuidString] = operative.emailLowercased
-        }
-        var paidByEmailDay: [String: Double] = [:]
-        let standardDay = input.payrollTimePolicy.standardPaidHours
-        func notePaid(email: String, day: Date, hours: Double, coversStandardDay: Bool) {
-            guard !email.isEmpty else { return }
-            let key = "\(email)|\(dayKeyString(day, calendar: calendar))"
-            if coversStandardDay {
-                paidByEmailDay[key] = max(paidByEmailDay[key] ?? 0, standardDay)
-            } else if hours > 0 {
-                paidByEmailDay[key, default: 0] += hours
-            }
-        }
-        func legacyFullDay(_ slot: String, _ start: String?, _ end: String?) -> Bool {
-            let name = slot.trimmingCharacters(in: .whitespacesAndNewlines)
-            let startText = start?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let endText = end?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return name == "FULL DAY" && startText.isEmpty && endText.isEmpty
-        }
-        for booking in input.bookings where booking.isActiveStatus {
-            notePaid(
-                email: emailById[booking.operativeId.uuidString] ?? "",
-                day: booking.dayStart,
-                hours: booking.paidHours,
-                coversStandardDay: legacyFullDay(booking.timeSlot, booking.workStart, booking.workEnd)
-            )
-        }
-        for booking in input.managerSiteBookings {
-            notePaid(
-                email: emailById[booking.userId] ?? "",
-                day: booking.dayStart,
-                hours: booking.paidHours,
-                coversStandardDay: booking.isFullDaySlot
-                    && (booking.workStart ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    && (booking.workEnd ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            )
-        }
         let shared = shareCoverageAcrossEmail(bookings: bookings, holidays: holidays, people: people, operatives: operatives)
         let excluded = expandedExcludedUserIds(
             input.warningDetection.excludedUserIdsFromUnbookedWarnings,
@@ -1017,7 +960,7 @@ enum WarningsComputation {
             payload: [
                 "timeZone": "Europe/London",
                 "startDayKey": dayKeyString(coverageStart, calendar: calendar),
-                "endDayKey": dayKeyString(coverageEnd, calendar: calendar),
+                "endDayKey": dayKeyString(rowEnd, calendar: calendar),
                 "includeWeekends": input.warningDetection.includeWeekendsForUnbookedLabour,
                 "excludedUserIds": excluded,
                 "standardDayStart": input.payrollTimePolicy.standardDayStart,
@@ -1045,15 +988,6 @@ enum WarningsComputation {
             let name = row["operativeName"] as? String ?? ""
             let personKey = row["personKey"] as? String ?? ""
             let hours = (row["missingHours"] as? NSNumber)?.doubleValue ?? 0
-            let email = emailById[personKey] ?? ""
-            let paid = paidByEmailDay["\(email)|\(dayKey)"] ?? 0
-            if unbookedRowIsAlreadyCovered(
-                paidHours: paid,
-                missingHours: hours,
-                requiredHours: input.payrollTimePolicy.standardPaidHours
-            ) {
-                return nil
-            }
             return Warning(
                 resolutionKey: id,
                 type: .unbookedLabour,
@@ -1068,6 +1002,155 @@ enum WarningsComputation {
                 )
             )
         }
+    }
+
+    /// `leave_clash` and `leave_cover` rows for approved leave inside the coverage window.
+    /// People are one entry per user (that user id, every alias id, and every operative id on the
+    /// email) plus a roster operative who has no user account. The script chooses the rows.
+    nonisolated private static func leaveRows(
+        _ input: WarningsComputationSnapshot,
+        coverageStart: Date,
+        coverageEnd: Date
+    ) -> [Warning]? {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        let startKey = dayKeyString(coverageStart, calendar: calendar)
+        let endKey = dayKeyString(coverageEnd, calendar: calendar)
+
+        var operativeIdsByEmail: [String: [String]] = [:]
+        for operative in input.operatives where !operative.emailLowercased.isEmpty {
+            let id = operative.id.uuidString
+            if operativeIdsByEmail[operative.emailLowercased]?.contains(id) != true {
+                operativeIdsByEmail[operative.emailLowercased, default: []].append(id)
+            }
+        }
+
+        var people: [CanonicalLeavePerson] = []
+        var claimedEmails = Set<String>()
+        for user in input.users {
+            let email = user.emailLowercased
+            let operativeIds = email.isEmpty ? [] : (operativeIdsByEmail[email] ?? [])
+            people.append(CanonicalLeavePerson(
+                personKey: user.id,
+                name: user.displayName,
+                userId: user.id,
+                operativeIds: operativeIds
+            ))
+            if !email.isEmpty { claimedEmails.insert(email) }
+            for alias in user.sameEmailUserIds where !alias.isEmpty && alias != user.id {
+                people.append(CanonicalLeavePerson(
+                    personKey: alias,
+                    name: user.displayName,
+                    userId: alias,
+                    operativeIds: operativeIds
+                ))
+            }
+        }
+        for operative in input.operatives where !operative.isPlaceholder {
+            let email = operative.emailLowercased
+            if !email.isEmpty && claimedEmails.contains(email) { continue }
+            if !email.isEmpty { claimedEmails.insert(email) }
+            let ids = email.isEmpty
+                ? [operative.id.uuidString]
+                : (operativeIdsByEmail[email] ?? [operative.id.uuidString])
+            people.append(CanonicalLeavePerson(
+                personKey: operative.id.uuidString,
+                name: operative.name,
+                userId: nil,
+                operativeIds: ids
+            ))
+        }
+
+        let peopleRows: [[String: Any]] = input.users.map { user in
+            ["id": user.id, "email": user.emailLowercased]
+        }
+        let excluded = expandedExcludedUserIds(
+            input.warningDetection.excludedUserIdsFromUnbookedWarnings,
+            people: peopleRows
+        )
+
+        var bookings: [CanonicalLeaveBooking] = []
+        for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
+            bookings.append(CanonicalLeaveBooking(
+                id: booking.id.uuidString,
+                personId: booking.operativeId.uuidString,
+                kind: "operative",
+                dayKey: dayKeyString(booking.dayStart, calendar: calendar),
+                timeSlot: booking.timeSlot,
+                workStartTime: booking.workStart,
+                workEndTime: booking.workEnd,
+                label: booking.scheduleLabel
+            ))
+        }
+        for booking in input.managerSiteBookings where booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
+            bookings.append(CanonicalLeaveBooking(
+                id: booking.id.uuidString,
+                personId: booking.userId,
+                kind: "manager",
+                dayKey: dayKeyString(booking.dayStart, calendar: calendar),
+                timeSlot: booking.timeSlot,
+                workStartTime: booking.workStart,
+                workEndTime: booking.workEnd,
+                label: booking.scheduleLabel
+            ))
+        }
+
+        let leave: [CanonicalLeaveRecord] = input.holidayBookings.map { holiday in
+            CanonicalLeaveRecord(
+                id: holiday.id,
+                userId: holiday.userId,
+                operativeId: holiday.operativeId?.uuidString,
+                startDayKey: dayKeyString(holiday.startDay, calendar: calendar),
+                endDayKey: dayKeyString(holiday.endDay, calendar: calendar),
+                timeSlot: holiday.timeSlot,
+                approved: holiday.isApproved
+            )
+        }
+
+        let policy = input.payrollTimePolicy
+        let inputPayload = CanonicalLeaveCoverageInput(
+            timeZone: "Europe/London",
+            startDayKey: startKey,
+            endDayKey: endKey,
+            day: CanonicalStandardDayInput(
+                standardDayStart: policy.standardDayStart,
+                standardDayEnd: policy.standardDayEnd,
+                breakWindowStart: policy.breakWindowStart,
+                breakWindowEnd: policy.breakWindowEnd
+            ),
+            includeWeekends: input.warningDetection.includeWeekendsForUnbookedLabour,
+            excludedUserIds: excluded,
+            people: people,
+            leave: leave,
+            bookings: bookings
+        )
+        guard let rows = CanonicalBusinessEngine.leaveCoverageRows(inputPayload) else { return nil }
+        return rows.compactMap { row in
+            guard let date = CanonicalBusinessEngine.date(fromDayKey: row.dayKey, calendar: calendar) else { return nil }
+            let severity: Warning.WarningSeverity = row.kind == "leave_clash" || row.severity == "high" ? .high : .medium
+            let ranges = row.missing.map { formatClockRange($0.start, $0.end) }
+            return Warning(
+                resolutionKey: row.id,
+                type: .annualLeave,
+                title: row.title,
+                message: row.message,
+                severity: severity,
+                occurrenceDate: date,
+                annualLeave: Warning.AnnualLeaveWarningDetails(
+                    kind: row.kind,
+                    personName: row.personName,
+                    missingRanges: ranges,
+                    missingHours: row.missingHours
+                )
+            )
+        }
+    }
+
+    nonisolated private static func formatClockRange(_ start: Int, _ end: Int) -> String {
+        func clock(_ minutes: Int) -> String {
+            let clamped = max(0, min(minutes, 24 * 60))
+            return String(format: "%02d:%02d", clamped / 60, clamped % 60)
+        }
+        return "\(clock(start))–\(clock(end))"
     }
 
     nonisolated private static func workingDaysBetween(_ start: Date, _ end: Date, calendar: Calendar) -> Int {

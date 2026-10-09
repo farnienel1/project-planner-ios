@@ -168,6 +168,8 @@ struct VariationEditorSheet: View {
     @State private var materialComposer = MaterialComposerState()
     @State private var extraTrades: [String] = []
     @State private var catalogue: [MaterialCatalogItem] = []
+    @State private var catalogueRecords: [CanonicalBusinessEngine.CanonicalMaterialRecord] = []
+    @State private var catalogueSearchGeneration = 0
     @State private var errorMessage: String?
     @State private var isSaving = false
     @State private var showingCamera = false
@@ -182,6 +184,8 @@ struct VariationEditorSheet: View {
     @State private var tradeQuery = ""
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var inFlightUploads = 0
+    @State private var pendingEvidenceBytes: [String: Data] = [:]
+    @State private var persistedVariation: Variation?
     @State private var preparingEvidence = 0
     @State private var undoNotice: VariationUndoNotice?
     @State private var undoRestore: (() -> Void)?
@@ -222,11 +226,8 @@ struct VariationEditorSheet: View {
         VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName)
     }
     private var totalHours: Double { labour.reduce(0) { $0 + $1.lineHours } }
-    private var evidenceBusy: Bool {
-        inFlightUploads > 0 || preparingEvidence > 0 || evidence.contains(where: \.isPending)
-    }
     private var canSave: Bool {
-        !heading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving && !evidenceBusy
+        !heading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
     }
     private var hourPresets: [(label: String, hours: Double)] {
         let day = firebaseBackend.currentOrganization?.settings.payrollTimePolicy.standardPaidHours ?? 0
@@ -247,17 +248,25 @@ struct VariationEditorSheet: View {
     }
     private var materialSuggestions: [(name: String, unit: String)] {
         let query = materialComposer.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard query.count >= 2 else { return [] }
+        guard !query.isEmpty else { return [] }
         if !catalogue.isEmpty {
-            return catalogue
-                .filter { $0.name.localizedCaseInsensitiveContains(query) }
-                .prefix(3)
-                .map { ($0.name, Self.formUnit(for: $0.defaultUnit)) }
+            let hits = CanonicalBusinessEngine.rankMaterialRecords(
+                query: query,
+                records: catalogueRecords,
+                limit: 80,
+                cacheIdentity: catalogueSearchGeneration
+            ) ?? []
+            return hits.compactMap { hit in
+                catalogue.indices.contains(hit.index) ? catalogue[hit.index] : nil
+            }
+            .map { ($0.name, Self.formUnit(for: $0.defaultUnit)) }
         }
-        return materialNames
-            .filter { $0.localizedCaseInsensitiveContains(query) }
-            .prefix(3)
-            .map { ($0, "no") }
+        let names = materialNames.map { name in
+            (name: name, unit: "no")
+        }
+        return CanonicalBusinessEngine.rankedItems(names, query: query, limit: 80) { row in
+            CanonicalBusinessEngine.CanonicalMaterialRecord(name: row.name)
+        }
     }
 
     var body: some View {
@@ -896,7 +905,7 @@ struct VariationEditorSheet: View {
                                     .frame(width: 30, height: 30)
                                     .background(VariationFormColors.blueTint)
                                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                                Text(item.isPending ? "\(item.fileName) — uploading" : item.fileName)
+                                Text(item.isPending ? "\(item.fileName) — queued" : item.fileName)
                                     .font(.system(size: 13.5))
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1374,6 +1383,9 @@ struct VariationEditorSheet: View {
     private func loadCatalogue() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         catalogue = (try? await firebaseBackend.loadMaterialCatalogue(organizationId: orgId)) ?? []
+        catalogueRecords = catalogue.map(\.canonicalSearchRecord)
+        catalogueSearchGeneration = CanonicalBusinessEngine.makeMaterialSearchCacheIdentity()
+        CanonicalBusinessEngine.installMaterialSearchRecords(catalogueRecords, cacheIdentity: catalogueSearchGeneration)
     }
 
     private static func formUnit(for unit: MaterialUnit) -> String {
@@ -1513,51 +1525,26 @@ struct VariationEditorSheet: View {
             showUndo("Up to \(Self.maxEvidence) files per variation", restore: nil)
             return
         }
-        let orgId = (await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
-            preferredFallback: firebaseBackend.currentOrganization?.firestoreDocumentId
-        )) ?? ""
-        guard !orgId.isEmpty else {
-            errorMessage = "Organization ID is missing. Open Settings → Force Reload Data, then retry."
-            return
-        }
         let evidenceId = UUID().uuidString
-        let pending = VariationEvidenceItem(
-            id: evidenceId,
-            fileName: fileName,
-            contentType: contentType,
-            sizeBytes: data.count,
-            storagePath: "",
-            downloadURL: "",
-            uploadedByUid: firebaseBackend.currentUser?.uid ?? "",
-            uploadedAt: Date(),
-            isPending: true
-        )
-        evidence.append(pending)
-        inFlightUploads += 1
-        do {
-            let uploaded = try await firebaseBackend.uploadVariationEvidence(
-                data: data,
+        pendingEvidenceBytes[evidenceId] = data
+        evidence.append(
+            VariationEvidenceItem(
+                id: evidenceId,
                 fileName: fileName,
                 contentType: contentType,
-                organizationId: orgId,
-                parentId: project.id.uuidString,
-                variationId: variationId,
-                evidenceId: evidenceId
+                sizeBytes: data.count,
+                storagePath: "",
+                downloadURL: "",
+                uploadedByUid: firebaseBackend.currentUser?.uid ?? "",
+                uploadedAt: Date(),
+                isPending: true
             )
-            if let idx = evidence.firstIndex(where: { $0.id == evidenceId }) {
-                evidence[idx].storagePath = uploaded.storagePath
-                evidence[idx].downloadURL = uploaded.downloadURL
-                evidence[idx].isPending = false
-            }
-        } catch {
-            evidence.removeAll { $0.id == evidenceId }
-            errorMessage = error.localizedDescription
-        }
-        inFlightUploads = max(0, inFlightUploads - 1)
+        )
     }
 
     private func removeEvidence(_ item: VariationEvidenceItem) async {
         evidence.removeAll { $0.id == item.id }
+        pendingEvidenceBytes[item.id] = nil
         if !item.storagePath.isEmpty {
             await firebaseBackend.deleteVariationEvidenceFile(storagePath: item.storagePath)
         }
@@ -1580,15 +1567,6 @@ struct VariationEditorSheet: View {
             isSaving = false
             return
         }
-        let waitDeadline = Date().addingTimeInterval(45)
-        while evidenceBusy && Date() < waitDeadline {
-            try? await Task.sleep(nanoseconds: 200_000_000)
-        }
-        if evidenceBusy {
-            errorMessage = "Evidence is still uploading. Wait a moment and tap Save again."
-            isSaving = false
-            return
-        }
         let savedLabour = labour
             .filter { $0.hoursEach > 0 && !$0.trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .map { VariationLabourLine(id: $0.id, trade: $0.trade, hours: $0.lineHours) }
@@ -1600,18 +1578,20 @@ struct VariationEditorSheet: View {
         let name = (user?.fullName.isEmpty == false ? user?.fullName : user?.email) ?? "Unknown"
         let parentType: VariationParentType = project.jobType == .smallWorks ? .smallWork : .project
         let now = Date()
+        let baseline = persistedVariation ?? existing
+        let creating = baseline == nil
         var variation: Variation
-        if var existing {
-            existing.voNumber = trackerOn ? existing.voNumber : voNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-            existing.heading = heading.trimmingCharacters(in: .whitespacesAndNewlines)
-            existing.description = descriptionText
-            existing.labour = savedLabour
-            existing.materials = savedMaterials
-            existing.evidence = evidence.filter { !$0.isPending }
-            existing.updatedByUid = uid
-            existing.updatedAt = now
-            existing.recomputeCounts()
-            variation = existing
+        if var baseline {
+            baseline.voNumber = trackerOn ? baseline.voNumber : voNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+            baseline.heading = heading.trimmingCharacters(in: .whitespacesAndNewlines)
+            baseline.description = descriptionText
+            baseline.labour = savedLabour
+            baseline.materials = savedMaterials
+            baseline.evidence = evidence.filter { !$0.isPending }
+            baseline.updatedByUid = uid
+            baseline.updatedAt = now
+            baseline.recomputeCounts()
+            variation = baseline
         } else {
             variation = Variation(
                 id: variationId,
@@ -1647,8 +1627,9 @@ struct VariationEditorSheet: View {
         }
         do {
             try await firebaseBackend.saveVariation(variation, organizationId: orgId)
+            persistedVariation = variation
             store.upsert(variation)
-            if existing == nil {
+            if creating {
                 await notificationService.notifyVariationAdded(
                     parentId: project.id,
                     parentName: variation.parentName,
@@ -1656,11 +1637,66 @@ struct VariationEditorSheet: View {
                     createdByUserId: uid
                 )
             }
-            dismiss()
         } catch {
             errorMessage = error.localizedDescription
             isSaving = false
+            return
         }
+        let uploadError = await uploadQueuedEvidence(orgId: orgId)
+        let attached = evidence.filter { !$0.isPending }
+        if attached.map(\.id) != variation.evidence.map(\.id) {
+            variation.evidence = attached
+            variation.recomputeCounts()
+            do {
+                try await firebaseBackend.saveVariation(variation, organizationId: orgId)
+                persistedVariation = variation
+                store.upsert(variation)
+            } catch {
+                errorMessage = error.localizedDescription
+                isSaving = false
+                return
+            }
+        }
+        if let uploadError {
+            errorMessage = uploadError
+            isSaving = false
+            return
+        }
+        dismiss()
+    }
+
+    /// Uploads files queued on this variation. A storage failure leaves the saved variation in place.
+    private func uploadQueuedEvidence(orgId: String) async -> String? {
+        let queued = evidence.filter(\.isPending)
+        var failed = 0
+        for item in queued {
+            guard let data = pendingEvidenceBytes[item.id] else { continue }
+            inFlightUploads += 1
+            do {
+                let uploaded = try await firebaseBackend.uploadVariationEvidence(
+                    data: data,
+                    fileName: item.fileName,
+                    contentType: item.contentType,
+                    organizationId: orgId,
+                    parentId: project.id.uuidString,
+                    variationId: variationId,
+                    evidenceId: item.id
+                )
+                if let idx = evidence.firstIndex(where: { $0.id == item.id }) {
+                    evidence[idx].storagePath = uploaded.storagePath
+                    evidence[idx].downloadURL = uploaded.downloadURL
+                    evidence[idx].isPending = false
+                }
+                pendingEvidenceBytes[item.id] = nil
+            } catch {
+                failed += 1
+            }
+            inFlightUploads = max(0, inFlightUploads - 1)
+        }
+        if failed == 0 { return nil }
+        return failed == 1
+            ? "The variation was saved. One file did not upload."
+            : "The variation was saved. \(failed) files did not upload."
     }
 
     private func mime(for fileName: String) -> String {

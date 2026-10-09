@@ -21,44 +21,113 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/bundleEntry.ts
   var bundleEntry_exports = {};
   __export(bundleEntry_exports, {
+    ANNUAL_LEAVE_ALLOWANCE_COPY: () => ANNUAL_LEAVE_ALLOWANCE_COPY,
+    CANONICAL_STANDARD_BREAK: () => CANONICAL_STANDARD_BREAK,
+    CANONICAL_STANDARD_DAY: () => CANONICAL_STANDARD_DAY,
+    DEFAULT_ANNUAL_LEAVE_DAYS: () => DEFAULT_ANNUAL_LEAVE_DAYS,
+    DEFAULT_PAYMENT_RUN_DATE_RANGES: () => DEFAULT_PAYMENT_RUN_DATE_RANGES,
+    DEFAULT_WARNING_DETECTION: () => DEFAULT_WARNING_DETECTION,
+    MIN_HALF_DAY_MINUTES: () => MIN_HALF_DAY_MINUTES,
+    accountKindFromFlags: () => accountKindFromFlags,
+    annualLeaveBalance: () => annualLeaveBalance,
+    applyEmploymentTypeChange: () => applyEmploymentTypeChange,
+    applyRemainingOverride: () => applyRemainingOverride,
     bookingBelongsToOrganization: () => bookingBelongsToOrganization,
+    canEditWorkCatalogue: () => canEditWorkCatalogue,
+    canManageVariationTracker: () => canManageVariationTracker,
+    canSeeVariations: () => canSeeVariations,
+    canViewStaffWarnings: () => canViewStaffWarnings,
+    catalogueRecordFromItem: () => catalogueRecordFromItem,
     coverageWindow: () => coverageWindow,
     dayKeyInOrganizationZone: () => dayKeyInOrganizationZone,
+    employmentEffectiveLabel: () => employmentEffectiveLabel,
+    employmentTypeOnDay: () => employmentTypeOnDay,
+    formatClockMinutes: () => formatClockMinutes,
+    halfDayWindows: () => halfDayWindows,
+    hasAnnualLeaveAllowance: () => hasAnnualLeaveAllowance,
     intervalsOverlap: () => intervalsOverlap,
     invoicingPeriod: () => invoicingPeriod,
+    invoicingToFirestore: () => invoicingToFirestore,
+    isBillableSelfEmployedDay: () => isBillableSelfEmployedDay,
+    isStaffAccount: () => isStaffAccount,
+    leaveCoverageRows: () => leaveCoverageRows,
+    leaveSlotKind: () => leaveSlotKind,
+    leaveYearBounds: () => leaveYearBounds,
+    materialRecordMatches: () => materialRecordMatches,
+    materialSearchScore: () => materialSearchScore,
+    mergeMinuteIntervals: () => mergeMinuteIntervals,
+    namedSlotKind: () => namedSlotKind,
+    normalizeEmploymentType: () => normalizeEmploymentType,
+    normalizeMaterialSearchText: () => normalizeMaterialSearchText,
     organizationIdFromValue: () => organizationIdFromValue,
     organizationIdsMatch: () => organizationIdsMatch,
     organizationScopedKey: () => organizationScopedKey,
     paidHoursForNamedSlot: () => paidHoursForNamedSlot,
+    parseClockMinutes: () => parseClockMinutes,
+    parseInvoicing: () => parseInvoicing,
+    parsePaymentRunDateRanges: () => parsePaymentRunDateRanges,
+    parseWarningDetection: () => parseWarningDetection,
+    paymentRunRangeToFirestore: () => paymentRunRangeToFirestore,
+    qualificationDismissKey: () => qualificationDismissKey,
     qualificationExpiryRows: () => qualificationExpiryRows,
+    rankMaterialRecords: () => rankMaterialRecords,
+    receivesJobNotification: () => receivesJobNotification,
+    seesEveryJob: () => seesEveryJob,
+    slotInterval: () => slotInterval,
+    snapLeaveDays: () => snapLeaveDays,
+    standardBreakWindow: () => standardBreakWindow,
     standardDayCoverage: () => standardDayCoverage,
+    standardDayWindow: () => standardDayWindow,
+    subtractMinuteIntervals: () => subtractMinuteIntervals,
+    tokenizeMaterialSearch: () => tokenizeMaterialSearch,
     unbookedLabourRows: () => unbookedLabourRows,
-    unverifiedOperativeRows: () => unverifiedOperativeRows
+    unverifiedOperativeRows: () => unverifiedOperativeRows,
+    validateInvoicingSettings: () => validateInvoicingSettings,
+    warningDetectionToFirestore: () => warningDetectionToFirestore,
+    withoutDismissedQualificationRows: () => withoutDismissedQualificationRows
   });
 
   // lib/orgTime/zoneTime.ts
   var LONDON_TIME_ZONE = "Europe/London";
+  var partsFormatters = /* @__PURE__ */ new Map();
+  var partsMemo = /* @__PURE__ */ new Map();
+  var PARTS_MEMO_LIMIT = 4096;
+  function partsFormatter(timeZone) {
+    let fmt = partsFormatters.get(timeZone);
+    if (!fmt) {
+      fmt = new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23"
+      });
+      partsFormatters.set(timeZone, fmt);
+    }
+    return fmt;
+  }
   function partsInZone(date, timeZone) {
-    const fmt = new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23"
-    });
+    const memoKey = `${timeZone}|${date.getTime()}`;
+    const cached = partsMemo.get(memoKey);
+    if (cached) return cached;
     const map = {};
-    for (const part of fmt.formatToParts(date)) {
+    for (const part of partsFormatter(timeZone).formatToParts(date)) {
       if (part.type !== "literal") map[part.type] = part.value;
     }
-    return {
+    const parts = {
       y: Number(map.year),
       m: Number(map.month),
       d: Number(map.day),
       h: Number(map.hour),
       min: Number(map.minute)
     };
+    if (partsMemo.size >= PARTS_MEMO_LIMIT) {
+      partsMemo.delete(partsMemo.keys().next().value);
+    }
+    partsMemo.set(memoKey, parts);
+    return parts;
   }
   function dayKeyInZone(date, timeZone) {
     const { y, m, d } = partsInZone(date, timeZone);
@@ -129,6 +198,121 @@ var ProjectPlannerCanonical = (() => {
   }
   function intervalsOverlap(a, b) {
     return a.start < b.end && b.start < a.end;
+  }
+  var CANONICAL_STANDARD_DAY = { start: 7 * 60 + 30, end: 16 * 60 };
+  var CANONICAL_STANDARD_BREAK = { start: 12 * 60, end: 12 * 60 + 30 };
+  var MIN_HALF_DAY_MINUTES = 60;
+  function parseClockMinutes(value) {
+    if (typeof value === "number") {
+      return Number.isFinite(value) && value >= 0 && value <= 24 * 60 ? Math.round(value) : null;
+    }
+    const text = String(value ?? "").trim();
+    const match = /^(\d{1,2}):(\d{2})$/.exec(text);
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (hours > 24 || minutes > 59) return null;
+    const total = hours * 60 + minutes;
+    return total <= 24 * 60 ? total : null;
+  }
+  function formatClockMinutes(minutes) {
+    const clamped = Math.max(0, Math.min(Math.round(minutes), 24 * 60));
+    const hours = Math.floor(clamped / 60);
+    const mins = clamped % 60;
+    return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+  }
+  function standardDayWindow(input) {
+    const start = parseClockMinutes(input?.standardDayStart);
+    const end = parseClockMinutes(input?.standardDayEnd);
+    if (start == null || end == null || end <= start) return { ...CANONICAL_STANDARD_DAY };
+    return { start, end };
+  }
+  function standardBreakWindow(input) {
+    const start = input?.breakWindowStart == null ? CANONICAL_STANDARD_BREAK.start : parseClockMinutes(input.breakWindowStart);
+    const end = input?.breakWindowEnd == null ? CANONICAL_STANDARD_BREAK.end : parseClockMinutes(input.breakWindowEnd);
+    if (start == null || end == null || end <= start) return null;
+    return { start, end };
+  }
+  function halfDayWindows(input) {
+    const day = standardDayWindow(input);
+    const breakWindow = standardBreakWindow(input);
+    const breakStart = breakWindow?.start ?? null;
+    const breakEnd = breakWindow?.end ?? null;
+    const breakUsable = breakStart != null && breakEnd != null && breakStart - day.start >= MIN_HALF_DAY_MINUTES && day.end - breakEnd >= MIN_HALF_DAY_MINUTES;
+    if (breakUsable) {
+      return {
+        day,
+        am: { start: day.start, end: breakStart },
+        pm: { start: breakEnd, end: day.end },
+        pivot: "break",
+        breakWindow: { start: breakStart, end: breakEnd }
+      };
+    }
+    const mid = day.start + Math.floor((day.end - day.start) / 2);
+    return {
+      day,
+      am: { start: day.start, end: mid },
+      pm: { start: mid, end: day.end },
+      pivot: "midpoint",
+      breakWindow: null
+    };
+  }
+  function namedSlotKind(timeSlot) {
+    const normalized = String(timeSlot || "").trim().toUpperCase().replace(/_/g, " ");
+    if (!normalized) return "UNKNOWN";
+    if (normalized.includes("FULL")) return "FULL_DAY";
+    if (normalized === "AM" || normalized.includes("MORNING")) return "AM";
+    if (normalized === "PM" || normalized.includes("AFTERNOON")) return "PM";
+    if (normalized.includes("CUSTOM")) return "CUSTOM";
+    if (normalized.includes("EVENING")) return "EVENING";
+    if (normalized.includes("OVERTIME")) return "OVERTIME";
+    return "UNKNOWN";
+  }
+  function slotInterval(booking, dayInput) {
+    const start = parseClockMinutes(booking.workStartTime);
+    const end = parseClockMinutes(booking.workEndTime);
+    if (start != null && end != null && end > start) return { start, end };
+    const windows = halfDayWindows(dayInput);
+    switch (namedSlotKind(booking.timeSlot)) {
+      case "AM":
+        return { ...windows.am };
+      case "PM":
+        return { ...windows.pm };
+      case "EVENING": {
+        const eveningEnd = Math.min(windows.day.end + 240, 24 * 60);
+        return eveningEnd > windows.day.end ? { start: windows.day.end, end: eveningEnd } : null;
+      }
+      case "OVERTIME": {
+        const overtimeStart = Math.min(windows.day.end + 240, 24 * 60);
+        const overtimeEnd = Math.min(windows.day.end + 360, 24 * 60);
+        return overtimeEnd > overtimeStart ? { start: overtimeStart, end: overtimeEnd } : null;
+      }
+      default:
+        return { ...windows.day };
+    }
+  }
+  function mergeMinuteIntervals(intervals) {
+    const sorted = intervals.filter((interval) => interval.end > interval.start).map((interval) => ({ ...interval })).sort((a, b) => a.start - b.start);
+    const merged = [];
+    for (const interval of sorted) {
+      const last = merged[merged.length - 1];
+      if (last && interval.start <= last.end) last.end = Math.max(last.end, interval.end);
+      else merged.push(interval);
+    }
+    return merged;
+  }
+  function subtractMinuteIntervals(window, covered) {
+    const gaps = [];
+    let cursor = window.start;
+    for (const interval of mergeMinuteIntervals(covered)) {
+      if (interval.end <= cursor) continue;
+      if (interval.start >= window.end) break;
+      if (interval.start > cursor) gaps.push({ start: cursor, end: Math.min(interval.start, window.end) });
+      cursor = Math.max(cursor, interval.end);
+      if (cursor >= window.end) break;
+    }
+    if (cursor < window.end) gaps.push({ start: cursor, end: window.end });
+    return gaps;
   }
   function paidHoursForNamedSlot(timeSlot, standardPaidHours = 8) {
     const normalized = String(timeSlot || "").trim().toUpperCase().replace(/_/g, " ");
@@ -236,77 +420,48 @@ var ProjectPlannerCanonical = (() => {
       endDayKey: dayKeyInZone(periodEnd, timeZone)
     };
   }
-  function parseClockMinutes(value) {
-    const match = /^(\d{1,2}):(\d{2})/.exec(String(value || "").trim());
-    if (!match) return null;
-    const hours = Number(match[1]);
-    const minutes = Number(match[2]);
-    if (hours > 23 || minutes > 59) return null;
-    return hours * 60 + minutes;
-  }
-  function mergeSpans(spans) {
-    const sorted = spans.filter((span) => span.end > span.start).sort((a, b) => a.start - b.start);
-    const merged = [];
-    for (const span of sorted) {
-      const last = merged[merged.length - 1];
-      if (!last || span.start > last.end) merged.push({ ...span });
-      else last.end = Math.max(last.end, span.end);
-    }
-    return merged;
-  }
-  function subtractSpan(base, cut) {
-    if (!cut || cut.end <= cut.start) return [...base];
-    const out = [];
-    for (const span of base) {
-      if (cut.end <= span.start || cut.start >= span.end) {
-        out.push(span);
-        continue;
-      }
-      if (cut.start > span.start) out.push({ start: span.start, end: cut.start });
-      if (cut.end < span.end) out.push({ start: cut.end, end: span.end });
-    }
-    return out;
-  }
-  function spanMinutes(spans) {
-    return spans.reduce((sum, span) => sum + (span.end - span.start), 0);
+  function intervalMinutes(intervals) {
+    return intervals.reduce((sum, interval) => sum + (interval.end - interval.start), 0);
   }
   function roundCoverageHours(hours) {
     return Math.round(hours * 100) / 100;
   }
-  function bookingCoverSpan(booking, dayStart, dayEnd, breakStart, breakEnd) {
-    const slot = String(booking.timeSlot || "").trim().toUpperCase().replace(/_/g, " ");
-    const clockStart = parseClockMinutes(booking.workStart);
-    const clockEnd = parseClockMinutes(booking.workEnd);
-    const hasClock = clockStart != null && clockEnd != null && clockEnd > clockStart;
-    if (!slot || slot.includes("FULL")) return { start: dayStart, end: dayEnd };
-    if (slot === "AM" || slot.includes("MORNING")) {
-      const end = breakStart > dayStart && breakStart < dayEnd ? breakStart : dayStart + Math.floor((dayEnd - dayStart) / 2);
-      return end > dayStart ? { start: dayStart, end } : null;
+  function withoutInterval(intervals, cut) {
+    if (!cut) return intervals.map((interval) => ({ ...interval }));
+    return intervals.flatMap((interval) => subtractMinuteIntervals(interval, [cut]));
+  }
+  function bookingCoverInterval(booking, windows) {
+    switch (namedSlotKind(booking.timeSlot)) {
+      case "UNKNOWN":
+      case "FULL_DAY":
+        return { ...windows.day };
+      case "AM":
+        return windows.am.end > windows.am.start ? { ...windows.am } : null;
+      case "PM":
+        return windows.pm.end > windows.pm.start ? { ...windows.pm } : null;
+      default: {
+        const start = parseClockMinutes(booking.workStart);
+        const end = parseClockMinutes(booking.workEnd);
+        if (start != null && end != null && end > start) return { start, end };
+        return { ...windows.day };
+      }
     }
-    if (slot === "PM" || slot.includes("AFTERNOON")) {
-      const start = breakEnd > dayStart && breakEnd < dayEnd ? breakEnd : dayStart + Math.floor((dayEnd - dayStart) / 2);
-      return dayEnd > start ? { start, end: dayEnd } : null;
-    }
-    if (hasClock) return { start: clockStart, end: clockEnd };
-    return { start: dayStart, end: dayEnd };
   }
   function standardDayCoverage(policy, bookings) {
-    const dayStart = parseClockMinutes(policy.standardDayStart) ?? 7 * 60 + 30;
-    const dayEnd = parseClockMinutes(policy.standardDayEnd) ?? 16 * 60;
-    const breakStart = parseClockMinutes(policy.breakWindowStart) ?? 12 * 60;
-    const breakEnd = parseClockMinutes(policy.breakWindowEnd) ?? 12 * 60 + 30;
-    const required = dayEnd > dayStart ? subtractSpan([{ start: dayStart, end: dayEnd }], breakEnd > breakStart ? { start: breakStart, end: breakEnd } : null) : [];
-    const requiredHours = roundCoverageHours(spanMinutes(required) / 60);
+    const windows = halfDayWindows(policy);
+    const unpaidBreak = standardBreakWindow(policy);
+    const required = withoutInterval([windows.day], unpaidBreak);
+    const requiredHours = roundCoverageHours(intervalMinutes(required) / 60);
     const covered = [];
     for (const booking of bookings) {
-      const span = bookingCoverSpan(booking, dayStart, dayEnd, breakStart, breakEnd);
-      if (!span) continue;
-      const start = Math.max(span.start, dayStart);
-      const end = Math.min(span.end, dayEnd);
+      const interval = bookingCoverInterval(booking, windows);
+      if (!interval) continue;
+      const start = Math.max(interval.start, windows.day.start);
+      const end = Math.min(interval.end, windows.day.end);
       if (end > start) covered.push({ start, end });
     }
-    const inside = subtractSpan(mergeSpans(covered), breakEnd > breakStart ? { start: breakStart, end: breakEnd } : null);
-    const coveredHours = roundCoverageHours(Math.min(requiredHours, spanMinutes(inside) / 60));
+    const inside = withoutInterval(mergeMinuteIntervals(covered), unpaidBreak);
+    const coveredHours = roundCoverageHours(Math.min(requiredHours, intervalMinutes(inside) / 60));
     return {
       requiredHours,
       coveredHours,
@@ -343,11 +498,45 @@ var ProjectPlannerCanonical = (() => {
     return user ? `${kind}:${user}:${org}` : `${kind}:${org}`;
   }
 
-  // lib/canonical/warningRows.ts
-  function zoneOf2(timeZone) {
+  // lib/canonical/dayKeys.ts
+  function zoneOrLondon(timeZone) {
     const value = String(timeZone || "").trim();
     return value || LONDON_TIME_ZONE;
   }
+  function eachDayKey(startKey, endKey, timeZone, cap = 400) {
+    if (!startKey || !endKey || startKey > endKey) return [];
+    const keys = [];
+    let cursor = dateFromDayKeyInZone(startKey, timeZone);
+    while (dayKeyInZone(cursor, timeZone) <= endKey) {
+      keys.push(dayKeyInZone(cursor, timeZone));
+      cursor = addDaysInZone(cursor, 1, timeZone);
+      if (keys.length > cap) break;
+    }
+    return keys;
+  }
+  function isoWeekdayOfDayKey(dayKey, timeZone) {
+    return isoWeekdayInZone(dateFromDayKeyInZone(dayKey, timeZone), timeZone);
+  }
+  function formatLongDayKey(dayKey, timeZone) {
+    const date = dateFromDayKeyInZone(dayKey, timeZone);
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      weekday: "long",
+      day: "numeric",
+      month: "long"
+    }).format(date);
+  }
+
+  // lib/canonical/warningRows.ts
+  function qualificationDismissKey(operativeId, qualificationId, expiryDayKey) {
+    return `qual|${String(operativeId).trim()}|${String(qualificationId).trim()}|${String(expiryDayKey).trim()}`;
+  }
+  function withoutDismissedQualificationRows(rows, dismissedKeys) {
+    const dismissed = dismissedKeys instanceof Set ? dismissedKeys : new Set(dismissedKeys);
+    if (dismissed.size === 0) return [...rows];
+    return rows.filter((row) => !(row.daysUntilExpiry < 0 && dismissed.has(row.dismissKey)));
+  }
+  var zoneOf2 = zoneOrLondon;
   function emailKey(value) {
     return String(value || "").trim().toLowerCase();
   }
@@ -373,17 +562,6 @@ var ProjectPlannerCanonical = (() => {
     const to = Date.UTC(ty, tm - 1, td);
     return Math.round((to - from) / 864e5);
   }
-  function eachDayKey(startKey, endKey, timeZone) {
-    if (!startKey || !endKey || startKey > endKey) return [];
-    const keys = [];
-    let cursor = dateFromDayKeyInZone(startKey, timeZone);
-    while (dayKeyInZone(cursor, timeZone) <= endKey) {
-      keys.push(dayKeyInZone(cursor, timeZone));
-      cursor = addDaysInZone(cursor, 1, timeZone);
-      if (keys.length > 400) break;
-    }
-    return keys;
-  }
   function workingDaysInclusive(startKey, endKey, timeZone) {
     if (!startKey || !endKey || startKey > endKey) return 0;
     let count = 0;
@@ -396,19 +574,11 @@ var ProjectPlannerCanonical = (() => {
     }
     return count;
   }
+  var formatUnbookedDay = formatLongDayKey;
   function formatCoverageHours(hours) {
     const rounded = Math.round(hours * 2) / 2;
     if (Math.abs(rounded - Math.trunc(rounded)) < 0.01) return String(Math.trunc(rounded));
     return rounded.toFixed(1);
-  }
-  function formatUnbookedDay(dayKey, timeZone) {
-    const date = dateFromDayKeyInZone(dayKey, timeZone);
-    return new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      weekday: "long",
-      day: "numeric",
-      month: "long"
-    }).format(date);
   }
   function finiteHours(value, fallback) {
     return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -445,7 +615,8 @@ var ProjectPlannerCanonical = (() => {
           daysUntilExpiry,
           severity: "low",
           title: daysUntilExpiry < 0 ? "Qualification expired" : "Qualification expiry",
-          message
+          message,
+          dismissKey: qualificationDismissKey(operative.id, expiry.qualificationId, expiryKey)
         });
       }
     }
@@ -551,6 +722,14 @@ var ProjectPlannerCanonical = (() => {
         operativesByEmail.set(email, operative);
       }
     }
+    const userIdsByEmail = /* @__PURE__ */ new Map();
+    for (const person of input.people) {
+      const email = emailKey(person.email);
+      if (!email || !person.id) continue;
+      const ids = userIdsByEmail.get(email) || /* @__PURE__ */ new Set();
+      ids.add(person.id);
+      userIdsByEmail.set(email, ids);
+    }
     const slotsFor = (email, operativeId, userId, dayKey) => {
       const slots = [];
       const ids = /* @__PURE__ */ new Set();
@@ -558,17 +737,31 @@ var ProjectPlannerCanonical = (() => {
       const linked = operativeIdsByEmail.get(email);
       if (linked) for (const id of linked) ids.add(id);
       for (const id of ids) slots.push(...operativeBookings.get(`${id}|${dayKey}`) || []);
-      if (userId) slots.push(...managerBookings.get(`${userId}|${dayKey}`) || []);
+      const userIds = /* @__PURE__ */ new Set();
+      if (userId) userIds.add(userId);
+      const linkedUsers = userIdsByEmail.get(email);
+      if (linkedUsers) for (const id of linkedUsers) userIds.add(id);
+      for (const id of userIds) slots.push(...managerBookings.get(`${id}|${dayKey}`) || []);
       return slots;
     };
     const approvedHolidays = input.holidays.filter((holiday) => holiday.approved);
-    const holidayCovers = (dayKey, userId, operativeId) => approvedHolidays.some((holiday) => {
-      if (dayKey < holiday.startDayKey || dayKey > holiday.endDayKey) return false;
-      const holidayUser = String(holiday.userId || "").trim();
-      if (userId && holidayUser && holidayUser === userId) return true;
-      if (operativeId && holiday.operativeId && holiday.operativeId === operativeId) return true;
-      return false;
-    });
+    const holidayCovers = (dayKey, email, userId, operativeId) => {
+      const userIds = /* @__PURE__ */ new Set();
+      if (userId) userIds.add(userId);
+      const linkedUsers = userIdsByEmail.get(email);
+      if (linkedUsers) for (const id of linkedUsers) userIds.add(id);
+      const operativeIds = /* @__PURE__ */ new Set();
+      if (operativeId) operativeIds.add(operativeId);
+      const linkedOps = operativeIdsByEmail.get(email);
+      if (linkedOps) for (const id of linkedOps) operativeIds.add(id);
+      return approvedHolidays.some((holiday) => {
+        if (dayKey < holiday.startDayKey || dayKey > holiday.endDayKey) return false;
+        const holidayUser = String(holiday.userId || "").trim();
+        if (holidayUser && userIds.has(holidayUser)) return true;
+        if (holiday.operativeId && operativeIds.has(holiday.operativeId)) return true;
+        return false;
+      });
+    };
     const operativeUsers = dedupeFinishedPeople(input.people.filter(isOperativeModeOnly));
     const managerUsers = dedupeFinishedPeople(input.people.filter(isManagerOrAdmin));
     const managerAdminUserIds = new Set(
@@ -611,9 +804,9 @@ var ProjectPlannerCanonical = (() => {
       };
       for (const person of operativeUsers) {
         if (excluded.has(person.id)) continue;
-        const linked = operativesByEmail.get(emailKey(person.email));
-        if (holidayCovers(dayKey, person.id, linked?.id)) continue;
         const email = emailKey(person.email);
+        const linked = operativesByEmail.get(email);
+        if (holidayCovers(dayKey, email, person.id, linked?.id)) continue;
         append({
           personKey: person.id,
           name: person.name,
@@ -624,9 +817,9 @@ var ProjectPlannerCanonical = (() => {
       }
       for (const person of managerUsers) {
         if (excluded.has(person.id)) continue;
-        const linked = operativesByEmail.get(emailKey(person.email));
-        if (holidayCovers(dayKey, person.id, linked?.id)) continue;
         const email = emailKey(person.email);
+        const linked = operativesByEmail.get(email);
+        if (holidayCovers(dayKey, email, person.id, linked?.id)) continue;
         append({
           personKey: person.id,
           name: person.name,
@@ -642,7 +835,7 @@ var ProjectPlannerCanonical = (() => {
         if (!matched && email && input.people.some((person) => emailKey(person.email) === email)) continue;
         if (matched && managerAdminUserIds.has(matched.id)) continue;
         if (matched && excluded.has(matched.id)) continue;
-        if (holidayCovers(dayKey, matched?.id, operative.id)) continue;
+        if (holidayCovers(dayKey, email, matched?.id, operative.id)) continue;
         append({
           personKey: matched?.id || operative.id,
           name: matched?.name || operative.name,
@@ -656,6 +849,804 @@ var ProjectPlannerCanonical = (() => {
       if (a.dayKey !== b.dayKey) return a.dayKey < b.dayKey ? -1 : 1;
       return a.operativeName.localeCompare(b.operativeName, void 0, { sensitivity: "base" });
     });
+  }
+
+  // lib/canonical/leaveCoverage.ts
+  function leaveSlotKind(timeSlot) {
+    const kind = namedSlotKind(timeSlot);
+    if (kind === "AM") return "AM";
+    if (kind === "PM") return "PM";
+    return "FULL_DAY";
+  }
+  function leaveLabelFor(slot) {
+    return slot === "AM" ? "AM" : slot === "PM" ? "PM" : "Full day";
+  }
+  function rangeLabel(interval) {
+    return `${formatClockMinutes(interval.start)}\u2013${formatClockMinutes(interval.end)}`;
+  }
+  function hoursOf(intervals) {
+    const minutes = intervals.reduce((sum, interval) => sum + Math.max(0, interval.end - interval.start), 0);
+    return Math.round(minutes / 60 * 100) / 100;
+  }
+  function formatHours(hours) {
+    const rounded = Math.round(hours * 4) / 4;
+    const text = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace(/0+$/, "");
+    return `${text} hour${rounded === 1 ? "" : "s"}`;
+  }
+  function joinRanges(intervals) {
+    const labels = intervals.map(rangeLabel);
+    if (labels.length <= 1) return labels[0] || "";
+    return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  }
+  function leaveCoverageRows(input) {
+    const timeZone = zoneOrLondon(input.timeZone);
+    const windows = halfDayWindows(input.day);
+    const excluded = new Set((input.excludedUserIds || []).map((id) => String(id)));
+    const approvedLeave = input.leave.filter((record) => record.approved && record.startDayKey && record.endDayKey);
+    if (approvedLeave.length === 0) return [];
+    const peopleByUserId = /* @__PURE__ */ new Map();
+    const peopleByOperativeId = /* @__PURE__ */ new Map();
+    for (const person of input.people) {
+      const userId = String(person.userId || "").trim();
+      if (userId && !peopleByUserId.has(userId)) peopleByUserId.set(userId, person);
+      for (const operativeId of person.operativeIds || []) {
+        const key = String(operativeId || "").trim();
+        if (key && !peopleByOperativeId.has(key)) peopleByOperativeId.set(key, person);
+      }
+    }
+    const personForLeave = (record) => {
+      const userId = String(record.userId || "").trim();
+      if (userId && peopleByUserId.has(userId)) return peopleByUserId.get(userId);
+      const operativeId = String(record.operativeId || "").trim();
+      if (operativeId && peopleByOperativeId.has(operativeId)) return peopleByOperativeId.get(operativeId);
+      return void 0;
+    };
+    const bookingsByPersonDay = /* @__PURE__ */ new Map();
+    for (const booking of input.bookings) {
+      const personId = String(booking.personId || "").trim();
+      if (!personId || !booking.dayKey) continue;
+      const person = booking.kind === "manager" ? peopleByUserId.get(personId) : peopleByOperativeId.get(personId);
+      if (!person) continue;
+      const key = `${person.personKey}|${booking.dayKey}`;
+      const list = bookingsByPersonDay.get(key) || [];
+      list.push(booking);
+      bookingsByPersonDay.set(key, list);
+    }
+    const rows = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const dayKey of eachDayKey(input.startDayKey, input.endDayKey, timeZone)) {
+      const iso = isoWeekdayOfDayKey(dayKey, timeZone);
+      const weekend = iso === 6 || iso === 7;
+      for (const record of approvedLeave) {
+        if (dayKey < record.startDayKey || dayKey > record.endDayKey) continue;
+        const person = personForLeave(record);
+        if (!person) continue;
+        const dedupe = `${person.personKey}|${dayKey}|${record.id}`;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        const leaveSlot = leaveSlotKind(record.timeSlot);
+        const leaveWindow = leaveSlot === "AM" ? windows.am : leaveSlot === "PM" ? windows.pm : windows.day;
+        const dayBookings = bookingsByPersonDay.get(`${person.personKey}|${dayKey}`) || [];
+        const intervals = dayBookings.map((booking) => ({ booking, interval: slotInterval(booking, input.day) })).filter((entry) => entry.interval !== null);
+        const personName = String(person.name || "").trim() || person.personKey;
+        const userId = String(person.userId || "").trim() || void 0;
+        const operativeId = String(record.operativeId || person.operativeIds?.[0] || "").trim() || void 0;
+        const longDay = formatLongDayKey(dayKey, timeZone);
+        const leaveLabel = leaveLabelFor(leaveSlot);
+        const clashes = intervals.filter(({ interval }) => intervalsOverlap(interval, leaveWindow)).map(({ booking, interval }) => ({
+          bookingId: booking.id,
+          kind: booking.kind,
+          label: String(booking.label || "").trim() || (booking.kind === "manager" ? "Manager booking" : "Booking"),
+          start: interval.start,
+          end: interval.end,
+          overlapStart: Math.max(interval.start, leaveWindow.start),
+          overlapEnd: Math.min(interval.end, leaveWindow.end)
+        })).sort((a, b) => a.start - b.start);
+        if (clashes.length > 0) {
+          const bookedText = clashes.map((clash) => `${clash.label} ${formatClockMinutes(clash.start)}\u2013${formatClockMinutes(clash.end)}`).join(", ");
+          const leaveText = leaveSlot === "FULL_DAY" ? "full-day annual leave" : `${leaveLabel} annual leave (${rangeLabel(leaveWindow)})`;
+          rows.push({
+            id: `leave-clash-${dayKey}-${person.personKey}-${record.id}`,
+            kind: "leave_clash",
+            personKey: person.personKey,
+            personName,
+            userId,
+            operativeId,
+            dayKey,
+            leaveId: record.id,
+            leaveSlot,
+            leaveLabel,
+            leaveWindow: { ...leaveWindow },
+            clashes,
+            workingWindow: null,
+            missing: [],
+            missingHours: 0,
+            bookedHours: hoursOf(mergeMinuteIntervals(intervals.map((entry) => entry.interval))),
+            severity: "high",
+            title: "Booked during annual leave",
+            message: `${personName} is booked ${bookedText} on ${longDay} while on ${leaveText}.`
+          });
+        }
+        if (leaveSlot === "FULL_DAY") continue;
+        if (weekend && !input.includeWeekends) continue;
+        if (userId && excluded.has(userId)) continue;
+        const workingWindow = leaveSlot === "PM" ? windows.am : windows.pm;
+        const workingLabel = leaveSlot === "PM" ? "AM" : "PM";
+        const covered = intervals.map((entry) => entry.interval);
+        const missing = subtractMinuteIntervals(workingWindow, covered);
+        if (missing.length === 0) continue;
+        const missingHours = hoursOf(missing);
+        const bookedInWorking = subtractMinuteIntervals(workingWindow, missing);
+        const bookedHours = hoursOf(bookedInWorking);
+        const message = bookedHours > 0 ? `${personName} has ${leaveLabel} annual leave on ${longDay}. The ${workingLabel} (${rangeLabel(workingWindow)}) is only booked ${joinRanges(bookedInWorking)}; ${joinRanges(missing)} (${formatHours(missingHours)}) is not booked.` : `${personName} has ${leaveLabel} annual leave on ${longDay} but is not booked for the ${workingLabel} (${rangeLabel(workingWindow)}, ${formatHours(missingHours)}).`;
+        rows.push({
+          id: `leave-cover-${dayKey}-${person.personKey}-${record.id}`,
+          kind: "leave_cover",
+          personKey: person.personKey,
+          personName,
+          userId,
+          operativeId,
+          dayKey,
+          leaveId: record.id,
+          leaveSlot,
+          leaveLabel,
+          leaveWindow: { ...leaveWindow },
+          clashes: [],
+          workingWindow: { ...workingWindow },
+          missing,
+          missingHours,
+          bookedHours,
+          severity: "medium",
+          title: "Half-day leave not covered",
+          message
+        });
+      }
+    }
+    return rows.sort((a, b) => {
+      if (a.dayKey !== b.dayKey) return a.dayKey < b.dayKey ? -1 : 1;
+      if (a.kind !== b.kind) return a.kind === "leave_clash" ? -1 : 1;
+      return a.personName.localeCompare(b.personName, void 0, { sensitivity: "base" });
+    });
+  }
+
+  // lib/canonical/staffAccess.ts
+  function isStaffAccount(role) {
+    if (role.isOperativeMode) return false;
+    return role.isSuperAdmin || role.isAdmin || role.isManager;
+  }
+  function seesEveryJob(role) {
+    return isStaffAccount(role);
+  }
+  function canViewStaffWarnings(role) {
+    return isStaffAccount(role);
+  }
+  function canSeeVariations(role) {
+    return isStaffAccount(role);
+  }
+  function canManageVariationTracker(role) {
+    if (role.isOperativeMode) return false;
+    return role.isSuperAdmin || role.isAdmin;
+  }
+  function canEditWorkCatalogue(role, catalogue, toggles) {
+    if (role.isOperativeMode) return false;
+    if (role.isSuperAdmin) return true;
+    if (!role.isAdmin && !role.isManager) return false;
+    return catalogue === "projects" ? toggles.projects === true : toggles.smallWorks === true;
+  }
+  function normalizedId(value) {
+    return String(value ?? "").trim();
+  }
+  function receivesJobNotification(input) {
+    const userId = normalizedId(input.userId);
+    if (!userId) return false;
+    const role = input.role;
+    if (role.isOperativeMode) return false;
+    if (role.isSuperAdmin || role.isAdmin) return true;
+    const assigned = input.assignedManagerUserIds.map(normalizedId);
+    if (assigned.includes(userId)) return true;
+    const line = (input.lineManagerUserIds ?? []).map(normalizedId);
+    return line.includes(userId);
+  }
+
+  // lib/canonical/organizationSettings.ts
+  var DEFAULT_WEEKEND = {
+    allHoursAtMultiplierMode: false,
+    allHoursMultiplier: 2,
+    definedWindowStart: "07:30",
+    definedWindowEnd: "16:00",
+    countsAsStandardHours: 8,
+    outsideWindowMultiplier: 1.5,
+    sameAsSaturday: false
+  };
+  var DEFAULT_SUNDAY = {
+    ...DEFAULT_WEEKEND,
+    sameAsSaturday: true
+  };
+  var DEFAULT_PAYROLL_POLICY = {
+    standardDayStart: "07:30",
+    standardDayEnd: "16:00",
+    unpaidBreakMinutes: 30,
+    standardPaidHours: 8,
+    breakWindowStart: "12:00",
+    breakWindowEnd: "12:30",
+    weekdayOutsideStandardMultiplier: 1.5,
+    saturday: { ...DEFAULT_WEEKEND },
+    sunday: { ...DEFAULT_SUNDAY }
+  };
+  var DEFAULT_PAYMENT_RUN_DATE_RANGES = CANONICAL_HALF_MONTH_RANGES.map((range) => ({
+    ...range
+  }));
+  var DEFAULT_WARNING_DETECTION = {
+    detectClashes: true,
+    clashLookaheadMode: "numberOfDays",
+    clashLookaheadDays: 7,
+    includeWeekendsForUnbookedLabour: false,
+    excludedUserIdsFromUnbookedWarnings: []
+  };
+  var DEFAULT_INVOICING = {
+    paymentRunMode: "date_ranges",
+    paymentDateMode: "recurring_date",
+    recurringRunStartDay: "monday",
+    recurringRunEndDay: "sunday",
+    recurringPaymentDay: "friday",
+    paymentRunDateRanges: DEFAULT_PAYMENT_RUN_DATE_RANGES.map((range) => ({ ...range })),
+    paymentDates: [],
+    noteToUsers: "If your timesheet displays 0 against your rate, then your day/hourly rate hasn't been set by your line manager"
+  };
+  var MONTH_DAYS = 31;
+  function asSettingsRecord(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return void 0;
+    return value;
+  }
+  function parseDayOfMonth(value) {
+    const n = Number(value);
+    if (Number.isInteger(n) && n >= 1 && n <= 31) return n;
+    return 0;
+  }
+  function stringIdList(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map((id) => String(id).trim()).filter(Boolean);
+  }
+  function parsePaymentRunDateRanges(data) {
+    const raw = data?.paymentRunDateRanges;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return DEFAULT_PAYMENT_RUN_DATE_RANGES.map((range) => ({ ...range }));
+    }
+    const ranges = raw.slice(0, 2).map((entry) => {
+      const row = entry || {};
+      return {
+        startDay: parseDayOfMonth(row.startDay ?? row.startDate),
+        endDay: parseDayOfMonth(row.endDay ?? row.endDate)
+      };
+    });
+    while (ranges.length < 2) ranges.push({ startDay: 0, endDay: 0 });
+    return ranges;
+  }
+  function paymentRunRangeToFirestore(range) {
+    return {
+      startDay: range.startDay,
+      endDay: range.endDay,
+      startDate: range.startDay,
+      endDate: range.endDay
+    };
+  }
+  function clampClashLookaheadDays(value) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const rec = value;
+      if (rec.integerValue != null) return clampClashLookaheadDays(rec.integerValue);
+      if (rec.doubleValue != null) return clampClashLookaheadDays(rec.doubleValue);
+    }
+    const n = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(n)) return DEFAULT_WARNING_DETECTION.clashLookaheadDays;
+    return Math.max(1, Math.min(365, Math.round(n)));
+  }
+  function parseClashLookaheadMode(value) {
+    const mode = String(value || "").trim();
+    if (mode === "numberOfDays" || mode === "days") return "numberOfDays";
+    if (mode === "endOfInvoicingPeriod" || mode === "invoicing") return "endOfInvoicingPeriod";
+    if (mode === "endOfWorkingWeek" || mode === "week") return "endOfWorkingWeek";
+    return DEFAULT_WARNING_DETECTION.clashLookaheadMode;
+  }
+  function excludedUnbookedUserIds(record) {
+    if (Array.isArray(record.excludedUserIdsFromUnbookedWarnings)) {
+      return stringIdList(record.excludedUserIdsFromUnbookedWarnings);
+    }
+    for (const key of ["excludedUserIds", "excludedUsers", "excludedUserIdsFromWarnings", "unbookedWarningExcludedUserIds"]) {
+      if (Array.isArray(record[key])) return stringIdList(record[key]);
+    }
+    return [];
+  }
+  function parseWarningDetection(data) {
+    const record = asSettingsRecord(data);
+    if (!record) return { ...DEFAULT_WARNING_DETECTION, excludedUserIdsFromUnbookedWarnings: [] };
+    const daysRaw = record.clashLookaheadDays ?? record.lookaheadDays ?? record.lookAheadDays ?? record.numberOfDays ?? record.daysAhead;
+    const days = daysRaw === void 0 || daysRaw === null ? DEFAULT_WARNING_DETECTION.clashLookaheadDays : daysRaw;
+    return {
+      detectClashes: record.detectClashes !== false,
+      clashLookaheadMode: parseClashLookaheadMode(
+        record.clashLookaheadMode ?? record.lookAheadMode ?? record.lookaheadMode
+      ),
+      clashLookaheadDays: clampClashLookaheadDays(days),
+      includeWeekendsForUnbookedLabour: Boolean(record.includeWeekendsForUnbookedLabour),
+      excludedUserIdsFromUnbookedWarnings: excludedUnbookedUserIds(record)
+    };
+  }
+  function warningDetectionToFirestore(settings) {
+    return {
+      detectClashes: settings.detectClashes,
+      clashLookaheadMode: settings.clashLookaheadMode,
+      clashLookaheadDays: clampClashLookaheadDays(settings.clashLookaheadDays),
+      includeWeekendsForUnbookedLabour: settings.includeWeekendsForUnbookedLabour,
+      excludedUserIdsFromUnbookedWarnings: settings.excludedUserIdsFromUnbookedWarnings
+    };
+  }
+  function parseInvoicing(data) {
+    if (!data) return { ...DEFAULT_INVOICING, paymentRunDateRanges: DEFAULT_PAYMENT_RUN_DATE_RANGES.map((range) => ({ ...range })) };
+    const paymentRunMode = data.paymentRunMode === "recurring_timeframe" ? "recurring_timeframe" : "date_ranges";
+    const paymentDateMode = data.paymentDateMode === "specific_dates" ? "specific_dates" : "recurring_date";
+    const paymentDates = Array.isArray(data.paymentDates) ? data.paymentDates.map((d) => String(parseDayOfMonth(d) || Number(d) || "")).filter(Boolean) : [];
+    return {
+      paymentRunMode,
+      paymentDateMode,
+      recurringRunStartDay: String(data.recurringRunStartDay ?? DEFAULT_INVOICING.recurringRunStartDay),
+      recurringRunEndDay: String(data.recurringRunEndDay ?? DEFAULT_INVOICING.recurringRunEndDay),
+      recurringPaymentDay: String(data.recurringPaymentDay ?? DEFAULT_INVOICING.recurringPaymentDay),
+      paymentRunDateRanges: parsePaymentRunDateRanges(data),
+      paymentDates,
+      noteToUsers: String(data.noteToUsers ?? DEFAULT_INVOICING.noteToUsers)
+    };
+  }
+  function capitalizeWeekday(day) {
+    if (!day) return day;
+    return day.charAt(0).toUpperCase() + day.slice(1);
+  }
+  function invoicingToFirestore(settings) {
+    return {
+      paymentRunMode: settings.paymentRunMode,
+      paymentDateMode: settings.paymentDateMode,
+      paymentRunDateRanges: settings.paymentRunDateRanges.map(paymentRunRangeToFirestore),
+      paymentDates: settings.paymentDates.map((d) => Number(d)),
+      noteToUsers: settings.noteToUsers,
+      recurringPaymentRunSummary: `In arrears: ${capitalizeWeekday(settings.recurringRunStartDay)} to ${capitalizeWeekday(settings.recurringRunEndDay)} (of the previous week)`,
+      recurringRunStartDay: settings.recurringRunStartDay,
+      recurringRunEndDay: settings.recurringRunEndDay,
+      recurringPaymentDay: settings.recurringPaymentDay
+    };
+  }
+  function isValidDay(day) {
+    return Number.isInteger(day) && day >= 1 && day <= MONTH_DAYS;
+  }
+  function validatePaymentRunDateRanges(ranges) {
+    if (ranges.length < 2) {
+      return "Set two payment run date ranges that together cover every day of the month.";
+    }
+    const [run1, run2] = ranges;
+    if (!isValidDay(run1.startDay) || !isValidDay(run1.endDay)) {
+      return "Payment run 1 needs a start and end day (1\u201331).";
+    }
+    if (!isValidDay(run2.startDay) || !isValidDay(run2.endDay)) {
+      return "Payment run 2 needs a start and end day (1\u201331).";
+    }
+    if (run1.startDay > run1.endDay) return "Payment run 1: start day must be on or before end day.";
+    if (run2.startDay > run2.endDay) return "Payment run 2: start day must be on or before end day.";
+    if (run1.startDay !== 1) return "Payment run 1 must start on day 1 of the month.";
+    if (run2.endDay !== MONTH_DAYS) {
+      return `Payment run 2 must end on day ${MONTH_DAYS} so all days of the month are covered.`;
+    }
+    if (run2.startDay !== run1.endDay + 1) {
+      return "Payment runs must not overlap \u2014 run 2 should start the day after run 1 ends (e.g. 1\u201315 then 16\u201331).";
+    }
+    const covered = /* @__PURE__ */ new Set();
+    for (const range of ranges) {
+      for (let day = range.startDay; day <= range.endDay; day += 1) {
+        if (covered.has(day)) {
+          return "Payment run date ranges overlap. Each day of the month must belong to exactly one run.";
+        }
+        covered.add(day);
+      }
+    }
+    if (covered.size !== MONTH_DAYS) {
+      return `All ${MONTH_DAYS} days of the month must be covered across your payment runs.`;
+    }
+    return null;
+  }
+  function validatePaymentDates(paymentDates, expectedCount) {
+    if (paymentDates.length < expectedCount) {
+      return `Set ${expectedCount} payment date${expectedCount === 1 ? "" : "s"} \u2014 one for each payment run.`;
+    }
+    for (let i = 0; i < expectedCount; i += 1) {
+      if (!isValidDay(paymentDates[i])) {
+        return `Payment date ${i + 1} must be a day of the month (1\u201331).`;
+      }
+    }
+    return null;
+  }
+  function validateInvoicingSettings(settings) {
+    if (settings.paymentRunMode === "date_ranges") {
+      const rangeError = validatePaymentRunDateRanges(settings.paymentRunDateRanges);
+      if (rangeError) return rangeError;
+      if (settings.paymentDateMode !== "specific_dates") {
+        return "Choose payment date/s when using payment run date ranges.";
+      }
+      const paymentDays = settings.paymentDates.map((d) => Number(d)).filter((d) => Number.isFinite(d) && d > 0);
+      return validatePaymentDates(paymentDays, 2);
+    }
+    if (settings.paymentRunMode === "recurring_timeframe") {
+      if (!settings.recurringRunStartDay || !settings.recurringRunEndDay) {
+        return "Choose a start day and end day for your recurring payment run.";
+      }
+      if (settings.paymentDateMode === "recurring_date" && !settings.recurringPaymentDay) {
+        return "Choose a recurring payment date.";
+      }
+      if (settings.paymentDateMode === "specific_dates") {
+        const paymentDays = settings.paymentDates.map((d) => Number(d)).filter((d) => Number.isFinite(d) && d > 0);
+        if (paymentDays.length < 1) return "Set at least one payment date.";
+        for (const day of paymentDays) {
+          if (!isValidDay(day)) return "Each payment date must be a day of the month (1\u201331).";
+        }
+      }
+    }
+    return null;
+  }
+
+  // lib/canonical/userProfile.ts
+  function normalizeEmploymentType(raw) {
+    if (raw === "paye") return "paye";
+    if (raw === "self_employed" || raw === "selfEmployed") return "self_employed";
+    return "self_employed";
+  }
+  function accountKindFromFlags(flags) {
+    if (flags.isSuperAdmin) return "admin";
+    if (flags.adminAccess || flags.role === "admin") return "admin";
+    if (flags.operativeMode) return "operative";
+    return "manager";
+  }
+  function validDay(value) {
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? void 0 : value;
+    if (typeof value === "string" || typeof value === "number") {
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? void 0 : parsed;
+    }
+    return void 0;
+  }
+  function employmentTypeOnDay(user, date, timeZone) {
+    const current = normalizeEmploymentType(user.employmentType);
+    const from = user.employmentTypeTransitionFrom;
+    const day = validDay(date);
+    const effectiveAt = validDay(user.employmentTypeEffectiveAt);
+    if (!from || !day || !effectiveAt) return current;
+    const zone = zoneOrLondon(timeZone);
+    if (dayKeyInZone(day, zone) < dayKeyInZone(effectiveAt, zone)) {
+      return normalizeEmploymentType(from);
+    }
+    return current;
+  }
+  function isBillableSelfEmployedDay(user, date, timeZone) {
+    return employmentTypeOnDay(user, date, timeZone) === "self_employed";
+  }
+  function applyEmploymentTypeChange(input) {
+    const next = normalizeEmploymentType(input.nextType);
+    const previous = normalizeEmploymentType(input.previousType);
+    if (next === previous) {
+      const existing = validDay(input.previousEffectiveAt);
+      return {
+        employmentType: next,
+        employmentTypeTransitionFrom: input.previousTransitionFrom ? String(input.previousTransitionFrom) : null,
+        employmentTypeEffectiveAt: existing ?? null
+      };
+    }
+    const zone = zoneOrLondon(input.timeZone);
+    const todayKey = dayKeyInZone(input.now ?? /* @__PURE__ */ new Date(), zone);
+    if (input.effectiveAt === "immediate") {
+      return { employmentType: next, employmentTypeTransitionFrom: null, employmentTypeEffectiveAt: null };
+    }
+    const when = validDay(input.effectiveAt);
+    if (!when || dayKeyInZone(when, zone) <= todayKey) {
+      return { employmentType: next, employmentTypeTransitionFrom: null, employmentTypeEffectiveAt: null };
+    }
+    return {
+      employmentType: next,
+      employmentTypeTransitionFrom: previous,
+      employmentTypeEffectiveAt: when
+    };
+  }
+  function employmentEffectiveLabel(user, now = /* @__PURE__ */ new Date(), timeZone) {
+    const effectiveAt = validDay(user.employmentTypeEffectiveAt);
+    if (!effectiveAt || !user.employmentTypeTransitionFrom) return "Effective immediately";
+    const zone = zoneOrLondon(timeZone);
+    if (dayKeyInZone(now, zone) >= dayKeyInZone(effectiveAt, zone)) return "Effective immediately";
+    const [year, month, day] = dayKeyInZone(effectiveAt, zone).split("-").map(Number);
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${day} ${months[(month || 1) - 1]} ${year}`;
+  }
+
+  // lib/canonical/annualLeaveBalance.ts
+  var DEFAULT_ANNUAL_LEAVE_DAYS = 25;
+  var ANNUAL_LEAVE_ALLOWANCE_COPY = {
+    toggleTitle: "Annual leave allowance",
+    toggleDescription: "Turn off annual leave allowances using this toggle. This is generally used for self-employed staff who do not get paid annual leave, therefore they do not have a set number of days per year.",
+    toggleNote: "When off, this person can still book and see annual leave. They see days taken in the company leave year, not a remaining balance or days per year.",
+    remainingTitle: "Manually adjust this user's remaining annual leave allowance for this year",
+    remainingNote: "This number will reset to the Days per year figure at the end of your company year."
+  };
+  function hasAnnualLeaveAllowance(enabled) {
+    return enabled !== false;
+  }
+  function snapLeaveDays(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(n * 2) / 2;
+  }
+  function clampMonth(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    const month = Math.trunc(n);
+    if (month < 1 || month > 12) return fallback;
+    return month;
+  }
+  function pad2(n) {
+    return n < 10 ? `0${n}` : String(n);
+  }
+  function lastDayOfMonth(year, month) {
+    return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+  function parseDayKey(value) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return { year, month, day };
+  }
+  function leaveYearBounds(input) {
+    const parsed = parseDayKey(input.onDayKey);
+    const startMonth = clampMonth(input.startMonth, 1);
+    const endMonth = clampMonth(input.endMonth, 12);
+    if (!parsed) {
+      const startDayKey2 = `1970-${pad2(startMonth)}-01`;
+      const endDay2 = lastDayOfMonth(endMonth <= startMonth ? 1971 : 1970, endMonth);
+      const endDayKey2 = `${endMonth <= startMonth ? 1971 : 1970}-${pad2(endMonth)}-${pad2(endDay2)}`;
+      return { startDayKey: startDayKey2, endDayKey: endDayKey2, yearKey: startDayKey2 };
+    }
+    let year = parsed.year;
+    if (parsed.month < startMonth) year -= 1;
+    const startDayKey = `${year}-${pad2(startMonth)}-01`;
+    const endYear = endMonth <= startMonth ? year + 1 : year;
+    const endDay = lastDayOfMonth(endYear, endMonth);
+    const endDayKey = `${endYear}-${pad2(endMonth)}-${pad2(endDay)}`;
+    return { startDayKey, endDayKey, yearKey: startDayKey };
+  }
+  function leaveUnits(slot) {
+    const raw = String(slot || "").trim().toUpperCase().replace(/\s+/g, "_");
+    if (raw === "AM" || raw === "PM") return 0.5;
+    return 1;
+  }
+  function bookingDays(startDayKey, endDayKey, timeZone) {
+    const keys = eachDayKey(startDayKey, endDayKey || startDayKey, timeZone);
+    return keys.length;
+  }
+  function bookingCount(booking, timeZone) {
+    const start = String(booking.startDayKey || "").trim();
+    if (!parseDayKey(start)) return 0;
+    const end = String(booking.endDayKey || start).trim() || start;
+    return snapLeaveDays(bookingDays(start, end, timeZone) * leaveUnits(booking.timeSlot));
+  }
+  function bookingsInYear(bookings, startDayKey, endDayKey, status, timeZone) {
+    let total = 0;
+    for (const booking of bookings) {
+      const raw = String(booking.status || "approved").toLowerCase();
+      if (raw !== status) continue;
+      const start = String(booking.startDayKey || "").trim();
+      if (start < startDayKey || start > endDayKey) continue;
+      total += bookingCount(booking, timeZone);
+    }
+    return snapLeaveDays(total);
+  }
+  function resolveDaysPerYear(userDays, orgDays) {
+    const user = Number(userDays);
+    if (Number.isFinite(user) && user >= 0) return snapLeaveDays(user);
+    const org = Number(orgDays);
+    if (Number.isFinite(org) && org >= 0) return snapLeaveDays(org);
+    return DEFAULT_ANNUAL_LEAVE_DAYS;
+  }
+  function previousYearEndKey(startDayKey, timeZone) {
+    const start = dateFromDayKeyInZone(startDayKey, timeZone);
+    return dayKeyInZone(addDaysInZone(start, -1, timeZone), timeZone);
+  }
+  function annualLeaveBalance(input) {
+    const hasAllowance = hasAnnualLeaveAllowance(input.annualLeaveEnabled);
+    const timeZone = zoneOrLondon(input.timeZone);
+    const orgStart = clampMonth(input.orgStartMonth, 1);
+    const orgEnd = clampMonth(input.orgEndMonth, 12);
+    const startMonth = hasAllowance ? clampMonth(input.startMonth, orgStart) : orgStart;
+    const endMonth = hasAllowance ? clampMonth(input.endMonth, orgEnd) : orgEnd;
+    const year = leaveYearBounds({ startMonth, endMonth, onDayKey: input.onDayKey });
+    const bookings = input.bookings ?? [];
+    const taken = bookingsInYear(bookings, year.startDayKey, year.endDayKey, "approved", timeZone);
+    const pending = bookingsInYear(bookings, year.startDayKey, year.endDayKey, "pending", timeZone);
+    const daysPerYear = hasAllowance ? resolveDaysPerYear(input.daysPerYear, input.orgDaysPerYear) : 0;
+    const overrideKey = String(input.yearAllowanceKey || "").trim();
+    const overrideApplies = hasAllowance && overrideKey !== "" && overrideKey === year.yearKey && Number.isFinite(Number(input.yearAllowance));
+    let carriedForward = 0;
+    if (hasAllowance && input.carriesOver === true && !overrideApplies && daysPerYear > 0) {
+      const prevOn = previousYearEndKey(year.startDayKey, timeZone);
+      const previous = leaveYearBounds({ startMonth, endMonth, onDayKey: prevOn });
+      const prevTaken = bookingsInYear(
+        bookings,
+        previous.startDayKey,
+        previous.endDayKey,
+        "approved",
+        timeZone
+      );
+      carriedForward = Math.max(0, snapLeaveDays(daysPerYear - prevTaken));
+    }
+    const yearAllowance = overrideApplies ? snapLeaveDays(input.yearAllowance) : null;
+    const pot = yearAllowance != null ? yearAllowance : daysPerYear + carriedForward;
+    const remaining = hasAllowance ? snapLeaveDays(pot - taken - pending) : null;
+    return {
+      hasAllowance,
+      startDayKey: year.startDayKey,
+      endDayKey: year.endDayKey,
+      yearKey: year.yearKey,
+      taken,
+      pending,
+      usedThisYear: taken,
+      daysPerYear,
+      carriedForward,
+      yearAllowance,
+      remaining
+    };
+  }
+  function applyRemainingOverride(input) {
+    const remaining = snapLeaveDays(input.remaining);
+    const taken = snapLeaveDays(input.taken);
+    const pending = snapLeaveDays(input.pending);
+    return {
+      annualLeaveYearAllowance: snapLeaveDays(remaining + taken + pending),
+      annualLeaveYearAllowanceKey: String(input.yearKey || "").trim()
+    };
+  }
+
+  // lib/canonical/materialSearch.ts
+  var UNIT_TOKEN = /^(mm2|mm|cm|m|kg)$/;
+  var NUMBER_TOKEN = /^\d+(?:\.\d+)?$/;
+  var MEASURE_TOKEN = /^(\d+(?:\.\d+)?)(mm2|mm|cm|m|kg)$/;
+  function normalizeMaterialSearchText(value) {
+    return String(value || "").toLowerCase().replace(/mm²|mm\^2/g, "mm2").replace(/&/g, " ").replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function expandToken(token) {
+    const out = /* @__PURE__ */ new Set([token]);
+    const measure = MEASURE_TOKEN.exec(token);
+    if (measure) {
+      const amount = measure[1];
+      const unit = measure[2];
+      out.add(amount);
+      out.add(unit);
+      out.add(amount + unit);
+      if (unit === "mm2") {
+        out.add(`${amount}mm`);
+        out.add("mm");
+      }
+    }
+    const code = /^(\d+)([a-z]+)$/.exec(token);
+    if (code) out.add(code[1]);
+    return [...out];
+  }
+  function tokenizeMaterialSearch(value) {
+    const raw = normalizeMaterialSearchText(value).split(" ").filter(Boolean);
+    const tokens = [];
+    for (let i = 0; i < raw.length; i += 1) {
+      const current = raw[i];
+      const next = raw[i + 1];
+      if (next && NUMBER_TOKEN.test(current) && UNIT_TOKEN.test(next)) {
+        tokens.push(current + next);
+        i += 1;
+        continue;
+      }
+      tokens.push(current);
+    }
+    return tokens;
+  }
+  function fieldTokens(value) {
+    const tokens = normalizeMaterialSearchText(value).split(" ").filter(Boolean);
+    const expanded = [];
+    for (const token of tokens) expanded.push(...expandToken(token));
+    return expanded;
+  }
+  function bestHit(...hits) {
+    if (hits.includes("exact")) return "exact";
+    if (hits.includes("prefix")) return "prefix";
+    if (hits.includes("contains")) return "contains";
+    return null;
+  }
+  function tokenHit(queryToken, hayTokens) {
+    if (!queryToken) return null;
+    for (const hay of hayTokens) {
+      if (hay === queryToken) return "exact";
+    }
+    if (queryToken.length >= 2) {
+      for (const hay of hayTokens) {
+        if (hay.startsWith(queryToken)) return "prefix";
+      }
+    }
+    if (queryToken.length >= 3) {
+      for (const hay of hayTokens) {
+        if (hay.includes(queryToken) || hay.length >= 3 && queryToken.startsWith(hay)) return "contains";
+      }
+    }
+    return null;
+  }
+  function recordFields(record) {
+    return {
+      name: fieldTokens(record.name),
+      brand: fieldTokens(record.brand),
+      code: fieldTokens(record.productCode),
+      extra: [
+        ...fieldTokens(record.category),
+        ...fieldTokens(record.size),
+        ...fieldTokens(record.length)
+      ]
+    };
+  }
+  function materialSearchScore(query, record) {
+    const tokens = tokenizeMaterialSearch(query);
+    if (tokens.length === 0) return 1;
+    const fields = recordFields(record);
+    const all = [...fields.name, ...fields.brand, ...fields.code, ...fields.extra];
+    let score = 0;
+    for (const token of tokens) {
+      const named = tokenHit(token, fields.name);
+      const branded = tokenHit(token, fields.brand);
+      const coded = tokenHit(token, fields.code);
+      const extra = tokenHit(token, fields.extra);
+      const hit = bestHit(coded, named, branded, extra, tokenHit(token, all));
+      if (!hit) return 0;
+      if (hit === "exact") score += 40;
+      else if (hit === "prefix") score += 26;
+      else score += 12;
+      if (coded) score += 18;
+      if (named) score += 8;
+    }
+    const name = normalizeMaterialSearchText(record.name);
+    const joined = tokens.join(" ");
+    if (name.startsWith(joined)) score += 24;
+    else if (name.includes(joined)) score += 10;
+    const nameLength = name.length;
+    if (nameLength > 0) score += Math.max(0, 20 - Math.floor(nameLength / 8));
+    return score;
+  }
+  function materialRecordMatches(query, record) {
+    return materialSearchScore(query, record) > 0;
+  }
+  function rankMaterialRecords(query, records, limit) {
+    const tokens = tokenizeMaterialSearch(query);
+    const hits = [];
+    for (let index = 0; index < records.length; index += 1) {
+      const score = tokens.length === 0 ? 1 : materialSearchScore(query, records[index]);
+      if (score > 0) hits.push({ index, score });
+    }
+    if (tokens.length > 0) {
+      hits.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        const left = normalizeMaterialSearchText(records[a.index]?.name);
+        const right = normalizeMaterialSearchText(records[b.index]?.name);
+        return left.localeCompare(right);
+      });
+    }
+    const cap = Number(limit);
+    if (Number.isFinite(cap) && cap > 0) return hits.slice(0, cap);
+    return hits;
+  }
+  function catalogueRecordFromItem(item) {
+    return {
+      name: item.name,
+      brand: item.brand,
+      productCode: item.productCode,
+      category: item.category,
+      size: item.size,
+      length: item.length
+    };
   }
   return __toCommonJS(bundleEntry_exports);
 })();

@@ -68,6 +68,7 @@ class AppSettingsStore: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.syncMyScheduleOptionsFromOrganization()
+                self?.applyOrganizationMaterialCutOff()
             }
         }
 
@@ -160,6 +161,7 @@ class AppSettingsStore: ObservableObject {
         do {
             if let remote = try await backend.loadUserNotificationPreferences(userId: userId) {
                 settings.notifications = remote
+                applyOrganizationMaterialCutOff()
                 await persistSettingsWithoutMyScheduleMerge()
             } else {
                 try await backend.saveUserNotificationPreferences(settings.notifications, userId: userId)
@@ -195,14 +197,29 @@ class AppSettingsStore: ObservableObject {
     
     func updateNotifications(_ notificationSettings: NotificationSettings) async {
         settings.notifications = notificationSettings
-        if let backend = firebaseBackend, let userId = backend.currentUser?.uid {
+        if let backend = firebaseBackend {
+            let cutOff = OrgMaterialCutOff.fromNotification(notificationSettings)
             do {
-                try await backend.saveUserNotificationPreferences(notificationSettings, userId: userId)
+                try await backend.updateOrganizationMaterialCutOff(cutOff)
+                settings.notifications = cutOff.applied(to: settings.notifications)
             } catch {
-                errorMessage = "Failed to sync notification preferences: \(error.localizedDescription)"
+                errorMessage = "Failed to save material cut-off: \(error.localizedDescription)"
+            }
+            if let userId = backend.currentUser?.uid {
+                do {
+                    try await backend.saveUserNotificationPreferences(settings.notifications, userId: userId)
+                } catch {
+                    errorMessage = "Failed to sync notification preferences: \(error.localizedDescription)"
+                }
             }
         }
         await saveSettingsLocallyOnly()
+    }
+
+    /// `settings.materialCutOff` wins over the signed-in user's notification copy.
+    private func applyOrganizationMaterialCutOff() {
+        guard let cutOff = firebaseBackend?.currentOrganization?.settings.materialCutOff else { return }
+        settings.notifications = cutOff.applied(to: settings.notifications)
     }
     
     func updateMyScheduleOptions(_ options: MyScheduleOptions) async {

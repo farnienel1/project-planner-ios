@@ -297,11 +297,13 @@ class WarningsService: ObservableObject {
         invoicingSettings: OrganizationInvoicingSettings? = nil,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
+        unbookedCoverageEnd: Date? = nil,
         materialOrderCutOffEnabled: Bool = true,
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
-        materialItemsForTomorrow: [MaterialItem] = []
+        materialItemsForTomorrow: [MaterialItem] = [],
+        dismissedQualificationKeys: Set<String> = []
     ) {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
@@ -321,11 +323,13 @@ class WarningsService: ObservableObject {
                 invoicingSettings: resolvedInvoicing,
                 labourCoverageStart: labourCoverageStart,
                 labourCoverageEnd: labourCoverageEnd,
+                unbookedCoverageEnd: unbookedCoverageEnd,
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
                 materialCutOffOnSaturday: materialCutOffOnSaturday,
                 materialCutOffOnSunday: materialCutOffOnSunday,
                 projectsWithTomorrowBookings: projectsWithTomorrowBookings,
                 materialItemsForTomorrow: materialItemsForTomorrow,
+                dismissedQualificationKeys: dismissedQualificationKeys,
                 publishToLiveCache: true
             )
         }
@@ -344,11 +348,13 @@ class WarningsService: ObservableObject {
         invoicingSettings: OrganizationInvoicingSettings? = nil,
         labourCoverageStart: Date? = nil,
         labourCoverageEnd: Date? = nil,
+        unbookedCoverageEnd: Date? = nil,
         materialOrderCutOffEnabled: Bool = true,
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
         projectsWithTomorrowBookings: [Project] = [],
         materialItemsForTomorrow: [MaterialItem] = [],
+        dismissedQualificationKeys: Set<String> = [],
         publishToLiveCache: Bool = true
     ) async {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
@@ -368,11 +374,13 @@ class WarningsService: ObservableObject {
             invoicingSettings: resolvedInvoicing,
             labourCoverageStart: labourCoverageStart,
             labourCoverageEnd: labourCoverageEnd,
+            unbookedCoverageEnd: unbookedCoverageEnd,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
             materialItemsForTomorrow: materialItemsForTomorrow,
+            dismissedQualificationKeys: dismissedQualificationKeys,
             publishToLiveCache: publishToLiveCache
         )
     }
@@ -389,11 +397,13 @@ class WarningsService: ObservableObject {
         invoicingSettings: OrganizationInvoicingSettings,
         labourCoverageStart: Date?,
         labourCoverageEnd: Date?,
+        unbookedCoverageEnd: Date?,
         materialOrderCutOffEnabled: Bool,
         materialCutOffOnSaturday: Bool,
         materialCutOffOnSunday: Bool,
         projectsWithTomorrowBookings: [Project],
         materialItemsForTomorrow: [MaterialItem],
+        dismissedQualificationKeys: Set<String>,
         publishToLiveCache: Bool
     ) async {
         updateGeneration += 1
@@ -408,18 +418,24 @@ class WarningsService: ObservableObject {
         let isLiveScan = publishToLiveCache
         let coverageStart = cal.startOfDay(for: labourCoverageStart ?? canonical.start)
         let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? canonical.end)
+        let unbookedEnd = cal.startOfDay(for: unbookedCoverageEnd ?? CanonicalBusinessEngine.unbookedLabourWindowEnd(
+            coverageEnd: coverageEnd,
+            clashLookaheadMode: warningDetection.clashLookaheadMode.rawValue,
+            includeWeekends: warningDetection.includeWeekendsForUnbookedLabour
+        ))
+        let dataEnd = max(coverageEnd, unbookedEnd)
         let windowedBookings = bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= coverageStart && day <= coverageEnd
+            return day >= coverageStart && day <= dataEnd
         }
         let windowedManager = managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= coverageStart && day <= coverageEnd
+            return day >= coverageStart && day <= dataEnd
         }
         let windowedHolidays = holidayBookings.filter { holiday in
             let start = cal.startOfDay(for: holiday.startDate)
             let end = cal.startOfDay(for: holiday.endDate)
-            return end >= coverageStart && start <= coverageEnd
+            return end >= coverageStart && start <= dataEnd
         }
         print("🔥🔥🔥 DEBUG: WarningsService live=\(isLiveScan) window bookings=\(windowedBookings.count)/\(bookings.count) mgr=\(windowedManager.count) \(coverageStart)…\(coverageEnd)")
         let referencedProjectIds = Set(windowedBookings.map(\.projectId))
@@ -439,11 +455,13 @@ class WarningsService: ObservableObject {
             warningDetection: warningDetection,
             coverageStart: coverageStart,
             coverageEnd: coverageEnd,
+            unbookedCoverageEnd: unbookedEnd,
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
-            materialItemsForTomorrow: materialItemsForTomorrow
+            materialItemsForTomorrow: materialItemsForTomorrow,
+            dismissedQualificationKeys: dismissedQualificationKeys
         )
         // Snapshot on MainActor (Swift 6 default isolation) over the *windowed* arrays.
         // Detach only generate. Extra yields stop Home quiet-expired jetsam.

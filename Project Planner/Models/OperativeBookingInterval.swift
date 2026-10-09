@@ -8,49 +8,17 @@
 import Foundation
 
 enum OperativeBookingInterval {
+    /// Clock interval for clash detection, in minutes from midnight: the canonical script's
+    /// `slotInterval` with the stored slot and stored clock times. Clock times win; the named slot
+    /// applies only when the script rejects the clock pair. The day input is always the weekday
+    /// standard day and break, on every day of the week. Overnight spans are not extended.
     static func clashInterval(for booking: Booking, policy: OrgPayrollTimePolicy) -> (Int, Int)? {
-        if booking.timeSlot == .morning || booking.timeSlot == .afternoon,
-           PayrollTimePolicyCatalog.isWeekday(booking.date),
-           let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
-            return booking.timeSlot == .morning
-                ? (windows.morningStart, windows.morningEnd)
-                : (windows.afternoonStart, windows.afternoonEnd)
-        }
-        if let s = booking.workStartTime, let e = booking.workEndTime,
-           let span = ManagerScheduleInterval.clockSpanMinutes(start: s, end: e) {
-            return span
-        }
-        guard let dayStart = resolvedStandardWindowStart(for: booking, policy: policy),
-              let dayEnd = resolvedStandardWindowEnd(for: booking, policy: policy),
-              dayEnd > dayStart else {
-            if booking.timeSlot == .fullDay { return (0, 24 * 60) }
-            return nil
-        }
-        switch booking.timeSlot {
-        case .fullDay:
-            return (dayStart, dayEnd)
-        case .morning:
-            if let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
-                return (windows.morningStart, windows.morningEnd)
-            }
-            let mid = dayStart + (dayEnd - dayStart) / 2
-            return (dayStart, mid)
-        case .afternoon:
-            if let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy) {
-                return (windows.afternoonStart, windows.afternoonEnd)
-            }
-            let mid = dayStart + (dayEnd - dayStart) / 2
-            return (mid, dayEnd)
-        case .customHours:
-            return (dayStart, dayEnd)
-        case .evening:
-            let end = min(dayEnd + 240, 24 * 60)
-            return end > dayEnd ? (dayEnd, end) : nil
-        case .overtime:
-            let startOT = min(dayEnd + 240, 24 * 60)
-            let endOT = min(dayEnd + 360, 24 * 60)
-            return endOT > startOT ? (startOT, endOT) : nil
-        }
+        CanonicalBusinessEngine.slotInterval(
+            timeSlot: booking.timeSlot.rawValue,
+            workStartTime: booking.workStartTime,
+            workEndTime: booking.workEndTime,
+            day: CanonicalStandardDayInput(policy: policy)
+        )?.tuple
     }
 
     static func closedIntervalsOverlap(_ a: (Int, Int), _ b: (Int, Int)) -> Bool {
@@ -84,20 +52,6 @@ enum OperativeBookingInterval {
               let ws = timeline.standardWindowStartMinutes,
               let we = timeline.standardWindowEndMinutes else { return false }
         return iv.0 <= ws && iv.1 >= we
-    }
-
-    private static func resolvedStandardWindowStart(for booking: Booking, policy: OrgPayrollTimePolicy) -> Int? {
-        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
-        if timeline.allHoursAtMultiplier { return nil }
-        return timeline.standardWindowStartMinutes
-            ?? ManagerScheduleInterval.parseMinutes(policy.standardDayStart)
-    }
-
-    private static func resolvedStandardWindowEnd(for booking: Booking, policy: OrgPayrollTimePolicy) -> Int? {
-        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
-        if timeline.allHoursAtMultiplier { return nil }
-        return timeline.standardWindowEndMinutes
-            ?? ManagerScheduleInterval.parseMinutes(policy.standardDayEnd)
     }
 
     private static func legacyOperativeSlotClash(_ a: TimeSlot, _ b: TimeSlot) -> Bool {
@@ -239,11 +193,7 @@ extension Booking {
     }
 
     func minutesSortKey(policy: OrgPayrollTimePolicy = .default) -> Int {
-        if let s = workStartTime, let m = ManagerScheduleInterval.parseMinutes(s) { return m }
-        guard let interval = OperativeBookingInterval.clashInterval(for: self, policy: policy) else {
-            return 0
-        }
-        return interval.0
+        OperativeBookingInterval.clashInterval(for: self, policy: policy)?.0 ?? 0
     }
 
     func reportDayValue(policy: OrgPayrollTimePolicy = .default) -> Double {
@@ -255,13 +205,7 @@ extension Booking {
     func calendarBlock(on day: Date, policy: OrgPayrollTimePolicy = .default) -> (start: Date, end: Date) {
         let cal = Calendar.current
         let startOfDay = cal.startOfDay(for: day)
-        if let s = workStartTime, let e = workEndTime,
-           let sm = ManagerScheduleInterval.parseMinutes(s),
-           let em = ManagerScheduleInterval.parseMinutes(e), em > sm {
-            let start = cal.date(byAdding: .minute, value: sm, to: startOfDay) ?? startOfDay
-            let end = cal.date(byAdding: .minute, value: em, to: startOfDay) ?? startOfDay
-            return (start, end)
-        }
+        // The script's slotInterval with the stored slot and clocks (calendar export and reminders).
         guard let iv = OperativeBookingInterval.clashInterval(for: self, policy: policy) else {
             let end = cal.date(byAdding: .hour, value: 8, to: startOfDay) ?? startOfDay
             return (startOfDay, end)
@@ -272,6 +216,8 @@ extension Booking {
     }
 
     /// Wall-clock hours for this booking (explicit times or legacy slot mapped to the org day).
+    /// An end before the start still counts as the next morning here: this is the Swift-only
+    /// overnight wall-hours rule (with `PayrollHoursEngine.overnightWallResult`), not the clash path.
     func totalBookedHours(policy: OrgPayrollTimePolicy = .default) -> Double {
         if let s = workStartTime, let e = workEndTime,
            let span = ManagerScheduleInterval.clockSpanMinutes(start: s, end: e) {

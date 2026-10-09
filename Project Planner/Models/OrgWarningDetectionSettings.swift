@@ -49,6 +49,17 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         case excludedUserIdsFromUnbookedWarnings
     }
 
+    init?(canonical: CanonicalBusinessEngine.CanonicalWarningDetection) {
+        guard let mode = WarningClashLookaheadMode(rawValue: canonical.clashLookaheadMode) else { return nil }
+        self.init(
+            detectClashes: canonical.detectClashes,
+            clashLookaheadMode: mode,
+            clashLookaheadDays: canonical.clashLookaheadDays,
+            includeWeekendsForUnbookedLabour: canonical.includeWeekendsForUnbookedLabour,
+            excludedUserIdsFromUnbookedWarnings: canonical.excludedUserIdsFromUnbookedWarnings
+        )
+    }
+
     init(
         detectClashes: Bool = true,
         clashLookaheadMode: WarningClashLookaheadMode = .numberOfDays,

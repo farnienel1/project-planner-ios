@@ -119,13 +119,15 @@ struct OperativesView: View {
                 .environmentObject(userStore)
         }
         .sheet(item: $selectedUserForProfile) { user in
-            OperativeProfileView(user: user)
-                .environmentObject(userStore)
-                .environmentObject(bookingStore)
-                .environmentObject(operativeStore)
-                .environmentObject(holidayStore)
-                .environmentObject(firebaseBackend)
-                .environmentObject(notificationService)
+            NavigationStack {
+                EditUserView(user: user)
+            }
+            .environmentObject(userStore)
+            .environmentObject(bookingStore)
+            .environmentObject(operativeStore)
+            .environmentObject(holidayStore)
+            .environmentObject(firebaseBackend)
+            .environmentObject(notificationService)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("resetNavigationForTab"))) { notification in
             if let userInfo = notification.userInfo, let tab = userInfo["tab"] as? Int, tab == 3 {

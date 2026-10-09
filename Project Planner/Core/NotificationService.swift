@@ -432,7 +432,12 @@ class NotificationService: ObservableObject {
         var recipientIds = Set<String>()
         for user in userStore?.organizationUsers ?? [] {
             guard user.isActive else { continue }
-            if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+            let notified = CanonicalBusinessEngine.receivesJobNotification(
+                userId: user.id,
+                role: UserStore.staffAccountRole(for: user),
+                assignedManagerUserIds: []
+            )
+            if notified {
                 recipientIds.insert(resolvedRecipientUserId(user.id))
             }
         }
@@ -564,6 +569,7 @@ class NotificationService: ObservableObject {
             case .operativeBookingClash: return "Operative booking clash"
             case .managerLocationClash: return warning.clashPersonKind?.bookingClashTitle ?? "Manager booking clash"
             case .unbookedLabour: return "Unbooked labour"
+            case .annualLeave: return "Annual leave"
             case .materialsCutoff: return "Materials cut-off"
             case .qualificationExpiry: return "Qualification expiry"
             case .operativeNotVerified: return "Operative not verified"

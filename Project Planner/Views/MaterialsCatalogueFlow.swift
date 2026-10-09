@@ -22,6 +22,7 @@ struct MaterialCatalogueRootView: View {
     @State private var saveError: String?
     @State private var deleteError: String?
     @State private var expandedCategories: Set<String> = []
+    @State private var categoryGroups: [CategoryGroup] = []
 
     private struct CategoryGroup: Identifiable {
         let id: String
@@ -34,22 +35,20 @@ struct MaterialCatalogueRootView: View {
         return names.sorted()
     }
 
-    private var filteredItems: [MaterialCatalogItem] {
-        var list = store.items
-        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !q.isEmpty {
-            list = list.filter { item in
-                item.name.localizedCaseInsensitiveContains(q)
-                    || item.brand.localizedCaseInsensitiveContains(q)
-                    || (item.productCode?.localizedCaseInsensitiveContains(q) ?? false)
-            }
-        }
-        return list
+    private var catalogueQuery: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var groupedFilteredItems: [CategoryGroup] {
-        let grouped = Dictionary(grouping: filteredItems) { normalizedCategory($0.category) }
-        return grouped.keys.sorted().map { key in
+    private var isSearchingCatalogue: Bool { !catalogueQuery.isEmpty }
+
+    private var filteredItems: [MaterialCatalogItem] {
+        guard isSearchingCatalogue else { return store.items }
+        return store.search(query: catalogueQuery)
+    }
+
+    private func refreshCategoryGroups() {
+        let grouped = Dictionary(grouping: store.items) { normalizedCategory($0.category) }
+        categoryGroups = grouped.keys.sorted().map { key in
             CategoryGroup(
                 id: key,
                 category: key,
@@ -63,7 +62,7 @@ struct MaterialCatalogueRootView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     heroCard
                     catalogueActionsRow
                     searchField
@@ -71,10 +70,31 @@ struct MaterialCatalogueRootView: View {
                         ProgressView("Loading catalogue…")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 40)
-                    } else if filteredItems.isEmpty {
+                    } else if isSearchingCatalogue {
+                        if filteredItems.isEmpty {
+                            Text("No items match")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(MaterialsOrderingTheme.muted)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 32)
+                        } else {
+                            Text("\(filteredItems.count) matches")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(MaterialsOrderingTheme.muted)
+                            LazyVStack(spacing: 8) {
+                                ForEach(filteredItems) { item in
+                                    Button { selectedItem = item } label: {
+                                        catalogueRow(item)
+                                    }
+                                    .accessibilityIdentifier("materialCatalogueRoot.row.\(item.id)")
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    } else if store.items.isEmpty {
                         emptyCatalogue
                     } else {
-                        ForEach(groupedFilteredItems) { group in
+                        ForEach(categoryGroups) { group in
                             DisclosureGroup(
                                 isExpanded: Binding(
                                     get: { expandedCategories.contains(group.category) },
@@ -87,7 +107,7 @@ struct MaterialCatalogueRootView: View {
                                     }
                                 )
                             ) {
-                                VStack(spacing: 8) {
+                                LazyVStack(spacing: 8) {
                                     ForEach(group.items) { item in
                                         Button { selectedItem = item } label: {
                                             catalogueRow(item)
@@ -129,9 +149,10 @@ struct MaterialCatalogueRootView: View {
                 guard !orgId.isEmpty else { return }
                 store.setFirebaseBackend(firebaseBackend)
                 await store.load()
-                if expandedCategories.isEmpty {
-                    expandedCategories = Set(store.items.map { normalizedCategory($0.category) })
-                }
+                refreshCategoryGroups()
+            }
+            .onChange(of: store.searchGeneration) { _, _ in
+                refreshCategoryGroups()
             }
             .sheet(isPresented: $showingAdd) {
                 MaterialCatalogueEditorSheet(mode: .create) { item in

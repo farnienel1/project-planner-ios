@@ -14,7 +14,11 @@ nonisolated struct AnnualLeaveUsageSummary: Equatable, Sendable {
     var carryOverDays: Double
     var takenDays: Double
     var pendingDays: Double
-    var remainingDays: Double
+    /// Nil when this person has no paid allowance. The year count is `usedThisYear`.
+    var remainingDays: Double?
+    var hasAllowance: Bool
+    var usedThisYear: Double
+    var yearKey: String
 }
 
 nonisolated enum AnnualLeavePolicy {
@@ -31,40 +35,25 @@ nonisolated enum AnnualLeavePolicy {
         min(366, max(0, d))
     }
 
-    /// Inclusive calendar-day range for the configured leave year containing `date`.
+    /// Inclusive leave year from `leaveYearBounds`. Dates are Europe/London midnights.
     static func leaveYearRange(
         containing date: Date,
         startMonth: Int,
         endMonth: Int,
         calendar: Calendar = .current
     ) -> (start: Date, end: Date)? {
-        let sm = clampMonth(startMonth)
-        let em = clampMonth(endMonth)
-        let y = calendar.component(.year, from: date)
-        let m = calendar.component(.month, from: date)
-
-        func startOfDay(_ d: Date) -> Date { calendar.startOfDay(for: d) }
-
-        if sm > em {
-            // e.g. April → March (UK-style)
-            let yearStartYear = m >= sm ? y : y - 1
-            guard let start = calendar.date(from: DateComponents(year: yearStartYear, month: sm, day: 1)),
-                  let endMonthFirst = calendar.date(from: DateComponents(year: yearStartYear + 1, month: em, day: 1)),
-                  let end = calendar.date(byAdding: DateComponents(month: 1, day: -1), to: endMonthFirst)
-            else { return nil }
-            return (startOfDay(start), startOfDay(end))
+        _ = calendar
+        let key = CanonicalBusinessEngine.dayKey(for: date)
+        guard let bounds = CanonicalBusinessEngine.leaveYearBounds(
+            startMonth: startMonth,
+            endMonth: endMonth,
+            onDayKey: key
+        ),
+        let start = CanonicalBusinessEngine.date(fromDayKey: bounds.startDayKey),
+        let end = CanonicalBusinessEngine.date(fromDayKey: bounds.endDayKey) else {
+            return nil
         }
-
-        // Same calendar-year band (e.g. Jan–Dec or Jun–Aug)
-        var bandYear = y
-        if m < sm { bandYear -= 1 }
-        else if m > em { bandYear += 1 }
-
-        guard let start = calendar.date(from: DateComponents(year: bandYear, month: sm, day: 1)),
-              let endMonthFirst = calendar.date(from: DateComponents(year: bandYear, month: em, day: 1)),
-              let end = calendar.date(byAdding: DateComponents(month: 1, day: -1), to: endMonthFirst)
-        else { return nil }
-        return (startOfDay(start), startOfDay(end))
+        return (start, end)
     }
 
     static func previousLeaveYearRange(
@@ -134,80 +123,65 @@ nonisolated enum AnnualLeavePolicy {
         endMonth: Int,
         carriesOver: Bool,
         referenceDate: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        annualLeaveEnabled: Bool = true,
+        orgDaysPerYear: Double? = nil,
+        orgStartMonth: Int? = nil,
+        orgEndMonth: Int? = nil,
+        yearAllowance: Double? = nil,
+        yearAllowanceKey: String? = nil
     ) -> AnnualLeaveUsageSummary {
-        let days = clampDaysPerYear(daysPerYear)
-        let sm = clampMonth(startMonth)
-        let em = clampMonth(endMonth)
-
-        guard let range = leaveYearRange(containing: referenceDate, startMonth: sm, endMonth: em, calendar: calendar) else {
+        _ = calendar
+        let records: [CanonicalBusinessEngine.CanonicalLeaveBooking] = bookings.compactMap { booking in
+            let matchesUser = holidayUserMatches(bookingUserId: booking.userId, profileUserId: profileUserId, profileEmail: profileEmail)
+            let matchesOp = operativeId != nil && booking.operativeId == operativeId
+            guard matchesUser || matchesOp else { return nil }
+            return CanonicalBusinessEngine.CanonicalLeaveBooking(
+                startDayKey: CanonicalBusinessEngine.dayKey(for: booking.startDate),
+                endDayKey: CanonicalBusinessEngine.dayKey(for: booking.endDate),
+                timeSlot: booking.timeSlot.rawValue,
+                status: booking.status.rawValue
+            )
+        }
+        let balance = CanonicalBusinessEngine.annualLeaveBalance(
+            annualLeaveEnabled: annualLeaveEnabled,
+            daysPerYear: daysPerYear,
+            startMonth: startMonth,
+            endMonth: endMonth,
+            orgDaysPerYear: orgDaysPerYear,
+            orgStartMonth: orgStartMonth,
+            orgEndMonth: orgEndMonth,
+            carriesOver: carriesOver,
+            yearAllowance: yearAllowance,
+            yearAllowanceKey: yearAllowanceKey,
+            bookings: records,
+            onDayKey: CanonicalBusinessEngine.dayKey(for: referenceDate)
+        )
+        guard let balance else {
             return AnnualLeaveUsageSummary(
                 leaveYearLabel: "—",
-                entitlementDays: days,
+                entitlementDays: 0,
                 carryOverDays: 0,
                 takenDays: 0,
                 pendingDays: 0,
-                remainingDays: days
+                remainingDays: nil,
+                hasAllowance: annualLeaveEnabled,
+                usedThisYear: 0,
+                yearKey: ""
             )
         }
-
-        let taken = consumedDays(
-            bookings: bookings,
-            userId: profileUserId,
-            operativeId: operativeId,
-            profileEmail: profileEmail,
-            statuses: [.approved],
-            rangeStart: range.start,
-            rangeEnd: range.end,
-            calendar: calendar
-        )
-        let pending = consumedDays(
-            bookings: bookings,
-            userId: profileUserId,
-            operativeId: operativeId,
-            profileEmail: profileEmail,
-            statuses: [.pending],
-            rangeStart: range.start,
-            rangeEnd: range.end,
-            calendar: calendar
-        )
-
-        var carry: Double = 0
-        if carriesOver, let prev = previousLeaveYearRange(beforeCurrentYearStart: range.start, startMonth: sm, endMonth: em, calendar: calendar) {
-            let prevTaken = consumedDays(
-                bookings: bookings,
-                userId: profileUserId,
-                operativeId: operativeId,
-                profileEmail: profileEmail,
-                statuses: [.approved],
-                rangeStart: prev.start,
-                rangeEnd: prev.end,
-                calendar: calendar
-            )
-            let prevPending = consumedDays(
-                bookings: bookings,
-                userId: profileUserId,
-                operativeId: operativeId,
-                profileEmail: profileEmail,
-                statuses: [.pending],
-                rangeStart: prev.start,
-                rangeEnd: prev.end,
-                calendar: calendar
-            )
-            carry = max(0, days - prevTaken - prevPending)
-        }
-
-        let entitlement = days + carry
-        let remaining = entitlement - taken - pending
-        let label = formattedLeaveYearLabel(range: range, calendar: calendar)
-
+        let label = formattedLeaveYearLabel(startDayKey: balance.startDayKey, endDayKey: balance.endDayKey)
+        let entitlement = balance.yearAllowance ?? (balance.daysPerYear + balance.carriedForward)
         return AnnualLeaveUsageSummary(
             leaveYearLabel: label,
             entitlementDays: entitlement,
-            carryOverDays: carry,
-            takenDays: taken,
-            pendingDays: pending,
-            remainingDays: remaining
+            carryOverDays: balance.carriedForward,
+            takenDays: balance.taken,
+            pendingDays: balance.pending,
+            remainingDays: balance.remaining,
+            hasAllowance: balance.hasAllowance,
+            usedThisYear: balance.usedThisYear,
+            yearKey: balance.yearKey
         )
     }
 
@@ -286,8 +260,9 @@ nonisolated enum AnnualLeavePolicy {
                 calendar: calendar
             )
             let requested = Double(days.count) * timeSlot.dayValue
-            if requested > summary.remainingDays + allowanceEpsilon {
-                let rem = formatAllowanceDays(summary.remainingDays)
+            guard summary.hasAllowance, let remaining = summary.remainingDays else { continue }
+            if requested > remaining + allowanceEpsilon {
+                let rem = formatAllowanceDays(remaining)
                 let req = formatAllowanceDays(requested)
                 return "In \(summary.leaveYearLabel) you have \(rem) days of annual leave left (after booked and pending), but this selection needs \(req) days. Remove dates, choose shorter slots, or wait until your allowance renews."
             }
@@ -327,8 +302,9 @@ nonisolated enum AnnualLeavePolicy {
                 calendar: calendar
             )
             let requested = days.reduce(0.0) { $0 + (normalized[$1] ?? .fullDay).dayValue }
-            if requested > summary.remainingDays + allowanceEpsilon {
-                let rem = formatAllowanceDays(summary.remainingDays)
+            guard summary.hasAllowance, let remaining = summary.remainingDays else { continue }
+            if requested > remaining + allowanceEpsilon {
+                let rem = formatAllowanceDays(remaining)
                 let req = formatAllowanceDays(requested)
                 return "In \(summary.leaveYearLabel) you have \(rem) days of annual leave left (after booked and pending), but this selection needs \(req) days. You can still send it, and your line manager can allow it."
             }
@@ -382,8 +358,9 @@ nonisolated enum AnnualLeavePolicy {
                 referenceDate: yearStart,
                 calendar: calendar
             )
-            if extra > summary.remainingDays + allowanceEpsilon {
-                let rem = formatAllowanceDays(summary.remainingDays)
+            guard summary.hasAllowance, let remaining = summary.remainingDays else { continue }
+            if extra > remaining + allowanceEpsilon {
+                let rem = formatAllowanceDays(remaining)
                 let ex = formatAllowanceDays(extra)
                 return "In \(summary.leaveYearLabel) you have \(rem) days of annual leave left; changing to \(newTimeSlot.rawValue) would need \(ex) more days than you have available."
             }
@@ -391,12 +368,17 @@ nonisolated enum AnnualLeavePolicy {
         return nil
     }
 
-    private static func formattedLeaveYearLabel(range: (start: Date, end: Date), calendar: Calendar) -> String {
+    private static func formattedLeaveYearLabel(startDayKey: String, endDayKey: String) -> String {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        guard let start = CanonicalBusinessEngine.date(fromDayKey: startDayKey, calendar: calendar),
+              let end = CanonicalBusinessEngine.date(fromDayKey: endDayKey, calendar: calendar) else {
+            return "—"
+        }
         let df = DateFormatter()
         df.calendar = calendar
         df.timeZone = calendar.timeZone
         df.dateFormat = "MMM yyyy"
-        return "\(df.string(from: range.start)) – \(df.string(from: range.end))"
+        return "\(df.string(from: start)) – \(df.string(from: end))"
     }
 
     static func shortMonthSymbols(calendar: Calendar = .current) -> [String] {

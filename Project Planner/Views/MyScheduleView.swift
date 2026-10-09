@@ -2299,23 +2299,15 @@ fileprivate struct ManagerSelfBookingEntryView: View {
     private static func defaultTimes(for slot: ManagerTimeSlot, day: Date, policy: OrgPayrollTimePolicy) -> (start: Date, end: Date) {
         let calendar = Calendar.current
         let base = calendar.startOfDay(for: day)
-        let dayStart = ManagerScheduleInterval.parseMinutes(policy.standardDayStart) ?? (7 * 60 + 30)
-        let dayEnd = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd) ?? (16 * 60)
-        let windows = PayrollTimePolicyCatalog.weekdayHalfDayWindows(policy: policy)
-        let mid = dayStart + max(1, (dayEnd - dayStart) / 2)
-        let range: (Int, Int)
-        switch slot {
-        case .fullDay:
-            range = (dayStart, dayEnd)
-        case .morning:
-            range = (windows?.morningStart ?? dayStart, windows?.morningEnd ?? mid)
-        case .afternoon:
-            range = (windows?.afternoonStart ?? mid, windows?.afternoonEnd ?? dayEnd)
-        case .customHours:
-            range = (dayStart, dayEnd)
-        }
-        let start = calendar.date(byAdding: .minute, value: range.0, to: base) ?? base
-        let end = calendar.date(byAdding: .minute, value: range.1, to: base) ?? start.addingTimeInterval(3600)
+        // The day and its AM/PM halves come from the canonical script.
+        let range = CanonicalBusinessEngine.slotInterval(
+            timeSlot: slot.rawValue,
+            workStartTime: nil,
+            workEndTime: nil,
+            day: CanonicalStandardDayInput(policy: policy)
+        ) ?? CanonicalMinuteInterval(start: 7 * 60 + 30, end: 16 * 60)
+        let start = calendar.date(byAdding: .minute, value: range.start, to: base) ?? base
+        let end = calendar.date(byAdding: .minute, value: range.end, to: base) ?? start.addingTimeInterval(3600)
         return (start, end)
     }
 }

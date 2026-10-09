@@ -58,6 +58,10 @@ struct MaterialsAddWithCatalogueSheet: View {
     @State private var recentMaterials: [MaterialItem] = []
     @State private var prefersCustomEntry = false
     @State private var editMatchedLineItemDetails = false
+    @State private var suggestionPool: [MaterialAutocompleteSuggestion] = []
+    @State private var suggestionRecords: [CanonicalBusinessEngine.CanonicalMaterialRecord] = []
+    @State private var suggestionGeneration = 0
+    @State private var rankedSuggestions: [MaterialAutocompleteSuggestion] = []
 
     private var categorySuggestions: [String] {
         let typed = customCategory.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -82,14 +86,15 @@ struct MaterialsAddWithCatalogueSheet: View {
         _neededDate = State(initialValue: date)
     }
 
-    private var suggestions: [MaterialAutocompleteSuggestion] {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return [] }
+    private var suggestions: [MaterialAutocompleteSuggestion] { rankedSuggestions }
 
+    private func rebuildSuggestionPool() {
         var merged: [MaterialAutocompleteSuggestion] = []
+        var records: [CanonicalBusinessEngine.CanonicalMaterialRecord] = []
         var seen = Set<String>()
-        let catalogMatches = catalogueStore.search(query: q, limit: 8)
-        for item in catalogMatches {
+        merged.reserveCapacity(catalogueStore.items.count)
+        records.reserveCapacity(catalogueStore.items.count)
+        for item in catalogueStore.items {
             let key = "\(MaterialCatalogDuplicateDetection.normalizeName(item.name))|\(MaterialCatalogDuplicateDetection.normalizeCode(item.productCode))"
             if seen.insert(key).inserted {
                 merged.append(MaterialAutocompleteSuggestion(
@@ -105,21 +110,13 @@ struct MaterialsAddWithCatalogueSheet: View {
                     category: item.category,
                     catalogueItem: item
                 ))
+                records.append(item.canonicalSearchRecord)
             }
         }
-
-        let normalizedQuery = MaterialCatalogDuplicateDetection.normalizeName(q)
-        let recentMatches = recentMaterials
-            .filter {
-                MaterialCatalogDuplicateDetection.normalizeName($0.material).contains(normalizedQuery)
-                    || MaterialCatalogDuplicateDetection.normalizeName($0.brand ?? "").contains(normalizedQuery)
-                    || MaterialCatalogDuplicateDetection.normalizeCode($0.productCode).contains(normalizedQuery)
-            }
-            .prefix(8)
-        for item in recentMatches {
+        for item in recentMaterials {
             let key = "\(MaterialCatalogDuplicateDetection.normalizeName(item.material))|\(MaterialCatalogDuplicateDetection.normalizeCode(item.productCode))"
             if seen.insert(key).inserted {
-                merged.append(MaterialAutocompleteSuggestion(
+                let suggestion = MaterialAutocompleteSuggestion(
                     id: "recent:\(item.id.uuidString)",
                     source: .recent,
                     name: item.material,
@@ -131,10 +128,38 @@ struct MaterialsAddWithCatalogueSheet: View {
                     lengthUnit: item.lengthUnit,
                     category: item.category,
                     catalogueItem: nil
+                )
+                merged.append(suggestion)
+                records.append(CanonicalBusinessEngine.CanonicalMaterialRecord(
+                    name: suggestion.name,
+                    brand: suggestion.brand,
+                    productCode: suggestion.productCode ?? "",
+                    category: suggestion.category ?? "",
+                    size: suggestion.size ?? "",
+                    length: suggestion.length ?? ""
                 ))
             }
         }
-        return Array(merged.prefix(10))
+        suggestionPool = merged
+        suggestionRecords = records
+        suggestionGeneration = CanonicalBusinessEngine.makeMaterialSearchCacheIdentity()
+        CanonicalBusinessEngine.installMaterialSearchRecords(records, cacheIdentity: suggestionGeneration)
+        rankSuggestionPool()
+    }
+
+    private func rankSuggestionPool() {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else {
+            rankedSuggestions = []
+            return
+        }
+        let hits = CanonicalBusinessEngine.rankMaterialRecords(
+            query: q,
+            records: suggestionRecords,
+            limit: 80,
+            cacheIdentity: suggestionGeneration
+        ) ?? []
+        rankedSuggestions = hits.compactMap { suggestionPool.indices.contains($0.index) ? suggestionPool[$0.index] : nil }
     }
 
     var body: some View {
@@ -208,6 +233,13 @@ struct MaterialsAddWithCatalogueSheet: View {
                         projectId: project.id
                     )) ?? []
                 }
+                rebuildSuggestionPool()
+            }
+            .onChange(of: query) { _, _ in
+                rankSuggestionPool()
+            }
+            .onChange(of: catalogueStore.searchGeneration) { _, _ in
+                rebuildSuggestionPool()
             }
             .alert("Duplicate material", isPresented: $showingDuplicateAlert) {
                 Button("Cancel", role: .cancel) {}
@@ -269,7 +301,7 @@ struct MaterialsAddWithCatalogueSheet: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(MaterialsOrderingTheme.primary)
-                TextField("Search catalogue or type custom", text: $query)
+                TextField("Try 2.5mm LS or a product code", text: $query)
                     .accessibilityIdentifier("materialsAddWithCatalogue.searchCatalogueOrTypeCustom")
                     .font(.system(size: 13, weight: .medium))
             }
@@ -353,40 +385,23 @@ struct MaterialsAddWithCatalogueSheet: View {
 
     private var suggestionsList: some View {
         VStack(spacing: 0) {
-            ForEach(suggestions) { suggestion in
-                Button {
-                    applySuggestion(suggestion)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: suggestion.source == .catalogue ? "shippingbox.fill" : "clock.arrow.circlepath")
-                            .font(.system(size: 13))
-                            .foregroundStyle(MaterialsOrderingTheme.primary)
-                            .frame(width: 26, height: 26)
-                            .background(MaterialsOrderingTheme.primaryTint)
-                            .clipShape(RoundedRectangle(cornerRadius: 7))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(highlighted(suggestion.name))
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(MaterialsOrderingTheme.ink)
-                            Text(autocompleteSubtitle(for: suggestion))
-                                .font(.system(size: 10))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
-                                .lineLimit(1)
+            Text(suggestions.isEmpty ? "No items match" : "\(suggestions.count) matches")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MaterialsOrderingTheme.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(suggestions) { suggestion in
+                        suggestionRow(suggestion)
+                        if suggestion.id != suggestions.last?.id {
+                            Divider()
                         }
-                        Spacer()
-                        Text(suggestion.source == .catalogue ? "In catalogue" : "Previously used")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(MaterialsOrderingTheme.primary)
                     }
-                    .padding(9)
-                    .background(MaterialsOrderingTheme.primaryTint.opacity(0.35))
-                }
-                .accessibilityIdentifier("materialsAddWithCatalogue.row.\(suggestion.id).shippingboxFill")
-                .buttonStyle(.plain)
-                if suggestion.id != suggestions.last?.id {
-                    Divider()
                 }
             }
+            .frame(maxHeight: 420)
             Button {
                 selectedCatalogue = nil
                 query = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -416,6 +431,38 @@ struct MaterialsAddWithCatalogueSheet: View {
         .background(MaterialsOrderingTheme.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: Color.black.opacity(0.08), radius: 10, y: 4)
+    }
+
+    private func suggestionRow(_ suggestion: MaterialAutocompleteSuggestion) -> some View {
+        Button {
+            applySuggestion(suggestion)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: suggestion.source == .catalogue ? "shippingbox.fill" : "clock.arrow.circlepath")
+                    .font(.system(size: 13))
+                    .foregroundStyle(MaterialsOrderingTheme.primary)
+                    .frame(width: 26, height: 26)
+                    .background(MaterialsOrderingTheme.primaryTint)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(highlighted(suggestion.name))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(MaterialsOrderingTheme.ink)
+                    Text(autocompleteSubtitle(for: suggestion))
+                        .font(.system(size: 10))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Text(suggestion.source == .catalogue ? "In catalogue" : "Previously used")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(MaterialsOrderingTheme.primary)
+            }
+            .padding(9)
+            .background(MaterialsOrderingTheme.primaryTint.opacity(0.35))
+        }
+        .accessibilityIdentifier("materialsAddWithCatalogue.row.\(suggestion.id).shippingboxFill")
+        .buttonStyle(.plain)
     }
 
     private var customHint: some View {
