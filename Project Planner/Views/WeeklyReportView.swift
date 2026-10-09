@@ -1769,6 +1769,7 @@ struct WeeklyReportView: View {
         case .operativeBookingClash: return "Operative booking clash"
         case .managerLocationClash: return "Manager booking clash"
         case .unbookedLabour: return "Unbooked labour"
+        case .annualLeave: return "Annual leave"
         case .materialsCutoff: return "Material order not placed"
         default: return type.rawValue
         }

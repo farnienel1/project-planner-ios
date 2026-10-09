@@ -18,6 +18,7 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
     var operativeClash: OperativeClashWarningDetails?
     var managerClash: ManagerClashWarningDetails?
     var unbookedLabour: UnbookedLabourWarningDetails?
+    var annualLeave: AnnualLeaveWarningDetails?
     var materialsCutoff: MaterialsCutoffWarningDetails?
     var bookingClashDetails: BookingClashDetails?
     var operativeEmail: String?
@@ -26,6 +27,7 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
         case operativeBookingClash
         case managerLocationClash
         case unbookedLabour
+        case annualLeave
         case materialsCutoff
         case qualificationExpiry
         case operativeNotVerified
@@ -55,7 +57,7 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
     /// High / medium / low scheduling warnings (excludes qualification & verification).
     var isCorePriorityWarning: Bool {
         switch type {
-        case .operativeBookingClash, .unbookedLabour, .managerLocationClash, .materialsCutoff:
+        case .operativeBookingClash, .unbookedLabour, .annualLeave, .managerLocationClash, .materialsCutoff:
             return true
         case .qualificationExpiry, .operativeNotVerified:
             return false
@@ -123,6 +125,14 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
             if let detail = unbookedLabour {
                 let names = detail.names.joined(separator: ", ")
                 return "\(title) on \(dateText): \(names). \(message)"
+            }
+        case .annualLeave:
+            if let detail = annualLeave {
+                let gap = detail.missingRanges.joined(separator: ", ")
+                if gap.isEmpty {
+                    return "\(detail.personName) on \(dateText): \(title). \(message)"
+                }
+                return "\(detail.personName) on \(dateText): \(title). Missing \(gap) (\(detail.missingHours)h). \(message)"
             }
         case .materialsCutoff:
             if let detail = materialsCutoff {
@@ -217,6 +227,15 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
         }
     }
 
+    struct AnnualLeaveWarningDetails: Hashable, Codable, Sendable {
+        /// `leave_clash` or `leave_cover`, as the script classified the row.
+        var kind: String
+        var personName: String
+        /// Clock ranges still open on the working half, formatted `09:30–12:00`.
+        var missingRanges: [String]
+        var missingHours: Double
+    }
+
     struct UnbookedLabourWarningDetails: Hashable, Codable, Sendable {
         var date: Date
         var names: [String]
@@ -280,6 +299,8 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
             return managerClash?.personName ?? title
         case .unbookedLabour:
             return unbookedLabour?.names.joined(separator: ", ") ?? ""
+        case .annualLeave:
+            return annualLeave?.personName ?? ""
         case .materialsCutoff, .qualificationExpiry, .operativeNotVerified:
             return ""
         }

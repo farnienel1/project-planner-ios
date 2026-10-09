@@ -8,7 +8,7 @@
 import Foundation
 
 // The scan window is CanonicalBusinessEngine.warningBounds (lib/canonical).
-// Qualification, unverified, and unbooked rows come from that script.
+// Qualification, unverified, unbooked, and annual-leave rows come from that script.
 // Clash timelines and material cut-off copy stay here, on the London business calendar.
 
 struct WarningsComputationInput: @unchecked Sendable {
@@ -115,11 +115,14 @@ struct WarningsComputationSnapshot: Sendable {
     }
 
     struct HolidaySnapshot: Sendable {
+        let id: String
         let userId: String?
         let operativeId: UUID?
         let startDay: Date
         let endDay: Date
         let isApproved: Bool
+        /// `FULL DAY`, `AM`, or `PM`. The script decides whether that is a clash or an open half.
+        let timeSlot: String
     }
 
     struct MaterialItemSnapshot: Sendable {
@@ -300,11 +303,13 @@ enum WarningsComputation {
                 return rawUserId
             }()
             return WarningsComputationSnapshot.HolidaySnapshot(
+                id: booking.id.uuidString,
                 userId: resolvedUserId,
                 operativeId: booking.operativeId,
                 startDay: cal.startOfDay(for: booking.startDate),
                 endDay: cal.startOfDay(for: booking.endDate),
-                isApproved: booking.status == .approved
+                isApproved: booking.status == .approved,
+                timeSlot: booking.timeSlot.rawValue
             )
         }
 
@@ -574,6 +579,12 @@ enum WarningsComputation {
         // Unbooked labour comes only from canonical-business.js. A second loop that
         // treats any booking as a full day would hide a morning gap.
         if let rows = unbookedRows(input, coverageStart: coverageStart, coverageEnd: coverageEnd) {
+            generated.append(contentsOf: rows)
+        }
+
+        // Leave clash and half-day cover come only from the script. Swift does not decide
+        // which half is open or whether a booking sits inside the leave.
+        if let rows = leaveRows(input, coverageStart: coverageStart, coverageEnd: coverageEnd) {
             generated.append(contentsOf: rows)
         }
 
@@ -1069,6 +1080,167 @@ enum WarningsComputation {
                 )
             )
         }
+    }
+
+    /// `leave_clash` and `leave_cover` rows for approved leave inside the coverage window.
+    /// People are one entry per user (that user id, every alias id, and every operative id on the
+    /// email) plus a roster operative who has no user account. The script chooses the rows.
+    nonisolated private static func leaveRows(
+        _ input: WarningsComputationSnapshot,
+        coverageStart: Date,
+        coverageEnd: Date
+    ) -> [Warning]? {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        let startKey = dayKeyString(coverageStart, calendar: calendar)
+        let endKey = dayKeyString(coverageEnd, calendar: calendar)
+
+        var operativeIdsByEmail: [String: [String]] = [:]
+        for operative in input.operatives where !operative.emailLowercased.isEmpty {
+            let id = operative.id.uuidString
+            if operativeIdsByEmail[operative.emailLowercased]?.contains(id) != true {
+                operativeIdsByEmail[operative.emailLowercased, default: []].append(id)
+            }
+        }
+
+        var people: [CanonicalLeavePerson] = []
+        var claimedEmails = Set<String>()
+        for user in input.users {
+            let email = user.emailLowercased
+            let operativeIds = email.isEmpty ? [] : (operativeIdsByEmail[email] ?? [])
+            let personKey = email.isEmpty ? user.id : email
+            let entry = CanonicalLeavePerson(
+                personKey: personKey,
+                name: user.displayName,
+                userId: user.id,
+                operativeIds: operativeIds
+            )
+            people.append(entry)
+            if !email.isEmpty { claimedEmails.insert(email) }
+            for alias in user.sameEmailUserIds where !alias.isEmpty && alias != user.id {
+                people.append(CanonicalLeavePerson(
+                    personKey: personKey,
+                    name: user.displayName,
+                    userId: alias,
+                    operativeIds: operativeIds
+                ))
+            }
+        }
+        var rosterByEmail: [String: [WarningsComputationSnapshot.OperativeSnapshot]] = [:]
+        for operative in input.operatives where operative.isActive && !operative.isPlaceholder {
+            let email = operative.emailLowercased
+            if email.isEmpty {
+                people.append(CanonicalLeavePerson(
+                    personKey: operative.id.uuidString,
+                    name: operative.name,
+                    userId: nil,
+                    operativeIds: [operative.id.uuidString]
+                ))
+            } else if !claimedEmails.contains(email) {
+                rosterByEmail[email, default: []].append(operative)
+            }
+        }
+        for (email, operatives) in rosterByEmail {
+            let ids = operatives.map(\.id.uuidString)
+            let name = operatives.max { $0.profileWeight < $1.profileWeight }?.name ?? operatives[0].name
+            people.append(CanonicalLeavePerson(
+                personKey: email,
+                name: name,
+                userId: nil,
+                operativeIds: ids
+            ))
+        }
+
+        let peopleRows: [[String: Any]] = input.users.map { user in
+            ["id": user.id, "email": user.emailLowercased]
+        }
+        let excluded = expandedExcludedUserIds(
+            input.warningDetection.excludedUserIdsFromUnbookedWarnings,
+            people: peopleRows
+        )
+
+        var bookings: [CanonicalLeaveBooking] = []
+        for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
+            bookings.append(CanonicalLeaveBooking(
+                id: booking.id.uuidString,
+                personId: booking.operativeId.uuidString,
+                kind: "operative",
+                dayKey: dayKeyString(booking.dayStart, calendar: calendar),
+                timeSlot: booking.timeSlot,
+                workStartTime: booking.workStart,
+                workEndTime: booking.workEnd,
+                label: booking.scheduleLabel
+            ))
+        }
+        for booking in input.managerSiteBookings where booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
+            bookings.append(CanonicalLeaveBooking(
+                id: booking.id.uuidString,
+                personId: booking.userId,
+                kind: "manager",
+                dayKey: dayKeyString(booking.dayStart, calendar: calendar),
+                timeSlot: booking.timeSlot,
+                workStartTime: booking.workStart,
+                workEndTime: booking.workEnd,
+                label: booking.scheduleLabel
+            ))
+        }
+
+        let leave: [CanonicalLeaveRecord] = input.holidayBookings.map { holiday in
+            CanonicalLeaveRecord(
+                id: holiday.id,
+                userId: holiday.userId,
+                operativeId: holiday.operativeId?.uuidString,
+                startDayKey: dayKeyString(holiday.startDay, calendar: calendar),
+                endDayKey: dayKeyString(holiday.endDay, calendar: calendar),
+                timeSlot: holiday.timeSlot,
+                approved: holiday.isApproved
+            )
+        }
+
+        let policy = input.payrollTimePolicy
+        let inputPayload = CanonicalLeaveCoverageInput(
+            timeZone: "Europe/London",
+            startDayKey: startKey,
+            endDayKey: endKey,
+            day: CanonicalStandardDayInput(
+                standardDayStart: policy.standardDayStart,
+                standardDayEnd: policy.standardDayEnd,
+                breakWindowStart: policy.breakWindowStart,
+                breakWindowEnd: policy.breakWindowEnd
+            ),
+            includeWeekends: input.warningDetection.includeWeekendsForUnbookedLabour,
+            excludedUserIds: excluded,
+            people: people,
+            leave: leave,
+            bookings: bookings
+        )
+        guard let rows = CanonicalBusinessEngine.leaveCoverageRows(inputPayload) else { return nil }
+        return rows.compactMap { row in
+            guard let date = CanonicalBusinessEngine.date(fromDayKey: row.dayKey, calendar: calendar) else { return nil }
+            let severity: Warning.WarningSeverity = row.kind == "leave_clash" || row.severity == "high" ? .high : .medium
+            let ranges = row.missing.map { formatClockRange($0.start, $0.end) }
+            return Warning(
+                resolutionKey: row.id,
+                type: .annualLeave,
+                title: row.title,
+                message: row.message,
+                severity: severity,
+                occurrenceDate: date,
+                annualLeave: Warning.AnnualLeaveWarningDetails(
+                    kind: row.kind,
+                    personName: row.personName,
+                    missingRanges: ranges,
+                    missingHours: row.missingHours
+                )
+            )
+        }
+    }
+
+    nonisolated private static func formatClockRange(_ start: Int, _ end: Int) -> String {
+        func clock(_ minutes: Int) -> String {
+            let clamped = max(0, min(minutes, 24 * 60))
+            return String(format: "%02d:%02d", clamped / 60, clamped % 60)
+        }
+        return "\(clock(start))–\(clock(end))"
     }
 
     nonisolated private static func workingDaysBetween(_ start: Date, _ end: Date, calendar: Calendar) -> Int {

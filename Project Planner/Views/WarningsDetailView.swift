@@ -348,6 +348,7 @@ struct WarningsDetailView: View {
             .all: all.count,
             .clashes: all.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }.count,
             .unbooked: all.filter { $0.type == .unbookedLabour }.count,
+            .annualLeave: all.filter { $0.type == .annualLeave }.count,
             .materials: all.filter { $0.type == .materialsCutoff }.count,
             .qualifications: all.filter { $0.type == .qualificationExpiry || $0.type == .operativeNotVerified }.count
         ]
@@ -362,6 +363,8 @@ struct WarningsDetailView: View {
             return sorted.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }
         case .unbooked:
             return sorted.filter { $0.type == .unbookedLabour }
+        case .annualLeave:
+            return sorted.filter { $0.type == .annualLeave }
         case .materials:
             return sorted.filter { $0.type == .materialsCutoff }
         case .qualifications:
@@ -390,6 +393,8 @@ struct WarningsDetailView: View {
             )
         case .unbookedLabour:
             unbookedCard(warning)
+        case .annualLeave:
+            annualLeaveCard(warning)
         case .materialsCutoff:
             materialsCard(warning)
         case .qualificationExpiry, .operativeNotVerified:
@@ -567,6 +572,78 @@ struct WarningsDetailView: View {
                 .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+    }
+
+    private func annualLeaveCard(_ warning: Warning) -> some View {
+        let detail = warning.annualLeave
+        let isClash = detail?.kind == "leave_clash" || warning.severity == .high
+        let headerColors: [Color] = isClash
+            ? [
+                Color(red: 0.498, green: 0.114, blue: 0.114),
+                Color(red: 0.600, green: 0.106, blue: 0.106),
+                Color(red: 0.725, green: 0.110, blue: 0.110)
+            ]
+            : [
+                Color(red: 0.478, green: 0.275, blue: 0.075),
+                Color(red: 0.620, green: 0.365, blue: 0.078)
+            ]
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(warning.title)
+                    .font(.system(size: 17, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .tracking(-0.2)
+                Spacer(minLength: 8)
+                WarningPriorityBadge(severity: warning.severity)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 15)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                LinearGradient(colors: headerColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(warning.message)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(WarningsUI.textBody)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail, detail.missingHours > 0, !detail.missingRanges.isEmpty {
+                    Text("Not booked: \(detail.missingRanges.joined(separator: ", ")) (\(formatMissingHours(detail.missingHours)))")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(WarningsUI.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(16)
+
+            Button { requestRemoveWarning(warning) } label: {
+                Text("Dismiss")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 14)
+            .background(Color(red: 0.980, green: 0.980, blue: 0.980))
+        }
+        .background(ProjectWorksRevampColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+    }
+
+    private func formatMissingHours(_ hours: Double) -> String {
+        let rounded = (hours * 4).rounded() / 4
+        let text = abs(rounded - rounded.rounded()) < 0.001
+            ? String(format: "%.0f", rounded)
+            : String(format: "%.1f", rounded)
+        return "\(text) \(rounded == 1 ? "hour" : "hours")"
     }
 
     private func materialsCard(_ warning: Warning) -> some View {

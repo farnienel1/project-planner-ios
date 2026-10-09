@@ -564,6 +564,7 @@ class NotificationService: ObservableObject {
             case .operativeBookingClash: return "Operative booking clash"
             case .managerLocationClash: return warning.clashPersonKind?.bookingClashTitle ?? "Manager booking clash"
             case .unbookedLabour: return "Unbooked labour"
+            case .annualLeave: return "Annual leave"
             case .materialsCutoff: return "Materials cut-off"
             case .qualificationExpiry: return "Qualification expiry"
             case .operativeNotVerified: return "Operative not verified"

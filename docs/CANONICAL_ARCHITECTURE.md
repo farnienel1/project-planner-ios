@@ -30,7 +30,7 @@ Clash, sort, and calendar export (`OperativeBookingInterval.clashInterval`, `Man
 
 ## Annual leave against bookings
 
-`CanonicalBusinessEngine.leaveCoverageRows(CanonicalLeaveCoverageInput)` returns the script's `leave_clash` rows (a booking inside approved leave) and `leave_cover` rows (half-day leave whose other half is not fully booked, with the clock ranges still open and their hours). People are keyed by `personKey` with their user id and every linked operative id; bookings carry `personId` and `kind` (`operative` or `manager`). The Swift warning screens are not yet reading these rows.
+`CanonicalBusinessEngine.leaveCoverageRows(CanonicalLeaveCoverageInput)` returns the script's `leave_clash` rows (a booking inside approved leave) and `leave_cover` rows (half-day leave whose other half is not fully booked, with the clock ranges still open and their hours). `WarningsComputation` builds one person per user — that user id, every alias id, and every operative id on the email — plus a roster operative with no account, and passes the coverage day keys, the weekday payroll fields, `includeWeekendsForUnbookedLabour`, the exclusion list, approved and pending holiday records (slot and day keys), and operative and manager bookings with their slot and clock times. The warnings screen shows `leave_clash` as high ("Booked during annual leave") and `leave_cover` as medium ("Half-day leave not covered"), with the script's message, missing ranges, and missing hours, under an Annual leave filter. The scan dates use `Europe/London`.
 
 ## Dismissed warnings
 
