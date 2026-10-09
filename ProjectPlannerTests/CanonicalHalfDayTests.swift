@@ -170,6 +170,64 @@ final class CanonicalHalfDayTests: XCTestCase {
         XCTAssertClose(pm.paidBookedHours(policy: LogicFixtures.policy), 4)
     }
 
+    func testStoredClockTimesBeatTheNamedHalf() {
+        let policy = LogicFixtures.policy
+        XCTAssertEqual(
+            CanonicalBusinessEngine.slotInterval(timeSlot: "AM", workStartTime: "07:30", workEndTime: "11:30", day: .init(policy: policy)),
+            CanonicalMinuteInterval(start: 450, end: 690)
+        )
+
+        let operative = LogicFixtures.booking(on: monday, slot: .morning, start: "07:30", end: "11:30")
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: operative, policy: policy)?.0, 450)
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: operative, policy: policy)?.1, 690)
+        XCTAssertEqual(operative.minutesSortKey(policy: policy), 450)
+
+        let manager = ManagerSiteBooking(
+            userId: "user-1",
+            date: monday,
+            timeSlot: .morning,
+            locationType: .office,
+            workStartTime: "07:30",
+            workEndTime: "11:30"
+        )
+        XCTAssertEqual(ManagerScheduleInterval.clashInterval(for: manager, policy: policy)?.0, 450)
+        XCTAssertEqual(ManagerScheduleInterval.clashInterval(for: manager, policy: policy)?.1, 690)
+
+        // No clocks: the named half is the engine AM window.
+        let bareOperative = LogicFixtures.booking(on: monday, slot: .morning)
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: bareOperative, policy: policy)?.0, 450)
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: bareOperative, policy: policy)?.1, 720)
+        let bareManager = ManagerSiteBooking(userId: "user-1", date: monday, timeSlot: .morning, locationType: .office)
+        XCTAssertEqual(ManagerScheduleInterval.clashInterval(for: bareManager, policy: policy)?.0, 450)
+        XCTAssertEqual(ManagerScheduleInterval.clashInterval(for: bareManager, policy: policy)?.1, 720)
+    }
+
+    func testOvernightClockPairFallsThroughToTheNamedSlot() {
+        // The script rejects end <= start, so the CUSTOM slot is the whole standard day. No +24h in Swift.
+        let overnight = LogicFixtures.booking(on: monday, slot: .customHours, start: "22:00", end: "02:00")
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: overnight, policy: LogicFixtures.policy)?.0, 450)
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: overnight, policy: LogicFixtures.policy)?.1, 960)
+    }
+
+    func testSaturdayUsesTheWeekdayHalves() {
+        var policy = OrgPayrollTimePolicy.default
+        policy.saturday.useCustomStandardDayWindow = true
+        policy.saturday.customStandardStart = "08:00"
+        policy.saturday.customStandardEnd = "13:00"
+        let saturday = LogicFixtures.day(2026, 10, 10, hour: 8)
+        XCTAssertTrue(PayrollTimePolicyCatalog.isWeekend(saturday))
+
+        let booking = LogicFixtures.booking(on: saturday, slot: .morning)
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: booking, policy: policy)?.0, 450)
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: booking, policy: policy)?.1, 720)
+
+        // Sunday is all-hours-at-multiplier by default; the day input is still the weekday policy.
+        let sunday = LogicFixtures.day(2026, 10, 11, hour: 8)
+        let sundayBooking = LogicFixtures.booking(on: sunday, slot: .afternoon)
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: sundayBooking, policy: policy)?.0, 750)
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: sundayBooking, policy: policy)?.1, 960)
+    }
+
     func testRecalibratedHalfDayWritesTheEngineWindow() {
         let newPolicy = policy(day: "07:00", "17:00", break: "12:30", "13:30")
         let booking = LogicFixtures.booking(on: monday, slot: .afternoon, start: "12:00", end: "16:00")

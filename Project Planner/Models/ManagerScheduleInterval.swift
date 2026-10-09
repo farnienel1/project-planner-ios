@@ -19,6 +19,8 @@ enum ManagerScheduleInterval {
     }
 
     /// Minutes from midnight. An end that is earlier than the start is the next morning.
+    /// Swift-only overnight wall hours for `Booking.totalBookedHours`; the clash, sort, and
+    /// calendar-export path uses the canonical `slotInterval`, which does not extend overnight.
     nonisolated static func clockSpanMinutes(start: String, end: String) -> (Int, Int)? {
         guard let sm = parseMinutes(start), let em = parseMinutes(end), sm != em else { return nil }
         if em > sm { return (sm, em) }
@@ -30,25 +32,15 @@ enum ManagerScheduleInterval {
         a.0 < b.1 && b.0 < a.1
     }
 
-    /// Interval used for clash detection. A weekday AM or PM booking is the organisation half from
-    /// the canonical script even when older clock times were stored on it. Otherwise explicit times
-    /// win, and a named slot without times is the script's `slotInterval` for the organisation day.
+    /// Interval used for clash detection: the canonical script's `slotInterval` with the stored
+    /// slot and stored clock times. Clock times win; the named slot applies only when the script
+    /// rejects the clock pair. The day input is always the weekday standard day and break.
     static func clashInterval(for booking: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> (Int, Int)? {
-        let dayInput = CanonicalStandardDayInput(policy: policy)
-        if (booking.timeSlot == .morning || booking.timeSlot == .afternoon),
-           PayrollTimePolicyCatalog.isWeekday(booking.date),
-           let windows = CanonicalBusinessEngine.halfDayWindows(dayInput) {
-            return booking.timeSlot == .morning ? windows.am.tuple : windows.pm.tuple
-        }
-        if let s = booking.workStartTime, let e = booking.workEndTime,
-           let sm = parseMinutes(s), let em = parseMinutes(e), em > sm {
-            return (sm, em)
-        }
-        return CanonicalBusinessEngine.slotInterval(
+        CanonicalBusinessEngine.slotInterval(
             timeSlot: booking.timeSlot.rawValue,
-            workStartTime: nil,
-            workEndTime: nil,
-            day: dayInput
+            workStartTime: booking.workStartTime,
+            workEndTime: booking.workEndTime,
+            day: CanonicalStandardDayInput(policy: policy)
         )?.tuple
     }
 
@@ -221,14 +213,9 @@ extension ManagerSiteBooking {
         ScheduleCoverageFormat.hours(paidBookedHours(policy: policy)) + "h"
     }
 
+    /// Sort position: the start of the script's interval for the stored slot and clocks.
     func minutesSortKey(policy: OrgPayrollTimePolicy = .default) -> Int {
-        if let s = workStartTime, let m = ManagerScheduleInterval.parseMinutes(s) { return m }
-        return CanonicalBusinessEngine.slotInterval(
-            timeSlot: timeSlot.rawValue,
-            workStartTime: nil,
-            workEndTime: nil,
-            day: CanonicalStandardDayInput(policy: policy)
-        )?.start ?? 0
+        ManagerScheduleInterval.clashInterval(for: self, policy: policy)?.0 ?? 0
     }
 
     /// Rough “day units” for reports from paid hours (includes break toggle and OT).
@@ -242,24 +229,13 @@ extension ManagerSiteBooking {
     func calendarBlock(on day: Date, policy: OrgPayrollTimePolicy = .default) -> (start: Date, end: Date) {
         let cal = Calendar.current
         let startOfDay = cal.startOfDay(for: day)
-        if let s = workStartTime, let e = workEndTime,
-           let sm = ManagerScheduleInterval.parseMinutes(s),
-           let em = ManagerScheduleInterval.parseMinutes(e), em > sm {
-            let start = cal.date(byAdding: .minute, value: sm, to: startOfDay) ?? startOfDay
-            let end = cal.date(byAdding: .minute, value: em, to: startOfDay) ?? startOfDay
-            return (start, end)
-        }
-        guard let interval = CanonicalBusinessEngine.slotInterval(
-            timeSlot: timeSlot.rawValue,
-            workStartTime: nil,
-            workEndTime: nil,
-            day: CanonicalStandardDayInput(policy: policy)
-        ) else {
+        // The script's slotInterval with the stored slot and clocks.
+        guard let interval = ManagerScheduleInterval.clashInterval(for: self, policy: policy) else {
             let end = cal.date(byAdding: .hour, value: timeSlot == .morning || timeSlot == .afternoon ? 4 : 8, to: startOfDay) ?? startOfDay
             return (startOfDay, end)
         }
-        let start = cal.date(byAdding: .minute, value: interval.start, to: startOfDay) ?? startOfDay
-        let end = cal.date(byAdding: .minute, value: interval.end, to: startOfDay) ?? startOfDay
+        let start = cal.date(byAdding: .minute, value: interval.0, to: startOfDay) ?? startOfDay
+        let end = cal.date(byAdding: .minute, value: interval.1, to: startOfDay) ?? startOfDay
         return (start, end)
     }
 

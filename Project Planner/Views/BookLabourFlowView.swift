@@ -1188,9 +1188,8 @@ struct BookLabourFlowView: View {
         let next: OperativeRectifyDraft
         switch slot {
         case .morning, .afternoon:
-            // AM and PM are the canonical halves of this day's standard window.
-            guard let dayInput = PayrollTimePolicyCatalog.canonicalDayInput(for: day, policy: policy),
-                  let windows = CanonicalBusinessEngine.halfDayWindows(dayInput) else { return }
+            // AM and PM are the canonical halves of the weekday standard day, on every day.
+            guard let windows = CanonicalBusinessEngine.halfDayWindows(CanonicalStandardDayInput(policy: policy)) else { return }
             let half = slot == .morning ? windows.am : windows.pm
             next = .init(startMinutes: half.start, endMinutes: half.end, breakRemoved: breakRemoved)
         default:

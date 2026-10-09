@@ -186,21 +186,6 @@ enum PayrollTimePolicyCatalog {
         timelinePolicy(for: booking.date, policy: policy).outsideMultiplier
     }
 
-    /// Standard-day fields the canonical script splits into AM and PM on `day`
-    /// (`CanonicalBusinessEngine.halfDayWindows`). A weekday passes the organisation policy
-    /// through unchanged. A weekend with its own standard window passes that window with the
-    /// organisation break. Nil when every hour of that weekend day is paid at the multiplier.
-    static func canonicalDayInput(for day: Date, policy: OrgPayrollTimePolicy) -> CanonicalStandardDayInput? {
-        let timeline = timelinePolicy(for: day, policy: policy)
-        if timeline.allHoursAtMultiplier { return nil }
-        return CanonicalStandardDayInput(
-            standardDayStart: timeline.standardWindowStart ?? policy.standardDayStart,
-            standardDayEnd: timeline.standardWindowEnd ?? policy.standardDayEnd,
-            breakWindowStart: policy.breakWindowStart,
-            breakWindowEnd: policy.breakWindowEnd
-        )
-    }
-
     static func defaultWeekendBookingChoice(policy: OrgPayrollTimePolicy, day: Date) -> OperativeDayBookingChoice {
         let weekend = weekendSettings(for: day, policy: policy)
         if weekend.allHoursAtMultiplierMode {

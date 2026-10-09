@@ -292,10 +292,11 @@ enum PayrollHoursEngine {
     }
 
     /// Custom hours within 20 minutes of the canonical AM or PM window pay as that half day.
+    /// The halves are the weekday standard day's, on every day, the same input the web app uses.
     private static func matchesStandardHalfWindow(booking: Booking, policy: OrgPayrollTimePolicy) -> Bool {
         guard let interval = OperativeBookingInterval.clashInterval(for: booking, policy: policy),
-              let dayInput = PayrollTimePolicyCatalog.canonicalDayInput(for: booking.date, policy: policy),
-              let windows = CanonicalBusinessEngine.halfDayWindows(dayInput) else { return false }
+              !PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy).allHoursAtMultiplier,
+              let windows = CanonicalBusinessEngine.halfDayWindows(CanonicalStandardDayInput(policy: policy)) else { return false }
         let tolerance = 20
         func near(_ a: Int, _ b: Int) -> Bool { abs(a - b) <= tolerance }
         let isMorningHalf = near(interval.0, windows.am.start) && near(interval.1, windows.am.end)

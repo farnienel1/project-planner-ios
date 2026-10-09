@@ -30,11 +30,7 @@ enum HomeUpNextSupport {
     }
 
     static func sortDate(managerBooking b: ManagerSiteBooking, policy: OrgPayrollTimePolicy = .default) -> Date {
-        let day = calendar.startOfDay(for: b.date)
-        if let s = b.workStartTime, let mins = ManagerScheduleInterval.parseMinutes(s) {
-            return calendar.date(byAdding: .minute, value: mins, to: day) ?? day
-        }
-        return calendar.date(byAdding: .minute, value: b.minutesSortKey(policy: policy), to: day) ?? day
+        b.calendarBlock(on: b.date, policy: policy).start
     }
 
     static func project(forProjectId id: UUID, allProjects: [Project]) -> Project? {
