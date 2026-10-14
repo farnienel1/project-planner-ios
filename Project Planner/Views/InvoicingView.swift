@@ -21,9 +21,13 @@ struct InvoicingView: View {
     @State private var pendingReviewUserId: String?
     @State private var pendingReviewWeek: WeekRange?
     @State private var didConsumeDeepLink = false
+    @State private var pushMyTimesheets = false
+    @State private var pushTeamTimesheets = false
+    @State private var teamListSurface = "awaiting"
 
     @Binding var initialReviewUserId: String?
     @Binding var initialReviewWeekStart: Date?
+    @Binding var initialSurface: String?
 
     private var settings: OrganizationInvoicingSettings {
         firebaseBackend.currentOrganization?.settings.invoicing ?? .default
@@ -65,6 +69,31 @@ struct InvoicingView: View {
             .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Timesheets")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(isPresented: $pushMyTimesheets) {
+                MyTimesheetsHubView(settings: settings)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(userStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(notificationService)
+            }
+            .navigationDestination(isPresented: $pushTeamTimesheets) {
+                OperativeTimesheetsView(
+                    settings: settings,
+                    week: pendingReviewWeek,
+                    initialReviewUserId: pendingReviewUserId,
+                    initialList: teamListSurface
+                )
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(userStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(notificationService)
+            }
             .task {
                 captureTimesheetDeepLink()
                 await syncLandingDraftsFromCloud()
@@ -74,10 +103,12 @@ struct InvoicingView: View {
 
     init(
         initialReviewUserId: Binding<String?> = .constant(nil),
-        initialReviewWeekStart: Binding<Date?> = .constant(nil)
+        initialReviewWeekStart: Binding<Date?> = .constant(nil),
+        initialSurface: Binding<String?> = .constant(nil)
     ) {
         _initialReviewUserId = initialReviewUserId
         _initialReviewWeekStart = initialReviewWeekStart
+        _initialSurface = initialSurface
     }
 
     private var paymentSummaryCard: some View {
@@ -460,12 +491,34 @@ struct InvoicingView: View {
         didConsumeDeepLink = true
         let rawId = initialReviewUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let weekStart = initialReviewWeekStart
+        let surface = initialSurface
         initialReviewUserId = nil
         initialReviewWeekStart = nil
-        guard !rawId.isEmpty else { return }
-        pendingReviewUserId = rawId
+        initialSurface = nil
+        if !rawId.isEmpty {
+            pendingReviewUserId = rawId
+        }
         if let weekStart {
-            pendingReviewWeek = TimesheetPayrollPolicy.periodMatchingStoredStart(weekStart, settings: settings)
+            let storedEnd = pendingReviewUserId.flatMap {
+                TimesheetDraftStore.storedPeriodEnd(userId: $0, weekStart: weekStart)
+            }
+            pendingReviewWeek = TimesheetPayrollPolicy.periodMatchingStoredStart(
+                weekStart,
+                storedEnd: storedEnd,
+                settings: settings
+            )
+        }
+        switch surface {
+        case "mine":
+            pushMyTimesheets = true
+        case "teamAwaiting":
+            teamListSurface = "awaiting"
+            pushTeamTimesheets = true
+        case "teamSigned":
+            teamListSurface = "signed"
+            pushTeamTimesheets = true
+        default:
+            break
         }
     }
 }
@@ -479,40 +532,36 @@ enum TimesheetApprovalPolicy {
         user.hasLineManager
     }
 
-    /// A stored instant before 2020 is a placeholder, not a signature or an export.
-    private static let earliestRealSignature = Date(timeIntervalSince1970: 1_577_836_800)
-
+    /// A stored instant the script still treats as a signature. Nil when the script did not answer.
     static func recordedSignatureDate(_ date: Date?) -> Date? {
-        guard let date, date > earliestRealSignature else { return nil }
-        return date
+        guard let date else { return nil }
+        var probe = TimesheetDraft()
+        probe.managerSignedAt = date
+        probe.managerSignedByName = "Manager"
+        guard let fields = TimesheetDraftStore.statusFields(for: probe),
+              let ms = fields.managerSignedAtMs else { return nil }
+        return Date(timeIntervalSince1970: ms / 1000)
     }
 
-    /// The operative signed on device: a real date plus the name or signature image iOS writes together.
     static func operativeHasSigned(_ draft: TimesheetDraft) -> Bool {
-        guard recordedSignatureDate(draft.operativeSignedAt) != nil else { return false }
-        let name = draft.operativeSignedByName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let image = draft.operativeSignatureImageBase64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !name.isEmpty || !image.isEmpty
+        guard let fields = TimesheetDraftStore.statusFields(for: draft) else { return false }
+        let signedWithoutManager = CanonicalBusinessEngine.isTimesheetFullySigned(fields, hasLineManager: false) == true
+        let waitingForManager = CanonicalBusinessEngine.isTimesheetAwaitingSignOff(fields, hasLineManager: true) == true
+        return signedWithoutManager || waitingForManager
     }
 
     static func isExported(_ draft: TimesheetDraft) -> Bool {
-        recordedSignatureDate(draft.exportedAt) != nil
+        guard let fields = TimesheetDraftStore.statusFields(for: draft) else { return false }
+        return CanonicalBusinessEngine.isTimesheetExported(fields) == true
     }
 
     static func isTimesheetFullyApproved(draft: TimesheetDraft, user: AppUser) -> Bool {
-        guard operativeHasSigned(draft) else { return false }
-        if requiresLineManagerCounterSign(for: user) {
-            return recordedSignatureDate(draft.managerSignedAt) != nil
-        }
-        return true
+        guard let fields = TimesheetDraftStore.statusFields(for: draft) else { return false }
+        return CanonicalBusinessEngine.isTimesheetFullySigned(fields, hasLineManager: user.hasLineManager) == true
     }
 
-    /// Awaiting sign-off means the operative has actually signed, the line manager has not, and the sheet is not exported.
     static func awaitingManagerSignOff(draft: TimesheetDraft, user: AppUser) -> Bool {
-        requiresLineManagerCounterSign(for: user)
-            && operativeHasSigned(draft)
-            && recordedSignatureDate(draft.managerSignedAt) == nil
-            && !isExported(draft)
+        TimesheetDraftStore.listBucket(for: draft, hasLineManager: user.hasLineManager) == "awaiting"
     }
 
     /// One row per pay period. An exported copy of that period never waits for sign-off.
@@ -522,32 +571,53 @@ enum TimesheetApprovalPolicy {
         documentStarts: [Date],
         settings: OrganizationInvoicingSettings
     ) -> [Date] {
-        let calendar = Calendar.current
-        var keysByPeriod: [Date: [Date]] = [:]
+        struct Candidate {
+            var weekStart: Date
+            var startKey: String
+            var endKey: String
+            var hasActivity: Bool
+            var periodStart: Date
+        }
+        var candidates: [Candidate] = []
         for start in documentStarts {
-            let day = calendar.startOfDay(for: start)
-            let period = TimesheetPayrollPolicy.periodMatchingStoredStart(day, settings: settings, calendar: calendar)
-            let periodDay = calendar.startOfDay(for: period.start)
-            var keys = keysByPeriod[periodDay] ?? []
-            if !keys.contains(where: { calendar.isDate($0, inSameDayAs: day) }) {
-                keys.append(day)
-            }
-            keysByPeriod[periodDay] = keys
+            let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
+            let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: start)
+            let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, storedEnd: storedEnd, settings: settings)
+            guard let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start),
+                  let endKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) else { continue }
+            let hasActivity = draft.operativeSignedAt != nil
+                || !draft.expenseEntries.isEmpty
+                || !draft.priceWorkEntries.isEmpty
+                || !draft.managerNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            candidates.append(Candidate(
+                weekStart: start,
+                startKey: startKey,
+                endKey: endKey,
+                hasActivity: hasActivity,
+                periodStart: period.start
+            ))
         }
         var awaiting: [Date] = []
-        for (periodDay, keys) in keysByPeriod {
-            let drafts = keys.map { TimesheetDraftStore.load(userId: user.id, weekStart: $0) }
-            if drafts.contains(where: { isExported($0) }) { continue }
-            let authoritative: TimesheetDraft
-            if let index = keys.firstIndex(where: { calendar.isDate($0, inSameDayAs: periodDay) }) {
-                authoritative = drafts[index]
-            } else if let signed = drafts.first(where: { operativeHasSigned($0) }) {
-                authoritative = signed
-            } else {
-                continue
+        var seen = Set<String>()
+        for candidate in candidates {
+            let key = "\(candidate.startKey)|\(candidate.endKey)"
+            guard seen.insert(key).inserted else { continue }
+            let period = CanonicalBusinessEngine.CanonicalTimesheetPeriod(
+                startDayKey: candidate.startKey,
+                endDayKey: candidate.endKey
+            )
+            let rows = candidates.map {
+                CanonicalBusinessEngine.CanonicalTimesheetPeriodCandidate(
+                    startDayKey: $0.startKey,
+                    endDayKey: $0.endKey,
+                    hasActivity: $0.hasActivity
+                )
             }
-            if awaitingManagerSignOff(draft: authoritative, user: user) {
-                awaiting.append(periodDay)
+            guard let index = CanonicalBusinessEngine.pickTimesheetRowForPeriod(rows: rows, period: period),
+                  candidates.indices.contains(index) else { continue }
+            let chosen = TimesheetDraftStore.load(userId: user.id, weekStart: candidates[index].weekStart)
+            if awaitingManagerSignOff(draft: chosen, user: user) {
+                awaiting.append(candidates[index].periodStart)
             }
         }
         return awaiting.sorted(by: >)
@@ -599,16 +669,110 @@ enum TimesheetDraftStore {
     private static let defaults = UserDefaults.standard
 
     static func load(userId: String, weekStart: Date) -> TimesheetDraft {
-        guard let data = defaults.data(forKey: key(userId: userId, weekStart: weekStart)),
+        guard let storageKey = key(userId: userId, weekStart: weekStart),
+              let data = defaults.data(forKey: storageKey),
               let decoded = try? JSONDecoder().decode(TimesheetDraft.self, from: data) else {
             return TimesheetDraft()
         }
         return decoded
     }
 
-    static func save(_ draft: TimesheetDraft, userId: String, weekStart: Date) {
-        guard let encoded = try? JSONEncoder().encode(draft) else { return }
-        defaults.set(encoded, forKey: key(userId: userId, weekStart: weekStart))
+    static func save(_ draft: TimesheetDraft, userId: String, weekStart: Date, weekEnd: Date? = nil) {
+        guard let storageKey = key(userId: userId, weekStart: weekStart),
+              let encoded = try? JSONEncoder().encode(draft) else { return }
+        defaults.set(encoded, forKey: storageKey)
+        if let weekEnd,
+           let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart),
+           let endKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekEnd),
+           let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart) {
+            defaults.set("\(startKey)|\(endKey)", forKey: boundsKey)
+        }
+    }
+
+    static func storedPeriodEnd(userId: String, weekStart: Date) -> Date? {
+        guard let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart),
+              let stored = defaults.string(forKey: boundsKey) else { return nil }
+        let parts = stored.split(separator: "|").map(String.init)
+        guard parts.count == 2 else { return nil }
+        return CanonicalBusinessEngine.date(fromDayKey: parts[1])
+    }
+
+    static func rememberPeriodBounds(startDayKey: String, endDayKey: String, userId: String, weekStart: Date) {
+        guard startDayKey.count == 10, endDayKey.count == 10,
+              let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart) else { return }
+        defaults.set("\(startDayKey)|\(endDayKey)", forKey: boundsKey)
+    }
+
+    static func statusPayload(for draft: TimesheetDraft) -> [String: Any] {
+        var row: [String: Any] = [:]
+        func put(_ key: String, _ date: Date?) {
+            if let date { row[key] = date.timeIntervalSince1970 * 1000 }
+        }
+        put("operativeSignedAt", draft.operativeSignedAt)
+        row["operativeSignedByName"] = draft.operativeSignedByName ?? ""
+        row["operativeSignatureImageBase64"] = draft.operativeSignatureImageBase64 ?? ""
+        put("managerSignedAt", draft.managerSignedAt)
+        row["managerSignedByName"] = draft.managerSignedByName ?? ""
+        row["managerSignedByUserId"] = draft.managerSignedByUserId ?? ""
+        row["managerSignatureImageBase64"] = draft.managerSignatureImageBase64 ?? ""
+        if let managerSignedAt = draft.managerSignedAt {
+            row["approvedAt"] = managerSignedAt.timeIntervalSince1970 * 1000
+            row["approvedByName"] = draft.managerSignedByName ?? ""
+        }
+        put("exportedAt", draft.exportedAt)
+        return row
+    }
+
+    static func statusFields(for draft: TimesheetDraft) -> CanonicalBusinessEngine.CanonicalTimesheetStatusFields? {
+        parseTimesheetStatusFields(statusPayload(for: draft))
+    }
+
+    static func listBucket(for draft: TimesheetDraft, hasLineManager: Bool) -> String? {
+        guard let fields = statusFields(for: draft) else { return nil }
+        return CanonicalBusinessEngine.timesheetListBucket(fields, hasLineManager: hasLineManager)
+    }
+
+    static func parseTimesheetStatusFields(_ data: [String: Any]) -> CanonicalBusinessEngine.CanonicalTimesheetStatusFields? {
+        CanonicalBusinessEngine.parseTimesheetStatusFields(data)
+    }
+
+    @discardableResult
+    static func applySignOff(
+        to draft: inout TimesheetDraft,
+        role: String,
+        signedAt: Date,
+        signedByName: String,
+        signedByUserId: String? = nil,
+        signatureImageBase64: String? = nil
+    ) -> Bool {
+        guard let fields = CanonicalBusinessEngine.timesheetSignOffWriteFields(
+            role: role,
+            signedAtMs: signedAt.timeIntervalSince1970 * 1000,
+            signedByName: signedByName,
+            signedByUserId: signedByUserId,
+            signatureImageBase64: signatureImageBase64
+        ) else { return false }
+        if role == "operative" {
+            guard let ms = fields.operativeSignedAtMs else { return false }
+            draft.operativeSignedAt = Date(timeIntervalSince1970: ms / 1000)
+            draft.operativeSignedByName = fields.operativeSignedByName
+            draft.operativeSignatureImageBase64 = fields.operativeSignatureImageBase64
+            return true
+        }
+        guard let ms = fields.managerSignedAtMs else { return false }
+        draft.managerSignedAt = Date(timeIntervalSince1970: ms / 1000)
+        draft.managerSignedByName = fields.managerSignedByName
+        draft.managerSignedByUserId = fields.managerSignedByUserId
+        draft.managerSignatureImageBase64 = fields.managerSignatureImageBase64
+        return true
+    }
+
+    @discardableResult
+    static func applyExport(to draft: inout TimesheetDraft, at: Date) -> Bool {
+        guard let fields = CanonicalBusinessEngine.timesheetExportWriteFields(exportedAtMs: at.timeIntervalSince1970 * 1000),
+              let ms = fields.exportedAtMs else { return false }
+        draft.exportedAt = Date(timeIntervalSince1970: ms / 1000)
+        return true
     }
 
     static func refreshFromCloud(
@@ -629,6 +793,15 @@ enum TimesheetDraftStore {
         }
         guard let raw else { return nil }
         guard let decoded = fromFirestoreMap(raw) else { return nil }
+        let endKey = (raw["weekEndKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let startKey = (raw["weekStartKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let startKey, let endKey, !startKey.isEmpty, !endKey.isEmpty {
+            rememberPeriodBounds(startDayKey: startKey, endDayKey: endKey, userId: userId, weekStart: weekStart)
+        } else if let weekEnd = firestoreDate(raw["weekEnd"]),
+                  let derivedStart = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart),
+                  let derivedEnd = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekEnd) {
+            rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: weekStart)
+        }
         save(decoded, userId: userId, weekStart: weekStart)
         return decoded
     }
@@ -637,19 +810,22 @@ enum TimesheetDraftStore {
         _ draft: TimesheetDraft,
         userId: String,
         weekStart: Date,
+        weekEnd: Date? = nil,
         firebaseBackend: FirebaseBackend,
         organizationId: String
     ) async {
         let payload = asFirestoreMap(draft)
+        let end = weekEnd ?? storedPeriodEnd(userId: userId, weekStart: weekStart) ?? weekStart
         try? await firebaseBackend.saveTimesheetState(
             organizationId: organizationId,
             userId: userId,
             weekStart: weekStart,
+            weekEnd: end,
             payload: payload
         )
     }
 
-    private static func asFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
+    static func asFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
         [
             "managerNote": draft.managerNote,
             "operativeSignedAt": draft.operativeSignedAt.map(Timestamp.init(date:)) as Any,
@@ -659,6 +835,8 @@ enum TimesheetDraftStore {
             "managerSignedByName": draft.managerSignedByName ?? "",
             "managerSignedByUserId": draft.managerSignedByUserId ?? "",
             "managerSignatureImageBase64": draft.managerSignatureImageBase64 ?? "",
+            "approvedAt": draft.managerSignedAt.map(Timestamp.init(date:)) as Any,
+            "approvedByName": draft.managerSignedByName ?? "",
             "exportedAt": draft.exportedAt.map(Timestamp.init(date:)) as Any,
             "weeklyReportOverride": draft.weeklyReportOverride.map(weeklyReportOverrideMap) as Any,
             "expenseEntries": draft.expenseEntries.map { e in
@@ -713,6 +891,23 @@ enum TimesheetDraftStore {
         let managerSignature = (map["managerSignatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.managerSignatureImageBase64 = managerSignature.isEmpty ? nil : managerSignature
         output.exportedAt = firestoreDate(map["exportedAt"])
+        if output.managerSignedAt == nil {
+            output.managerSignedAt = firestoreDate(map["approvedAt"])
+        }
+        if output.managerSignedByName == nil {
+            let approvedBy = (map["approvedByName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            output.managerSignedByName = approvedBy.isEmpty ? nil : approvedBy
+        }
+        if let fields = statusFields(fromFirestore: map) {
+            output.operativeSignedAt = fields.operativeSignedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }
+            output.operativeSignedByName = fields.operativeSignedByName.isEmpty ? nil : fields.operativeSignedByName
+            output.operativeSignatureImageBase64 = fields.operativeSignatureImageBase64.isEmpty ? nil : fields.operativeSignatureImageBase64
+            output.managerSignedAt = fields.managerSignedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }
+            output.managerSignedByName = fields.managerSignedByName.isEmpty ? nil : fields.managerSignedByName
+            output.managerSignedByUserId = fields.managerSignedByUserId.isEmpty ? output.managerSignedByUserId : fields.managerSignedByUserId
+            output.managerSignatureImageBase64 = fields.managerSignatureImageBase64.isEmpty ? nil : fields.managerSignatureImageBase64
+            output.exportedAt = fields.exportedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }
+        }
 
         output.expenseEntries = ((map["expenseEntries"] as? [[String: Any]]) ?? []).compactMap { row in
             guard let idRaw = row["id"] as? String,
@@ -855,9 +1050,63 @@ enum TimesheetDraftStore {
         )
     }
 
-    private static func key(userId: String, weekStart: Date) -> String {
-        let stamp = Int(Calendar.current.startOfDay(for: weekStart).timeIntervalSince1970)
+    static func key(userId: String, weekStart: Date) -> String? {
+        guard let stamp = organizationPeriodStamp(for: weekStart) else { return nil }
         return "timesheet-draft-\(userId)-\(stamp)"
+    }
+
+    private static func periodBoundsKey(userId: String, weekStart: Date) -> String? {
+        guard let stamp = organizationPeriodStamp(for: weekStart) else { return nil }
+        return "timesheet-period-\(userId)-\(stamp)"
+    }
+
+    static func organizationDay(_ date: Date) -> Date? {
+        guard let key = CanonicalBusinessEngine.dayKeyInOrganizationZone(date) else { return nil }
+        return CanonicalBusinessEngine.date(fromDayKey: key)
+    }
+
+    static func rememberBounds(from row: [String: Any], userId: String, weekStart: Date) {
+        let endKey = (row["weekEndKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let startKey = (row["weekStartKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let startKey, let endKey, startKey.count == 10, endKey.count == 10 {
+            rememberPeriodBounds(startDayKey: startKey, endDayKey: endKey, userId: userId, weekStart: weekStart)
+            return
+        }
+        if let weekEnd = firestoreDate(row["weekEnd"]),
+           let derivedStart = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart),
+           let derivedEnd = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekEnd) {
+            rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: weekStart)
+        }
+    }
+
+    /// Unix start of the organisation-zone day, taken from `timesheetDocumentId`. Nil when the script did not answer.
+    static func organizationPeriodStamp(for weekStart: Date) -> Int? {
+        guard let startDayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart),
+              let documentId = CanonicalBusinessEngine.timesheetDocumentId(userId: "u", startDayKey: startDayKey) else {
+            return nil
+        }
+        guard let stamp = documentId.split(separator: "_").last, let value = Int(stamp), value > 0 else { return nil }
+        return value
+    }
+
+    static func statusFields(fromFirestore map: [String: Any]) -> CanonicalBusinessEngine.CanonicalTimesheetStatusFields? {
+        var row: [String: Any] = [:]
+        for key in ["operativeSignedAt", "managerSignedAt", "approvedAt", "exportedAt", "invoiceGeneratedAt"] {
+            if let date = firestoreDate(map[key]) {
+                row[key] = date.timeIntervalSince1970 * 1000
+            }
+        }
+        for key in [
+            "operativeSignedByName",
+            "operativeSignatureImageBase64",
+            "managerSignedByName",
+            "managerSignedByUserId",
+            "managerSignatureImageBase64",
+            "approvedByName",
+        ] {
+            if let text = map[key] as? String { row[key] = text }
+        }
+        return CanonicalBusinessEngine.parseTimesheetStatusFields(row)
     }
 
     /// Local cache keys — used so past pay runs appear before cloud sync finishes.
@@ -866,15 +1115,26 @@ enum TimesheetDraftStore {
         let stamps = UserDefaults.standard.dictionaryRepresentation().keys.compactMap { key -> Date? in
             guard key.hasPrefix(prefix) else { return nil }
             guard let stamp = Int(key.dropFirst(prefix.count)) else { return nil }
-            return Calendar.current.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(stamp)))
+            return Date(timeIntervalSince1970: TimeInterval(stamp))
         }
         return stamps.sorted(by: >)
     }
 
     static func ingestCloudRow(_ row: [String: Any], userId: String) -> Date? {
         guard let weekStart = firestoreDate(row["weekStart"]) else { return nil }
-        let storedStart = Calendar.current.startOfDay(for: weekStart)
+        guard let storedStart = CanonicalBusinessEngine.date(
+            fromDayKey: CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart) ?? ""
+        ) else { return nil }
         guard let draft = decodeFirestoreMap(row) else { return nil }
+        let endKey = (row["weekEndKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let startKey = (row["weekStartKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let startKey, let endKey, !startKey.isEmpty, !endKey.isEmpty {
+            rememberPeriodBounds(startDayKey: startKey, endDayKey: endKey, userId: userId, weekStart: storedStart)
+        } else if let weekEnd = firestoreDate(row["weekEnd"]),
+                  let derivedStart = CanonicalBusinessEngine.dayKeyInOrganizationZone(storedStart),
+                  let derivedEnd = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekEnd) {
+            rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: storedStart)
+        }
         save(draft, userId: userId, weekStart: storedStart)
         return storedStart
     }
@@ -887,8 +1147,8 @@ enum TimesheetDraftStore {
         var starts = Set<Date>()
         starts.insert(WeekRange.current(settings: settings).start)
         starts.insert(TimesheetPayrollPolicy.timesheetWeekRange(for: settings).start)
-        if let extraWeekStart {
-            starts.insert(Calendar.current.startOfDay(for: extraWeekStart))
+        if let extraWeekStart, let day = organizationDay(extraWeekStart) {
+            starts.insert(day)
         }
         return Array(starts)
     }
@@ -937,20 +1197,31 @@ private struct MyTimesheetsHubView: View {
 
     private func refreshPastWeeksFromLocalCache(userId: String) {
         let current = currentWeek
-        var byStart: [Date: WeekRange] = [:]
+        var byPeriod: [String: WeekRange] = [:]
+        func keep(_ week: WeekRange) {
+            guard week.start != current.start || week.end != current.end else { return }
+            byPeriod[periodIdentity(week)] = week
+        }
         for weekStart in TimesheetDraftStore.discoverStoredWeekStarts(userId: userId) {
-            let week = TimesheetPayrollPolicy.periodMatchingStoredStart(weekStart, settings: settings)
-            guard week.start != current.start else { continue }
-            byStart[week.start] = week
+            let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: userId, weekStart: weekStart)
+            keep(TimesheetPayrollPolicy.periodMatchingStoredStart(weekStart, storedEnd: storedEnd, settings: settings))
         }
-        for week in TimesheetPayrollPolicy.previousPayPeriods(count: 120, settings: settings) {
-            guard week.start != current.start else { continue }
-            byStart[week.start] = week
+        for week in TimesheetPayrollPolicy.selectablePayPeriods(settings: settings) {
+            keep(week)
         }
-        let sorted = byStart.values.sorted(by: { $0.start > $1.start })
+        let sorted = byPeriod.values.sorted { lhs, rhs in
+            if lhs.start != rhs.start { return lhs.start > rhs.start }
+            return lhs.end > rhs.end
+        }
         if !sorted.isEmpty {
             pastWeeks = sorted
         }
+    }
+
+    private func periodIdentity(_ week: WeekRange) -> String {
+        let start = CanonicalBusinessEngine.dayKeyInOrganizationZone(week.start) ?? ""
+        let end = CanonicalBusinessEngine.dayKeyInOrganizationZone(week.end) ?? ""
+        return "\(start)|\(end)"
     }
 
     private func loadPastWeeks() async {
@@ -963,12 +1234,15 @@ private struct MyTimesheetsHubView: View {
         defer { Task { @MainActor in isLoadingPastWeeks = false } }
 
         let current = currentWeek
-        var byStart: [Date: WeekRange] = [:]
+        var byPeriod: [String: WeekRange] = [:]
+        func keep(_ week: WeekRange) {
+            guard week.start != current.start || week.end != current.end else { return }
+            byPeriod[periodIdentity(week)] = week
+        }
 
         for weekStart in TimesheetDraftStore.discoverStoredWeekStarts(userId: userId) {
-            let week = TimesheetPayrollPolicy.periodMatchingStoredStart(weekStart, settings: settings)
-            guard week.start != current.start else { continue }
-            byStart[week.start] = week
+            let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: userId, weekStart: weekStart)
+            keep(TimesheetPayrollPolicy.periodMatchingStoredStart(weekStart, storedEnd: storedEnd, settings: settings))
         }
 
         if let orgId = organizationId {
@@ -978,24 +1252,23 @@ private struct MyTimesheetsHubView: View {
                 limit: 200
             ) {
                 for row in rows {
-                    guard let weekStart = firestoreDate(row["weekStart"]) else { continue }
-                    let storedStart = Calendar.current.startOfDay(for: weekStart)
-                    let week = TimesheetPayrollPolicy.periodMatchingStoredStart(storedStart, settings: settings)
-                    guard week.start != current.start else { continue }
+                    guard let weekStart = firestoreDate(row["weekStart"]),
+                          let storedStart = TimesheetDraftStore.organizationDay(weekStart) else { continue }
+                    TimesheetDraftStore.rememberBounds(from: row, userId: userId, weekStart: storedStart)
+                    let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: userId, weekStart: storedStart)
+                    let week = TimesheetPayrollPolicy.periodMatchingStoredStart(storedStart, storedEnd: storedEnd, settings: settings)
                     guard let draft = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
-                    // Always persist under the Firestore weekStart key — never remap to ISO Monday.
-                    TimesheetDraftStore.save(draft, userId: userId, weekStart: storedStart)
-                    byStart[week.start] = week
+                    TimesheetDraftStore.save(draft, userId: userId, weekStart: storedStart, weekEnd: week.end)
+                    keep(week)
                 }
             }
 
-            for week in TimesheetPayrollPolicy.previousPayPeriods(count: 120, settings: settings) {
-                guard week.start != current.start else { continue }
-                byStart[week.start] = week
+            for week in TimesheetPayrollPolicy.selectablePayPeriods(settings: settings) {
+                keep(week)
             }
 
             // Soft-refresh only the most recent periods from cloud (listing is local/policy; avoid 120 network hits).
-            let recentToRefresh = byStart.values.sorted(by: { $0.start > $1.start }).prefix(24)
+            let recentToRefresh = byPeriod.values.sorted(by: { $0.start > $1.start }).prefix(24)
             for week in recentToRefresh {
                 _ = await TimesheetDraftStore.refreshFromCloud(
                     userId: userId,
@@ -1006,7 +1279,10 @@ private struct MyTimesheetsHubView: View {
             }
         }
 
-        let sorted = byStart.values.sorted(by: { $0.start > $1.start })
+        let sorted = byPeriod.values.sorted { lhs, rhs in
+            if lhs.start != rhs.start { return lhs.start > rhs.start }
+            return lhs.end > rhs.end
+        }
         await MainActor.run { pastWeeks = sorted }
     }
 
@@ -1076,7 +1352,7 @@ private struct MyTimesheetsHubView: View {
                             .foregroundStyle(.secondary)
                             .textCase(.uppercase)
                             .padding(.horizontal, 4)
-                        ForEach(pastWeeks, id: \.start) { week in
+                        ForEach(pastWeeks, id: \.self) { week in
                             hubCard(
                                 title: week.title,
                                 subtitle: pastSubtitle(for: week),
@@ -1944,11 +2220,17 @@ private struct MyTimesheetView: View {
     }
 
     private func markTimesheetSigned(signatureImageData: Data) {
-        draft.operativeSignedAt = Date()
-        draft.operativeSignedByName = userStore.displayUser?.fullName.isEmpty == false
-            ? userStore.displayUser?.fullName
-            : userStore.displayUser?.email
-        draft.operativeSignatureImageBase64 = signatureImageData.base64EncodedString()
+        let signedByName = userStore.displayUser?.fullName.isEmpty == false
+            ? (userStore.displayUser?.fullName ?? "")
+            : (userStore.displayUser?.email ?? "")
+        guard TimesheetDraftStore.applySignOff(
+            to: &draft,
+            role: "operative",
+            signedAt: Date(),
+            signedByName: signedByName,
+            signedByUserId: userStore.displayUser?.id,
+            signatureImageBase64: signatureImageData.base64EncodedString()
+        ) else { return }
         if let current = userStore.displayUser {
             TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &draft, user: current)
         }
@@ -1986,7 +2268,7 @@ private struct MyTimesheetView: View {
                 relatedUsers: userStore.organizationUsers
             )
         }
-        TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start)
+        TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let snapshot = draft
         Task {
@@ -1994,6 +2276,7 @@ private struct MyTimesheetView: View {
                 snapshot,
                 userId: currentUserId,
                 weekStart: week.start,
+                weekEnd: week.end,
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId
             )
@@ -2326,9 +2609,15 @@ private struct PreviousTimesheetsView: View {
             limit: 200
         ) {
             for row in rows {
-                guard let weekStart = firestoreDate(row["weekStart"]) else { continue }
-                let storedStart = Calendar.current.startOfDay(for: weekStart)
-                let week = TimesheetPayrollPolicy.periodMatchingStoredStart(storedStart, settings: settings)
+                guard let weekStart = firestoreDate(row["weekStart"]),
+                      let storedStart = TimesheetDraftStore.organizationDay(weekStart) else { continue }
+                TimesheetDraftStore.rememberBounds(from: row, userId: userId, weekStart: storedStart)
+                let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: userId, weekStart: storedStart)
+                let week = TimesheetPayrollPolicy.periodMatchingStoredStart(
+                    storedStart,
+                    storedEnd: storedEnd,
+                    settings: settings
+                )
                 guard let draft = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
                 var adjusted = draft
                 if let user = userStore.displayUser {
@@ -2462,6 +2751,7 @@ private struct OperativeTimesheetsView: View {
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
     let initialReviewUserId: String?
+    let initialList: String?
     @State private var selectedTab: ManagerTimesheetListTab = .awaiting
     @State private var refreshVersion = 0
     @State private var isExporting = false
@@ -2469,6 +2759,9 @@ private struct OperativeTimesheetsView: View {
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var exportedHistory: [ExportedTimesheetHistoryRow] = []
     @State private var isLoadingExportedHistory = false
+    @State private var exportedSearch = ""
+    @State private var exportedSort = "dateNewest"
+    @State private var exportedRunKey = "all"
     @State private var awaitingRows: [ManagerTimesheetRow] = []
     @State private var autoOpenReview: TimesheetAutoOpenTarget?
     @State private var didAutoOpenReview = false
@@ -2478,14 +2771,24 @@ private struct OperativeTimesheetsView: View {
         return u.isSuperAdmin || u.permissions.adminAccess || u.role == .admin
     }
 
+    private var seesEveryTimesheet: Bool {
+        guard let user = userStore.displayUser else { return false }
+        return CanonicalBusinessEngine.seesEveryUserTimesheet(UserStore.staffAccountRole(for: user)) == true
+    }
+
     init(
         settings: OrganizationInvoicingSettings,
         week: WeekRange? = nil,
-        initialReviewUserId: String? = nil
+        initialReviewUserId: String? = nil,
+        initialList: String? = nil
     ) {
         self.settings = settings
         self.week = week ?? TimesheetPayrollPolicy.payPeriodContaining(settings: settings)
         self.initialReviewUserId = initialReviewUserId
+        self.initialList = initialList
+        if initialList == "signed" {
+            _selectedTab = State(initialValue: .signedOff)
+        }
     }
 
     private var extraReviewUser: AppUser? {
@@ -2496,7 +2799,7 @@ private struct OperativeTimesheetsView: View {
     private var managerScopeUsers: [AppUser] {
         guard let currentUser = userStore.displayUser else { return [] }
         var users: [AppUser]
-        if isAdminViewer {
+        if seesEveryTimesheet {
             users = userStore.organizationUsers.filter { user in
                 user.isActive
                 && (user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess || user.role == .manager || user.role == .admin)
@@ -2515,7 +2818,7 @@ private struct OperativeTimesheetsView: View {
     private var directReports: [AppUser] {
         guard let currentUser = userStore.displayUser else { return [] }
         var users: [AppUser]
-        if isAdminViewer {
+        if seesEveryTimesheet {
             users = userStore.organizationUsers
                 .filter { user in
                     user.isActive
@@ -2540,13 +2843,14 @@ private struct OperativeTimesheetsView: View {
         let _ = refreshVersion
         return directReports.filter { user in
             let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
+            let bucket = TimesheetDraftStore.listBucket(for: draft, hasLineManager: user.hasLineManager)
             switch selectedTab {
             case .awaiting:
-                return TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user)
+                return bucket == "awaiting"
             case .signedOff:
-                return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) && !TimesheetApprovalPolicy.isExported(draft)
+                return bucket == "signed"
             case .exported:
-                return TimesheetApprovalPolicy.isExported(draft)
+                return bucket == "exported"
             }
         }
     }
@@ -2574,6 +2878,7 @@ private struct OperativeTimesheetsView: View {
 
                 VStack(spacing: 0) {
                     if selectedTab == .exported {
+                        exportedFilterCard
                         if isLoadingExportedHistory && exportedHistory.isEmpty {
                             ProgressView("Loading exported timesheets…")
                                 .padding()
@@ -2584,8 +2889,15 @@ private struct OperativeTimesheetsView: View {
                                 description: Text("Exported timesheets stay here for years after you email them.")
                             )
                             .padding()
+                        } else if filteredExportedHistory.isEmpty {
+                            ContentUnavailableView(
+                                "No matching exported timesheets",
+                                systemImage: "magnifyingglass",
+                                description: Text("Try another name, sort, or payment run.")
+                            )
+                            .padding()
                         } else {
-                            ForEach(exportedHistory) { row in
+                            ForEach(filteredExportedHistory) { row in
                                 NavigationLink {
                                     OperativeTimesheetReviewView(operative: row.user, settings: settings, week: row.week)
                                         .environmentObject(firebaseBackend)
@@ -2629,7 +2941,7 @@ private struct OperativeTimesheetsView: View {
                                 }
                                 .accessibilityIdentifier("timesheets.row.\(row.id).exported")
                                 .buttonStyle(.plain)
-                                if row.id != exportedHistory.last?.id {
+                                if row.id != filteredExportedHistory.last?.id {
                                     Divider().padding(.leading, 60)
                                 }
                             }
@@ -2779,11 +3091,16 @@ private struct OperativeTimesheetsView: View {
             .padding(16)
         }
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
-        .navigationTitle(isAdminViewer ? "User Timesheets" : "Operative Timesheets")
+        .navigationTitle("User Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $autoOpenReview) { target in
             if let operative = userStore.organizationUsers.first(where: { $0.id == target.userId }) {
-                let reviewWeek = TimesheetPayrollPolicy.periodMatchingStoredStart(target.weekStart, settings: settings)
+                let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: operative.id, weekStart: target.weekStart)
+                let reviewWeek = TimesheetPayrollPolicy.periodMatchingStoredStart(
+                    target.weekStart,
+                    storedEnd: storedEnd,
+                    settings: settings
+                )
                 OperativeTimesheetReviewView(operative: operative, settings: settings, week: reviewWeek)
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
@@ -2813,6 +3130,72 @@ private struct OperativeTimesheetsView: View {
                 Task { await loadExportedHistory() }
             }
         }
+    }
+
+    private var filteredExportedHistory: [ExportedTimesheetHistoryRow] {
+        let needle = exportedSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered = exportedHistory.filter { row in
+            if exportedRunKey != "all" {
+                let key = periodKey(for: row.week)
+                if key != exportedRunKey { return false }
+            }
+            if needle.isEmpty { return true }
+            let name = "\(row.user.firstName) \(row.user.surname) \(row.user.email)".lowercased()
+            return name.contains(needle) || row.week.title.lowercased().contains(needle)
+        }
+        return filtered.sorted { lhs, rhs in
+            switch exportedSort {
+            case "firstName":
+                return lhs.user.firstName.localizedCaseInsensitiveCompare(rhs.user.firstName) == .orderedAscending
+            case "lastName":
+                return lhs.user.surname.localizedCaseInsensitiveCompare(rhs.user.surname) == .orderedAscending
+            case "dateOldest":
+                return (lhs.draft.exportedAt ?? .distantPast) < (rhs.draft.exportedAt ?? .distantPast)
+            default:
+                return (lhs.draft.exportedAt ?? .distantPast) > (rhs.draft.exportedAt ?? .distantPast)
+            }
+        }
+    }
+
+    private var exportedRunChoices: [WeekRange] {
+        let observed = exportedHistory.compactMap { row -> CanonicalBusinessEngine.CanonicalTimesheetPeriod? in
+            guard let start = CanonicalBusinessEngine.dayKeyInOrganizationZone(row.week.start),
+                  let end = CanonicalBusinessEngine.dayKeyInOrganizationZone(row.week.end) else { return nil }
+            return CanonicalBusinessEngine.CanonicalTimesheetPeriod(startDayKey: start, endDayKey: end)
+        }
+        return TimesheetPayrollPolicy.selectablePayPeriods(settings: settings, observed: observed)
+    }
+
+    private func periodKey(for week: WeekRange) -> String {
+        let start = CanonicalBusinessEngine.dayKeyInOrganizationZone(week.start) ?? ""
+        let end = CanonicalBusinessEngine.dayKeyInOrganizationZone(week.end) ?? ""
+        return "\(start)|\(end)"
+    }
+
+    private var exportedFilterCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Name or payment run", text: $exportedSearch)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("timesheets.exportedSearch")
+            Picker("Sort", selection: $exportedSort) {
+                Text("First name").tag("firstName")
+                Text("Last name").tag("lastName")
+                Text("Date newest").tag("dateNewest")
+                Text("Date oldest").tag("dateOldest")
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("timesheets.exportedSort")
+            Picker("Payment run", selection: $exportedRunKey) {
+                Text("All payment runs").tag("all")
+                ForEach(exportedRunChoices, id: \.self) { period in
+                    Text(period.title).tag(periodKey(for: period))
+                }
+            }
+            .accessibilityIdentifier("timesheets.exportedRun")
+        }
+        .padding(12)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     @ViewBuilder
@@ -2905,7 +3288,12 @@ private struct OperativeTimesheetsView: View {
                 documentStarts: documentStarts,
                 settings: settings
             ) {
-                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(periodStart, settings: settings)
+                let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: periodStart)
+                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(
+                    periodStart,
+                    storedEnd: storedEnd,
+                    settings: settings
+                )
                 let id = "\(user.id)|\(Int(period.start.timeIntervalSince1970))"
                 guard seen.insert(id).inserted else { continue }
                 rows.append(ManagerTimesheetRow(id: id, user: user, week: period))
@@ -2989,7 +3377,7 @@ private struct OperativeTimesheetsView: View {
 
         for op in targets where result.emailedUserIds.contains(op.id) {
             var d = TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
-            d.exportedAt = Date()
+            guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
             TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                 to: &d,
                 user: op,
@@ -3006,12 +3394,13 @@ private struct OperativeTimesheetsView: View {
                 viewer: exporter,
                 relatedUsers: userStore.organizationUsers
             )
-            TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start)
+            TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start, weekEnd: week.end)
             let snapshot = d
             await TimesheetDraftStore.saveToCloud(
                 snapshot,
                 userId: op.id,
                 weekStart: week.start,
+                weekEnd: week.end,
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId
             )
@@ -3058,20 +3447,26 @@ private struct OperativeTimesheetsView: View {
                    limit: 400
                ) {
                 for row in cloudRows {
-                    guard let weekStart = firestoreDate(row["weekStart"]) else { continue }
-                    let day = Calendar.current.startOfDay(for: weekStart)
+                    guard let weekStart = firestoreDate(row["weekStart"]),
+                          let day = TimesheetDraftStore.organizationDay(weekStart) else { continue }
+                    TimesheetDraftStore.rememberBounds(from: row, userId: user.id, weekStart: day)
                     weekStarts.insert(day)
-                    if let decoded = TimesheetDraftStore.decodeFirestoreMap(row), TimesheetApprovalPolicy.isExported(decoded) {
-                        TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day)
+                    if let decoded = TimesheetDraftStore.decodeFirestoreMap(row),
+                       TimesheetDraftStore.listBucket(for: decoded, hasLineManager: user.hasLineManager) == "exported" {
+                        let end = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: day)
+                        TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, weekEnd: end)
                     }
                 }
             }
 
             for start in weekStarts {
                 let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
-                guard TimesheetApprovalPolicy.isExported(draft) else { continue }
-                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, settings: settings)
-                let rowId = "\(user.id)|\(Int(period.start.timeIntervalSince1970))"
+                guard TimesheetDraftStore.listBucket(for: draft, hasLineManager: user.hasLineManager) == "exported" else { continue }
+                let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: start)
+                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, storedEnd: storedEnd, settings: settings)
+                let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? ""
+                let endKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) ?? ""
+                let rowId = "\(user.id)|\(startKey)|\(endKey)"
                 byId[rowId] = ExportedTimesheetHistoryRow(
                     id: rowId,
                     user: user,
@@ -3095,7 +3490,7 @@ private struct OperativeTimesheetsView: View {
 
     private func usersForExportedHistory() -> [AppUser] {
         guard let currentUser = userStore.displayUser else { return [] }
-        if isAdminViewer {
+        if seesEveryTimesheet {
             return userStore.organizationUsers
                 .filter { user in
                     user.isActive
@@ -3734,7 +4129,7 @@ private struct OperativeTimesheetReviewView: View {
             viewer: userStore.displayUser,
             relatedUsers: userStore.organizationUsers
         )
-        TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start)
+        TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let snapshot = draft
         Task {
@@ -3742,6 +4137,7 @@ private struct OperativeTimesheetReviewView: View {
                 snapshot,
                 userId: operative.id,
                 weekStart: week.start,
+                weekEnd: week.end,
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId
             )
@@ -3979,12 +4375,17 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                     ? (userStore.displayUser?.fullName ?? "Line manager")
                     : (userStore.displayUser?.email ?? "Line manager")
             ) { signatureImageData in
-                draft.managerSignedAt = Date()
-                draft.managerSignedByName = userStore.displayUser?.fullName.isEmpty == false
-                    ? userStore.displayUser?.fullName
-                    : userStore.displayUser?.email
-                draft.managerSignedByUserId = userStore.displayUser?.id
-                draft.managerSignatureImageBase64 = signatureImageData.base64EncodedString()
+                let signedByName = userStore.displayUser?.fullName.isEmpty == false
+                    ? (userStore.displayUser?.fullName ?? "")
+                    : (userStore.displayUser?.email ?? "")
+                guard TimesheetDraftStore.applySignOff(
+                    to: &draft,
+                    role: "manager",
+                    signedAt: Date(),
+                    signedByName: signedByName,
+                    signedByUserId: userStore.displayUser?.id,
+                    signatureImageBase64: signatureImageData.base64EncodedString()
+                ) else { return }
                 onSaveDraft()
                 let signer = draft.managerSignedByName ?? "Line manager"
                 let signerId = userStore.displayUser?.id ?? ""
@@ -5771,12 +6172,22 @@ private enum TimesheetExportHelper {
         var downloadLinks: [(fileName: String, url: String)] = []
         if let firebaseBackend, let orgId = organization?.firestoreDocumentId {
             for attachment in attachments {
-                if let url = try? await firebaseBackend.uploadTimesheetExportPDF(
-                    attachment.data,
-                    fileName: attachment.fileName,
-                    organizationId: orgId
-                ) {
+                do {
+                    let url = try await firebaseBackend.uploadTimesheetExportPDF(
+                        attachment.data,
+                        fileName: attachment.fileName,
+                        organizationId: orgId
+                    )
                     downloadLinks.append((attachment.fileName, url))
+                } catch {
+                    let refused = (error as NSError).domain == "FirebaseBackend" && (error as NSError).code == 413
+                    if refused {
+                        return Result(
+                            emailedUserIds: [],
+                            failed: failed + [error.localizedDescription],
+                            emailSent: false
+                        )
+                    }
                 }
             }
         }

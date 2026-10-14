@@ -741,13 +741,14 @@ class UserStore: ObservableObject {
     /// - Manager accounts can access when at least one active operative is directly assigned to them.
     func canAccessOperativeTimesheets() -> Bool {
         guard let user = displayUser else { return false }
-        guard user.permissions.manager || user.permissions.adminAccess || user.role == .admin || user.isSuperAdmin else {
+        let role = Self.staffAccountRole(for: user)
+        guard CanonicalBusinessEngine.canReviewUserTimesheets(role) == true else {
             return false
         }
         let hasAnyActiveOperative = organizationUsers.contains { orgUser in
             orgUser.permissions.operativeMode && orgUser.isActive
         }
-        if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+        if CanonicalBusinessEngine.seesEveryUserTimesheet(role) == true {
             return hasAnyActiveOperative || isHomeProfileLoading
         }
         return organizationUsers.contains { orgUser in
@@ -788,7 +789,11 @@ class UserStore: ObservableObject {
         updated.utrNumber = (trimmedUTR?.isEmpty == false) ? trimmedUTR : nil
 
         do {
-            try await firebaseBackend.saveUser(updated)
+            try await firebaseBackend.patchOwnUserBillingFields(
+                userId: userId,
+                vatNumber: updated.vatNumber,
+                utrNumber: updated.utrNumber
+            )
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
                 cu = updated
@@ -809,7 +814,7 @@ class UserStore: ObservableObject {
         updated.timesheetsEnabled = enabled
 
         do {
-            try await firebaseBackend.saveUser(updated)
+            try await firebaseBackend.patchOwnUserTimesheetsEnabled(userId: userId, enabled: enabled)
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
                 cu = updated
@@ -1695,11 +1700,6 @@ class UserStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: identity patch skipped for \(id): \(error.localizedDescription)")
                 }
             }
-            do {
-                try await firebaseBackend.saveUser(updated)
-            } catch {
-                print("🔥🔥🔥 DEBUG: identity patch stuck; full profile save failed: \(error.localizedDescription)")
-            }
             if emailChanged {
                 try await firebaseBackend.reconcileUserEmailIndex(
                     organizationId: orgId,
@@ -1816,12 +1816,18 @@ class UserStore: ObservableObject {
                         // Skills catalogue is retired — never persist the flag as enabled.
                         var sanitized = permissions
                         sanitized.skills = false
+                        let isSelfSave = Auth.auth().currentUser?.uid == userId
+                        if isSelfSave {
+                            sanitized.adminAccess = previousPermissions.adminAccess
+                        }
                         // `sanitized.qualifications` is UI access only for the org catalogue.
                         // This method must not load/save organisations/.../qualifications or
                         // rewrite operative.qualifications when that flag changes.
                         updatedUser.permissions = sanitized
                         // Role follows Change user type. A toggle save must not invent a different role.
-                        if let role {
+                        // A self save must not send role or admin privilege fields.
+                        let previousRole = updatedUser.role
+                        if let role, !isSelfSave {
                             updatedUser.role = role
                         }
                         let staffMaterialsAlwaysOn = updatedUser.isSuperAdmin
@@ -1833,7 +1839,13 @@ class UserStore: ObservableObject {
                             updatedUser.permissions.siteAudit = true
                         }
 
-                        try await firebaseBackend.saveUser(updatedUser)
+                        try await firebaseBackend.patchChangedUserPermissions(
+                            userId: userId,
+                            previous: previousPermissions,
+                            updated: updatedUser.permissions,
+                            previousRole: previousRole,
+                            nextRole: isSelfSave ? nil : role
+                        )
                          organizationUsers[index] = updatedUser
 
                          if let holidayStore,
@@ -1868,7 +1880,7 @@ class UserStore: ObservableObject {
                  }
              }
 
-    /// Persists annual leave entitlement on `users/{userId}`. Admins use full `saveUser`; managers with operative management use a narrow patch allowed by Firestore rules.
+    /// Persists annual leave entitlement on `users/{userId}` as a field-limited patch. The write does not include organizationId.
     func updateUserAnnualLeaveEntitlement(
         userId: String,
         daysPerYear: Double,
@@ -1899,23 +1911,20 @@ class UserStore: ObservableObject {
         }
 
         do {
-            if hasAdminAccess() {
-                try await firebaseBackend.saveUser(updated)
-            } else if isActingManagerOperativeManagementOnly(),
-                      updated.permissions.operativeMode || updated.role == .operative {
-                try await firebaseBackend.updateAnnualLeaveEntitlement(
-                    userId: userId,
-                    daysPerYear: clampedDays,
-                    startMonth: sm,
-                    endMonth: em,
-                    carriesOver: carriesOver,
-                    yearAllowance: yearAllowance,
-                    yearAllowanceKey: yearAllowanceKey,
-                    writeYearAllowance: writeYearAllowance
-                )
-            } else {
-                return false
-            }
+            let canPatchLeave = hasAdminAccess()
+                || (isActingManagerOperativeManagementOnly()
+                    && (updated.permissions.operativeMode || updated.role == .operative))
+            guard canPatchLeave else { return false }
+            try await firebaseBackend.updateAnnualLeaveEntitlement(
+                userId: userId,
+                daysPerYear: clampedDays,
+                startMonth: sm,
+                endMonth: em,
+                carriesOver: carriesOver,
+                yearAllowance: yearAllowance,
+                yearAllowanceKey: yearAllowanceKey,
+                writeYearAllowance: writeYearAllowance
+            )
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
                 cu.annualLeaveDaysPerYear = clampedDays
@@ -1936,7 +1945,7 @@ class UserStore: ObservableObject {
         }
     }
 
-    /// Persists `annualLeaveEnabled` on `users/{userId}`. Admins use full `saveUser`; managers with operative management use a narrow patch allowed by Firestore rules.
+    /// Persists `annualLeaveEnabled` on `users/{userId}` as a field-limited patch. The write does not include organizationId.
     func updateUserAnnualLeaveEnabled(userId: String, enabled: Bool) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
@@ -1949,14 +1958,11 @@ class UserStore: ObservableObject {
         updated.annualLeaveEnabled = enabled
 
         do {
-            if hasAdminAccess() {
-                try await firebaseBackend.saveUser(updated)
-            } else if isActingManagerOperativeManagementOnly(),
-                      updated.permissions.operativeMode || updated.role == .operative {
-                try await firebaseBackend.updateAnnualLeaveEnabled(userId: userId, enabled: enabled)
-            } else {
-                return false
-            }
+            let canPatchLeave = hasAdminAccess()
+                || (isActingManagerOperativeManagementOnly()
+                    && (updated.permissions.operativeMode || updated.role == .operative))
+            guard canPatchLeave else { return false }
+            try await firebaseBackend.updateAnnualLeaveEnabled(userId: userId, enabled: enabled)
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
                 cu.annualLeaveEnabled = enabled
@@ -1995,7 +2001,14 @@ class UserStore: ObservableObject {
 
         do {
             if hasAdminAccess() {
-                try await firebaseBackend.saveUser(updated)
+                let previousTimesheets = organizationUsers[index].timesheetsEnabled
+                try await firebaseBackend.updateUserEmploymentType(
+                    userId: userId,
+                    employmentType: updated.employmentType,
+                    transitionFrom: updated.employmentTypeTransitionFrom,
+                    effectiveAt: updated.employmentTypeEffectiveAt,
+                    timesheetsEnabled: updated.timesheetsEnabled == previousTimesheets ? nil : updated.timesheetsEnabled
+                )
             } else if isActingManagerOperativeManagementOnly(),
                       updated.permissions.operativeMode || updated.role == .operative {
                 try await firebaseBackend.updateUserEmploymentType(
