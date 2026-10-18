@@ -60,6 +60,7 @@ var ProjectPlannerCanonical = (() => {
     TIMESHEET_SUBMISSION_NOTICE_TITLE: () => TIMESHEET_SUBMISSION_NOTICE_TITLE,
     TIMESHEET_SUBMISSION_NOTICE_TYPE: () => TIMESHEET_SUBMISSION_NOTICE_TYPE,
     USER_DOCUMENT_FIELDS: () => USER_DOCUMENT_FIELDS,
+    USER_SELF_CREATE_AGE_FIELDS: () => USER_SELF_CREATE_AGE_FIELDS,
     WEB_SESSION_ORGANIZATION_STORAGE_PREFIX: () => WEB_SESSION_ORGANIZATION_STORAGE_PREFIX,
     accessProbeFromReadError: () => accessProbeFromReadError,
     accountKindFromFlags: () => accountKindFromFlags,
@@ -100,6 +101,10 @@ var ProjectPlannerCanonical = (() => {
     hasAnnualLeaveAllowance: () => hasAnnualLeaveAllowance,
     inboxNotificationVisibleToUser: () => inboxNotificationVisibleToUser,
     intervalsOverlap: () => intervalsOverlap,
+    inviteEmailHasLiveClaim: () => inviteEmailHasLiveClaim,
+    inviteEmailOrgLookupConstraints: () => inviteEmailOrgLookupConstraints,
+    invitePlaceholderUserWriteFields: () => invitePlaceholderUserWriteFields,
+    inviteWritesOperativeProfile: () => inviteWritesOperativeProfile,
     invoicingPeriod: () => invoicingPeriod,
     invoicingToFirestore: () => invoicingToFirestore,
     isAnonymisedDeletedProfile: () => isAnonymisedDeletedProfile,
@@ -114,6 +119,7 @@ var ProjectPlannerCanonical = (() => {
     leaveCoverageRows: () => leaveCoverageRows,
     leaveSlotKind: () => leaveSlotKind,
     leaveYearBounds: () => leaveYearBounds,
+    listedCurrentLabourPeople: () => listedCurrentLabourPeople,
     listedRosterUsers: () => listedRosterUsers,
     matchesRosterSegment: () => matchesRosterSegment,
     matchesUserRosterSegment: () => matchesUserRosterSegment,
@@ -138,6 +144,8 @@ var ProjectPlannerCanonical = (() => {
     notificationDeliversDevicePush: () => notificationDeliversDevicePush,
     notificationDestination: () => notificationDestination,
     notificationPreferenceAllowsDelivery: () => notificationPreferenceAllowsDelivery,
+    notificationPreferenceCopy: () => notificationPreferenceCopy,
+    notificationPreferenceIsVisible: () => notificationPreferenceIsVisible,
     notificationPreferenceKeyForType: () => notificationPreferenceKeyForType,
     orgAccessProbeFromReads: () => orgAccessProbeFromReads,
     organizationIdFromValue: () => organizationIdFromValue,
@@ -181,6 +189,7 @@ var ProjectPlannerCanonical = (() => {
     receivesJobNotification: () => receivesJobNotification,
     rememberedOrganizationSurvivesSignOut: () => rememberedOrganizationSurvivesSignOut,
     removedQualificationCertificateIds: () => removedQualificationCertificateIds,
+    resolveInviteEmailClaim: () => resolveInviteEmailClaim,
     resolveMaterialCutOffClock: () => resolveMaterialCutOffClock,
     resolveTimesheetExportedAtMs: () => resolveTimesheetExportedAtMs,
     resolveTimesheetPeriod: () => resolveTimesheetPeriod,
@@ -228,10 +237,12 @@ var ProjectPlannerCanonical = (() => {
     uniqueOrganizationIds: () => uniqueOrganizationIds,
     unreadNotificationBadgeCount: () => unreadNotificationBadgeCount,
     unverifiedOperativeRows: () => unverifiedOperativeRows,
+    userCreateRequiresAgeConfirmation: () => userCreateRequiresAgeConfirmation,
     userNotificationPreferenceFieldPatch: () => userNotificationPreferenceFieldPatch,
     userNotificationPreferencesToFirestore: () => userNotificationPreferencesToFirestore,
     userRosterSegment: () => userRosterSegment,
     validateInvoicingSettings: () => validateInvoicingSettings,
+    visibleNotificationPreferenceKeys: () => visibleNotificationPreferenceKeys,
     warningDayKeyIsDated: () => warningDayKeyIsDated,
     warningDetectionToFirestore: () => warningDetectionToFirestore,
     webSessionOrganizationStorageKey: () => webSessionOrganizationStorageKey,
@@ -755,6 +766,77 @@ var ProjectPlannerCanonical = (() => {
     return user ? `${kind}:${user}:${org}` : `${kind}:${org}`;
   }
 
+  // lib/canonical/userRosterSegment.ts
+  var ANONYMISED_DELETED_USER_NAME = "Deleted user";
+  function trimmed(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function normalizeEmail(value) {
+    return trimmed(value).toLowerCase();
+  }
+  function namesEqualDeletedUser(value) {
+    return value.toLowerCase() === ANONYMISED_DELETED_USER_NAME.toLowerCase();
+  }
+  function rosterPersonName(profile) {
+    const first = trimmed(profile.firstName);
+    const surname = trimmed(profile.surname) || trimmed(profile.lastName);
+    const combined = `${first} ${surname}`.trim();
+    if (combined) return combined;
+    return trimmed(profile.name) || trimmed(profile.displayName);
+  }
+  function rosterPhone(profile) {
+    return trimmed(profile.mobileNumber) || trimmed(profile.mobile) || trimmed(profile.phone);
+  }
+  function isAnonymisedDeletedProfile(profile) {
+    if (!profile) return false;
+    if (normalizeEmail(profile.email)) return false;
+    if (namesEqualDeletedUser(rosterPersonName(profile))) return true;
+    if (namesEqualDeletedUser(trimmed(profile.name))) return true;
+    if (namesEqualDeletedUser(trimmed(profile.displayName))) return true;
+    return false;
+  }
+  function rosterSegment(profile) {
+    if (isAnonymisedDeletedProfile(profile)) return "inactive";
+    if (profile.passwordSet === true) return profile.isActive === true ? "active" : "inactive";
+    return "pending";
+  }
+  function matchesRosterSegment(profile, segment) {
+    return rosterSegment(profile) === segment;
+  }
+  function rosterStatusLabel(profile) {
+    const segment = rosterSegment(profile);
+    if (segment === "active") return "Active";
+    if (segment === "inactive") return "Inactive";
+    return "Pending";
+  }
+  function normalizeClaimedEmails(claimedEmails) {
+    if (claimedEmails == null) return null;
+    return claimedEmails.map((email) => normalizeEmail(email)).filter(Boolean);
+  }
+  function isIdentifiablePendingLeftover(profile, claimedEmails) {
+    if (profile.passwordSet === true) return false;
+    if (isAnonymisedDeletedProfile(profile)) return false;
+    const email = normalizeEmail(profile.email);
+    const name = rosterPersonName(profile);
+    const phone = rosterPhone(profile);
+    const namedPerson = Boolean(name) && !namesEqualDeletedUser(name);
+    const identifiable = Boolean(email) || namedPerson || Boolean(phone);
+    if (!identifiable) return false;
+    if (!email) return true;
+    const claimed = normalizeClaimedEmails(claimedEmails);
+    if (claimed == null) return false;
+    return !claimed.includes(email);
+  }
+  function listedRosterUsers(users, claimedEmails) {
+    return users.filter((user) => !isIdentifiablePendingLeftover(user, claimedEmails));
+  }
+  function listedCurrentLabourPeople(people) {
+    return people.filter((person) => !isAnonymisedDeletedProfile(person));
+  }
+  var DELETED_USER_DISPLAY_NAME = ANONYMISED_DELETED_USER_NAME;
+  var userRosterSegment = rosterSegment;
+  var matchesUserRosterSegment = matchesRosterSegment;
+
   // lib/canonical/dayKeys.ts
   function zoneOrLondon(timeZone) {
     const value = String(timeZone || "").trim();
@@ -854,6 +936,7 @@ var ProjectPlannerCanonical = (() => {
     const rows = [];
     for (const operative of input.operatives) {
       if (!operative.isActive) continue;
+      if (isAnonymisedDeletedProfile({ email: operative.email, name: operative.name })) continue;
       const operativeName = String(operative.name || "").trim() || operative.id;
       for (const expiry of operative.expiries) {
         const name = String(expiry.name || "").trim();
@@ -885,6 +968,7 @@ var ProjectPlannerCanonical = (() => {
     if (!todayKey) return [];
     const rows = [];
     for (const operative of input.operatives) {
+      if (isAnonymisedDeletedProfile({ email: operative.email, name: operative.name })) continue;
       const email = emailKey(operative.email);
       if (!email) continue;
       const person = input.people.find((candidate) => emailKey(candidate.email) === email && candidate.isOperativeMode);
@@ -947,6 +1031,8 @@ var ProjectPlannerCanonical = (() => {
   }
   function unbookedLabourRows(input) {
     const timeZone = zoneOf2(input.timeZone);
+    const people = listedCurrentLabourPeople(input.people);
+    const operatives = listedCurrentLabourPeople(input.operatives);
     const excluded = new Set((input.excludedUserIds || []).map((id) => String(id)));
     const dayPolicy = {
       standardDayStart: input.standardDayStart,
@@ -968,7 +1054,7 @@ var ProjectPlannerCanonical = (() => {
     }
     const operativesByEmail = /* @__PURE__ */ new Map();
     const operativeIdsByEmail = /* @__PURE__ */ new Map();
-    for (const operative of input.operatives) {
+    for (const operative of operatives) {
       const email = emailKey(operative.email);
       if (!email) continue;
       const ids = operativeIdsByEmail.get(email) || /* @__PURE__ */ new Set();
@@ -980,7 +1066,7 @@ var ProjectPlannerCanonical = (() => {
       }
     }
     const userIdsByEmail = /* @__PURE__ */ new Map();
-    for (const person of input.people) {
+    for (const person of people) {
       const email = emailKey(person.email);
       if (!email || !person.id) continue;
       const ids = userIdsByEmail.get(email) || /* @__PURE__ */ new Set();
@@ -1020,17 +1106,17 @@ var ProjectPlannerCanonical = (() => {
         return false;
       });
     };
-    const operativeUsers = dedupeFinishedPeople(input.people.filter(isOperativeModeOnly));
-    const managerUsers = dedupeFinishedPeople(input.people.filter(isManagerOrAdmin));
+    const operativeUsers = dedupeFinishedPeople(people.filter(isOperativeModeOnly));
+    const managerUsers = dedupeFinishedPeople(people.filter(isManagerOrAdmin));
     const managerAdminUserIds = new Set(
-      input.people.filter(isManagerOrAdmin).filter(hasFinishedSignup).map((person) => person.id)
+      people.filter(isManagerOrAdmin).filter(hasFinishedSignup).map((person) => person.id)
     );
     const operativeUserEmails = new Set(operativeUsers.map((person) => emailKey(person.email)).filter(Boolean));
     const verifiedUserForEmail = (email) => {
       if (!email) return void 0;
-      return preferFinishedAccount(input.people.filter((person) => emailKey(person.email) === email));
+      return preferFinishedAccount(people.filter((person) => emailKey(person.email) === email));
     };
-    const roster = input.operatives.filter((operative) => operative.isActive !== false && !operative.isPlaceholder);
+    const roster = operatives.filter((operative) => operative.isActive !== false && !operative.isPlaceholder);
     const rows = [];
     for (const dayKey of eachDayKey(input.startDayKey, input.endDayKey, timeZone)) {
       const iso = isoWeekdayInZone(dateFromDayKeyInZone(dayKey, timeZone), timeZone);
@@ -1090,7 +1176,7 @@ var ProjectPlannerCanonical = (() => {
         const email = emailKey(operative.email);
         if (email && operativeUserEmails.has(email)) continue;
         const matched = email ? verifiedUserForEmail(email) : void 0;
-        if (!matched && email && input.people.some((person) => emailKey(person.email) === email)) continue;
+        if (!matched && email && people.some((person) => emailKey(person.email) === email)) continue;
         if (matched && managerAdminUserIds.has(matched.id)) continue;
         if (matched && excluded.has(matched.id)) continue;
         if (holidayCovers(dayKey, email, matched?.id, operative.id)) continue;
@@ -1179,6 +1265,7 @@ var ProjectPlannerCanonical = (() => {
     const peopleByUserId = /* @__PURE__ */ new Map();
     const peopleByOperativeId = /* @__PURE__ */ new Map();
     for (const person of input.people) {
+      if (isAnonymisedDeletedProfile({ name: person.name })) continue;
       const userId = String(person.userId || "").trim();
       if (userId && !peopleByUserId.has(userId)) peopleByUserId.set(userId, person);
       for (const operativeId of person.operativeIds || []) {
@@ -1759,7 +1846,7 @@ var ProjectPlannerCanonical = (() => {
   function zoneOf3(timeZone) {
     return String(timeZone || "").trim() || CANONICAL_TIME_ZONE;
   }
-  function trimmed(value) {
+  function trimmed2(value) {
     return String(value ?? "").trim();
   }
   function isDayKey(value) {
@@ -1798,7 +1885,7 @@ var ProjectPlannerCanonical = (() => {
     return ms;
   }
   function timesheetDocumentId(userId, startDayKey, timeZone) {
-    const uid = trimmed(userId);
+    const uid = trimmed2(userId);
     if (!uid || !isDayKey(startDayKey)) return "";
     const stamp = unixStartOfDayInZone(dateFromDayKeyInZone(startDayKey, zoneOf3(timeZone)), zoneOf3(timeZone));
     return `${TIMESHEET_DOCUMENT_PREFIX}${uid}_${stamp}`;
@@ -1823,16 +1910,16 @@ var ProjectPlannerCanonical = (() => {
     return dayKey >= period.startDayKey && dayKey <= period.endDayKey;
   }
   function resolveTimesheetPeriod(input) {
-    const start = trimmed(input.storedStartDayKey);
-    const end = trimmed(input.storedEndDayKey);
+    const start = trimmed2(input.storedStartDayKey);
+    const end = trimmed2(input.storedEndDayKey);
     if (isDayKey(start) && isDayKey(end)) return { startDayKey: start, endDayKey: end };
     if (isDayKey(start) && start === input.currentPeriod.startDayKey) return { ...input.currentPeriod };
     if (isDayKey(start)) return { startDayKey: start, endDayKey: start };
     return { ...input.currentPeriod };
   }
   function timesheetPeriodMatches(stored, period) {
-    const start = trimmed(stored.startDayKey);
-    const end = trimmed(stored.endDayKey);
+    const start = trimmed2(stored.startDayKey);
+    const end = trimmed2(stored.endDayKey);
     if (start !== period.startDayKey) return false;
     if (isDayKey(end)) return end === period.endDayKey;
     return true;
@@ -1842,7 +1929,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function isTimesheetOperativeSigned(fields) {
     if (fields.operativeSignedAtMs == null || fields.operativeSignedAtMs <= TIMESHEET_SIGNED_AFTER_MS) return false;
-    return Boolean(trimmed(fields.operativeSignedByName) || trimmed(fields.operativeSignatureImageBase64));
+    return Boolean(trimmed2(fields.operativeSignedByName) || trimmed2(fields.operativeSignatureImageBase64));
   }
   function timesheetRequiresManagerCounterSign(hasLineManager) {
     return hasLineManager === true;
@@ -1881,19 +1968,19 @@ var ProjectPlannerCanonical = (() => {
     const managerSignedAtMs = realSignatureMs(row.managerSignedAt) ?? realSignatureMs(row.approvedAt);
     return {
       operativeSignedAtMs: realSignatureMs(row.operativeSignedAt),
-      operativeSignedByName: trimmed(row.operativeSignedByName),
-      operativeSignatureImageBase64: trimmed(row.operativeSignatureImageBase64),
+      operativeSignedByName: trimmed2(row.operativeSignedByName),
+      operativeSignatureImageBase64: trimmed2(row.operativeSignatureImageBase64),
       managerSignedAtMs,
-      managerSignedByName: trimmed(row.managerSignedByName) || trimmed(row.approvedByName),
-      managerSignedByUserId: trimmed(row.managerSignedByUserId),
-      managerSignatureImageBase64: trimmed(row.managerSignatureImageBase64),
+      managerSignedByName: trimmed2(row.managerSignedByName) || trimmed2(row.approvedByName),
+      managerSignedByUserId: trimmed2(row.managerSignedByUserId),
+      managerSignatureImageBase64: trimmed2(row.managerSignatureImageBase64),
       exportedAtMs: resolveTimesheetExportedAtMs(row)
     };
   }
   function timesheetSignOffWriteFields(input) {
     const signedAtMs = Number(input.signedAtMs);
-    const name = trimmed(input.signedByName);
-    const signature = trimmed(input.signatureImageBase64);
+    const name = trimmed2(input.signedByName);
+    const signature = trimmed2(input.signatureImageBase64);
     if (input.role === "operative") {
       return {
         operativeSignedAtMs: signedAtMs,
@@ -1904,7 +1991,7 @@ var ProjectPlannerCanonical = (() => {
     return {
       managerSignedAtMs: signedAtMs,
       managerSignedByName: name,
-      managerSignedByUserId: trimmed(input.signedByUserId),
+      managerSignedByUserId: trimmed2(input.signedByUserId),
       managerSignatureImageBase64: signature,
       approvedAtMs: signedAtMs,
       approvedByName: name
@@ -1915,14 +2002,14 @@ var ProjectPlannerCanonical = (() => {
   }
   function timesheetPeriodWriteFields(input) {
     return {
-      userId: trimmed(input.userId),
-      weekStartKey: trimmed(input.startDayKey),
-      weekEndKey: trimmed(input.endDayKey)
+      userId: trimmed2(input.userId),
+      weekStartKey: trimmed2(input.startDayKey),
+      weekEndKey: trimmed2(input.endDayKey)
     };
   }
   function timesheetExportStoragePath(organizationId, fileName, stampSeconds) {
-    const org = trimmed(organizationId);
-    const safe = trimmed(fileName).replace(/\s+/g, "_");
+    const org = trimmed2(organizationId);
+    const safe = trimmed2(fileName).replace(/\s+/g, "_");
     const stamp = Math.max(0, Math.floor(Number(stampSeconds) || 0));
     return `organizations/${org}/${TIMESHEET_EXPORT_STORAGE_FOLDER}/${stamp}_${safe}`;
   }
@@ -1930,14 +2017,14 @@ var ProjectPlannerCanonical = (() => {
     const managerMs = fields.managerSignedAtMs;
     return {
       operativeSignedAtMs: fields.operativeSignedAtMs,
-      operativeSignedByName: trimmed(fields.operativeSignedByName),
-      operativeSignatureImageBase64: trimmed(fields.operativeSignatureImageBase64),
+      operativeSignedByName: trimmed2(fields.operativeSignedByName),
+      operativeSignatureImageBase64: trimmed2(fields.operativeSignatureImageBase64),
       managerSignedAtMs: managerMs,
-      managerSignedByName: trimmed(fields.managerSignedByName),
-      managerSignedByUserId: trimmed(fields.managerSignedByUserId),
-      managerSignatureImageBase64: trimmed(fields.managerSignatureImageBase64),
+      managerSignedByName: trimmed2(fields.managerSignedByName),
+      managerSignedByUserId: trimmed2(fields.managerSignedByUserId),
+      managerSignatureImageBase64: trimmed2(fields.managerSignatureImageBase64),
       approvedAtMs: managerMs,
-      approvedByName: trimmed(fields.managerSignedByName),
+      approvedByName: trimmed2(fields.managerSignedByName),
       exportedAtMs: fields.exportedAtMs
     };
   }
@@ -1947,8 +2034,8 @@ var ProjectPlannerCanonical = (() => {
     const startOnly = [];
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
-      if (trimmed(row.startDayKey) !== period.startDayKey) continue;
-      const end = trimmed(row.endDayKey);
+      if (trimmed2(row.startDayKey) !== period.startDayKey) continue;
+      const end = trimmed2(row.endDayKey);
       if (isDayKey(end)) {
         if (end === period.endDayKey) exact.push(index);
         continue;
@@ -1960,7 +2047,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function paymentRunWindowFingerprint(window) {
     if (String(window.paymentRunMode || "") === "recurring_timeframe") {
-      return `recurring:${trimmed(window.recurringRunStartDay).toLowerCase() || "monday"}:${trimmed(window.recurringRunEndDay).toLowerCase() || "sunday"}`;
+      return `recurring:${trimmed2(window.recurringRunStartDay).toLowerCase() || "monday"}:${trimmed2(window.recurringRunEndDay).toLowerCase() || "sunday"}`;
     }
     const ranges = (window.ranges ?? []).map((row) => normalizePaymentRunRange(row)).filter((row) => row != null).map((row) => `${row.startDay}-${row.endDay}`);
     return `dates:${ranges.join("|")}`;
@@ -1973,9 +2060,9 @@ var ProjectPlannerCanonical = (() => {
     const snapshot = {
       paymentRunMode: input.previous.paymentRunMode === "recurring_timeframe" ? "recurring_timeframe" : "date_ranges",
       ranges: (input.previous.ranges ?? []).map((row) => normalizePaymentRunRange(row)).filter((row) => row != null),
-      recurringRunStartDay: trimmed(input.previous.recurringRunStartDay) || "monday",
-      recurringRunEndDay: trimmed(input.previous.recurringRunEndDay) || "sunday",
-      recordedAtDayKey: trimmed(input.recordedAtDayKey)
+      recurringRunStartDay: trimmed2(input.previous.recurringRunStartDay) || "monday",
+      recurringRunEndDay: trimmed2(input.previous.recurringRunEndDay) || "sunday",
+      recordedAtDayKey: trimmed2(input.recordedAtDayKey)
     };
     const fingerprint = paymentRunWindowFingerprint(snapshot);
     const rest = existing.filter((row) => paymentRunWindowFingerprint(row) !== fingerprint);
@@ -2053,12 +2140,12 @@ var ProjectPlannerCanonical = (() => {
       const mode = String(data.paymentRunMode || "") === "recurring_timeframe" ? "recurring_timeframe" : "date_ranges";
       const rangeRows = Array.isArray(data.paymentRunDateRanges) ? data.paymentRunDateRanges : Array.isArray(data.ranges) ? data.ranges : [];
       const ranges = rangeRows.map((row) => normalizePaymentRunRange(row || {})).filter((row) => row != null);
-      const recordedAtDayKey = trimmed(data.recordedAtDayKey);
+      const recordedAtDayKey = trimmed2(data.recordedAtDayKey);
       rows.push({
         paymentRunMode: mode,
         ranges,
-        recurringRunStartDay: trimmed(data.recurringRunStartDay) || "monday",
-        recurringRunEndDay: trimmed(data.recurringRunEndDay) || "sunday",
+        recurringRunStartDay: trimmed2(data.recurringRunStartDay) || "monday",
+        recurringRunEndDay: trimmed2(data.recurringRunEndDay) || "sunday",
         recordedAtDayKey: isDayKey(recordedAtDayKey) ? recordedAtDayKey : ""
       });
     }
@@ -2513,6 +2600,16 @@ var ProjectPlannerCanonical = (() => {
     "pushTokenUpdatedAt",
     "notificationPreferences"
   ];
+  var USER_SELF_CREATE_AGE_FIELDS = [
+    "ageConfirmed",
+    "ageConfirmedAt",
+    "ageConfirmedYears"
+  ];
+  function userCreateRequiresAgeConfirmation(input) {
+    const creator = typeof input.creatorUserId === "string" ? input.creatorUserId.trim() : "";
+    const target = typeof input.targetUserId === "string" ? input.targetUserId.trim() : "";
+    return creator.length > 0 && creator === target;
+  }
   function normalizeEmploymentType(raw) {
     if (raw === "paye") return "paye";
     if (raw === "self_employed" || raw === "selfEmployed") return "self_employed";
@@ -2656,11 +2753,11 @@ var ProjectPlannerCanonical = (() => {
     line_manager_peer_update: "lineManagerPeerUpdates",
     [TIMESHEET_SUBMISSION_NOTICE_TYPE]: "timesheetSubmissionReminder"
   };
-  function trimmed2(value) {
+  function trimmed3(value) {
     return String(value ?? "").trim();
   }
   function asDayKey(value) {
-    const key = trimmed2(value);
+    const key = trimmed3(value);
     return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : void 0;
   }
   function asCatalogue(value) {
@@ -2700,7 +2797,80 @@ var ProjectPlannerCanonical = (() => {
     return patch;
   }
   function notificationPreferenceKeyForType(type) {
-    return TYPE_TO_PREFERENCE[trimmed2(type)] ?? null;
+    return TYPE_TO_PREFERENCE[trimmed3(type)] ?? null;
+  }
+  var PREFERENCE_LABELS = {
+    materialOrderCutOff: "Material order cut-off",
+    annualLeaveRequested: "Annual leave requested",
+    annualLeaveDecision: "Annual leave approved or declined",
+    projectCreated: "New project created",
+    smallWorksCreated: "New small works",
+    bookingClashes: "Booking clashes",
+    materialOrderPlaced: "New material order",
+    bookedOntoJob: "You've been booked",
+    operativeCreated: "New operative created",
+    managerCreated: "New manager created",
+    clientCreated: "New client created",
+    warningDismissed: "Warning dismissed",
+    tasksAssignedOrCompleted: "Tasks assigned or completed",
+    toolboxTalkIssued: "Toolbox talk issued",
+    timesheetSignOff: "Timesheet sign-off",
+    qualificationExpiry: "Qualification expiry",
+    lineManagerPeerUpdates: "Line manager peer updates",
+    timesheetSubmissionReminder: "Timesheet submission reminder"
+  };
+  function notificationPreferenceCopy(key, audience) {
+    const descriptions = {
+      materialOrderCutOff: "Daily reminder at the time set in organisation settings.",
+      annualLeaveRequested: "When someone you manage requests annual leave.",
+      annualLeaveDecision: "When your annual leave is approved or declined.",
+      projectCreated: "When a project is added.",
+      smallWorksCreated: "When new small works is added.",
+      bookingClashes: "When two bookings overlap.",
+      materialOrderPlaced: "When a material order is placed.",
+      bookedOntoJob: "When you are booked onto a job.",
+      operativeCreated: "When a new operative is added.",
+      managerCreated: "When a new manager is added.",
+      clientCreated: "When a new client is added.",
+      warningDismissed: "When someone dismisses a warning.",
+      tasksAssignedOrCompleted: "When a task is assigned to you or marked complete.",
+      toolboxTalkIssued: "When a toolbox talk is issued to you.",
+      timesheetSignOff: "When a timesheet needs your sign-off or has been signed.",
+      qualificationExpiry: "Reminders before qualifications expire.",
+      lineManagerPeerUpdates: "When another line manager actions a shared request.",
+      timesheetSubmissionReminder: "Reminder to submit before the payment-run deadline."
+    };
+    return { label: PREFERENCE_LABELS[key], description: descriptions[key] };
+  }
+  function notificationPreferenceIsVisible(key, audience) {
+    const role = audience.role;
+    const staff = isStaffAccount(role);
+    switch (key) {
+      case "projectCreated":
+        return canEditWorkCatalogue(role, "projects", audience.catalogue);
+      case "smallWorksCreated":
+        return canEditWorkCatalogue(role, "smallWorks", audience.catalogue);
+      case "annualLeaveRequested":
+      case "bookingClashes":
+      case "lineManagerPeerUpdates":
+      case "managerCreated":
+        return staff;
+      case "materialOrderPlaced":
+        return staff && audience.canManageMaterials !== false;
+      case "operativeCreated":
+        return staff && audience.canManagePeople !== false;
+      case "clientCreated":
+        return staff && audience.canManageClients !== false;
+      case "warningDismissed":
+        return canViewStaffWarnings(role);
+      case "timesheetSignOff":
+        return canReviewUserTimesheets(role);
+      default:
+        return true;
+    }
+  }
+  function visibleNotificationPreferenceKeys(audience) {
+    return NOTIFICATION_PREFERENCE_KEYS.filter((key) => notificationPreferenceIsVisible(key, audience));
   }
   function notificationPreferenceAllowsDelivery(prefs, type) {
     const key = notificationPreferenceKeyForType(type);
@@ -2738,12 +2908,12 @@ var ProjectPlannerCanonical = (() => {
     return DEVICE_PUSH_NOTIFICATION_TYPES;
   }
   function notificationDeliversDevicePush(type) {
-    return DEVICE_PUSH_TYPE_SET.has(trimmed2(type));
+    return DEVICE_PUSH_TYPE_SET.has(trimmed3(type));
   }
   function inboxNotificationVisibleToUser(row, userId) {
-    const uid = trimmed2(userId);
+    const uid = trimmed3(userId);
     if (!uid || !row || typeof row !== "object") return false;
-    const owner = trimmed2(row.userId);
+    const owner = trimmed3(row.userId);
     return !owner || owner === uid;
   }
   function compareInboxNotificationsByCreatedAt(left, right) {
@@ -2760,7 +2930,7 @@ var ProjectPlannerCanonical = (() => {
     return 0;
   }
   function unreadNotificationBadgeCount(notifications, userId) {
-    const uid = trimmed2(userId);
+    const uid = trimmed3(userId);
     if (!uid) return 0;
     const rows = Array.isArray(notifications) ? notifications : [];
     let count = 0;
@@ -2780,12 +2950,12 @@ var ProjectPlannerCanonical = (() => {
     return { kind: "dailyOverviewDay", dayKey };
   }
   function notificationDestination(input) {
-    const type = trimmed2(input.type);
-    const relatedId = trimmed2(input.relatedId) || void 0;
+    const type = trimmed3(input.type);
+    const relatedId = trimmed3(input.relatedId) || void 0;
     const dayKey = asDayKey(input.dayKey) || asDayKey(relatedId);
     const catalogue = asCatalogue(input.catalogue);
     const role = input.role === "admin" || input.role === "operative" || input.role === "manager" ? input.role : "manager";
-    const userId = trimmed2(input.deepLinkUserId) || void 0;
+    const userId = trimmed3(input.deepLinkUserId) || void 0;
     switch (type) {
       case "booking_created":
       case "booked_onto_job":
@@ -3515,72 +3685,60 @@ var ProjectPlannerCanonical = (() => {
     return false;
   }
 
-  // lib/canonical/userRosterSegment.ts
-  var ANONYMISED_DELETED_USER_NAME = "Deleted user";
-  function trimmed3(value) {
+  // lib/canonical/inviteEmailClaim.ts
+  function normalizeEmail2(value) {
+    return typeof value === "string" ? value.trim().toLowerCase() : "";
+  }
+  function trimmedId(value) {
     return typeof value === "string" ? value.trim() : "";
   }
-  function normalizeEmail(value) {
-    return trimmed3(value).toLowerCase();
+  function pointedOwnsInviteEmail(pointed, inviteEmail) {
+    if (!pointed) return false;
+    if (isAnonymisedDeletedProfile(pointed)) return false;
+    return normalizeEmail2(pointed.email) === inviteEmail;
   }
-  function namesEqualDeletedUser(value) {
-    return value.toLowerCase() === ANONYMISED_DELETED_USER_NAME.toLowerCase();
+  function resolveInviteEmailClaim(input) {
+    const inviteEmail = normalizeEmail2(input.inviteEmail);
+    if (!inviteEmail) return { action: "allow" };
+    const pointer = input.emailPointer;
+    const pointedUser = pointer?.pointedUser ?? null;
+    const livePointer = pointer != null && pointer.exists === true && pointedOwnsInviteEmail(pointedUser, inviteEmail);
+    if (livePointer) return { action: "block" };
+    const claimedEmails = pointer == null ? null : [];
+    let reuseUserId = "";
+    for (const user of input.existingUsers ?? []) {
+      if (isAnonymisedDeletedProfile(user)) continue;
+      if (normalizeEmail2(user.email) !== inviteEmail) continue;
+      if (user.passwordSet === true) return { action: "block" };
+      if (!isIdentifiablePendingLeftover(user, claimedEmails)) return { action: "block" };
+      const id = trimmedId(user.userId);
+      if (id && !reuseUserId) reuseUserId = id;
+    }
+    if (!reuseUserId && pointer?.exists === true && !pointedUser) {
+      const pointedId = trimmedId(pointer.pointedUserId);
+      if (pointedId) reuseUserId = pointedId;
+    }
+    return reuseUserId ? { action: "allow", reuseUserId } : { action: "allow" };
   }
-  function rosterPersonName(profile) {
-    const first = trimmed3(profile.firstName);
-    const surname = trimmed3(profile.surname) || trimmed3(profile.lastName);
-    const combined = `${first} ${surname}`.trim();
-    if (combined) return combined;
-    return trimmed3(profile.name) || trimmed3(profile.displayName);
+  function inviteEmailHasLiveClaim(input) {
+    return resolveInviteEmailClaim(input).action === "block";
   }
-  function rosterPhone(profile) {
-    return trimmed3(profile.mobileNumber) || trimmed3(profile.mobile) || trimmed3(profile.phone);
+  function inviteEmailOrgLookupConstraints(organizationId, email) {
+    return {
+      organizationId: typeof organizationId === "string" ? organizationId.trim() : "",
+      email: normalizeEmail2(email)
+    };
   }
-  function isAnonymisedDeletedProfile(profile) {
-    if (!profile) return false;
-    if (normalizeEmail(profile.email)) return false;
-    if (namesEqualDeletedUser(rosterPersonName(profile))) return true;
-    if (namesEqualDeletedUser(trimmed3(profile.name))) return true;
-    if (namesEqualDeletedUser(trimmed3(profile.displayName))) return true;
+  function invitePlaceholderUserWriteFields() {
+    return {
+      passwordSet: false,
+      isActive: true,
+      isSuperAdmin: false,
+      policyAccepted: false
+    };
+  }
+  function inviteWritesOperativeProfile() {
     return false;
   }
-  function rosterSegment(profile) {
-    if (isAnonymisedDeletedProfile(profile)) return "inactive";
-    if (profile.passwordSet === true) return profile.isActive === true ? "active" : "inactive";
-    return "pending";
-  }
-  function matchesRosterSegment(profile, segment) {
-    return rosterSegment(profile) === segment;
-  }
-  function rosterStatusLabel(profile) {
-    const segment = rosterSegment(profile);
-    if (segment === "active") return "Active";
-    if (segment === "inactive") return "Inactive";
-    return "Pending";
-  }
-  function normalizeClaimedEmails(claimedEmails) {
-    if (claimedEmails == null) return null;
-    return claimedEmails.map((email) => normalizeEmail(email)).filter(Boolean);
-  }
-  function isIdentifiablePendingLeftover(profile, claimedEmails) {
-    if (profile.passwordSet === true) return false;
-    if (isAnonymisedDeletedProfile(profile)) return false;
-    const email = normalizeEmail(profile.email);
-    const name = rosterPersonName(profile);
-    const phone = rosterPhone(profile);
-    const namedPerson = Boolean(name) && !namesEqualDeletedUser(name);
-    const identifiable = Boolean(email) || namedPerson || Boolean(phone);
-    if (!identifiable) return false;
-    if (!email) return true;
-    const claimed = normalizeClaimedEmails(claimedEmails);
-    if (claimed == null) return false;
-    return !claimed.includes(email);
-  }
-  function listedRosterUsers(users, claimedEmails) {
-    return users.filter((user) => !isIdentifiablePendingLeftover(user, claimedEmails));
-  }
-  var DELETED_USER_DISPLAY_NAME = ANONYMISED_DELETED_USER_NAME;
-  var userRosterSegment = rosterSegment;
-  var matchesUserRosterSegment = matchesRosterSegment;
   return __toCommonJS(bundleEntry_exports);
 })();
