@@ -1,9 +1,3 @@
----
-description: "Safe, fast testing for the Project Planner iOS app. Apply when working on tests or using XcodeBuildMCP."
-globs: "**/*Tests/**,**/*Test*.swift,app-tests/**,CURSOR_FULL_APP_TEST_GUIDE.md"
-alwaysApply: false
----
-
 # iOS testing
 
 Test the Project Planner iOS app safely and quickly.

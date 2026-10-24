@@ -6,11 +6,9 @@ The rules live in the files below. This file only imports them, so there is stil
 @docs/agent-rules/canonical-architecture.md
 @docs/agent-rules/advisor.md
 
-The two files in `docs/agent-rules/` are symlinks to `.cursor/rules/canonical-architecture.mdc` and `.cursor/rules/advisor.mdc`. Edit the `.mdc` files.
-
 Read `docs/CANONICAL_ARCHITECTURE.md` before changing bookings, warnings, invoicing, labour, organisation context, dates, people, invites, notifications, or billing.
 
-Read `.cursor/rules/ios-testing.mdc` before running or writing tests.
+Read `docs/agent-rules/ios-testing.md` before running or writing tests.
 
 ## Always
 
