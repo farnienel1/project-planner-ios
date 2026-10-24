@@ -39,7 +39,11 @@ struct ManagersView: View {
     private var filteredManagers: [AppUser] {
         var managers = allManagers
         
-        managers = managers.filter { rosterSegment.matches($0) }
+        managers = CanonicalBusinessEngine.listedRosterUsers(
+            managers,
+            claimedEmails: userStore.organizationUserEmailClaims
+        ) ?? []
+        managers = managers.filter { CanonicalBusinessEngine.rosterSegment($0) == rosterSegment.canonicalSegment }
         
         // Filter by search text
         guard !filterText.isEmpty else { return managers }
@@ -267,24 +271,14 @@ struct ManagerUserRowView: View {
                         }
                     }
                     
-                    HStack {
-                        Text(user.isActive ? "Active" : "Inactive")
+                    if let segment = user.rosterSegment {
+                        Text(segment.title)
                             .font(.caption)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(user.isActive ? Color.green.opacity(0.2) : Color.red.opacity(0.2))
-                            .foregroundColor(user.isActive ? .green : .red)
+                            .background(segment == .pending ? Color.orange.opacity(0.2) : (segment == .active ? Color.green.opacity(0.2) : Color.red.opacity(0.2)))
+                            .foregroundColor(segment == .pending ? .orange : (segment == .active ? .green : .red))
                             .cornerRadius(8)
-                        
-                        if !user.passwordSet {
-                            Text("Pending")
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.orange.opacity(0.2))
-                                .foregroundColor(.orange)
-                                .cornerRadius(8)
-                        }
                     }
                 }
                 

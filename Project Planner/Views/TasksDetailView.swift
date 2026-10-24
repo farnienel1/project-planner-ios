@@ -69,7 +69,7 @@ struct TasksDetailView: View {
                   let q = op.qualifications.first(where: { $0.id == qid }) else { continue }
             let days = Calendar.current.dateComponents([.day], from: today, to: exp).day ?? 0
             rows.append((
-                id: qid.uuidString,
+                id: qid,
                 title: "Qualification expiring: \(q.name)",
                 subtitle: days <= 0 ? "Renew today — tell your manager when complete." : "\(days) day(s) remaining. Tell your manager when you have renewed it."
             ))

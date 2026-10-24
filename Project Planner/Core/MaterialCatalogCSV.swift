@@ -254,23 +254,17 @@ enum MaterialCatalogCSV {
     }
 
     nonisolated static func joinCSVFields(_ fields: [String]) -> String {
-        fields.map { field in
-            let needsQuotes = field.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" })
-                || UUID(uuidString: field) != nil
-            if needsQuotes {
-                return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-            }
-            return field
-        }.joined(separator: ",")
+        fields.map(escapeCSVField).joined(separator: ",")
     }
 
     nonisolated static func escapeCSVField(_ field: String) -> String {
-        let needsQuotes = field.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" })
+        let guarded = ExportTextEscaping.spreadsheetFormulaPrefix(field)
+        let needsQuotes = guarded.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" })
             || UUID(uuidString: field) != nil
         if needsQuotes {
-            return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+            return "\"" + guarded.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         }
-        return field
+        return guarded
     }
 
     nonisolated static func splitCSVLine(_ line: String) -> [String] {

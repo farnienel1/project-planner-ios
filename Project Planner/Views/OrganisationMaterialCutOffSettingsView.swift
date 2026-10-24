@@ -9,7 +9,24 @@ import SwiftUI
 
 struct OrganisationMaterialCutOffSettingsView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @Environment(\.dismiss) private var dismiss
+
+    private struct CutOffDraft: Equatable {
+        var enabled: Bool
+        var minutes: Int
+        var saturday: Bool
+        var sunday: Bool
+    }
+
+    @State private var draft = CutOffDraft(enabled: true, minutes: 0, saturday: false, sunday: false)
+    @State private var baseline = CutOffDraft(enabled: true, minutes: 0, saturday: false, sunday: false)
+    @State private var optionLabels: [Int: String] = [:]
+    @State private var isSaving = false
+    @State private var didLoad = false
+
+    private var isDirty: Bool { didLoad && draft != baseline }
 
     var body: some View {
         ScrollView {
@@ -30,10 +47,7 @@ struct OrganisationMaterialCutOffSettingsView: View {
                         title: "Material cut-off notification",
                         subtitle: "Email all managers"
                     ) {
-                        Toggle("", isOn: Binding(
-                            get: { appSettings.settings.notifications.materialOrderCutOff },
-                            set: { v in Task { await updateMaterial(v) } }
-                        ))
+                        Toggle("", isOn: $draft.enabled)
                         .accessibilityIdentifier("organisationMaterialCutOffSettings.toggle")
                         .labelsHidden()
                         .tint(ProjectWorksRevampColors.blue)
@@ -62,10 +76,7 @@ struct OrganisationMaterialCutOffSettingsView: View {
                         Spacer(minLength: 8)
                         Picker(
                             "Cut-off time",
-                            selection: Binding(
-                                get: { materialCutOffTimeValue },
-                                set: { v in Task { await updateMaterialCutOffTime(v) } }
-                            )
+                            selection: $draft.minutes
                         ) {
                             ForEach(materialCutOffTimeOptions, id: \.self) { value in
                                 Text(materialCutOffTimeLabel(for: value)).tag(value)
@@ -74,7 +85,7 @@ struct OrganisationMaterialCutOffSettingsView: View {
                         .accessibilityIdentifier("organisationMaterialCutOffSettings.cutOffTime")
                         .labelsHidden()
                         .pickerStyle(.menu)
-                        .disabled(!appSettings.settings.notifications.materialOrderCutOff)
+                        .disabled(!draft.enabled || !didLoad)
                     }
                     .padding(.vertical, 11)
 
@@ -87,21 +98,11 @@ struct OrganisationMaterialCutOffSettingsView: View {
                         title: "Include Saturday",
                         subtitle: "Send the reminder on Saturdays"
                     ) {
-                        Toggle("", isOn: Binding(
-                            get: { appSettings.settings.notifications.materialCutOffOnSaturday },
-                            set: { v in
-                                Task {
-                                    await updateMaterialWeekendSettings(
-                                        includeSaturday: v,
-                                        includeSunday: appSettings.settings.notifications.materialCutOffOnSunday
-                                    )
-                                }
-                            }
-                        ))
+                        Toggle("", isOn: $draft.saturday)
                         .accessibilityIdentifier("organisationMaterialCutOffSettings.toggle2")
                         .labelsHidden()
                         .tint(ProjectWorksRevampColors.blue)
-                        .disabled(!appSettings.settings.notifications.materialOrderCutOff)
+                        .disabled(!draft.enabled)
                     }
 
                     Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 42)
@@ -113,21 +114,11 @@ struct OrganisationMaterialCutOffSettingsView: View {
                         title: "Include Sunday",
                         subtitle: "Send the reminder on Sundays"
                     ) {
-                        Toggle("", isOn: Binding(
-                            get: { appSettings.settings.notifications.materialCutOffOnSunday },
-                            set: { v in
-                                Task {
-                                    await updateMaterialWeekendSettings(
-                                        includeSaturday: appSettings.settings.notifications.materialCutOffOnSaturday,
-                                        includeSunday: v
-                                    )
-                                }
-                            }
-                        ))
+                        Toggle("", isOn: $draft.sunday)
                         .accessibilityIdentifier("organisationMaterialCutOffSettings.toggle3")
                         .labelsHidden()
                         .tint(ProjectWorksRevampColors.blue)
-                        .disabled(!appSettings.settings.notifications.materialOrderCutOff)
+                        .disabled(!draft.enabled)
                     }
                 }
             }
@@ -138,29 +129,46 @@ struct OrganisationMaterialCutOffSettingsView: View {
         .navigationTitle("Material cut-off")
         .navigationBarTitleDisplayMode(.inline)
         .appChromeNavigationBarSurface()
+        .safeAreaInset(edge: .bottom) {
+            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+                Task { await save() }
+            }
+        }
+        .settingsUnsavedLeave(isDirty: isDirty) {
+            draft = baseline
+            dismiss()
+        }
+        .onAppear { loadDraft() }
+        .onChange(of: firebaseBackend.currentOrganization?.settings.materialCutOff) { _, _ in
+            guard !isDirty else { return }
+            loadDraft(force: true)
+        }
     }
 
     private var footerText: String {
-        if !appSettings.settings.notifications.materialOrderCutOff {
+        if !didLoad {
+            return "Loading the organisation cut-off"
+        }
+        if !draft.enabled {
             return "Turn on the notification to choose a time"
         }
-        return "Managers are reminded daily at \(materialCutOffTimeLabel(for: materialCutOffTimeValue))"
+        return "Managers are reminded daily at \(materialCutOffTimeLabel(for: draft.minutes))"
     }
 
     private var materialCutOffTimeOptions: [Int] {
         stride(from: 0, through: 23 * 60 + 30, by: 30).map { $0 }
     }
 
-    private var materialCutOffTimeValue: Int {
-        (appSettings.settings.notifications.materialCutOffHour * 60) + appSettings.settings.notifications.materialCutOffMinute
-    }
-
     private func materialCutOffTimeLabel(for value: Int) -> String {
-        let hour24 = max(0, min(23, value / 60))
-        let minute = max(0, min(59, value % 60))
-        let hour12 = hour24 == 0 ? 12 : (hour24 > 12 ? hour24 - 12 : hour24)
-        let suffix = hour24 >= 12 ? "PM" : "AM"
-        return String(format: "%d:%02d %@", hour12, minute, suffix)
+        if let label = optionLabels[value] { return label }
+        let clock = CanonicalBusinessEngine.CanonicalMaterialCutOffClock(
+            materialOrderCutOff: true,
+            materialCutOffHour: value / 60,
+            materialCutOffMinute: value % 60,
+            materialCutOffOnSaturday: false,
+            materialCutOffOnSunday: false
+        )
+        return CanonicalBusinessEngine.formatMaterialCutOffClock(clock) ?? ""
     }
 
     private func sectionTitle(_ text: String) -> some View {
@@ -218,26 +226,59 @@ struct OrganisationMaterialCutOffSettingsView: View {
         .padding(.vertical, 11)
     }
 
-    private func updateMaterial(_ enabled: Bool) async {
-        var updated = appSettings.settings.notifications
-        updated.materialOrderCutOff = enabled
-        await appSettings.updateNotifications(updated)
-        await notificationService.refreshDailyMaterialCutOffReminder()
+    private func loadDraft(force: Bool = false) {
+        guard force || !didLoad else { return }
+        refreshOptionLabels()
+        guard let clock = OrgMaterialCutOff.resolve(
+            stored: firebaseBackend.currentOrganization?.settings.materialCutOff,
+            organizationLoaded: firebaseBackend.currentOrganization != nil
+        ), let minutes = CanonicalBusinessEngine.materialCutOffClockMinutes(clock) else { return }
+        let loaded = CutOffDraft(
+            enabled: clock.materialOrderCutOff,
+            minutes: minutes,
+            saturday: clock.materialCutOffOnSaturday,
+            sunday: clock.materialCutOffOnSunday
+        )
+        draft = loaded
+        baseline = loaded
+        didLoad = true
     }
 
-    private func updateMaterialCutOffTime(_ totalMinutes: Int) async {
-        var updated = appSettings.settings.notifications
-        updated.materialCutOffHour = max(0, min(23, totalMinutes / 60))
-        updated.materialCutOffMinute = max(0, min(59, totalMinutes % 60))
-        await appSettings.updateNotifications(updated)
-        await notificationService.refreshDailyMaterialCutOffReminder()
+    private func refreshOptionLabels() {
+        var labels: [Int: String] = [:]
+        for value in materialCutOffTimeOptions {
+            let clock = CanonicalBusinessEngine.CanonicalMaterialCutOffClock(
+                materialOrderCutOff: true,
+                materialCutOffHour: value / 60,
+                materialCutOffMinute: value % 60,
+                materialCutOffOnSaturday: false,
+                materialCutOffOnSunday: false
+            )
+            if let label = CanonicalBusinessEngine.formatMaterialCutOffClock(clock) {
+                labels[value] = label
+            }
+        }
+        optionLabels = labels
     }
 
-    private func updateMaterialWeekendSettings(includeSaturday: Bool, includeSunday: Bool) async {
-        var updated = appSettings.settings.notifications
-        updated.materialCutOffOnSaturday = includeSaturday
-        updated.materialCutOffOnSunday = includeSunday
-        await appSettings.updateNotifications(updated)
+    private func save() async {
+        guard !isSaving, didLoad else { return }
+        isSaving = true
+        defer { isSaving = false }
+        let cutOff = OrgMaterialCutOff(
+            materialOrderCutOff: draft.enabled,
+            materialCutOffHour: draft.minutes / 60,
+            materialCutOffMinute: draft.minutes % 60,
+            materialCutOffOnSaturday: draft.saturday,
+            materialCutOffOnSunday: draft.sunday
+        )
+        do {
+            try await firebaseBackend.updateOrganizationMaterialCutOff(cutOff)
+        } catch {
+            appSettings.errorMessage = "Failed to save material cut-off: \(error.localizedDescription)"
+            return
+        }
         await notificationService.refreshDailyMaterialCutOffReminder()
+        baseline = draft
     }
 }

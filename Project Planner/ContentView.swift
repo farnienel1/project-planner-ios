@@ -7,7 +7,6 @@
 
 import SwiftUI
 import FirebaseAuth
-import UserNotifications
 
 // Preference key to track if we're in a detail view (should hide bottom menu)
 struct HideBottomMenuKey: PreferenceKey {
@@ -176,6 +175,9 @@ struct ContentView: View {
                     NotificationCenter.default.post(name: .mainMenuOpenSurface, object: nil, userInfo: payload)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .timesheetSubmissionNoticeFired)) { _ in
+                Task { await notificationService.refreshTimesheetSubmissionReminders() }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .openNotificationDeepLink)) { notification in
                 let info = NotificationDeepLink.userInfo(from: notification.userInfo ?? [:])
                 showMoreMenuSheet = false
@@ -184,7 +186,7 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     NotificationDeepLink.route(
                         userInfo: info,
-                        isOperativeMode: userStore.isOperativeMode()
+                        user: userStore.currentUser
                     )
                 }
             }
@@ -224,7 +226,12 @@ struct ContentView: View {
                 let tab = isSmallWorks ? 2 : 1
                 showMoreMenuSheet = false
                 showingHolidaySheet = false
-                WorkCatalogueDeepLink.set(projectId: projectId, isSmallWorks: isSmallWorks)
+                WorkCatalogueDeepLink.set(
+                    projectId: projectId,
+                    isSmallWorks: isSmallWorks,
+                    dayKey: notification.userInfo?["dayKey"] as? String,
+                    section: notification.userInfo?["section"] as? String
+                )
                 if selectedTab != tab {
                     previousTab = selectedTab
                     selectedTab = tab
@@ -238,6 +245,26 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .qualificationExpiryScheduleRefresh)) { _ in
                 Task { await notificationService.refreshQualificationExpiryReminders() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .bookingStoreDidChange)) { _ in
+                scheduleWarningsForBookingChange()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
+                scheduleWarningsForBookingChange()
+            }
+    }
+
+    /// Debounced warning scan for booking changes on every tab. Home only updates its badge.
+    private func scheduleWarningsForBookingChange() {
+        WarningsRefreshHelper.scheduleBookingDrivenRefresh(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings
+        )
     }
 
     @ViewBuilder
@@ -310,7 +337,7 @@ struct ContentView: View {
             Task {
                 await userStore.loadCurrentUser()
             }
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+            Task { await refreshNotificationDelivery() }
         }
         .onChange(of: notificationService.bookingToastMessage) { _, newValue in
             guard let text = newValue, !text.isEmpty else { return }
@@ -362,6 +389,8 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                notificationService.clearAppIconBadgeIfNeeded()
+                Task { await refreshNotificationDelivery() }
                 Task {
                     await userStore.recordCurrentUserLastSeenIfDue()
                     // Refresh the signed-in account when returning to the app so permission
@@ -379,6 +408,9 @@ struct ContentView: View {
             }
         }
         .onChange(of: appSettings.settings.notifications.materialOrderCutOff) { _, _ in
+            Task { await notificationService.refreshDailyMaterialCutOffReminder() }
+        }
+        .onChange(of: firebaseBackend.currentOrganization?.settings.materialCutOff) { _, _ in
             Task { await notificationService.refreshDailyMaterialCutOffReminder() }
         }
         .onChange(of: isReorderingTabs) { _, newValue in
@@ -402,6 +434,14 @@ struct ContentView: View {
         }
     }
     
+    /// Prompts for notification permission if it was never requested, and keeps the inbox listener attached.
+    private func refreshNotificationDelivery() async {
+        guard firebaseBackend.isAuthenticated, userStore.currentUser != nil else { return }
+        await notificationService.ensureSystemNotificationAuthorizationIfNeeded()
+        notificationService.startInboxListenerIfNeeded()
+        await notificationService.refreshTimesheetSubmissionReminders()
+    }
+
     private func completeFirstOrgAssignmentSideWork(organizationId: String) async {
         guard firebaseBackend.isAuthenticated else { return }
         if organizationId == lastLoadedOrganizationId { return }

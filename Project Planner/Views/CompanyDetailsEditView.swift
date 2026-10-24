@@ -6,6 +6,7 @@
 import SwiftUI
 import CoreLocation
 import PhotosUI
+import UniformTypeIdentifiers
 
 struct CompanyDetailsEditView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
@@ -21,10 +22,35 @@ struct CompanyDetailsEditView: View {
     @State private var countryCode = "GB"
     @State private var selectedLogoItem: PhotosPickerItem?
     @State private var selectedLogoImage: UIImage?
+    @State private var selectedLogoPDFData: Data?
+    @State private var showingLogoPDFPicker = false
     
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var successMessage: String?
+    @State private var logoRemoved = false
+    @State private var showingLeaveConfirm = false
+    @State private var baselineName = ""
+    @State private var baselineAbbreviation = ""
+    @State private var baselineHasOffice = true
+    @State private var baselineLine1 = ""
+    @State private var baselineCity = ""
+    @State private var baselinePostcode = ""
+    @State private var baselineCountry = "GB"
+    @State private var didLoad = false
+
+    private var isDirty: Bool {
+        organizationName != baselineName
+            || documentAbbreviation != baselineAbbreviation
+            || hasOfficeAddress != baselineHasOffice
+            || officeAddressLine1 != baselineLine1
+            || officeCity != baselineCity
+            || officePostcode != baselinePostcode
+            || countryCode != baselineCountry
+            || logoRemoved
+            || selectedLogoImage != nil
+            || selectedLogoPDFData != nil
+    }
     
     var body: some View {
         NavigationStack {
@@ -103,7 +129,12 @@ struct CompanyDetailsEditView: View {
                                     Image(uiImage: selectedLogoImage)
                                         .resizable()
                                         .scaledToFit()
-                                } else if let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
+                                } else if selectedLogoPDFData != nil {
+                                    Image(systemName: "doc.fill")
+                                        .font(.title2)
+                                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                                } else if !logoRemoved,
+                                          let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
                                           let url = URL(string: logoURL) {
                                     AsyncImage(url: url) { image in
                                         image.resizable().scaledToFit()
@@ -131,12 +162,17 @@ struct CompanyDetailsEditView: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 }
                                     .accessibilityIdentifier("companyDetailsEdit.uploadLogoJPEG")
+                                Button("Upload PDF") {
+                                    showingLogoPDFPicker = true
+                                }
+                                .accessibilityIdentifier("companyDetailsEdit.uploadLogoPDF")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.blue)
                                 Button("Remove logo", role: .destructive) {
                                     selectedLogoImage = nil
                                     selectedLogoItem = nil
-                                    Task {
-                                        try? await firebaseBackend.updateOrganizationCompanyLogoURL(nil)
-                                    }
+                                    selectedLogoPDFData = nil
+                                    logoRemoved = true
                                 }
                                 .accessibilityIdentifier("companyDetailsEdit.removeLogo")
                                 .font(.system(size: 13, weight: .medium))
@@ -145,7 +181,7 @@ struct CompanyDetailsEditView: View {
                         }
                         .padding(.vertical, 12)
                     }
-                    SettingsHubChrome.footer("Shown on Home and Site Audit report header.")
+                    SettingsHubChrome.footer("Image or PDF, up to 5 MB. Shown on Home and Site Audit report header.")
 
                     if let errorMessage {
                         Text(errorMessage)
@@ -182,25 +218,59 @@ struct CompanyDetailsEditView: View {
             .navigationTitle("Company details")
             .navigationBarTitleDisplayMode(.inline)
             .appChromeNavigationBarSurface()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .accessibilityIdentifier("companyDetailsEdit.cancel")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if isSaving {
-                        ProgressView()
-                    } else {
-                        Button("Save") {
-                            Task { await save() }
-                        }
-                        .accessibilityIdentifier("companyDetailsEdit.save")
-                        .disabled(!canSave)
-                    }
+            .interactiveDismissDisabled(isDirty)
+            .safeAreaInset(edge: .bottom) {
+                SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+                    Task { await save() }
                 }
             }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { requestLeave() }
+                        .accessibilityIdentifier("companyDetailsEdit.cancel")
+                }
+            }
+            .alert("Unsaved changes", isPresented: $showingLeaveConfirm) {
+                Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("companyDetailsEdit.stay")
+                Button("Continue") {
+                    applyOrganizationToForm()
+                    dismiss()
+                }
+                .accessibilityIdentifier("companyDetailsEdit.continue")
+            } message: {
+                Text("You have changes that have not been saved. Leave this page and discard them?")
+            }
             .onAppear {
+                guard !didLoad else { return }
                 applyOrganizationToForm()
+                didLoad = true
+            }
+            .fileImporter(
+                isPresented: $showingLogoPDFPicker,
+                allowedContentTypes: [.pdf],
+                allowsMultipleSelection: false
+            ) { result in
+                guard case .success(let urls) = result, let url = urls.first else { return }
+                let accessed = url.startAccessingSecurityScopedResource()
+                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                guard let data = try? Data(contentsOf: url) else {
+                    errorMessage = "Could not read that PDF."
+                    return
+                }
+                if let message = StorageUploadPolicy.refusal(
+                    family: .companyLogo,
+                    fileExtension: "pdf",
+                    contentType: "application/pdf",
+                    byteCount: data.count
+                ) {
+                    errorMessage = message
+                    return
+                }
+                selectedLogoPDFData = data
+                selectedLogoImage = nil
+                selectedLogoItem = nil
+                logoRemoved = false
             }
             .onChange(of: selectedLogoItem) { _, newItem in
                 guard let newItem else { return }
@@ -209,6 +279,8 @@ struct CompanyDetailsEditView: View {
                        let image = UIImage(data: data) {
                         await MainActor.run {
                             selectedLogoImage = resizedLogoImage(image)
+                            selectedLogoPDFData = nil
+                            logoRemoved = false
                         }
                     }
                 }
@@ -227,9 +299,17 @@ struct CompanyDetailsEditView: View {
         return nameOk && countryOk
     }
     
+    private func requestLeave() {
+        if isDirty {
+            showingLeaveConfirm = true
+        } else {
+            dismiss()
+        }
+    }
+
     private func applyOrganizationToForm() {
         guard let org = firebaseBackend.currentOrganization else { return }
-        organizationName = org.name
+        organizationName = firebaseBackend.organizationNameForEditing(org)
         documentAbbreviation = org.documentAbbreviation
             ?? OrganizationDocumentAbbreviation.display(abbreviation: nil, organizationName: org.name)
         countryCode = org.countryCode.uppercased()
@@ -245,6 +325,21 @@ struct CompanyDetailsEditView: View {
             officeCity = ""
             officePostcode = org.officePostcode ?? ""
         }
+        selectedLogoImage = nil
+        selectedLogoItem = nil
+        selectedLogoPDFData = nil
+        logoRemoved = false
+        captureBaseline()
+    }
+
+    private func captureBaseline() {
+        baselineName = organizationName
+        baselineAbbreviation = documentAbbreviation
+        baselineHasOffice = hasOfficeAddress
+        baselineLine1 = officeAddressLine1
+        baselineCity = officeCity
+        baselinePostcode = officePostcode
+        baselineCountry = countryCode
     }
     
     private func resolveMapCenter() async -> (Double, Double) {
@@ -269,7 +364,12 @@ struct CompanyDetailsEditView: View {
     }
     
     private func save() async {
-        guard canSave else { return }
+        guard canSave else {
+            errorMessage = hasOfficeAddress
+                ? "Name, country, address line 1 and town are required."
+                : "Organisation name and country are required."
+            return
+        }
         isSaving = true
         errorMessage = nil
         successMessage = nil
@@ -286,10 +386,21 @@ struct CompanyDetailsEditView: View {
                 defaultLongitude: lon,
                 documentAbbreviation: documentAbbreviation
             )
-            if let selectedLogoImage,
-               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                let logoURL = try await firebaseBackend.uploadOrganizationLogo(selectedLogoImage, organizationId: orgId)
-                try await firebaseBackend.updateOrganizationCompanyLogoURL(logoURL)
+            if logoRemoved, selectedLogoImage == nil, selectedLogoPDFData == nil {
+                try await firebaseBackend.updateOrganizationCompanyLogoURL(nil)
+            }
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                if let selectedLogoPDFData {
+                    let logoURL = try await firebaseBackend.uploadOrganizationLogoFile(
+                        selectedLogoPDFData,
+                        fileName: "logo.pdf",
+                        organizationId: orgId
+                    )
+                    try await firebaseBackend.updateOrganizationCompanyLogoURL(logoURL)
+                } else if let selectedLogoImage {
+                    let logoURL = try await firebaseBackend.uploadOrganizationLogo(selectedLogoImage, organizationId: orgId)
+                    try await firebaseBackend.updateOrganizationCompanyLogoURL(logoURL)
+                }
             }
             await MainActor.run {
                 isSaving = false

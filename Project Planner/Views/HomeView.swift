@@ -47,6 +47,8 @@ struct HomeView: View {
     @State private var showingSiteAudit = false
     @State private var showingInvoicing = false
     @State private var timesheetReviewDeepLinkUserId: String?
+    @State private var timesheetDeepLinkSurface: String?
+    @State private var dailyOverviewDay: Date?
     @State private var timesheetReviewDeepLinkWeekStart: Date?
     
     // Navigation states for menu items
@@ -168,6 +170,7 @@ struct HomeView: View {
         .sheet(isPresented: $showingAddUser) {
             AddUserView(mode: .admin)
                 .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
         }
             .sheet(isPresented: $showingManageUsers) {
             ManageUsersView()
@@ -196,8 +199,7 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToWarnings"))) { _ in
             print("🔥🔥🔥 DEBUG: WARNINGS_NAVIGATE_SYNC")
-            showingTasksDetail = false
-            showingWarningsDetail = true
+            presentWarningsDetail()
         }
         .fullScreenCover(isPresented: $showingClientsView) {
             ClientsView()
@@ -213,8 +215,10 @@ struct HomeView: View {
                 }
             )
         }
-        .sheet(isPresented: $showingDailyOverview) {
-            DailyOverviewView()
+        .sheet(isPresented: $showingDailyOverview, onDismiss: {
+            dailyOverviewDay = nil
+        }) {
+            DailyOverviewView(displayDate: dailyOverviewDay)
                 .environmentObject(bookingStore)
                 .environmentObject(projectStore)
                 .environmentObject(operativeStore)
@@ -264,10 +268,12 @@ struct HomeView: View {
         .sheet(isPresented: $showingInvoicing, onDismiss: {
             timesheetReviewDeepLinkUserId = nil
             timesheetReviewDeepLinkWeekStart = nil
+            timesheetDeepLinkSurface = nil
         }) {
             InvoicingView(
                 initialReviewUserId: $timesheetReviewDeepLinkUserId,
-                initialReviewWeekStart: $timesheetReviewDeepLinkWeekStart
+                initialReviewWeekStart: $timesheetReviewDeepLinkWeekStart,
+                initialSurface: $timesheetDeepLinkSurface
             )
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
@@ -313,7 +319,11 @@ struct HomeView: View {
                     showingMaterialCatalogue = true
                 }
             case .addUser: showingAddUser = true
-            case .manageUsers: showingManageUsers = true
+            case .manageUsers:
+                if let editUserId = note.userInfo?["editUserId"] as? String, !editUserId.isEmpty {
+                    WorkCatalogueDeepLink.pendingEditUserId = editUserId
+                }
+                showingManageUsers = true
             case .tasksDetail: presentTasksDetail()
             case .generalAppSettings:
                 break
@@ -321,12 +331,16 @@ struct HomeView: View {
             case .siteAudit: showingSiteAudit = true
             case .invoicing:
                 timesheetReviewDeepLinkUserId = note.userInfo?["targetUserId"] as? String
+                timesheetDeepLinkSurface = note.userInfo?["timesheetSurface"] as? String
                 if let date = note.userInfo?["weekStart"] as? Date {
                     timesheetReviewDeepLinkWeekStart = date
                 } else if let interval = note.userInfo?["weekStart"] as? TimeInterval {
                     timesheetReviewDeepLinkWeekStart = Date(timeIntervalSince1970: interval)
                 } else if let number = note.userInfo?["weekStart"] as? NSNumber {
                     timesheetReviewDeepLinkWeekStart = Date(timeIntervalSince1970: number.doubleValue)
+                } else if let dayKey = note.userInfo?["dayKey"] as? String,
+                          let date = CanonicalBusinessEngine.date(fromDayKey: dayKey) {
+                    timesheetReviewDeepLinkWeekStart = date
                 } else {
                     timesheetReviewDeepLinkWeekStart = nil
                 }
@@ -334,9 +348,17 @@ struct HomeView: View {
             case .mySchedule:
                 showingMySchedule = true
             case .dailyOverview:
+                if let dayKey = note.userInfo?["dayKey"] as? String,
+                   let date = CanonicalBusinessEngine.date(fromDayKey: dayKey) {
+                    dailyOverviewDay = date
+                } else {
+                    dailyOverviewDay = nil
+                }
                 showingDailyOverview = true
             case .warnings:
-                showingWarningsDetail = true
+                presentWarningsDetail()
+            case .notifications:
+                showingNotifications = true
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .mainMenuResetPassword)) { _ in
@@ -603,23 +625,13 @@ struct HomeView: View {
             homeWarningCount = WarningsService.shared.warningCount
         }
         .onReceive(NotificationCenter.default.publisher(for: .bookingStoreDidChange)) { _ in
-            Task {
-                await WarningsRefreshHelper.refreshSharedWarnings(
-                    operativeStore: operativeStore,
-                    bookingStore: bookingStore,
-                    projectStore: projectStore,
-                    userStore: userStore,
-                    managerScheduleStore: managerScheduleStore,
-                    holidayStore: holidayStore,
-                    firebaseBackend: firebaseBackend,
-                    appSettings: appSettings,
-                    force: true,
-                    allowWhileSheetVisible: true
-                )
-            }
+            // ContentView owns the debounced warning scan so it still runs on other tabs.
         }
         .onChange(of: showingWarningsDetail) { _, isOpen in
             WarningsRefreshHelper.isWarningsSheetVisible = isOpen
+            if isOpen {
+                WarningsRefreshHelper.cancelInFlightRefresh()
+            }
         }
         .onChange(of: weeklyReportLaunch != nil) { _, isOpen in
             WarningsRefreshHelper.isWeeklyReportVisible = isOpen
@@ -701,7 +713,6 @@ struct HomeView: View {
                 .accessibilityLabel("Refresh")
                 .accessibilityHint("Checks your connection and syncs changes waiting on this device")
                 Button {
-                    notificationService.prepareInboxPresentation()
                     showingNotifications = true
                 } label: {
                     ZStack(alignment: .topTrailing) {
@@ -842,8 +853,7 @@ struct HomeView: View {
                     value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
                 ) {
                     print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC")
-                    showingTasksDetail = false
-                    showingWarningsDetail = true
+                    presentWarningsDetail()
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -1081,6 +1091,7 @@ struct HomeView: View {
                 taskStore: taskStore
             )
         case HomeQuickActionID.staffDailyOverview.rawValue:
+            dailyOverviewDay = nil
             showingDailyOverview = true
         case HomeQuickActionID.staffManagers.rawValue:
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 4])
@@ -1335,6 +1346,8 @@ struct HomeView: View {
 
     private func presentWarningsDetail() {
         showingTasksDetail = false
+        WarningsRefreshHelper.isWarningsSheetVisible = true
+        WarningsRefreshHelper.cancelInFlightRefresh()
         showingWarningsDetail = true
     }
 

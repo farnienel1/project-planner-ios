@@ -345,9 +345,15 @@ enum RoleTestingPreset: String, CaseIterable, Identifiable {
     }
 }
 
+/// `getOrganizationUsers` result. `claimedEmails` is nil when `userEmails` could not be read.
+struct OrganizationUserRoster {
+    var users: [AppUser]
+    var claimedEmails: Set<String>?
+}
+
 // MARK: - User roster segments (Manage Users, Managers, Operatives)
 
-/// Active = verified and not deactivated; Inactive = verified but deactivated; Pending = invitation not completed (`passwordSet` false).
+/// Tab on the people lists. Who is Active, Inactive, or Pending is `CanonicalBusinessEngine.rosterSegment` after `listedRosterUsers`.
 enum UserRosterSegment: Int, CaseIterable, Identifiable, Hashable {
     case active = 0
     case inactive = 1
@@ -362,15 +368,22 @@ enum UserRosterSegment: Int, CaseIterable, Identifiable, Hashable {
         case .pending: return "Pending"
         }
     }
-    
-    func matches(_ user: AppUser) -> Bool {
+
+    /// The string `rosterSegment` returns for this tab. It does not decide which people match.
+    var canonicalSegment: String {
         switch self {
-        case .active:
-            return user.passwordSet && user.isActive
-        case .inactive:
-            return user.passwordSet && !user.isActive
-        case .pending:
-            return !user.passwordSet
+        case .active: return "active"
+        case .inactive: return "inactive"
+        case .pending: return "pending"
+        }
+    }
+
+    init?(canonicalSegment: String) {
+        switch canonicalSegment {
+        case Self.active.canonicalSegment: self = .active
+        case Self.inactive.canonicalSegment: self = .inactive
+        case Self.pending.canonicalSegment: self = .pending
+        default: return nil
         }
     }
 }
@@ -443,6 +456,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// Other `users` document ids for this email. The roster shows one row. Bookings stored
     /// on a dropped id still belong to this person.
     var sameEmailUserIds: [String] = []
+    /// `users/{uid}.name` as stored. Roster classification passes it to the packed script. A user save does not write it.
+    var documentName: String = ""
+    /// `users/{uid}.displayName` as stored. Roster classification passes it to the packed script. A user save does not write it.
+    var documentDisplayName: String = ""
     
     init(
         id: String,
@@ -483,7 +500,9 @@ struct AppUser: Identifiable, Codable, Hashable {
         vatNumber: String? = nil,
         utrNumber: String? = nil,
         placedByManagersRecord: Bool = false,
-        sameEmailUserIds: [String] = []
+        sameEmailUserIds: [String] = [],
+        documentName: String = "",
+        documentDisplayName: String = ""
     ) {
         self.id = id
         self.email = email
@@ -524,13 +543,29 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.utrNumber = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.placedByManagersRecord = placedByManagersRecord
         self.sameEmailUserIds = sameEmailUserIds
+        self.documentName = documentName
+        self.documentDisplayName = documentDisplayName
     }
     
+    /// Label the account-delete route writes onto `name` and `displayName`.
+    static let deletedUserDisplayName = "Deleted user"
+
     var fullName: String {
         if firstName.isEmpty && surname.isEmpty {
             return email
         }
         return "\(firstName) \(surname)".trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Empty email and the deleted-user name, from `CanonicalBusinessEngine.isAnonymisedDeletedProfile`.
+    var isAnonymisedDeletedProfile: Bool {
+        CanonicalBusinessEngine.isAnonymisedDeletedProfile(self) == true
+    }
+
+    /// `CanonicalBusinessEngine.rosterSegment`. Nil when the script did not run.
+    var rosterSegment: UserRosterSegment? {
+        guard let raw = CanonicalBusinessEngine.rosterSegment(self) else { return nil }
+        return UserRosterSegment(canonicalSegment: raw)
     }
 }
 
@@ -550,6 +585,7 @@ extension AppUser {
         case annualLeaveEnabled, annualLeaveDaysPerYear, annualLeaveYearStartMonth, annualLeaveYearEndMonth
         case annualLeaveCarriesOver, annualLeaveYearAllowance, annualLeaveYearAllowanceKey
         case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
+        case documentName, documentDisplayName
     }
 
     init(from decoder: Decoder) throws {
@@ -593,6 +629,8 @@ extension AppUser {
         utrNumber = try container.decodeIfPresent(String.self, forKey: .utrNumber)
         placedByManagersRecord = try container.decodeIfPresent(Bool.self, forKey: .placedByManagersRecord) ?? false
         sameEmailUserIds = try container.decodeIfPresent([String].self, forKey: .sameEmailUserIds) ?? []
+        documentName = try container.decodeIfPresent(String.self, forKey: .documentName) ?? ""
+        documentDisplayName = try container.decodeIfPresent(String.self, forKey: .documentDisplayName) ?? ""
     }
 
     func encode(to encoder: Encoder) throws {
@@ -636,6 +674,8 @@ extension AppUser {
         try container.encodeIfPresent(utrNumber, forKey: .utrNumber)
         try container.encode(placedByManagersRecord, forKey: .placedByManagersRecord)
         try container.encode(sameEmailUserIds, forKey: .sameEmailUserIds)
+        try container.encode(documentName, forKey: .documentName)
+        try container.encode(documentDisplayName, forKey: .documentDisplayName)
     }
 
     /// Operatives default on; self-employed managers/admins default on; PAYE managers/admins default off.
@@ -840,7 +880,7 @@ nonisolated struct OrgMaterialCutOff: Codable, Hashable, Sendable {
         return copy
     }
 
-    func asFirestoreDictionary() -> [String: Any] {
+    func canonicalMap() -> [String: Any] {
         [
             "materialOrderCutOff": materialOrderCutOff,
             "materialCutOffHour": materialCutOffHour,
@@ -850,30 +890,44 @@ nonisolated struct OrgMaterialCutOff: Codable, Hashable, Sendable {
         ]
     }
 
-    static func fromNotification(_ settings: NotificationSettings) -> OrgMaterialCutOff {
-        OrgMaterialCutOff(
-            materialOrderCutOff: settings.materialOrderCutOff,
-            materialCutOffHour: settings.materialCutOffHour,
-            materialCutOffMinute: settings.materialCutOffMinute,
-            materialCutOffOnSaturday: settings.materialCutOffOnSaturday,
-            materialCutOffOnSunday: settings.materialCutOffOnSunday
+    var canonicalClock: CanonicalBusinessEngine.CanonicalMaterialCutOffClock {
+        CanonicalBusinessEngine.CanonicalMaterialCutOffClock(
+            materialOrderCutOff: materialOrderCutOff,
+            materialCutOffHour: materialCutOffHour,
+            materialCutOffMinute: materialCutOffMinute,
+            materialCutOffOnSaturday: materialCutOffOnSaturday,
+            materialCutOffOnSunday: materialCutOffOnSunday
         )
     }
 
-    static func fromFirestore(_ data: [String: Any]) -> OrgMaterialCutOff {
-        OrgMaterialCutOff(
-            materialOrderCutOff: data["materialOrderCutOff"] as? Bool ?? (data["materialOrderCutOff"] as? NSNumber)?.boolValue ?? true,
-            materialCutOffHour: Self.int(data["materialCutOffHour"]) ?? 16,
-            materialCutOffMinute: Self.int(data["materialCutOffMinute"]) ?? 0,
-            materialCutOffOnSaturday: (data["materialCutOffOnSaturday"] as? Bool) ?? (data["materialCutOffOnSaturday"] as? NSNumber)?.boolValue ?? false,
-            materialCutOffOnSunday: (data["materialCutOffOnSunday"] as? Bool) ?? (data["materialCutOffOnSunday"] as? NSNumber)?.boolValue ?? false
-        )
+    /// Script write map. Nil when the script did not answer.
+    func asFirestoreDictionary() -> [String: Any]? {
+        CanonicalBusinessEngine.materialCutOffToFirestore(canonicalClock)
     }
 
-    private static func int(_ value: Any?) -> Int? {
-        if let number = value as? Int { return number }
-        if let number = value as? NSNumber { return number.intValue }
-        return nil
+    /// Live organisation map, or the script default when that map is absent. Nil when the organisation is not loaded or the script did not answer.
+    static func resolve(
+        stored: OrgMaterialCutOff?,
+        organizationLoaded: Bool
+    ) -> CanonicalBusinessEngine.CanonicalMaterialCutOffClock? {
+        guard organizationLoaded else { return nil }
+        if let stored {
+            return CanonicalBusinessEngine.resolveMaterialCutOffClock([
+                "organizationMaterialCutOff": stored.canonicalMap(),
+            ])
+        }
+        return CanonicalBusinessEngine.resolveMaterialCutOffClock([:])
+    }
+
+    static func fromFirestore(_ data: [String: Any]) -> OrgMaterialCutOff? {
+        guard let clock = CanonicalBusinessEngine.parseMaterialCutOff(data) else { return nil }
+        return OrgMaterialCutOff(
+            materialOrderCutOff: clock.materialOrderCutOff,
+            materialCutOffHour: clock.materialCutOffHour,
+            materialCutOffMinute: clock.materialCutOffMinute,
+            materialCutOffOnSaturday: clock.materialCutOffOnSaturday,
+            materialCutOffOnSunday: clock.materialCutOffOnSunday
+        )
     }
 }
 
@@ -968,6 +1022,36 @@ nonisolated struct OrganizationInvoicingSettings: Codable, Hashable, Sendable {
     var recurringRunStartDay: RecurringPaymentDay
     var recurringRunEndDay: RecurringPaymentDay
     var recurringPaymentDay: RecurringPaymentDay
+    /// `invoicing.timesheetSubmission`. Nil when the document has no list; the script then uses its defaults.
+    var timesheetSubmission: [CanonicalBusinessEngine.CanonicalTimesheetSubmissionEntry]? = nil
+    /// Earlier payment-run windows. A save merges this through `paymentRunHistoryAfterChange`.
+    var paymentRunHistory: [CanonicalBusinessEngine.CanonicalPaymentRunHistoryWindow] = []
+
+    nonisolated init(
+        paymentRunMode: PaymentRunConfigurationMode,
+        paymentDateMode: PaymentDateConfigurationMode,
+        paymentRunDateRanges: [PaymentRunDateRange],
+        paymentDates: [Int],
+        noteToUsers: String,
+        recurringPaymentRunSummary: String,
+        recurringRunStartDay: RecurringPaymentDay,
+        recurringRunEndDay: RecurringPaymentDay,
+        recurringPaymentDay: RecurringPaymentDay,
+        timesheetSubmission: [CanonicalBusinessEngine.CanonicalTimesheetSubmissionEntry]? = nil,
+        paymentRunHistory: [CanonicalBusinessEngine.CanonicalPaymentRunHistoryWindow] = []
+    ) {
+        self.paymentRunMode = paymentRunMode
+        self.paymentDateMode = paymentDateMode
+        self.paymentRunDateRanges = paymentRunDateRanges
+        self.paymentDates = paymentDates
+        self.noteToUsers = noteToUsers
+        self.recurringPaymentRunSummary = recurringPaymentRunSummary
+        self.recurringRunStartDay = recurringRunStartDay
+        self.recurringRunEndDay = recurringRunEndDay
+        self.recurringPaymentDay = recurringPaymentDay
+        self.timesheetSubmission = timesheetSubmission
+        self.paymentRunHistory = paymentRunHistory
+    }
 
     nonisolated static let `default` = OrganizationInvoicingSettings(
         paymentRunMode: .dateRanges,
@@ -1053,8 +1137,88 @@ nonisolated struct OrganizationInvoicingSettings: Codable, Hashable, Sendable {
                 CanonicalBusinessEngine.CanonicalPaymentRunRange(startDay: $0.startDay, endDay: $0.endDay)
             },
             paymentDates: paymentDates.map(String.init),
-            noteToUsers: noteToUsers
+            noteToUsers: noteToUsers,
+            timesheetSubmission: timesheetSubmission ?? [],
+            paymentRunHistory: paymentRunHistory
         )
+    }
+
+    func paymentRunWindow() -> CanonicalBusinessEngine.CanonicalTimesheetPaymentRunWindow {
+        CanonicalBusinessEngine.CanonicalTimesheetPaymentRunWindow(
+            paymentRunMode: paymentRunMode.rawValue,
+            ranges: paymentRunDateRanges.map {
+                CanonicalBusinessEngine.CanonicalPaymentRunRange(startDay: $0.startDay, endDay: $0.endDay)
+            },
+            recurringRunStartDay: recurringRunStartDay.rawValue,
+            recurringRunEndDay: recurringRunEndDay.rawValue
+        )
+    }
+
+    nonisolated enum InvoicingCodingKeys: String, CodingKey {
+        case paymentRunMode, paymentDateMode, paymentRunDateRanges, paymentDates, noteToUsers
+        case recurringPaymentRunSummary, recurringRunStartDay, recurringRunEndDay, recurringPaymentDay
+        case timesheetSubmission, paymentRunHistory
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: InvoicingCodingKeys.self)
+        paymentRunMode = try container.decode(PaymentRunConfigurationMode.self, forKey: .paymentRunMode)
+        paymentDateMode = try container.decode(PaymentDateConfigurationMode.self, forKey: .paymentDateMode)
+        paymentRunDateRanges = try container.decode([PaymentRunDateRange].self, forKey: .paymentRunDateRanges)
+        paymentDates = try container.decode([Int].self, forKey: .paymentDates)
+        noteToUsers = try container.decode(String.self, forKey: .noteToUsers)
+        recurringPaymentRunSummary = try container.decode(String.self, forKey: .recurringPaymentRunSummary)
+        recurringRunStartDay = try container.decode(RecurringPaymentDay.self, forKey: .recurringRunStartDay)
+        recurringRunEndDay = try container.decode(RecurringPaymentDay.self, forKey: .recurringRunEndDay)
+        recurringPaymentDay = try container.decode(RecurringPaymentDay.self, forKey: .recurringPaymentDay)
+        timesheetSubmission = try container.decodeIfPresent(
+            [CanonicalBusinessEngine.CanonicalTimesheetSubmissionEntry].self,
+            forKey: .timesheetSubmission
+        )
+        paymentRunHistory = try container.decodeIfPresent(
+            [CanonicalBusinessEngine.CanonicalPaymentRunHistoryWindow].self,
+            forKey: .paymentRunHistory
+        ) ?? []
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: InvoicingCodingKeys.self)
+        try container.encode(paymentRunMode, forKey: .paymentRunMode)
+        try container.encode(paymentDateMode, forKey: .paymentDateMode)
+        try container.encode(paymentRunDateRanges, forKey: .paymentRunDateRanges)
+        try container.encode(paymentDates, forKey: .paymentDates)
+        try container.encode(noteToUsers, forKey: .noteToUsers)
+        try container.encode(recurringPaymentRunSummary, forKey: .recurringPaymentRunSummary)
+        try container.encode(recurringRunStartDay, forKey: .recurringRunStartDay)
+        try container.encode(recurringRunEndDay, forKey: .recurringRunEndDay)
+        try container.encode(recurringPaymentDay, forKey: .recurringPaymentDay)
+        try container.encodeIfPresent(timesheetSubmission, forKey: .timesheetSubmission)
+        try container.encode(paymentRunHistory, forKey: .paymentRunHistory)
+    }
+
+    func timesheetSubmissionListInput() -> CanonicalBusinessEngine.CanonicalTimesheetSubmissionListInput {
+        CanonicalBusinessEngine.CanonicalTimesheetSubmissionListInput(
+            paymentRunMode: paymentRunMode.rawValue,
+            paymentDates: normalizedPaymentDates.map(String.init),
+            recurringPaymentDay: recurringPaymentDay.rawValue,
+            timesheetSubmission: timesheetSubmission,
+            paymentRunDateRanges: normalizedRanges.map {
+                CanonicalBusinessEngine.CanonicalPaymentRunRange(startDay: $0.startDay, endDay: $0.endDay)
+            }
+        )
+    }
+
+    static func timesheetSubmission(from data: [String: Any]) -> [CanonicalBusinessEngine.CanonicalTimesheetSubmissionEntry] {
+        guard let raw = data["timesheetSubmission"],
+              JSONSerialization.isValidJSONObject(raw),
+              let json = try? JSONSerialization.data(withJSONObject: raw),
+              let entries = try? JSONDecoder().decode(
+                [CanonicalBusinessEngine.CanonicalTimesheetSubmissionEntry].self,
+                from: json
+              ) else {
+            return []
+        }
+        return entries
     }
 }
 
@@ -1508,7 +1672,7 @@ nonisolated struct MyScheduleOptions: Codable, Sendable, Hashable {
     }
 }
 
-nonisolated struct NotificationSettings: Codable, Sendable {
+nonisolated struct NotificationSettings: Codable, Equatable, Sendable {
     var bookingConflicts: Bool
     var projectDeadlines: Bool
     var operativeAvailability: Bool
@@ -1533,6 +1697,8 @@ nonisolated struct NotificationSettings: Codable, Sendable {
     var timesheetSignoff: Bool
     var qualificationExpiry: Bool
     var lineManagerPeerUpdate: Bool
+    /// Canonical toggle values from `parseUserNotificationPreferences`. Nil until that call answers.
+    var preferenceValues: [String: Bool]?
 
     nonisolated init(
         bookingConflicts: Bool = true,
@@ -1558,7 +1724,8 @@ nonisolated struct NotificationSettings: Codable, Sendable {
         toolboxTalkIssued: Bool = true,
         timesheetSignoff: Bool = true,
         qualificationExpiry: Bool = true,
-        lineManagerPeerUpdate: Bool = true
+        lineManagerPeerUpdate: Bool = true,
+        preferenceValues: [String: Bool]? = nil
     ) {
         self.bookingConflicts = bookingConflicts
         self.projectDeadlines = projectDeadlines
@@ -1584,6 +1751,7 @@ nonisolated struct NotificationSettings: Codable, Sendable {
         self.timesheetSignoff = timesheetSignoff
         self.qualificationExpiry = qualificationExpiry
         self.lineManagerPeerUpdate = lineManagerPeerUpdate
+        self.preferenceValues = preferenceValues
     }
 
     nonisolated enum CodingKeys: String, CodingKey {
@@ -1592,6 +1760,7 @@ nonisolated struct NotificationSettings: Codable, Sendable {
         case annualLeaveRequests, annualLeaveDecisions, projectCreated, smallWorksCreated, materialAdded
         case bookingCreated, operativeCreated, managerCreated, clientCreated, warningRemoved
         case taskAssigned, toolboxTalkIssued, timesheetSignoff, qualificationExpiry, lineManagerPeerUpdate
+        case preferenceValues
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -1620,6 +1789,7 @@ nonisolated struct NotificationSettings: Codable, Sendable {
         timesheetSignoff = try container.decodeIfPresent(Bool.self, forKey: .timesheetSignoff) ?? true
         qualificationExpiry = try container.decodeIfPresent(Bool.self, forKey: .qualificationExpiry) ?? true
         lineManagerPeerUpdate = try container.decodeIfPresent(Bool.self, forKey: .lineManagerPeerUpdate) ?? true
+        preferenceValues = try container.decodeIfPresent([String: Bool].self, forKey: .preferenceValues)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -1648,6 +1818,28 @@ nonisolated struct NotificationSettings: Codable, Sendable {
         try container.encode(timesheetSignoff, forKey: .timesheetSignoff)
         try container.encode(qualificationExpiry, forKey: .qualificationExpiry)
         try container.encode(lineManagerPeerUpdate, forKey: .lineManagerPeerUpdate)
+        try container.encodeIfPresent(preferenceValues, forKey: .preferenceValues)
+    }
+
+    /// The script's value for a toggle key. A missing key is on. A nil map has not been parsed yet.
+    func canonicalPreferenceIsOn(_ key: String) -> Bool {
+        guard let preferenceValues, preferenceValues.keys.contains(key) else { return true }
+        return preferenceValues[key] != false
+    }
+
+    mutating func setCanonicalPreference(_ key: String, enabled: Bool) {
+        var values = preferenceValues ?? [:]
+        values[key] = enabled
+        preferenceValues = values
+        if key == "materialOrderCutOff" { materialOrderCutOff = enabled }
+        if key == "qualificationExpiry" { qualificationExpiry = enabled }
+    }
+
+    /// Replaces the toggle map with the script's parse. Does not touch legacy keys or the cut-off clock.
+    mutating func applyCanonicalPreferences(_ parsed: [String: Bool]) {
+        preferenceValues = parsed
+        if let value = parsed["materialOrderCutOff"] { materialOrderCutOff = value }
+        if let value = parsed["qualificationExpiry"] { qualificationExpiry = value }
     }
 
     func isEnabled(_ key: UserNotificationToggle) -> Bool {
@@ -1777,54 +1969,6 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         }
     }
 
-    static func visible(for user: AppUser) -> [UserNotificationToggle] {
-        if user.permissions.operativeMode {
-            return [
-                .bookingCreated,
-                .annualLeaveDecisions,
-                .taskAssigned,
-                .toolboxTalkIssued,
-                .timesheetSignoff,
-                .qualificationExpiry
-            ]
-        }
-        let isAdmin = user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin
-        if isAdmin {
-            return [
-                .materialOrderCutOff,
-                .annualLeaveRequests,
-                .annualLeaveDecisions,
-                .projectCreated,
-                .smallWorksCreated,
-                .bookingConflicts,
-                .materialAdded,
-                .bookingCreated,
-                .operativeCreated,
-                .managerCreated,
-                .clientCreated,
-                .warningRemoved,
-                .taskAssigned,
-                .toolboxTalkIssued,
-                .timesheetSignoff,
-                .qualificationExpiry,
-                .lineManagerPeerUpdate
-            ]
-        }
-        return [
-            .materialOrderCutOff,
-            .annualLeaveRequests,
-            .annualLeaveDecisions,
-            .bookingConflicts,
-            .materialAdded,
-            .bookingCreated,
-            .taskAssigned,
-            .toolboxTalkIssued,
-            .timesheetSignoff,
-            .qualificationExpiry,
-            .lineManagerPeerUpdate
-        ]
-    }
-
     static func preference(for type: AppNotification.NotificationType) -> UserNotificationToggle? {
         switch type {
         case .bookingCreated: return .bookingCreated
@@ -1846,6 +1990,7 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .materialOrderCutOff: return .materialOrderCutOff
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return nil
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return nil
+        case .timesheetSubmissionReminder: return nil
         }
     }
 }

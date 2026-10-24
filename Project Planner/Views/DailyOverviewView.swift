@@ -166,8 +166,25 @@ struct DailyOverviewView: View {
         Set(visibleWFHBookings.map { overviewPersonKey(userId: $0.userId) }).count
     }
 
+    private var unbookedLabourRows: [CanonicalUnbookedLabourRow] {
+        let detection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
+        return WarningsComputation.unbookedLabourRowsOnDay(
+            day: overviewDate,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            operativeBookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            holidays: holidayStore.bookings,
+            policy: payrollTimePolicy,
+            includeWeekends: detection.includeWeekendsForUnbookedLabour,
+            excludedUserIds: detection.excludedUserIdsFromUnbookedWarnings
+        )
+    }
+
     private var unbookedAllNames: [String] {
-        Array(Set(unbookedManagerNames + unbookedOperativeNames)).sorted()
+        unbookedLabourRows.map { row in
+            "\(row.operativeName) (missing \(ScheduleCoverageFormat.hours(row.missingHours))h)"
+        }
     }
 
     /// Unique people with any same-day booking (operatives on jobs, managers on jobs or “other” locations, subs on jobs).
@@ -263,25 +280,6 @@ struct DailyOverviewView: View {
         selectedCalendarDay = cal.startOfDay(for: d)
     }
 
-    private var isWeekday: Bool {
-        let weekday = Calendar.current.component(.weekday, from: overviewDate)
-        return weekday >= 2 && weekday <= 6
-    }
-
-    private var operativeUsers: [AppUser] {
-        userStore.organizationUsers.filter {
-            $0.appearsOnOperativesList && $0.isActive && $0.passwordSet
-        }
-    }
-
-    private var managerUsers: [AppUser] {
-        userStore.organizationUsers.filter {
-            $0.isActive &&
-            $0.passwordSet &&
-            ($0.permissions.manager || $0.permissions.adminAccess || $0.isSuperAdmin || $0.role == .admin)
-        }
-    }
-
     private func overviewPersonKey(operativeId: UUID) -> String {
         let email = operativeStore.allOperatives.first { $0.id == operativeId }?.email
         return StaffEmailIdentity.personKey(email: email, fallbackId: "op:\(operativeId.uuidString)")
@@ -292,34 +290,6 @@ struct DailyOverviewView: View {
         return StaffEmailIdentity.personKey(email: email, fallbackId: "u:\(userId)")
     }
 
-    private var unbookedOperativeNames: [String] {
-        LabourDayCoverage.unbookedLines(
-            day: overviewDate,
-            users: operativeUsers,
-            operatives: operativeStore.allOperatives,
-            operativeBookings: dayBookings,
-            managerBookings: managerScheduleStore.managerSiteBookings.filter {
-                Calendar.current.isDate($0.date, inSameDayAs: overviewDate)
-            },
-            holidays: dayHolidays,
-            policy: payrollTimePolicy
-        )
-    }
-
-    private var unbookedManagerNames: [String] {
-        LabourDayCoverage.unbookedLines(
-            day: overviewDate,
-            users: managerUsers,
-            operatives: operativeStore.allOperatives,
-            operativeBookings: dayBookings,
-            managerBookings: managerScheduleStore.managerSiteBookings.filter {
-                Calendar.current.isDate($0.date, inSameDayAs: overviewDate)
-            },
-            holidays: dayHolidays,
-            policy: payrollTimePolicy
-        )
-    }
-    
     // Group bookings by project
     private var bookingsByProject: [UUID: [Booking]] {
         Dictionary(grouping: dayBookings) { $0.projectId }
@@ -363,7 +333,7 @@ struct DailyOverviewView: View {
 
                 todayAtAGlanceHeroCard
 
-                if isWeekday && !unbookedAllNames.isEmpty {
+                if !unbookedAllNames.isEmpty {
                     unbookedLabourRevampCard
                 }
 
@@ -494,7 +464,7 @@ struct DailyOverviewView: View {
     }
 
     private var glanceUnbookedCount: Int {
-        isWeekday ? unbookedAllNames.count : 0
+        unbookedAllNames.count
     }
 
     private var teamLocationBarFractions: (office: CGFloat, wfh: CGFloat, onSite: CGFloat, unbooked: CGFloat) {

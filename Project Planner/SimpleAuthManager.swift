@@ -8,6 +8,7 @@ extension Notification.Name {
     static let userDidSignOut = Notification.Name("userDidSignOut")
     static let organizationDidLoad = Notification.Name("organizationDidLoad")
     static let organizationMyScheduleOptionsDidChange = Notification.Name("organizationMyScheduleOptionsDidChange")
+    static let organizationMaterialCutOffDidChange = Notification.Name("organizationMaterialCutOffDidChange")
     static let syncOfflineChanges = Notification.Name("syncOfflineChanges")
 }
 

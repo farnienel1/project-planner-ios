@@ -279,8 +279,8 @@ enum BookLabourCandidateSelection {
 
     static func choices(
         day: Date,
-        users: [AppUser],
-        operatives: [Operative],
+        users sourceUsers: [AppUser],
+        operatives sourceOperatives: [Operative],
         operativeBookings: [Booking],
         managerBookings: [ManagerSiteBooking],
         holidays: [HolidayBooking],
@@ -290,6 +290,8 @@ enum BookLabourCandidateSelection {
         calendar: Calendar = .current
     ) -> [Choice] {
         guard includeThisDay else { return [] }
+        let users = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceUsers) ?? sourceUsers
+        let operatives = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceOperatives) ?? sourceOperatives
         let required = max(policy.standardPaidHours, 0)
 
         func focused(_ user: AppUser, operative: Operative?) -> Bool {
@@ -388,14 +390,16 @@ enum BookLabourCandidateSelection {
 enum LabourDayCoverage {
     static func unbookedLines(
         day: Date,
-        users: [AppUser],
-        operatives: [Operative],
+        users sourceUsers: [AppUser],
+        operatives sourceOperatives: [Operative],
         operativeBookings: [Booking],
         managerBookings: [ManagerSiteBooking],
         holidays: [HolidayBooking],
         policy: OrgPayrollTimePolicy,
         calendar: Calendar = .current
     ) -> [String] {
+        let users = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceUsers) ?? sourceUsers
+        let operatives = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceOperatives) ?? sourceOperatives
         let required = max(policy.standardPaidHours, 0)
         let operativeOnly = StaffEmailIdentity.oneAccountPerEmail(
             users.filter {

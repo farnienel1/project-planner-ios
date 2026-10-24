@@ -25,6 +25,8 @@ struct PrivacyPolicyView: View {
                             .foregroundColor(.secondary)
                     }
 
+                    CustomerLegalWebLinks()
+
                     Text(CustomerLegalPack.toolboxTalkDisclaimer)
                         .font(.footnote)
                         .padding(12)
@@ -78,6 +80,33 @@ struct PrivacyPolicyView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
+    }
+}
+
+struct CustomerLegalWebLinks: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            legalLink("Privacy on web", identifier: "legalWeb.privacy") {
+                AppBranding.openPrivacyPolicy()
+            }
+            legalLink("Terms on web", identifier: "legalWeb.terms") {
+                AppBranding.openTermsOfService()
+            }
+            legalLink("Processors on web", identifier: "legalWeb.processors") {
+                AppBranding.openProcessors()
+            }
+        }
+    }
+
+    private func legalLink(_ title: String, identifier: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.blue)
+        .accessibilityIdentifier(identifier)
+        .accessibilityAddTraits(.isLink)
     }
 }
 

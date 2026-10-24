@@ -44,6 +44,7 @@ class ManagerScheduleStore: ObservableObject {
     }
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
+        guard LaunchStartupPolicy.shouldRewireStore(isSameInstance: firebaseBackend === backend) else { return }
         firebaseBackend = backend
     }
 
@@ -88,13 +89,23 @@ class ManagerScheduleStore: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let list = try await fb.loadManagerSiteBookings(organizationId: orgId)
+                fb.prepareLaunchScheduleQueryIfNeeded()
+                let queryStart = fb.scheduleBookingQueryStart()
+                let list = try await fb.loadManagerSiteBookings(organizationId: orgId, startingOn: queryStart)
                 let duplicates = self.duplicatesToDelete(from: list)
                 self.managerSiteBookings = self.deduplicated(list)
                 OfflineManagerScheduleLocalStore.save(self.managerSiteBookings, organizationId: orgId)
                 self.lastLoadAt = Date()
-                fb.listenManagerSiteBookings(organizationId: orgId) { [weak self] remote in
-                    self?.applyRemoteManagerBookings(remote, organizationId: orgId)
+                fb.listenManagerSiteBookings(organizationId: orgId, startingOn: queryStart) { [weak self] remote in
+                    guard let self else { return }
+                    guard WarningsBookingScanScheduler.acceptsListener(
+                        listenerOrganizationId: orgId,
+                        currentOrganizationId: self.firebaseBackend?.currentOrganization?.firestoreDocumentId,
+                        sessionOrganizationId: self.firebaseBackend?.sessionOrganizationId
+                    ) else {
+                        return
+                    }
+                    self.applyRemoteManagerBookings(remote, organizationId: orgId)
                 }
                 if !duplicates.isEmpty {
                     // Defer duplicate cleanup — sequential deletes on launch freeze Simulator.
@@ -202,6 +213,13 @@ class ManagerScheduleStore: ObservableObject {
     }
 
     private func applyRemoteManagerBookings(_ remote: [ManagerSiteBooking], organizationId: String) {
+        if remote.isEmpty && !managerSiteBookings.isEmpty {
+            let lowerBound = firebaseBackend?.scheduleBookingQueryStart()
+            managerSiteBookings = managerSiteBookings.filter {
+                LaunchStartupPolicy.launchBookingIncludes(date: $0.date, lowerBound: lowerBound)
+            }
+            return
+        }
         let next = deduplicated(remote)
         let incoming = next.sorted { $0.id.uuidString < $1.id.uuidString }
         let current = managerSiteBookings.sorted { $0.id.uuidString < $1.id.uuidString }

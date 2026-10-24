@@ -96,6 +96,10 @@ struct InvoicingView: View {
             }
             .task {
                 captureTimesheetDeepLink()
+                if firebaseBackend.noteScheduleNeedsFullHistory() {
+                    bookingStore.loadData()
+                    managerScheduleStore.loadData(force: true)
+                }
                 await syncLandingDraftsFromCloud()
             }
         }
@@ -6203,20 +6207,24 @@ private enum TimesheetExportHelper {
         )
         let resend = ResendEmailService()
         let payload = attachments.map { (fileName: $0.fileName, data: $0.data) }
+        let emailSubject = ExportTextEscaping.sanitizeEmailSubject(
+            "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)"
+        )
+        let emailFromName = ExportTextEscaping.sanitizeFromDisplayName(organizationName)
         var sent = await resend.sendTimesheetExportEmail(
             to: recipientEmail,
-            subject: "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)",
+            subject: emailSubject,
             htmlContent: html,
             pdfAttachments: payload,
-            fromName: organizationName
+            fromName: emailFromName
         )
         if !sent {
             sent = await resend.sendTimesheetExportEmail(
                 to: recipientEmail,
-                subject: "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)",
+                subject: emailSubject,
                 htmlContent: html,
                 pdfAttachments: payload,
-                fromName: organizationName
+                fromName: emailFromName
             )
         }
 
@@ -6454,21 +6462,29 @@ private enum TimesheetExportHelper {
         downloadLinks: [(fileName: String, url: String)] = [],
         timesheetCount: Int
     ) -> String {
+        let safeRecipient = ExportTextEscaping.escapeHTML(recipientName)
+        let safeWeekTitle = ExportTextEscaping.escapeHTML(weekTitle)
+        let safeStamp = ExportTextEscaping.escapeHTML(paymentRunStamp)
+        let safeOrganization = ExportTextEscaping.escapeHTML(organizationName)
         let list: String
         if downloadLinks.isEmpty {
-            list = attachmentNames.map { "<li>\($0)</li>" }.joined()
+            list = attachmentNames.map { "<li>\(ExportTextEscaping.escapeHTML($0))</li>" }.joined()
         } else {
-            list = downloadLinks.map { "<li><a href=\"\($0.url)\">\($0.fileName)</a></li>" }.joined()
+            list = downloadLinks.map { link in
+                let href = ExportTextEscaping.escapeHTMLAttributeURL(link.url)
+                let name = ExportTextEscaping.escapeHTML(link.fileName)
+                return "<li><a href=\"\(href)\">\(name)</a></li>"
+            }.joined()
         }
         let attachNote = downloadLinks.isEmpty
-            ? "\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(paymentRunStamp)</strong> (\(weekTitle)) from <strong>\(organizationName)</strong> \(timesheetCount == 1 ? "is" : "are") attached for your records."
-            : "\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(paymentRunStamp)</strong> (\(weekTitle)) from <strong>\(organizationName)</strong> \(timesheetCount == 1 ? "is" : "are") attached, with backup download links below."
+            ? "\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(safeStamp)</strong> (\(safeWeekTitle)) from <strong>\(safeOrganization)</strong> \(timesheetCount == 1 ? "is" : "are") attached for your records."
+            : "\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(safeStamp)</strong> (\(safeWeekTitle)) from <strong>\(safeOrganization)</strong> \(timesheetCount == 1 ? "is" : "are") attached, with backup download links below."
         return """
         <html><body style="font-family:Arial,sans-serif;max-width:720px;margin:0 auto;padding:20px;">
         <h2 style="color:#0D67ED;">Signed timesheets for filing</h2>
-        <p>Hello \(recipientName),</p>
+        <p>Hello \(safeRecipient),</p>
         <p>\(attachNote)</p>
-        <p>Each file is named: <em>User Name timesheet for payment run date \(paymentRunStamp)</em>.</p>
+        <p>Each file is named: <em>User Name timesheet for payment run date \(safeStamp)</em>.</p>
         <ul>\(list)</ul>
         <p style="color:#666;font-size:13px;">These timesheets were counter-signed and exported from Operative Timesheets → Signed off.</p>
         </body></html>

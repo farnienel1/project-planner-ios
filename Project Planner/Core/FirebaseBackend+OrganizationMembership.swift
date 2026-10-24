@@ -45,28 +45,128 @@ extension FirebaseBackend {
     /// once the project has more than a handful of orgs.
     @MainActor
     func fetchOrganizationsForCurrentUser() async -> [OrgMembershipSummary] {
-        guard let userId = currentUser?.uid else { return [] }
+        guard let userId = currentUser?.uid else { return listedOrganizationMemberships }
+        let previous = listedOrganizationMemberships
+        let known = knownOrganizationMembershipsBeforeScan()
+        if !known.isEmpty {
+            listedOrganizationMemberships = known
+        }
+        var byId: [String: (data: [String: Any], role: String)] = [:]
+        var memberFailed = false
+        var creatorFailed = false
+        var membershipFailed = false
 
         do {
-            let memberships = try await loadOrganizationMembershipDocuments(userId: userId)
-            let results: [OrgMembershipSummary] = memberships.map { item in
-                OrganizationTrialPolicy.membershipSummary(
-                    organizationId: item.id,
-                    orgData: item.data,
-                    roleInOrg: item.role
-                )
-            }
-
-            let activeId = currentOrganization?.firestoreDocumentId
-            return results.sorted { lhs, rhs in
-                if lhs.id == activeId { return true }
-                if rhs.id == activeId { return false }
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            let memberField = FieldPath(["members", userId])
+            let memberSnapshot = try await sessionProbeQuery(
+                db.collection("organizations").whereField(memberField, isNotEqualTo: ""),
+                timeoutSeconds: 8
+            )
+            for doc in memberSnapshot.documents {
+                guard let role = Self.listedMemberRole(in: doc.data(), userId: userId) else { continue }
+                byId[doc.documentID] = (doc.data(), role)
             }
         } catch {
-            print("🔥🔥🔥 DEBUG: [OrgMembership] Failed to list organisations: \(error.localizedDescription)")
-            return []
+            memberFailed = true
+            print("🔥🔥🔥 DEBUG: [OrgMembership] members query incomplete: \(error.localizedDescription)")
         }
+
+        do {
+            let creatorSnapshot = try await sessionProbeQuery(
+                db.collection("organizations").whereField("creatorUserId", isEqualTo: userId),
+                timeoutSeconds: 8
+            )
+            for doc in creatorSnapshot.documents where byId[doc.documentID] == nil {
+                byId[doc.documentID] = (doc.data(), "admin")
+            }
+        } catch {
+            creatorFailed = true
+            print("🔥🔥🔥 DEBUG: [OrgMembership] creator query incomplete: \(error.localizedDescription)")
+        }
+
+        do {
+            let membershipSnapshot = try await sessionProbeQuery(
+                orgMembershipsCollection(userId: userId),
+                timeoutSeconds: 8
+            )
+            for doc in membershipSnapshot.documents {
+                let role = (doc.data()["role"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let resolved = (role?.isEmpty == false) ? role! : "member"
+                if byId[doc.documentID] == nil {
+                    byId[doc.documentID] = ([:], resolved)
+                }
+            }
+        } catch {
+            membershipFailed = true
+            print("🔥🔥🔥 DEBUG: [OrgMembership] orgMemberships read incomplete: \(error.localizedDescription)")
+        }
+
+        let incomplete = memberFailed || creatorFailed || membershipFailed
+        // A finished members or creator query can omit a company this phone already knows.
+        // The script still returns the remembered id and the user-document id.
+        let ids = CanonicalBusinessEngine.sessionMembershipIds(
+            discoveredIds: Array(byId.keys),
+            previousIds: previous.map(\.id),
+            rememberedOrganizationId: cachedOrganizationIdString(),
+            documentOrganizationId: sharedUserOrganizationId,
+            explicitOrganizationId: organizationSwitchTargetId ?? sessionOrganizationId,
+            discoveryIncomplete: incomplete
+        )
+        guard let ids else { return previous }
+
+        let rows: [OrgMembershipSummary] = ids.map { organizationId in
+            if let match = byId.first(where: { organizationIdsMatch($0.key, organizationId) }) {
+                return OrganizationTrialPolicy.membershipSummary(
+                    organizationId: match.key,
+                    orgData: match.value.data,
+                    roleInOrg: match.value.role
+                )
+            }
+            if let existing = previous.first(where: { organizationIdsMatch($0.id, organizationId) }) {
+                return existing
+            }
+            let knownName = CanonicalBusinessEngine.coalesceOrganizationName([
+                organizationIdsMatch(currentOrganization?.firestoreDocumentId, organizationId)
+                    ? currentOrganization?.name
+                    : nil,
+                cachedOrganizationName(matching: organizationId)
+            ]) ?? ""
+            return OrgMembershipSummary(
+                id: organizationId,
+                name: CanonicalBusinessEngine.displayOrganizationName(knownName) ?? "Organisation",
+                roleInOrg: "member",
+                isTrial: false,
+                trialAccessBlocked: false,
+                subscriptionHasAccess: true,
+                createdAt: nil
+            )
+        }
+        let activeId = sessionOrganizationId.isEmpty
+            ? currentOrganization?.firestoreDocumentId
+            : sessionOrganizationId
+        let sorted = rows.sorted { lhs, rhs in
+            let leftActive = organizationIdsMatch(lhs.id, activeId)
+            let rightActive = organizationIdsMatch(rhs.id, activeId)
+            if leftActive != rightActive { return leftActive }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        listedOrganizationMemberships = sorted
+        return sorted
+    }
+
+    /// Remembered company and the user-document company, before the members or creator scan.
+    @MainActor
+    func knownOrganizationMembershipsBeforeScan() -> [OrgMembershipSummary] {
+        OrganizationSwitcherCatalog.knownCompaniesBeforeScan(
+            previous: listedOrganizationMemberships,
+            rememberedOrganizationId: cachedOrganizationIdString(),
+            documentOrganizationId: sharedUserOrganizationId,
+            explicitOrganizationId: organizationSwitchTargetId ?? (sessionOrganizationId.isEmpty ? nil : sessionOrganizationId),
+            currentOrganizationId: currentOrganization?.firestoreDocumentId,
+            currentOrganizationName: currentOrganization?.name,
+            cachedNameForRemembered: cachedOrganizationIdString().flatMap { cachedOrganizationName(matching: $0) }
+        )
     }
 
     /// Copies the live `users/{uid}` document onto `orgMemberships/{orgId}`, including
@@ -166,9 +266,10 @@ extension FirebaseBackend {
             throw OrganizationSwitchError.organizationNotFound
         }
 
-        let members = orgData["members"] as? [String: String] ?? [:]
+        let members = orgData["members"] as? [String: Any] ?? [:]
         let creatorUserId = orgData["creatorUserId"] as? String
-        let roleInOrg = members[userId] ?? (creatorUserId == userId ? "admin" : nil)
+        let listedRole = (members[userId] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let roleInOrg = (listedRole?.isEmpty == false ? listedRole : nil) ?? (creatorUserId == userId ? "admin" : nil)
         guard let roleInOrg else {
             throw OrganizationSwitchError.notAMember
         }
@@ -180,6 +281,10 @@ extension FirebaseBackend {
             memberships: memberships
         ) {
             throw OrganizationSwitchError.trialBlocked(blockMessage)
+        }
+
+        if CanonicalBusinessEngine.hasAccess(billing: OrganizationBillingMap.payload(from: orgData)) == false {
+            throw OrganizationSwitchError.subscriptionLapsed
         }
 
         let userDocRef = db.collection("users").document(userId)
@@ -219,14 +324,21 @@ extension FirebaseBackend {
             sharedUserData: userData
         )
 
-        if members[userId] == nil {
-            var membersUpdate = members
-            membersUpdate[userId] = roleInOrg
-            try await db.collection("organizations").document(trimmedId).updateData([
-                "members": membersUpdate,
-                "updatedAt": Timestamp(date: Date()),
-            ])
+        let choice = CanonicalBusinessEngine.chooseSessionOrganization(
+            explicitOrganizationId: trimmedId,
+            rememberedOrganizationId: cachedOrganizationIdString(),
+            documentOrganizationId: sharedUserOrganizationId,
+            probes: [trimmedId: "allowed"]
+        )
+        guard let choice, !choice.organizationId.isEmpty else {
+            throw OrganizationSwitchError.organizationNotFound
         }
+        let chosenId = normalizedOrganizationId(choice.organizationId)
+        guard organizationIdsMatch(chosenId, trimmedId) else {
+            throw OrganizationSwitchError.organizationNotFound
+        }
+        persistRememberedOrganizationId = !(choice.persistOrganizationId ?? "").isEmpty
+        sessionOrganizationId = chosenId
 
         stopScheduleLiveListeners()
         let organization = buildOrganizationFromDocument(orgId: trimmedId, data: orgData)
@@ -247,7 +359,7 @@ extension FirebaseBackend {
         if OrganizationTrialPolicy.isAccessBlocked(orgData) {
             errorMessage = OrganizationTrialPolicy.blockedMessage(from: orgData)
             currentOrganization = nil
-            clearLocalOrganizationCache()
+            sessionOrganizationId = ""
             try? auth.signOut()
             return true
         }
@@ -268,7 +380,7 @@ extension FirebaseBackend {
 
         errorMessage = message
         currentOrganization = nil
-        clearLocalOrganizationCache()
+        sessionOrganizationId = ""
         try? auth.signOut()
         return true
     }
@@ -279,41 +391,151 @@ extension FirebaseBackend {
         organizationHasFirestoreMyScheduleOptions = Self.organizationHasMyScheduleOptionsInDocument(data)
         var organization = Organization.make(fromFirestoreId: orgId, data: data, settings: orgSettings)
         Self.applyPayrollPolicyFields(from: data, to: &organization)
-        return organization
+        return organizationKeepingKnownName(organization)
     }
 
-    /// Phone session wins when this person still belongs to the company saved on the device.
-    /// When that company is already the shared one, launch must not wait on another server read.
+    /// Explicit switch, then `cached_organizationId`, then `users/{uid}.organizationId`.
+    /// Publishes the provisional company before probes so a booking snapshot for it is applied.
+    /// Nil from the script is not replaced with another company.
     @MainActor
-    func preferredSessionOrganizationId(userId: String, sharedOrganizationId: String?) async -> String? {
-        let device = normalizedOrganizationId(cachedOrganizationIdString() ?? "")
-        let shared = normalizedOrganizationId(sharedOrganizationId ?? "")
-        if !device.isEmpty, shared.isEmpty || organizationIdsMatch(device, shared) {
-            return device
+    @discardableResult
+    func applySessionOrganizationChoice(
+        userId: String,
+        documentOrganizationId: String?,
+        explicitOrganizationId: String?
+    ) async -> CanonicalBusinessEngine.CanonicalSessionOrganizationChoice? {
+        prepareRememberedOrganizationOwner(for: userId)
+        let remembered = cachedOrganizationIdString()
+        let provisional = CanonicalBusinessEngine.provisionalOrganizationId(
+            explicitOrganizationId: explicitOrganizationId,
+            rememberedOrganizationId: remembered,
+            documentOrganizationId: documentOrganizationId
+        ) ?? ""
+        if !provisional.isEmpty {
+            publishSessionOrganizationIfNeeded(provisional)
         }
-        if !device.isEmpty, await userBelongsToOrganization(userId: userId, organizationId: device) {
-            return device
-        }
-        return shared.isEmpty ? nil : shared
-    }
 
-    @MainActor
-    func userBelongsToOrganization(userId: String, organizationId: String) async -> Bool {
-        let orgId = normalizedOrganizationId(organizationId)
-        guard !userId.isEmpty, !orgId.isEmpty else { return false }
-        do {
-            // Off the main actor, with a cache fallback. A server read that never returns used to leave a white window.
-            let doc = try await getDocumentWithServerTimeoutAndCacheFallback(
-                db.collection("organizations").document(orgId),
-                timeoutSeconds: 4
+        var probes: [String: String] = [:]
+        for raw in [explicitOrganizationId, remembered, documentOrganizationId] {
+            let organizationId = normalizedOrganizationId(raw ?? "")
+            guard !organizationId.isEmpty else { continue }
+            if probes.keys.contains(where: { organizationIdsMatch($0, organizationId) }) { continue }
+            probes[organizationId] = await probeSessionOrganizationAccess(
+                userId: userId,
+                organizationId: organizationId
             )
-            guard doc.exists, let data = doc.data() else { return false }
-            let members = data["members"] as? [String: String] ?? [:]
-            if members[userId] != nil { return true }
-            return (data["creatorUserId"] as? String) == userId
+        }
+
+        guard let choice = CanonicalBusinessEngine.chooseSessionOrganization(
+            explicitOrganizationId: explicitOrganizationId,
+            rememberedOrganizationId: remembered,
+            documentOrganizationId: documentOrganizationId,
+            probes: probes
+        ) else {
+            return nil
+        }
+        guard !choice.organizationId.isEmpty else { return choice }
+        persistRememberedOrganizationId = !(choice.persistOrganizationId ?? "").isEmpty
+        if let persist = choice.persistOrganizationId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !persist.isEmpty {
+            storeOrganizationIdLocally(persist)
+        }
+        publishSessionOrganizationIfNeeded(choice.organizationId)
+        return choice
+    }
+
+    /// Timeout, permission-denied, missing, and failed reads are `unknown`, not `denied`.
+    @MainActor
+    func probeSessionOrganizationAccess(userId: String, organizationId: String) async -> String {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !userId.isEmpty, !orgId.isEmpty else {
+            return CanonicalBusinessEngine.accessProbeFromReadError() ?? "unknown"
+        }
+        var orgRead = "failed"
+        var listed = false
+        var isCreator = false
+        var membershipRead = "failed"
+
+        do {
+            let snap = try await sessionProbeDocument(db.collection("organizations").document(orgId))
+            if snap.exists, let data = snap.data() {
+                orgRead = "loaded"
+                applyOrganizationDocumentBilling(from: data, organizationId: orgId)
+                listed = Self.listedMemberRole(in: data, userId: userId) != nil
+                let creator = (data["creatorUserId"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                isCreator = !creator.isEmpty && creator == userId
+            } else {
+                orgRead = "missing"
+            }
         } catch {
-            // Offline or timed out: keep the company already stored on this phone.
-            return organizationIdsMatch(orgId, cachedOrganizationIdString())
+            orgRead = "failed"
+        }
+
+        do {
+            let snap = try await sessionProbeDocument(
+                orgMembershipsCollection(userId: userId).document(orgId)
+            )
+            if snap.exists {
+                let status = (snap.data()?["status"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased() ?? ""
+                membershipRead = status == "pending" ? "pending" : "active"
+            } else {
+                membershipRead = "missing"
+            }
+        } catch {
+            membershipRead = "failed"
+        }
+
+        return CanonicalBusinessEngine.orgAccessProbeFromReads(
+            orgRead: orgRead,
+            membershipRead: membershipRead,
+            listed: listed,
+            isCreator: isCreator
+        ) ?? CanonicalBusinessEngine.accessProbeFromReadError() ?? "unknown"
+    }
+
+    private static func listedMemberRole(in data: [String: Any], userId: String) -> String? {
+        let members = data["members"] as? [String: Any] ?? [:]
+        guard let raw = members[userId] as? String else { return nil }
+        let role = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return role.isEmpty ? nil : role
+    }
+
+    private enum SessionProbeTimeout: Error {
+        case timedOut
+    }
+
+    private func sessionProbeDocument(
+        _ ref: DocumentReference,
+        timeoutSeconds: Double = 2.5
+    ) async throws -> DocumentSnapshot {
+        try await withThrowingTaskGroup(of: DocumentSnapshot.self) { group in
+            group.addTask { try await ref.getDocument(source: .server) }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                throw SessionProbeTimeout.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let value = try await group.next() else { throw SessionProbeTimeout.timedOut }
+            return value
+        }
+    }
+
+    private func sessionProbeQuery(
+        _ query: Query,
+        timeoutSeconds: Double
+    ) async throws -> QuerySnapshot {
+        try await withThrowingTaskGroup(of: QuerySnapshot.self) { group in
+            group.addTask { try await query.getDocuments(source: .server) }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                throw SessionProbeTimeout.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let value = try await group.next() else { throw SessionProbeTimeout.timedOut }
+            return value
         }
     }
 
@@ -393,7 +615,8 @@ extension FirebaseBackend {
             deviceSessionProfile = nil
             return user
         }
-        guard await userBelongsToOrganization(userId: user.id, organizationId: sessionOrg) else {
+        let access = await probeSessionOrganizationAccess(userId: user.id, organizationId: sessionOrg)
+        if access == "denied" {
             return user
         }
         let orgDoc: DocumentSnapshot

@@ -305,9 +305,12 @@ private struct QuarterHourWheel: UIViewRepresentable {
     func updateUIView(_ host: WheelHost, context: Context) {
         context.coordinator.values = values
         context.coordinator.selection = $selection
+        defer { context.coordinator.acceptsLiveChanges = true }
         guard !host.isUserSpinning, let idx = values.firstIndex(of: selection) else { return }
         if host.picker.selectedRow(inComponent: 0) != idx {
+            host.picker.suppressVisibleRowCallback = true
             host.picker.selectRow(idx, inComponent: 0, animated: false)
+            host.picker.suppressVisibleRowCallback = false
         }
     }
 
@@ -315,6 +318,8 @@ private struct QuarterHourWheel: UIViewRepresentable {
         var values: [Int]
         var selection: Binding<Int>?
         weak var picker: LiveQuarterPicker?
+        /// False until `updateUIView` has applied the bound row, so the first layout cannot publish row 0.
+        var acceptsLiveChanges = false
         private var lastPublished: Int?
 
         init(values: [Int]) {
@@ -322,6 +327,7 @@ private struct QuarterHourWheel: UIViewRepresentable {
         }
 
         func publish(row: Int) {
+            guard acceptsLiveChanges else { return }
             guard values.indices.contains(row) else { return }
             let next = values[row]
             guard lastPublished != next else { return }
@@ -352,10 +358,16 @@ private struct QuarterHourWheel: UIViewRepresentable {
 
 private final class LiveQuarterPicker: UIPickerView {
     var onVisibleRow: ((Int) -> Void)?
+    /// True while SwiftUI calls `selectRow` so that layout does not write `@State` during the update.
+    var suppressVisibleRowCallback = false
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        onVisibleRow?(selectedRow(inComponent: 0))
+        guard !suppressVisibleRowCallback else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.onVisibleRow?(self.selectedRow(inComponent: 0))
+        }
     }
 }
 

@@ -23,11 +23,14 @@ struct OrganisationWarningsSettingsView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
 
     @State private var draft = OrgWarningDetectionSettings.default
+    @State private var baseline = OrgWarningDetectionSettings.default
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var saveSucceeded = false
-    @State private var userHasEdited = false
     @State private var excludedExpanded = false
+    @State private var showingLeaveConfirm = false
+
+    private var isDirty: Bool { draft != baseline }
 
     private var invoicingSettings: OrganizationInvoicingSettings {
         firebaseBackend.currentOrganization?.settings.invoicing ?? .default
@@ -72,30 +75,42 @@ struct OrganisationWarningsSettingsView: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Warnings")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(exitsToHomeOnBack)
+        .navigationBarBackButtonHidden(true)
+        .background(SettingsSwipeBackGuard(disabled: isDirty))
+        .safeAreaInset(edge: .bottom) {
+            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+                Task { await save() }
+            }
+        }
         .toolbar {
-            if exitsToHomeOnBack {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        onExitToHome?()
-                    } label: {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    requestLeave()
+                } label: {
+                    if exitsToHomeOnBack {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
                             Text("Warnings")
                         }
+                    } else {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
                     }
-                        .accessibilityIdentifier("organisationWarningsSettings.back")
                 }
+                .accessibilityIdentifier("organisationWarningsSettings.back")
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Save") {
-                    Task { await save() }
-                }
-                .accessibilityIdentifier("organisationWarningsSettings.save")
-                .fontWeight(.semibold)
-                .disabled(isSaving || !userHasEdited)
-                .foregroundStyle((userHasEdited && !isSaving) ? Color.accentColor : Color.secondary)
+        }
+        .alert("Unsaved changes", isPresented: $showingLeaveConfirm) {
+            Button("Cancel", role: .cancel) {}
+                .accessibilityIdentifier("organisationWarningsSettings.cancel")
+            Button("Continue") {
+                draft = baseline
+                leave()
             }
+            .accessibilityIdentifier("organisationWarningsSettings.continue")
+        } message: {
+            Text("You have changes that have not been saved. Leave this page and discard them?")
         }
         .onAppear { syncDraftFromOrganization(force: true) }
         .task {
@@ -106,8 +121,9 @@ struct OrganisationWarningsSettingsView: View {
             syncDraftFromOrganization(force: false)
         }
         .onChange(of: firebaseBackend.currentOrganization?.settings.warningDetection) { _, newValue in
-            guard !userHasEdited, let newValue else { return }
+            guard !isDirty, let newValue else { return }
             draft = newValue
+            baseline = newValue
         }
     }
 
@@ -331,8 +347,7 @@ struct OrganisationWarningsSettingsView: View {
 
             NavigationLink {
                 WarningExcludedUsersPickerView(
-                    selectedUserIds: $draft.excludedUserIdsFromUnbookedWarnings,
-                    onSave: saveExcludedUsers
+                    selectedUserIds: $draft.excludedUserIdsFromUnbookedWarnings
                 )
                 .environmentObject(userStore)
                 .environmentObject(operativeStore)
@@ -434,13 +449,24 @@ struct OrganisationWarningsSettingsView: View {
         }
     }
 
+    private var materialCutOffSeverityDescription: String {
+        let clock = OrgMaterialCutOff.resolve(
+            stored: firebaseBackend.currentOrganization?.settings.materialCutOff,
+            organizationLoaded: firebaseBackend.currentOrganization != nil
+        )
+        if let label = clock.flatMap({ CanonicalBusinessEngine.formatMaterialCutOffClock($0) }) {
+            return "Materials not ordered by the \(label) cut-off, qualification expiry (including already expired), and unverified accounts."
+        }
+        return "Materials not ordered by the daily cut-off, qualification expiry (including already expired), and unverified accounts."
+    }
+
     private var severityGuideCard: some View {
         warningsCard {
             sectionHeader(icon: "exclamationmark.triangle.fill", title: "Warning severity guide", subtitle: "For reference — severity levels are assigned automatically based on warning type.")
 
             severityRow(title: "High", description: "Operative booking clashes and unbooked labour. Approve a clash to note it on the weekly report.", tint: .red)
             severityRow(title: "Medium", description: "Manager and admin booking overlaps. Approve if intentional so they appear on the weekly report.", tint: .orange)
-            severityRow(title: "Low", description: "Materials not ordered by the 16:00 cut-off, qualification expiry (including already expired), and unverified accounts.", tint: .blue)
+            severityRow(title: "Low", description: materialCutOffSeverityDescription, tint: .blue)
         }
     }
 
@@ -561,15 +587,30 @@ struct OrganisationWarningsSettingsView: View {
 
     // MARK: - Persistence
 
+    private func requestLeave() {
+        if isDirty {
+            showingLeaveConfirm = true
+        } else {
+            leave()
+        }
+    }
+
+    private func leave() {
+        if exitsToHomeOnBack {
+            onExitToHome?()
+        } else {
+            dismiss()
+        }
+    }
+
     private func syncDraftFromOrganization(force: Bool) {
-        guard force || !userHasEdited else { return }
+        guard force || !isDirty else { return }
         guard let saved = firebaseBackend.currentOrganization?.settings.warningDetection else { return }
         draft = saved
-        if force { userHasEdited = false }
+        baseline = saved
     }
 
     private func markEdited() {
-        userHasEdited = true
         saveSucceeded = false
     }
 
@@ -596,7 +637,7 @@ struct OrganisationWarningsSettingsView: View {
             if !didRefresh {
                 errorMessage = "Settings saved, but warnings could not refresh yet. Go back and tap Refresh."
             }
-            userHasEdited = false
+            baseline = draft
             if let onSaved {
                 await MainActor.run { onSaved() }
             } else {
@@ -607,49 +648,17 @@ struct OrganisationWarningsSettingsView: View {
         }
     }
 
-    private func saveExcludedUsers() async {
-        markEdited()
-        guard !isSaving else { return }
-        isSaving = true
-        errorMessage = nil
-        defer { isSaving = false }
-        do {
-            try await firebaseBackend.updateOrganizationWarningDetectionSettings(draft)
-            let didRefresh = await WarningsRefreshHelper.refreshSharedWarnings(
-                operativeStore: operativeStore,
-                bookingStore: bookingStore,
-                projectStore: projectStore,
-                userStore: userStore,
-                managerScheduleStore: managerScheduleStore,
-                holidayStore: holidayStore,
-                firebaseBackend: firebaseBackend,
-                appSettings: appSettings,
-                force: true,
-                manualUserInitiated: true
-            )
-            if !didRefresh {
-                errorMessage = "Settings saved, but warnings could not refresh yet. Go back and tap Refresh."
-            }
-            userHasEdited = false
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 }
 
 // MARK: - Excluded users picker
 
 private struct WarningExcludedUsersPickerView: View {
     @Binding var selectedUserIds: [String]
-    let onSave: () async -> Void
 
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var operativeStore: OperativeStore
 
     @State private var searchText = ""
-    @State private var isSaving = false
-    @State private var saveSucceeded = false
 
     private var eligibleUsers: [AppUser] {
         userStore.organizationUsers
@@ -704,35 +713,6 @@ private struct WarningExcludedUsersPickerView: View {
         .navigationTitle("Excluded users")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Search users")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Save") {
-                    Task {
-                        isSaving = true
-                        saveSucceeded = false
-                        await onSave()
-                        isSaving = false
-                        saveSucceeded = true
-                    }
-                }
-                .accessibilityIdentifier("warningExcludedUsersPicker.save")
-                .fontWeight(.semibold)
-                .disabled(isSaving)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if saveSucceeded {
-                Text("Excluded users saved. Warnings updated.")
-                    .font(.caption)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(ProjectWorksRevampColors.activeGreen)
-                    .clipShape(Capsule())
-                    .padding(.bottom, 12)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
     }
 
     private func toggle(_ userId: String) {

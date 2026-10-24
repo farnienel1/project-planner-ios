@@ -180,16 +180,24 @@ fileprivate struct MyScheduleBookingStripeRow: View {
                 .frame(width: 4)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text(subtitle)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                    Button {
+                        onEdit?()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(title)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(subtitle)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .buttonStyle(.plain)
+                    .disabled(onEdit == nil)
+                    .accessibilityIdentifier("myScheduleBookingStripe.open")
                     if let otChip {
                         Text(otChip)
                             .font(.system(size: 10, weight: .semibold))
@@ -626,6 +634,7 @@ struct ManagerScheduleContentView: View {
     @State private var selectedDates: Set<Date> = []
     @State private var expandedCustomLocationName: String?
     @State private var customHoursContext: CustomHoursEditorContext?
+    @State private var managerBookingEditTarget: ManagerSiteBooking?
     @State private var operativeBookingEditTarget: Booking?
     @State private var secondBookingDialog: SecondBookingDialog?
     @State private var isBookYourselfExpanded = false
@@ -920,6 +929,35 @@ struct ManagerScheduleContentView: View {
                 }
             )
         }
+        .sheet(item: $managerBookingEditTarget) { booking in
+            let personName = managerBookingPersonName(booking)
+            let policy = payrollPolicy(for: booking.date)
+            OperativeCustomHoursSheet(
+                policy: policy,
+                referenceDay: booking.date,
+                title: "Edit booking",
+                subtitle: myScheduleEditSubtitle(date: booking.date, locationTitle: locationNameString(for: booking)),
+                headerName: personName,
+                headerInitials: PlannerUIInitials.from(personName),
+                allowsOtMultiplierOverride: false,
+                initialChoice: booking.hoursEditChoice(policy: policy),
+                onSave: { start, end, breakRemoved, _ in
+                    managerBookingEditTarget = nil
+                    var updated = booking
+                    updated.timeSlot = .customHours
+                    updated.workStartTime = start
+                    updated.workEndTime = end
+                    updated.isBreakRemoved = breakRemoved
+                    updated.updatedAt = Date()
+                    Task { await managerScheduleStore.saveBooking(updated) }
+                },
+                onCancel: { managerBookingEditTarget = nil },
+                onDelete: {
+                    managerBookingEditTarget = nil
+                    Task { await managerScheduleStore.deleteBooking(booking) }
+                }
+            )
+        }
         .sheet(item: $operativeBookingEditTarget) { booking in
             let p = projectStore.projects.first(where: { $0.id == booking.projectId }) ??
                 projectStore.smallWorks.first(where: { $0.id == booking.projectId })
@@ -1022,6 +1060,7 @@ struct ManagerScheduleContentView: View {
         if let week = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: start)) {
             weekStart = week
         }
+        coverSchedule(from: start)
     }
 
     private func scheduleOverlapWarningTile(_ pending: PendingScheduleOverlapResolution) -> some View {
@@ -1351,33 +1390,36 @@ struct ManagerScheduleContentView: View {
         if let ws = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: newDay)) {
             weekStart = ws
         }
+        coverSchedule(from: newDay)
+    }
+
+    private func coverSchedule(from date: Date) {
+        guard firebaseBackend.noteScheduleNeedsDate(date) else { return }
+        bookingStore.loadData()
+        managerScheduleStore.loadData(force: true)
     }
 
     private func beginEditManagerBooking(_ b: ManagerSiteBooking) {
-        let day = calendar.startOfDay(for: b.date)
-        let p = payrollPolicy(for: day)
-        let ws: String
-        let we: String
-        if let s = b.workStartTime, let e = b.workEndTime, !s.isEmpty, !e.isEmpty {
-            ws = s
-            we = e
-        } else {
-            let block = b.calendarBlock(on: b.date, policy: p)
-            let f = DateFormatter()
-            f.dateFormat = "HH:mm"
-            ws = f.string(from: block.start)
-            we = f.string(from: block.end)
+        managerBookingEditTarget = b
+    }
+
+    private func managerBookingPersonName(_ booking: ManagerSiteBooking) -> String {
+        let match = userStore.organizationUsers.first { $0.id == booking.userId }
+            ?? ((userStore.displayUser ?? userStore.currentUser)?.id == booking.userId
+                ? (userStore.displayUser ?? userStore.currentUser) : nil)
+        if let match {
+            let name = match.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+            let email = match.email.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !email.isEmpty { return email }
         }
-        customHoursContext = CustomHoursEditorContext(
-            days: [day],
-            locationType: b.locationType,
-            locationId: b.locationId,
-            customLocationName: b.customLocationName,
-            replaceBookingId: b.id,
-            seedStart: ws,
-            seedEnd: we,
-            seedBreakRemoved: b.isBreakRemoved
-        )
+        return "Booking"
+    }
+
+    private func myScheduleEditSubtitle(date: Date, locationTitle: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE d MMM"
+        return "\(formatter.string(from: date)) · \(locationTitle)"
     }
 
     private var dayStrip: some View {
@@ -2619,6 +2661,9 @@ struct OperativeScheduleContentView: View {
     private func moveWeek(_ delta: Int) {
         if let newStart = calendar.date(byAdding: .weekOfYear, value: delta, to: weekStart) {
             weekStart = newStart
+            guard firebaseBackend.noteScheduleNeedsDate(newStart) else { return }
+            bookingStore.loadData()
+            managerScheduleStore.loadData(force: true)
         }
     }
 

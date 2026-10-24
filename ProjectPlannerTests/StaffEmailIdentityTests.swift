@@ -53,7 +53,7 @@ final class StaffEmailIdentityTests: XCTestCase {
         let heavyId = UUID()
         let busyId = UUID()
         var heavy = LogicFixtures.operative(id: heavyId, email: email)
-        let qualificationId = UUID()
+        let qualificationId = UUID().uuidString
         heavy.qualificationExpiryDates = [qualificationId: thursday]
         heavy.qualificationCertificateURLs = [qualificationId: "https://example.test/cert"]
         let busy = LogicFixtures.operative(id: busyId, email: email)
@@ -348,14 +348,35 @@ final class StaffEmailIdentityTests: XCTestCase {
         XCTAssertEqual(lines, ["Test Admin (missing 8h)"])
     }
 
-    func testExcludedWarningIdsCoverEveryAccountOnTheEmail() {
-        let people: [[String: Any]] = [
-            ["id": "admin-a", "email": "Admin@Example.com"],
-            ["id": "admin-b", "email": "admin@example.com"],
-            ["id": "manager", "email": "manager@example.com"]
-        ]
-        let expanded = Set(WarningsComputation.expandedExcludedUserIds(["admin-a"], people: people))
-        XCTAssertEqual(expanded, ["admin-a", "admin-b"])
+    func testExcludedAliasDoesNotHideTheOtherAccountOnThatEmail() {
+        let people = WarningsComputation.orderedPeopleForUnbookedScript([
+            ["id": "admin-a", "email": "admin@example.com", "name": "Ada", "passwordSet": true, "isActive": true, "isOperativeMode": true],
+            ["id": "admin-b", "email": "admin@example.com", "name": "Ada", "passwordSet": true, "isActive": true, "isOperativeMode": true]
+        ], excludedUserIds: ["admin-a"])
+        XCTAssertEqual(people.first?["id"] as? String, "admin-b")
+        let excluded = Set(WarningsComputation.storedExcludedUserIds(["admin-a"]))
+        XCTAssertEqual(excluded, ["admin-a"])
+        let rows = CanonicalBusinessEngine.objectRows(
+            function: "unbookedLabourRows",
+            payload: [
+                "timeZone": "Europe/London",
+                "startDayKey": "2026-10-09",
+                "endDayKey": "2026-10-09",
+                "includeWeekends": false,
+                "excludedUserIds": Array(excluded),
+                "standardDayStart": "07:30",
+                "standardDayEnd": "16:00",
+                "breakWindowStart": "12:00",
+                "breakWindowEnd": "12:30",
+                "standardPaidHours": 8,
+                "people": people,
+                "operatives": [] as [[String: Any]],
+                "bookings": [] as [[String: Any]],
+                "holidays": [] as [[String: Any]]
+            ]
+        )
+        XCTAssertEqual(rows?.count, 1)
+        XCTAssertEqual(rows?.first?["personKey"] as? String, "admin-b")
     }
 
     func testUnbookedScriptUsesTheSameAccountOnEveryPhone() {

@@ -97,14 +97,14 @@ struct WeeklyReportOpenShell: View {
         }
         .task {
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL")
-            WarningsRefreshHelper.isWeeklyReportVisible = true
-            WarningsRefreshHelper.cancelInFlightRefresh()
+            WarningsRefreshHelper.setWeeklyReportVisible(true)
+            WarningsRefreshHelper.cancelInFlightRefresh(replayIfBookingData: true)
             await WarningsRefreshHelper.prepareForHeavySheet()
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SETTLED")
             phase = .report
         }
         .onDisappear {
-            WarningsRefreshHelper.isWeeklyReportVisible = false
+            WarningsRefreshHelper.setWeeklyReportVisible(false)
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SHELL_DISMISS")
         }
     }

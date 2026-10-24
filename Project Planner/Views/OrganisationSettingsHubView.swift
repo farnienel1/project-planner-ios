@@ -65,6 +65,18 @@ struct OrganisationSettingsHubView: View {
         return CountryCapitalDirectory.supported.first(where: { $0.code == code })?.name ?? code
     }
 
+    /// Signed-in organisation super admin. `isRosterAdmin` also includes ordinary admins, who can open this alert.
+    private var signedInUserIsOrganisationSuperAdmin: Bool {
+        userStore.currentUser?.isSuperAdmin == true
+    }
+
+    private var deleteOrganisationAlertMessage: String {
+        if signedInUserIsOrganisationSuperAdmin {
+            return "Project Planner is £149 a month or £1,490 a year. VAT is not charged. After the 30-day free trial the plan renews automatically at that price until cancelled. The organisation super admin turns off renewal in the web app, under Settings → Billing. To delete the organisation entirely, email info@projectplanner.us."
+        }
+        return "Subscriptions can be turned off via the web app. To delete an organisation entirely, please contact info@projectplanner.us"
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -188,7 +200,7 @@ struct OrganisationSettingsHubView: View {
                     .buttonStyle(.plain)
                 }
 
-                hubSectionTitle("Payment Runs and Timesheets")
+                hubSectionTitle("Payment runs & timesheets", sentenceCase: true)
                 hubCard {
                     NavigationLink {
                         OrganisationInvoicingSettingsView()
@@ -198,7 +210,7 @@ struct OrganisationSettingsHubView: View {
                             icon: "doc.text.fill",
                             iconBg: ProjectWorksRevampColors.blue.opacity(0.12),
                             iconFg: ProjectWorksRevampColors.blue,
-                            title: "Payment Runs and Timesheets",
+                            title: "Payment runs & timesheets",
                             subtitle: invoicingSubtitle
                         )
                     }
@@ -290,7 +302,7 @@ struct OrganisationSettingsHubView: View {
             Button("OK", role: .cancel) { }
                 .accessibilityIdentifier("organisationSettingsHub.ok")
         } message: {
-            Text("Subscriptions can be turned off via the web app. To delete and organisation entirely, please contact info@projectplanner.us")
+            Text(deleteOrganisationAlertMessage)
         }
     }
 
@@ -308,7 +320,7 @@ struct OrganisationSettingsHubView: View {
                         .foregroundStyle(.white)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(org?.name ?? "Organisation")
+                    Text(CanonicalBusinessEngine.displayOrganizationName(org?.name) ?? (org?.name ?? ""))
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.white)
                     Text("\(countryLabel) · Company")
@@ -412,14 +424,17 @@ struct OrganisationSettingsHubView: View {
     }
 
     private var materialReminderSubtitle: String {
-        if !appSettings.settings.notifications.materialOrderCutOff {
-            return "Notifications off"
+        guard let clock = OrgMaterialCutOff.resolve(
+            stored: org?.settings.materialCutOff,
+            organizationLoaded: org != nil
+        ) else {
+            return "Company material cut-off"
         }
-        let hour24 = max(0, min(23, appSettings.settings.notifications.materialCutOffHour))
-        let minute = max(0, min(59, appSettings.settings.notifications.materialCutOffMinute))
-        let hour12 = hour24 == 0 ? 12 : (hour24 > 12 ? hour24 - 12 : hour24)
-        let suffix = hour24 >= 12 ? "PM" : "AM"
-        return "Daily at \(String(format: "%d:%02d %@", hour12, minute, suffix))"
+        guard clock.materialOrderCutOff else { return "Notifications off" }
+        guard let label = CanonicalBusinessEngine.formatMaterialCutOffClock(clock) else {
+            return "Daily reminder"
+        }
+        return "Daily at \(label)"
     }
 
     private func formatMult(_ v: Double) -> String {
@@ -438,8 +453,8 @@ struct OrganisationSettingsHubView: View {
             return "Recurring: \(invoicing.recurringRunStartDay.title)-\(invoicing.recurringRunEndDay.title)"
         }
     }
-    private func hubSectionTitle(_ t: String) -> some View {
-        Text(t.uppercased())
+    private func hubSectionTitle(_ t: String, sentenceCase: Bool = false) -> some View {
+        Text(sentenceCase ? t : t.uppercased())
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(ProjectWorksRevampColors.muted)
             .tracking(0.4)

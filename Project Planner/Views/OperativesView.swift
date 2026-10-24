@@ -117,6 +117,7 @@ struct OperativesView: View {
         }) {
             AddUserView(mode: .managerAddingOperative)
                 .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
         }
         .sheet(item: $selectedUserForProfile) { user in
             NavigationStack {
@@ -238,7 +239,7 @@ struct OperativesView: View {
         }
     }
 
-    /// Source of truth for operative status should mirror Manage Users (AppUser flags).
+    /// Operative rows on this list use `listedRosterUsers` and `rosterSegment`.
     private var linkedOperativeRecords: [(user: AppUser, operative: Operative)] {
         let operativeUsers = userStore.organizationUsers.filter { $0.appearsOnOperativesList }
         return operativeUsers.compactMap { user in
@@ -278,9 +279,10 @@ struct OperativesView: View {
     }
 
     private var displayedOperativeUsers: [AppUser] {
-        let base = userStore.organizationUsers.filter {
-            $0.appearsOnOperativesList && rosterSegment.matches($0)
-        }
+        let base = rosterListed(
+            userStore.organizationUsers.filter(\.appearsOnOperativesList),
+            segment: rosterSegment
+        )
         let searched = base.filter { ManageOperativesSearch.matches(user: $0, query: liveSearchText) }
         let filtered = searched.filter { operativeUserPassesTextFilter($0) }
         return ManageOperativesSearch.sorted(filtered, query: liveSearchText)
@@ -289,8 +291,9 @@ struct OperativesView: View {
     /// Operative records from Firestore store, filtered by Active/Inactive segment and search text.
     private var displayedOperatives: [Operative] {
         guard rosterSegment != .pending else { return [] }
+        let listedIds = Set(rosterListed(linkedOperativeRecords.map(\.user), segment: rosterSegment).map(\.id))
         let base = linkedOperativeRecords
-            .filter { rosterSegment.matches($0.user) }
+            .filter { listedIds.contains($0.user.id) }
             .map(\.operative)
         return base.filter { operativePassesTextFilter($0) }
     }
@@ -329,8 +332,20 @@ struct OperativesView: View {
         )
     }
     
+    /// Claim set is `organizations/{orgId}/userEmails` document ids. Pending is `rosterSegment`, not `passwordSet` alone.
+    private func rosterListed(_ users: [AppUser], segment: UserRosterSegment) -> [AppUser] {
+        let listed = CanonicalBusinessEngine.listedRosterUsers(
+            users,
+            claimedEmails: userStore.organizationUserEmailClaims
+        ) ?? []
+        return listed.filter { CanonicalBusinessEngine.rosterSegment($0) == segment.canonicalSegment }
+    }
+
     private var pendingOperativeInvitees: [AppUser] {
-        let base = userStore.organizationUsers.filter { $0.appearsOnOperativesList && !$0.passwordSet }
+        let base = rosterListed(
+            userStore.organizationUsers.filter(\.appearsOnOperativesList),
+            segment: .pending
+        )
         let searched = base.filter { ManageOperativesSearch.matches(user: $0, query: liveSearchText) }
         let afterAdvancedFilter: [AppUser]
         if filterText.isEmpty {
@@ -489,7 +504,7 @@ struct OperativeUserRowView: View {
                     Text(user.email)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-                    if !user.passwordSet {
+                    if user.rosterSegment == .pending {
                         Text("Pending")
                             .font(.caption2)
                             .padding(.horizontal, 6)
@@ -498,7 +513,7 @@ struct OperativeUserRowView: View {
                             .foregroundColor(.orange)
                             .cornerRadius(4)
                     }
-                    if !user.isActive {
+                    if user.rosterSegment == .inactive {
                         Text("Inactive")
                             .font(.caption2)
                             .padding(.horizontal, 6)

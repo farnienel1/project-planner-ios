@@ -49,7 +49,7 @@ struct PasswordResetView: View {
                         }
                         .accessibilityIdentifier("passwordReset.sendResetLink")
                         .buttonStyle(PrimaryButtonStyle())
-                        .disabled(email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !isValidEmail(email) || isSending)
+                        .disabled(isSending)
 
                         if isSending {
                             ProgressView()
@@ -97,11 +97,11 @@ struct PasswordResetView: View {
     }
 
     private func sendPasswordReset() {
-        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isValidEmail(trimmed) else {
-            errorMessage = "Please enter a valid email address."
+        if let emailError = AuthFormValidation.emailMessage(for: email) {
+            errorMessage = emailError
             return
         }
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
 
         errorMessage = nil
         isSending = true
@@ -122,11 +122,6 @@ struct PasswordResetView: View {
         }
     }
 
-    private func isValidEmail(_ email: String) -> Bool {
-        let emailRegex = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
-        let emailPredicate = NSPredicate(format: "SELF MATCHES %@", emailRegex)
-        return emailPredicate.evaluate(with: email)
-    }
 }
 
 #Preview {

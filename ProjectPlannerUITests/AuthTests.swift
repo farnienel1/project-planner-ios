@@ -75,11 +75,17 @@ struct AuthScreen {
         test.tap(PPID.authSignIn, timeout: 8)
     }
 
-    /// The sign-in button stays disabled until both fields have text, so an empty
-    /// submit cannot reach the error message. That disabled state is the check.
+    /// Empty sign-in stays tappable so both required messages are shown.
     func submitEmpty() {
-        let button = test.waitFor(PPID.authSignIn)
-        XCTAssertFalse(button.isEnabled, "Sign in should stay disabled until email and password are filled")
+        test.tap(PPID.authSignIn, timeout: 8)
+        let emailError = test.app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Please enter your email address.")
+        ).firstMatch
+        let passwordError = test.app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Please enter your password.")
+        ).firstMatch
+        XCTAssertTrue(emailError.waitForExistence(timeout: 4), "Empty sign-in should show the email required message")
+        XCTAssertTrue(passwordError.waitForExistence(timeout: 4), "Empty sign-in should show the password required message")
     }
 
     func openForgotPassword() {
@@ -88,7 +94,7 @@ struct AuthScreen {
 
     func assertCredentialError() {
         let error = test.app.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS[c] 'sign in failed' OR label CONTAINS[c] 'password' OR label CONTAINS[c] 'email address'")
+            NSPredicate(format: "label CONTAINS[c] 'sign in failed' OR label CONTAINS[c] 'password' OR label CONTAINS[c] 'email address' OR label CONTAINS[c] 'does not exist'")
         ).firstMatch
         XCTAssertTrue(error.waitForExistence(timeout: 12), "GAP: sign-in error did not appear")
     }

@@ -60,11 +60,11 @@ struct SettingsView: View {
                 settingsHubProfileCard
                     .padding(.top, 10)
 
-                settingsHubSectionTitle("Personal")
+                settingsHubSectionTitle("Personal", sentenceCase: true)
                 settingsHubPersonalGroup
 
                 if userStore.hasAdminAccess(), firebaseBackend.currentOrganization != nil {
-                    settingsHubSectionTitle("Company-wide")
+                    settingsHubSectionTitle("Company-wide", sentenceCase: true)
                     settingsHubOrganisationPromoCard
                     Text("Tap to manage how \(firebaseBackend.currentOrganization?.name ?? "your organisation") runs — affects everyone in your team.")
                         .font(.system(size: 10, weight: .regular))
@@ -142,7 +142,8 @@ struct SettingsView: View {
     }
 
     private var settingsHubOrgLine: String {
-        firebaseBackend.currentOrganization?.name ?? "No organisation linked"
+        guard let org = firebaseBackend.currentOrganization else { return "No organisation linked" }
+        return CanonicalBusinessEngine.displayOrganizationName(org.name) ?? org.name
     }
 
     private var settingsHubRoleBadge: (text: String, fg: Color, bg: Color)? {
@@ -162,8 +163,8 @@ struct SettingsView: View {
         return nil
     }
 
-    private func settingsHubSectionTitle(_ text: String) -> some View {
-        Text(text.uppercased())
+    private func settingsHubSectionTitle(_ text: String, sentenceCase: Bool = false) -> some View {
+        Text(sentenceCase ? text : text.uppercased())
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(ProjectWorksRevampColors.muted)
             .tracking(0.4)
@@ -278,25 +279,39 @@ struct SettingsView: View {
             }
             .accessibilityIdentifier("settings.keyFill")
             .buttonStyle(.plain)
-            if !(userStore.currentUser?.permissions.operativeMode ?? false) {
-                Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
-                NavigationLink {
-                    SettingsNotificationsHubView(canConfigureMaterialCutOff: canConfigureMaterialCutOffNotifications)
-                        .environmentObject(appSettings)
-                        .environmentObject(notificationService)
-                        .environmentObject(userStore)
-                } label: {
-                    settingsHubRow(
-                        icon: "bell.fill",
-                        iconBg: ProjectWorksRevampColors.pinRoseBg,
-                        iconFg: ProjectWorksRevampColors.pinRoseFg,
-                        title: "My notifications",
-                        subtitle: "Choose which reminders you receive"
-                    )
-                }
-                .accessibilityIdentifier("settings.navigationLink")
-                .buttonStyle(.plain)
+            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            NavigationLink {
+                SettingsNotificationsHubView(canConfigureMaterialCutOff: canConfigureMaterialCutOffNotifications)
+                    .environmentObject(appSettings)
+                    .environmentObject(notificationService)
+                    .environmentObject(userStore)
+            } label: {
+                settingsHubRow(
+                    icon: "bell.fill",
+                    iconBg: ProjectWorksRevampColors.pinRoseBg,
+                    iconFg: ProjectWorksRevampColors.pinRoseFg,
+                    title: "My notifications",
+                    subtitle: "Choose which reminders you receive"
+                )
             }
+            .accessibilityIdentifier("settings.navigationLink")
+            .buttonStyle(.plain)
+            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            NavigationLink {
+                DeleteMyAccountView()
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(userStore)
+            } label: {
+                settingsHubRow(
+                    icon: "trash.fill",
+                    iconBg: ProjectWorksRevampColors.requiredPillBg,
+                    iconFg: ProjectWorksRevampColors.requiredPillFg,
+                    title: "Delete my account",
+                    subtitle: "Permanently delete your login"
+                )
+            }
+            .accessibilityIdentifier("settings.deleteMyAccount")
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
@@ -771,13 +786,6 @@ struct SettingsView: View {
         }
     }
 
-    private func updateMaterialCutOffNotificationPreference(_ enabled: Bool) async {
-        var updated = appSettings.settings.notifications
-        updated.materialOrderCutOff = enabled
-        await appSettings.updateNotifications(updated)
-        await notificationService.refreshDailyMaterialCutOffReminder()
-    }
-    
     private func deleteAllOperatives() async {
         await MainActor.run {
             isDeletingAllOperatives = true

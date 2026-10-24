@@ -112,6 +112,8 @@ private nonisolated func firestoreDate(fromEpoch value: Double) -> Date? {
 enum OrganizationUserProbe {
     case present(AppUser)
     case confirmedMissing
+    /// The rules refused this document. That is not proof it still exists.
+    case permissionDenied
     case unconfirmed
 }
 
@@ -225,8 +227,20 @@ class FirebaseBackend: ObservableObject {
     private var lastOrganizationDidLoadBroadcastOrgId: String?
     private var lastOrganizationDidLoadBroadcastAt: Date?
     private var organizationDocumentListener: ListenerRegistration?
+    private var organizationDocumentListenerTarget: String?
     private var bookingsLiveListener: ListenerRegistration?
+    private var bookingsLiveListenerTarget: String?
     private var managerScheduleLiveListener: ListenerRegistration?
+    private var managerScheduleLiveListenerTarget: String?
+    /// Lower bound of the launch booking and manager-site listeners. Nil with `scheduleHistoryIsFull` means every date.
+    var scheduleHistoryStart: Date?
+    private var scheduleHistoryIsFull = false
+    /// Inbox ids already accepted for an only-if-missing write. A token refresh must not write the same row twice.
+    private var acceptedMissingNotificationIds = Set<String>()
+    /// Push tokens a send has already reported as dead. The full token is never logged.
+    private var failedPushTokens = Set<String>()
+    /// `userEmails` documents confirmed missing. A second launch lookup does not retry them.
+    private var userEmailClaimMisses = Set<String>()
     /// True when `organizations/{orgId}.settings.myScheduleOptions` exists in Firestore.
     /// Writable from membership helpers in `FirebaseBackend+OrganizationMembership`.
     var organizationHasFirestoreMyScheduleOptions = false
@@ -299,20 +313,29 @@ class FirebaseBackend: ObservableObject {
     private func stopOrganizationDocumentListener() {
         organizationDocumentListener?.remove()
         organizationDocumentListener = nil
+        organizationDocumentListenerTarget = nil
         stopScheduleLiveListeners()
     }
 
     func stopScheduleLiveListeners() {
         bookingsLiveListener?.remove()
         bookingsLiveListener = nil
+        bookingsLiveListenerTarget = nil
         managerScheduleLiveListener?.remove()
         managerScheduleLiveListener = nil
+        managerScheduleLiveListenerTarget = nil
     }
 
     private func startOrganizationDocumentListener(organizationId: String) {
-        stopOrganizationDocumentListener()
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
+        let target = "org:\(orgId)"
+        guard LaunchStartupPolicy.shouldAttachListener(
+            activeTarget: organizationDocumentListenerTarget,
+            requestedTarget: target
+        ) else { return }
+        stopOrganizationDocumentListener()
+        organizationDocumentListenerTarget = target
         organizationDocumentListener = db.collection("organizations").document(orgId)
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error {
@@ -324,6 +347,7 @@ class FirebaseBackend: ObservableObject {
                     guard organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
                     self.applyOrganizationDocumentMyScheduleOptions(from: data)
                     self.applyOrganizationDocumentMaterialCutOff(from: data)
+                    self.applyOrganizationDocumentBilling(from: data, organizationId: orgId)
                 }
             }
     }
@@ -357,6 +381,19 @@ class FirebaseBackend: ObservableObject {
         currentOrganization = org
         storeOrganizationLocally(org)
         NotificationCenter.default.post(name: .organizationMaterialCutOffDidChange, object: nil)
+    }
+
+    /// Re-reads nested `billing` when the organisation document changes. Does not write billing back.
+    @MainActor
+    func applyOrganizationDocumentBilling(from data: [String: Any], organizationId: String) {
+        guard var org = currentOrganization else { return }
+        guard organizationIdsMatch(org.firestoreDocumentId, organizationId) else { return }
+        let next = OrganizationBillingMap.storedJSON(from: data)
+        guard org.billingJSON != next || !org.billingResolved else { return }
+        org.billingJSON = next
+        org.billingResolved = true
+        currentOrganization = org
+        cacheBillingJSON(org)
     }
 
     @MainActor
@@ -410,6 +447,7 @@ class FirebaseBackend: ObservableObject {
 
     /// Call immediately before any `Auth`/`Firestore` use if launch-time configure was skipped (e.g. bad plist path).
     private func ensureFirebaseAppConfigured() {
+        PlannerAppCheckProviderFactory.installIfNeeded()
         guard FirebaseApp.app() == nil else { return }
         let names = ["GoogleService-Info", "GoogleService-Info 2"]
         for name in names {
@@ -758,7 +796,12 @@ class FirebaseBackend: ObservableObject {
             Task { await self.ensureAuthStateListenerAttached() }
         } catch {
             isLoading = false
-            errorMessage = error.localizedDescription
+            let nsError = error as NSError
+            errorMessage = SignInAuthError.presentedMessage(
+                domain: nsError.domain,
+                code: nsError.code,
+                localizedDescription: error.localizedDescription
+            )
             throw error
         }
     }
@@ -1058,10 +1101,13 @@ class FirebaseBackend: ObservableObject {
             currentOrganization = organizationKeepingKnownName(cached)
             return
         }
+        let cachedBilling = cachedBillingJSON(matching: trimmed)
         currentOrganization = Organization(
             id: UUID(uuidString: trimmed) ?? UUID(),
             firestoreDocumentId: trimmed,
-            name: cachedOrganizationName(matching: trimmed) ?? ""
+            name: cachedOrganizationName(matching: trimmed) ?? "",
+            billingJSON: cachedBilling,
+            billingResolved: cachedBilling != nil
         )
     }
 
@@ -1088,11 +1134,14 @@ class FirebaseBackend: ObservableObject {
                !currencyCode.isEmpty {
                 settings.currencyCode = currencyCode
             }
+            let cachedBilling = cachedBillingJSON(matching: organizationId)
             return Organization(
                 id: uuid,
                 firestoreDocumentId: organizationId,
                 name: organizationName,
-                settings: settings
+                settings: settings,
+                billingJSON: cachedBilling,
+                billingResolved: cachedBilling != nil
             )
         }
         return nil
@@ -1132,7 +1181,32 @@ class FirebaseBackend: ObservableObject {
         if let currencyCode = organization.settings.currencyCode, !currencyCode.isEmpty {
             UserDefaults.standard.set(currencyCode, forKey: Self.currencyCodeDefaultsKey(organization.firestoreDocumentId))
         }
+        cacheBillingJSON(organization)
         print("🔥🔥🔥 DEBUG: ✅ Stored organization locally: \(organization.name)")
+    }
+
+    /// Last nested billing map for this company. This does not write `cached_organizationId`.
+    @MainActor
+    private func cacheBillingJSON(_ organization: Organization) {
+        guard organization.billingResolved else { return }
+        let billingKey = Self.billingJSONDefaultsKey(organization.firestoreDocumentId)
+        if let billingJSON = organization.billingJSON {
+            UserDefaults.standard.set(billingJSON, forKey: billingKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: billingKey)
+        }
+    }
+
+    private static func billingJSONDefaultsKey(_ organizationId: String) -> String {
+        "org_billing_json_\(organizationId)"
+    }
+
+    private func cachedBillingJSON(matching organizationId: String) -> String? {
+        let trimmed = normalizedOrganizationId(organizationId)
+        guard !trimmed.isEmpty else { return nil }
+        let stored = UserDefaults.standard.string(forKey: Self.billingJSONDefaultsKey(trimmed))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? nil : stored
     }
     
     /// Builds `OrganizationSettings` from a Firestore `organizations/{id}` document, including `payrollTimePolicy`.
@@ -1554,7 +1628,7 @@ class FirebaseBackend: ObservableObject {
     /// Off the main actor. Loading every project on the main actor left the Projects
     /// spinner up until the system killed the app.
     private nonisolated static func readCollectionFromServer(
-        _ collection: CollectionReference,
+        _ collection: Query,
         timeoutSeconds: Double
     ) async throws -> QuerySnapshot {
         try await withThrowingTaskGroup(of: QuerySnapshot.self) { group in
@@ -2800,35 +2874,17 @@ class FirebaseBackend: ObservableObject {
         guard let userId = currentUser?.uid else {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
-        
-        // Create secure path: organizations/{orgId}/tasks/{taskId}/files/{userId}_{timestamp}_{fileName}
-        let timestamp = Int(Date().timeIntervalSince1970)
-        let sanitizedFileName = fileName.replacingOccurrences(of: " ", with: "_")
-        let filePath = "organizations/\(organizationId)/tasks/\(taskId.uuidString)/files/\(userId)_\(timestamp)_\(sanitizedFileName)"
-        
-        let storageRef = storage.reference().child(filePath)
-        if let byteCount = byteCountOfFile(at: fileURL), byteCount > Int64(10 * 1024 * 1024) {
-            throw NSError(domain: "FirebaseBackend", code: 413, userInfo: [NSLocalizedDescriptionKey: "File is too large. Please upload a file smaller than 10MB."])
-        }
-        
-        // Upload file using async/await wrapper
-        let metadata = StorageMetadata()
-        metadata.contentType = storageContentType(forFileName: fileName)
-        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putFile(from: fileURL, metadata: metadata) { metadata, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else if let metadata = metadata {
-                    continuation.resume(returning: metadata)
-                } else {
-                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
-                }
-            }
-        }
-        
-        // Get download URL
-        let downloadURL = try await storageRef.downloadURL()
-        return downloadURL.absoluteString
+        let fileData = try Data(contentsOf: fileURL)
+        let prepared = try StorageUploadPolicy.prepareFileData(
+            fileData,
+            originalFileName: fileName,
+            declaredContentType: nil,
+            family: .workFile,
+            uid: userId,
+            unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow()
+        )
+        let filePath = "organizations/\(organizationId)/tasks/\(taskId.uuidString)/files/\(prepared.objectName)"
+        return try await putStorageData(prepared.data, path: filePath, contentType: prepared.contentType)
     }
 
     func uploadHealthSafetyFile(
@@ -2842,26 +2898,26 @@ class FirebaseBackend: ObservableObject {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
 
-        let timestamp = Int(Date().timeIntervalSince1970)
         let safeCategory = category
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
             .replacingOccurrences(of: " ", with: "_")
             .replacingOccurrences(of: "/", with: "_")
-        let safeFileName = fileName
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: " ", with: "_")
-            .replacingOccurrences(of: "/", with: "_")
-        let path = "organizations/\(organizationId)/healthSafety/\(projectId.uuidString)/\(safeCategory)/\(userId)_\(timestamp)_\(safeFileName)"
+        let fileData = try Data(contentsOf: localFileURL)
+        let prepared = try StorageUploadPolicy.prepareFileData(
+            fileData,
+            originalFileName: fileName,
+            declaredContentType: nil,
+            family: .workFile,
+            uid: userId,
+            unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow()
+        )
+        let path = "organizations/\(organizationId)/healthSafety/\(projectId.uuidString)/\(safeCategory)/\(prepared.objectName)"
         let storageRef = storage.reference().child(path)
-        if let byteCount = byteCountOfFile(at: localFileURL), byteCount > Int64(10 * 1024 * 1024) {
-            throw NSError(domain: "FirebaseBackend", code: 413, userInfo: [NSLocalizedDescriptionKey: "File is too large. Please upload a file smaller than 10MB."])
-        }
-
         let metadata = StorageMetadata()
-        metadata.contentType = storageContentType(forFileName: fileName)
+        metadata.contentType = prepared.contentType
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putFile(from: localFileURL, metadata: metadata) { metadata, error in
+            storageRef.putData(prepared.data, metadata: metadata) { metadata, error in
                 if let error = error {
                     continuation.resume(throwing: error)
                 } else if let metadata = metadata {
@@ -2881,24 +2937,22 @@ class FirebaseBackend: ObservableObject {
         }
     }
     
-    func uploadTaskImage(_ image: UIImage, taskId: UUID, organizationId: String, imageName: String) async throws -> String {
+    func uploadTaskImage(_ image: UIImage, taskId: UUID, organizationId: String) async throws -> String {
         guard let userId = currentUser?.uid else {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Failed to process image"])
         }
-        let imageData = try jpegDataFittingUploadLimit(
+        let prepared = try StorageUploadPolicy.prepareImage(
             image,
-            maxBytes: 10 * 1024 * 1024,
+            family: .taskImage,
+            uid: userId,
+            unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow(),
             initialQuality: 0.8,
             encodeFailedMessage: "Failed to process image",
             oversizedMessage: "Image is too large. It must be 10 MB or smaller."
         )
-        
-        // Create secure path: organizations/{orgId}/tasks/{taskId}/images/{userId}_{timestamp}_{imageName}
-        let timestamp = Int(Date().timeIntervalSince1970)
-        let sanitizedImageName = imageName.replacingOccurrences(of: " ", with: "_")
-        let imagePath = "organizations/\(organizationId)/tasks/\(taskId.uuidString)/images/\(userId)_\(timestamp)_\(sanitizedImageName).jpg"
-        
+        let imagePath = "organizations/\(organizationId)/tasks/\(taskId.uuidString)/images/\(prepared.objectName)"
         let storageRef = storage.reference().child(imagePath)
+        let imageData = prepared.data
         
         // Upload image using async/await wrapper
         let metadata = StorageMetadata()
@@ -2921,21 +2975,22 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Site audit photos (not task attachments). Keeps Storage paths aligned with Firestore `siteAudits` for clearer rules later.
-    func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String, imageName: String) async throws -> String {
+    func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String) async throws -> String {
         guard let userId = currentUser?.uid else {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
         let uploadImage = SiteAuditMediaProcessor.preparedForUpload(image)
-        let imageData = try jpegDataFittingUploadLimit(
+        let prepared = try StorageUploadPolicy.prepareImage(
             uploadImage,
-            maxBytes: 10 * 1024 * 1024,
+            family: .siteAuditPhoto,
+            uid: userId,
+            unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow(),
             initialQuality: 0.72,
             encodeFailedMessage: "Failed to process image",
             oversizedMessage: "Site audit photo is too large. It must be 10 MB or smaller."
         )
-        let timestamp = Int(Date().timeIntervalSince1970)
-        let sanitizedImageName = imageName.replacingOccurrences(of: " ", with: "_")
-        let imagePath = "organizations/\(organizationId)/siteAudits/\(auditId.uuidString)/images/\(userId)_\(timestamp)_\(sanitizedImageName).jpg"
+        let imagePath = "organizations/\(organizationId)/siteAudits/\(auditId.uuidString)/images/\(prepared.objectName)"
+        let imageData = prepared.data
         let storageRef = storage.reference().child(imagePath)
         let metadata = StorageMetadata()
         metadata.contentType = "image/jpeg"
@@ -2966,14 +3021,17 @@ class FirebaseBackend: ObservableObject {
         guard currentUser?.uid != nil else {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
-        let imageData = try jpegDataFittingUploadLimit(
+        let prepared = try StorageUploadPolicy.prepareImage(
             image,
-            maxBytes: 2 * 1024 * 1024,
+            family: .profilePhoto,
+            uid: currentUser?.uid ?? userId,
+            unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow(),
             initialQuality: 0.82,
             encodeFailedMessage: "Failed to process image",
             oversizedMessage: "Profile photo is too large. It must be 2 MB or smaller."
         )
-        let path = "organizations/\(organizationId)/userProfiles/\(userId)/profile.jpg"
+        let path = "organizations/\(organizationId)/userProfiles/\(userId)/\(StorageUploadPolicy.profileObjectName)"
+        let imageData = prepared.data
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
         metadata.contentType = "image/jpeg"
@@ -2992,18 +3050,37 @@ class FirebaseBackend: ObservableObject {
         return downloadURL.absoluteString
     }
 
+    func uploadOrganizationLogoFile(_ data: Data, fileName: String, organizationId: String) async throws -> String {
+        guard let userId = currentUser?.uid else {
+            throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        }
+        let prepared = try StorageUploadPolicy.prepareFileData(
+            data,
+            originalFileName: fileName,
+            declaredContentType: nil,
+            family: .companyLogo,
+            uid: userId,
+            unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow()
+        )
+        let path = "organizations/\(organizationId)/branding/company_logo/\(prepared.objectName)"
+        return try await putStorageData(prepared.data, path: path, contentType: prepared.contentType)
+    }
+
     func uploadOrganizationLogo(_ image: UIImage, organizationId: String) async throws -> String {
         guard let userId = currentUser?.uid else {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
-        let imageData = try jpegDataFittingUploadLimit(
+        let prepared = try StorageUploadPolicy.prepareImage(
             image,
-            maxBytes: 5 * 1024 * 1024,
+            family: .companyLogo,
+            uid: userId,
+            unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow(),
             initialQuality: 0.75,
             encodeFailedMessage: "Failed to process logo image",
             oversizedMessage: "Company logo is too large. It must be 5 MB or smaller."
         )
-        let path = "organizations/\(organizationId)/branding/company_logo/\(userId)_\(Int(Date().timeIntervalSince1970)).jpg"
+        let path = "organizations/\(organizationId)/branding/company_logo/\(prepared.objectName)"
+        let imageData = prepared.data
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
         metadata.contentType = "image/jpeg"
@@ -3033,33 +3110,28 @@ class FirebaseBackend: ObservableObject {
         guard let userId = currentUser?.uid else {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
-        if data.isEmpty {
-            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "File is empty"])
-        }
-        // Conservative guardrail to avoid excessively large uploads from mobile.
-        if data.count > 10 * 1024 * 1024 {
-            throw NSError(domain: "FirebaseBackend", code: 413, userInfo: [NSLocalizedDescriptionKey: "File is too large. Please upload a file smaller than 10MB."])
-        }
-        
-        let timestamp = Int(Date().timeIntervalSince1970)
-        let sanitizedName = fileName
-            .replacingOccurrences(of: " ", with: "_")
-            .replacingOccurrences(of: "/", with: "_")
-        let storedName = "\(userId)_\(timestamp)_\(sanitizedName)"
+        let prepared = try StorageUploadPolicy.prepareFileData(
+            data,
+            originalFileName: fileName,
+            declaredContentType: contentType,
+            family: .qualificationCertificate,
+            uid: userId,
+            unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow()
+        )
         guard let path = CanonicalBusinessEngine.qualificationCertificateStoragePath(
             organizationId: organizationId,
             operativeId: operativeId.uuidString,
             qualificationId: qualificationId,
-            fileName: storedName
+            fileName: prepared.objectName
         ) else {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Could not save the certificate. Organisation or qualification is missing."])
         }
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
-        metadata.contentType = contentType
+        metadata.contentType = prepared.contentType
         
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(data, metadata: metadata) { metadata, error in
+            storageRef.putData(prepared.data, metadata: metadata) { metadata, error in
                 if let error = error {
                     continuation.resume(throwing: error)
                 } else if let metadata = metadata {
@@ -3075,8 +3147,9 @@ class FirebaseBackend: ObservableObject {
     }
 
     func uploadTimesheetExportPDF(_ data: Data, fileName: String, organizationId: String) async throws -> String {
-        if data.count > 10 * 1024 * 1024 {
-            throw NSError(domain: "FirebaseBackend", code: 413, userInfo: [NSLocalizedDescriptionKey: "Timesheet export is too large. Please use a PDF smaller than 10MB."])
+        if let message = StorageUploadPolicy.timesheetRefusal(data: data, fileName: fileName) {
+            let oversize = data.count > StorageUploadPolicy.standardMaxBytes
+            throw StorageUploadPolicy.failure(message, oversize: oversize)
         }
         let sanitized = fileName
             .replacingOccurrences(of: "/", with: "-")
@@ -3124,126 +3197,22 @@ class FirebaseBackend: ObservableObject {
         storeOrganizationLocally(org)
     }
 
-    /// JPEG at `initialQuality` when those bytes already fit. Larger images are recompressed or scaled.
-    private func jpegDataFittingUploadLimit(
-        _ image: UIImage,
-        maxBytes: Int,
-        initialQuality: CGFloat,
-        encodeFailedMessage: String,
-        oversizedMessage: String
-    ) throws -> Data {
-        var producedData = false
-        if let initial = image.jpegData(compressionQuality: initialQuality) {
-            producedData = true
-            if initial.count <= maxBytes {
-                return initial
-            }
-        }
-
-        let lowerQualities: [CGFloat] = [0.6, 0.45, 0.3, 0.2, 0.12]
-        for quality in lowerQualities where quality < initialQuality {
-            if let data = image.jpegData(compressionQuality: quality) {
-                producedData = true
-                if data.count <= maxBytes {
-                    return data
+    private func putStorageData(_ data: Data, path: String, contentType: String) async throws -> String {
+        let storageRef = storage.reference().child(path)
+        let metadata = StorageMetadata()
+        metadata.contentType = contentType
+        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+            storageRef.putData(data, metadata: metadata) { metadata, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let metadata {
+                    continuation.resume(returning: metadata)
+                } else {
+                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
                 }
             }
         }
-
-        let pixelLongest = max(image.size.width * image.scale, image.size.height * image.scale)
-        if pixelLongest > 1 {
-            var dimension = pixelLongest * 0.75
-            for _ in 0..<6 {
-                if dimension < 480 { break }
-                let scaled = imageScaledToMaxPixelDimension(image, maxPixelDimension: dimension)
-                for quality in [initialQuality] + lowerQualities {
-                    if let data = scaled.jpegData(compressionQuality: quality) {
-                        producedData = true
-                        if data.count <= maxBytes {
-                            return data
-                        }
-                    }
-                }
-                dimension *= 0.7
-            }
-        }
-
-        if !producedData {
-            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: encodeFailedMessage])
-        }
-        throw NSError(domain: "FirebaseBackend", code: 413, userInfo: [NSLocalizedDescriptionKey: oversizedMessage])
-    }
-
-    private func imageScaledToMaxPixelDimension(_ image: UIImage, maxPixelDimension: CGFloat) -> UIImage {
-        let pixelWidth = image.size.width * image.scale
-        let pixelHeight = image.size.height * image.scale
-        let longest = max(pixelWidth, pixelHeight)
-        guard longest > maxPixelDimension, longest > 0, maxPixelDimension > 0 else { return image }
-        let ratio = maxPixelDimension / longest
-        let newSize = CGSize(width: max(1, floor(pixelWidth * ratio)), height: max(1, floor(pixelHeight * ratio)))
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        format.opaque = true
-        return UIGraphicsImageRenderer(size: newSize, format: format).image { _ in
-            UIColor.white.setFill()
-            UIRectFill(CGRect(origin: .zero, size: newSize))
-            image.draw(in: CGRect(origin: .zero, size: newSize))
-        }
-    }
-
-    private func byteCountOfFile(at url: URL) -> Int64? {
-        if let values = try? url.resourceValues(forKeys: [.fileSizeKey]), let fileSize = values.fileSize {
-            return Int64(fileSize)
-        }
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = attributes[.size] as? NSNumber {
-            return size.int64Value
-        }
-        return nil
-    }
-
-    /// image/*, PDF, and common office types. Anything else is octet-stream so metadata is never nil.
-    private func storageContentType(forFileName fileName: String) -> String {
-        switch (fileName as NSString).pathExtension.lowercased() {
-        case "jpg", "jpeg", "jpe":
-            return "image/jpeg"
-        case "png":
-            return "image/png"
-        case "gif":
-            return "image/gif"
-        case "heic":
-            return "image/heic"
-        case "heif":
-            return "image/heif"
-        case "webp":
-            return "image/webp"
-        case "bmp":
-            return "image/bmp"
-        case "tif", "tiff":
-            return "image/tiff"
-        case "svg":
-            return "image/svg+xml"
-        case "pdf":
-            return "application/pdf"
-        case "doc":
-            return "application/msword"
-        case "docx":
-            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        case "xls":
-            return "application/vnd.ms-excel"
-        case "xlsx":
-            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        case "ppt":
-            return "application/vnd.ms-powerpoint"
-        case "pptx":
-            return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        case "csv":
-            return "text/csv"
-        case "rtf":
-            return "application/rtf"
-        default:
-            return "application/octet-stream"
-        }
+        return try await storageRef.downloadURL().absoluteString
     }
     #else
     func uploadTaskFile(_ fileURL: URL, taskId: UUID, organizationId: String, fileName: String) async throws -> String {
@@ -3260,11 +3229,11 @@ class FirebaseBackend: ObservableObject {
         throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available."])
     }
     
-    func uploadTaskImage(_ image: UIImage, taskId: UUID, organizationId: String, imageName: String) async throws -> String {
+    func uploadTaskImage(_ image: UIImage, taskId: UUID, organizationId: String) async throws -> String {
         throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available. Please add FirebaseStorage to your project dependencies via Xcode: File > Add Package Dependencies > https://github.com/firebase/firebase-ios-sdk"])
     }
 
-    func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String, imageName: String) async throws -> String {
+    func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String) async throws -> String {
         throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "FirebaseStorage is not available."])
     }
 
@@ -4287,7 +4256,7 @@ class FirebaseBackend: ObservableObject {
         let utrRaw = (data["utrNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         
         let parsedName = Self.personName(from: data)
-        return AppUser(
+        var parsed = AppUser(
             id: userId,
             email: email,
             organizationId: organizationId,
@@ -4332,6 +4301,9 @@ class FirebaseBackend: ObservableObject {
             vatNumber: (vatRaw?.isEmpty == false) ? vatRaw : nil,
             utrNumber: (utrRaw?.isEmpty == false) ? utrRaw : nil
         )
+        parsed.documentName = data["name"] as? String ?? ""
+        parsed.documentDisplayName = data["displayName"] as? String ?? ""
+        return parsed
     }
     
     /// Reads the name the list shows. Website rows sometimes store `lastName` or a single `name`.
@@ -4365,10 +4337,12 @@ class FirebaseBackend: ObservableObject {
 
     /// Server read of one user document.
     /// `confirmedMissing` is only a successful server snapshot that does not exist.
-    /// A timeout, a rules error, or an offline failure is `unconfirmed` — the roster must keep that person.
+    /// Permission-denied is not proof the document is still there — the roster drops that row.
+    /// A timeout or an offline failure is `unconfirmed`, and that row stays.
     func probeOrganizationUser(userId: String, organizationId: String) async -> OrganizationUserProbe {
         // `organizationId` is the roster being shown. It is not used to delete someone whose
         // user document points at another company: that field is the company they last opened.
+        // A denied read does not clear `organizationId` on a document this phone can still read.
         _ = organizationId
         let trimmedId = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedId.isEmpty else { return .unconfirmed }
@@ -4380,6 +4354,14 @@ class FirebaseBackend: ObservableObject {
             guard doc.exists, let data = doc.data() else { return .confirmedMissing }
             return .present(Self.parseAppUserDocument(userId: trimmedId, data: data))
         } catch {
+            let nsError = error as NSError
+            if LaunchStartupPolicy.isPermissionDenied(
+                domain: nsError.domain,
+                code: nsError.code,
+                description: nsError.localizedDescription
+            ) {
+                return .permissionDenied
+            }
             return .unconfirmed
         }
     }
@@ -4401,6 +4383,11 @@ class FirebaseBackend: ObservableObject {
         do {
             return try await query.getDocuments(source: .server).documents
         } catch {
+            let denied = isFirestorePermissionDenied(error)
+            if !LaunchStartupPolicy.shouldRetryOrganizationUserQuery(permissionDenied: denied) {
+                if required { throw error }
+                return []
+            }
             if required {
                 return try await query.getDocuments().documents
             }
@@ -4415,6 +4402,8 @@ class FirebaseBackend: ObservableObject {
         var indexedUserIds = Set<String>()
         /// `userEmails/{email}` document id → `userId`.
         var userIdByEmail: [String: String] = [:]
+        /// False only when both the server read and the cache read of `userEmails` failed.
+        var emailClaimsLoaded = false
     }
 
     private func loadOrgMemberIndex(organizationId: String) async -> OrgMemberIndex {
@@ -4442,6 +4431,7 @@ class FirebaseBackend: ObservableObject {
             emailSnap = try? await emailQuery.getDocuments()
         }
         if let emailSnap {
+            index.emailClaimsLoaded = true
             for doc in emailSnap.documents {
                 guard let userId = Self.firestoreLinkedUserId(doc.data()["userId"]) else { continue }
                 index.indexedUserIds.insert(userId)
@@ -4473,7 +4463,9 @@ class FirebaseBackend: ObservableObject {
     }
 
     private struct StaffDirectoryLink {
+        /// `userId` / `uid` / `linkedUserId` on the catalogue row. Not the catalogue document id.
         var candidateIds: [String]
+        var documentId: String
         var email: String
         var rawEmail: String
         var fromManagers: Bool
@@ -4501,12 +4493,15 @@ class FirebaseBackend: ObservableObject {
                     }
                 }
                 let docId = doc.documentID.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !docId.isEmpty, !ids.contains(docId) {
-                    ids.append(docId)
-                }
                 let rawEmail = ((data["email"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 let email = rawEmail.lowercased()
-                links.append(StaffDirectoryLink(candidateIds: ids, email: email, rawEmail: rawEmail, fromManagers: fromManagers))
+                links.append(StaffDirectoryLink(
+                    candidateIds: ids,
+                    documentId: docId,
+                    email: email,
+                    rawEmail: rawEmail,
+                    fromManagers: fromManagers
+                ))
             }
         }
         return links
@@ -4517,34 +4512,70 @@ class FirebaseBackend: ObservableObject {
         case usable([String: Any])
     }
 
-    /// `missing` is only a snapshot that is not there. A user document whose organizationId is another company is still usable: that field is the company they last opened, and this organisation can also list them.
+    /// `missing` is a snapshot that is not there, or a permission-denied read.
+    /// Denial does not fall through to a cached copy and re-insert the row.
+    /// A user document whose organizationId is another company is still usable when the read succeeds:
+    /// that field is the company they last opened, and this organisation can also list them.
     private func lookupLinkedUser(userId: String, organizationId: String) async -> LinkedUserLookup {
         let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .missing }
         _ = organizationId
         let ref = db.collection("users").document(trimmed)
-        let snap: DocumentSnapshot?
-        if let server = try? await ref.getDocument(source: .server) {
-            snap = server
-        } else {
-            snap = try? await ref.getDocument(source: .cache)
+        do {
+            let server = try await ref.getDocument(source: .server)
+            guard server.exists, let data = server.data() else { return .missing }
+            return .usable(data)
+        } catch {
+            let nsError = error as NSError
+            if LaunchStartupPolicy.isPermissionDenied(
+                domain: nsError.domain,
+                code: nsError.code,
+                description: nsError.localizedDescription
+            ) || LaunchStartupPolicy.isNotFound(domain: nsError.domain, code: nsError.code) {
+                return .missing
+            }
+            if let cache = try? await ref.getDocument(source: .cache), cache.exists, let data = cache.data() {
+                return .usable(data)
+            }
+            return .missing
         }
-        guard let snap, snap.exists, let data = snap.data() else { return .missing }
-        return .usable(data)
     }
 
     private func userIdFromUserEmailsDocument(organizationId: String, email: String) async -> String? {
         let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        let key = "\(normalizedOrganizationId(organizationId))|\(trimmed.lowercased())"
+        if userEmailClaimMisses.contains(key) { return nil }
         let ref = db.collection("organizations").document(organizationId).collection("userEmails").document(trimmed)
-        let snap: DocumentSnapshot?
-        if let server = try? await ref.getDocument(source: .server) {
-            snap = server
-        } else {
-            snap = try? await ref.getDocument(source: .cache)
+        let outcome: LaunchStartupPolicy.UserEmailsPointRead
+        do {
+            let server = try await ref.getDocument(source: .server)
+            outcome = LaunchStartupPolicy.classifyUserEmailsPointRead(
+                exists: server.exists,
+                userId: Self.firestoreLinkedUserId(server.data()?["userId"]),
+                errorDomain: nil,
+                errorCode: nil
+            )
+        } catch {
+            let nsError = error as NSError
+            outcome = LaunchStartupPolicy.classifyUserEmailsPointRead(
+                exists: nil,
+                userId: nil,
+                errorDomain: nsError.domain,
+                errorCode: nsError.code
+            )
         }
-        guard let snap, snap.exists else { return nil }
-        return Self.firestoreLinkedUserId(snap.data()?["userId"])
+        switch outcome {
+        case .linked(let userId):
+            return userId
+        case .notFound:
+            userEmailClaimMisses.insert(key)
+            print("🔥🔥🔥 DEBUG: userEmails document missing — not a startup error")
+            return nil
+        case .failed:
+            // A failed claims read stays failed. It does not hide live pending invites.
+            return nil
+        }
     }
 
     /// Email match inside one company. An empty organisation id does not list every user.
@@ -4569,10 +4600,10 @@ class FirebaseBackend: ObservableObject {
         return true
     }
 
-    func getOrganizationUsers(organizationId: String) async throws -> [AppUser] {
+    func getOrganizationUsers(organizationId: String) async throws -> OrganizationUserRoster {
         let orgId = normalizedOrganizationId(organizationId)
         print("🔥🔥🔥 DEBUG: getOrganizationUsers called with organizationId: \(orgId)")
-        guard !orgId.isEmpty else { return [] }
+        guard !orgId.isEmpty else { return OrganizationUserRoster(users: [], claimedEmails: nil) }
 
         struct CollectedUserDocument {
             var data: [String: Any]
@@ -4597,29 +4628,28 @@ class FirebaseBackend: ObservableObject {
         }
 
         absorb(try await userDocuments(whereOrganizationIdEquals: orgId, required: true), matchedOrganizationQuery: true)
-
-        var alternateValues: [Any] = []
-        let lowercasedId = orgId.lowercased()
-        let uppercasedId = orgId.uppercased()
-        if lowercasedId != orgId { alternateValues.append(lowercasedId) }
-        if uppercasedId != orgId && uppercasedId != lowercasedId { alternateValues.append(uppercasedId) }
-        alternateValues.append("organizations/\(orgId)")
-        if lowercasedId != orgId {
-            alternateValues.append("organizations/\(lowercasedId)")
-        }
-        alternateValues.append(db.collection("organizations").document(orgId))
-        for value in alternateValues {
-            absorb(try await userDocuments(whereOrganizationIdEquals: value, required: false), matchedOrganizationQuery: true)
-        }
+        // The exact organisation id succeeded. Lowercase, `organizations/{id}`, and a document
+        // reference are different rules queries and are not issued.
 
         let memberIndex = await loadOrgMemberIndex(organizationId: orgId)
         let staffLinks = await loadStaffDirectoryLinks(organizationId: orgId)
-        var candidateIds = memberIndex.indexedUserIds
+        var explicitLinkUserIds = Set<String>()
+        var directoryDocumentIds = Set<String>()
         for link in staffLinks {
-            candidateIds.formUnion(link.candidateIds)
+            explicitLinkUserIds.formUnion(link.candidateIds)
+            if !link.documentId.isEmpty {
+                directoryDocumentIds.insert(link.documentId)
+            }
         }
+        let pointIds = LaunchStartupPolicy.pointReadUserIds(
+            alreadyLoaded: Set(documentsById.keys),
+            memberUserIds: memberIndex.memberIds,
+            claimUserIds: Set(memberIndex.userIdByEmail.values),
+            explicitLinkUserIds: explicitLinkUserIds,
+            directoryDocumentIds: directoryDocumentIds
+        )
         var fetched = 0
-        for userId in candidateIds where documentsById[userId] == nil {
+        for userId in pointIds {
             fetched += 1
             if fetched % 20 == 0 {
                 await Task.yield()
@@ -4727,7 +4757,8 @@ class FirebaseBackend: ObservableObject {
         let uniqueUsers = Array(byKey.values)
 
         print("🔥🔥🔥 DEBUG: Returning \(uniqueUsers.count) unique users")
-        return uniqueUsers
+        let claimedEmails: Set<String>? = memberIndex.emailClaimsLoaded ? Set(memberIndex.userIdByEmail.keys) : nil
+        return OrganizationUserRoster(users: uniqueUsers, claimedEmails: claimedEmails)
     }
 
     /// One email stays one roster row. The signed-in account stays the id. A readable
@@ -5212,11 +5243,15 @@ class FirebaseBackend: ObservableObject {
 
     /// Dotted updates for toggles. The cut-off clock stays on the organisation map.
     func saveUserNotificationPreferences(_ settings: NotificationSettings, userId: String) async throws {
+        try await saveUserNotificationPreferenceKeys(settings.preferenceValues ?? [:], userId: userId)
+    }
+
+    /// Dotted `notificationPreferences.{key}` writes for the keys passed in. Does not replace the map.
+    func saveUserNotificationPreferenceKeys(_ keys: [String: Bool], userId: String) async throws {
         var data: [String: Any] = [
             "updatedAt": Timestamp(date: Date()),
         ]
-        if let values = settings.preferenceValues,
-           let patch = CanonicalBusinessEngine.userNotificationPreferenceFieldPatch(values) {
+        if !keys.isEmpty, let patch = CanonicalBusinessEngine.userNotificationPreferenceFieldPatch(keys) {
             for (key, value) in patch {
                 data[key] = value
             }
@@ -6162,10 +6197,7 @@ class FirebaseBackend: ObservableObject {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         do {
-            try await db.collection("users").document(uid).setData([
-                "pushTokens": FieldValue.arrayUnion([trimmed]),
-                "pushTokenUpdatedAt": Timestamp(date: Date())
-            ], merge: true)
+            try await writePushTokens(userId: uid, currentDeviceToken: trimmed)
             // Backward compatibility: invitations may still reference legacy users/{placeholderId}.
             // Mirror this token into same-email docs so targeted push still works during id convergence.
             let normalizedEmail = authUser.email?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -6184,10 +6216,7 @@ class FirebaseBackend: ObservableObject {
                     return !email.isEmpty && email == normalizedEmail
                 }
                 for doc in candidateDocs where doc.documentID != uid {
-                    try await db.collection("users").document(doc.documentID).setData([
-                        "pushTokens": FieldValue.arrayUnion([trimmed]),
-                        "pushTokenUpdatedAt": Timestamp(date: Date())
-                    ], merge: true)
+                    try await writePushTokens(userId: doc.documentID, currentDeviceToken: trimmed)
                     print("🔥🔥🔥 DEBUG: Mirrored push token from \(uid) to legacy user doc \(doc.documentID)")
                 }
             }
@@ -6195,6 +6224,37 @@ class FirebaseBackend: ObservableObject {
         } catch {
             print("🔥🔥🔥 DEBUG: Failed to register push token: \(error.localizedDescription)")
         }
+    }
+
+    /// Drops one token after FCM/APNs reports it dead. Does not clear tokens that have not failed.
+    func recordPushTokenFailure(token: String, message: String) async {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, LaunchStartupPolicy.isTerminalPushTokenFailure(message) else { return }
+        guard let uid = currentUser?.uid, !uid.isEmpty else { return }
+        failedPushTokens.insert(trimmed)
+        do {
+            try await writePushTokens(userId: uid, currentDeviceToken: "")
+            print("🔥🔥🔥 DEBUG: Removed a dead push token. stored failures=\(failedPushTokens.count)")
+        } catch {
+            print("🔥🔥🔥 DEBUG: Failed to remove a dead push token: \(error.localizedDescription)")
+        }
+    }
+
+    private func writePushTokens(userId: String, currentDeviceToken: String) async throws {
+        let ref = db.collection("users").document(userId)
+        // A failed read is not an empty list. Replacing pushTokens then would delete tokens this client never received.
+        let snap = try await ref.getDocument(source: .server)
+        let existing = (snap.data()?["pushTokens"] as? [String]) ?? []
+        let next = LaunchStartupPolicy.nextStoredPushTokens(
+            existing: existing,
+            currentDeviceToken: currentDeviceToken,
+            failedTokens: failedPushTokens
+        )
+        guard next != existing else { return }
+        try await ref.setData([
+            "pushTokens": next,
+            "pushTokenUpdatedAt": Timestamp(date: Date())
+        ], merge: true)
     }
 
     func forceRefreshAndRegisterPushToken() async -> String {
@@ -6232,6 +6292,15 @@ class FirebaseBackend: ObservableObject {
         preserveExistingReadState: Bool = false,
         onlyIfMissing: Bool = false
     ) async throws {
+        let idKey = notification.id.uuidString
+        guard LaunchStartupPolicy.shouldStartInboxWrite(
+            onlyIfMissing: onlyIfMissing,
+            alreadyAcceptedIds: acceptedMissingNotificationIds,
+            notificationId: idKey
+        ) else { return }
+        if onlyIfMissing {
+            acceptedMissingNotificationIds.insert(idKey)
+        }
         let ref = db.collection("organizations").document(organizationId).collection("notifications").document(notification.id.uuidString)
         var isRead = notification.isRead
         if onlyIfMissing || preserveExistingReadState {
@@ -6271,7 +6340,14 @@ class FirebaseBackend: ObservableObject {
             data["catalogue"] = catalogue
         }
         
-        try await ref.setData(data)
+        do {
+            try await ref.setData(data)
+        } catch {
+            if onlyIfMissing {
+                acceptedMissingNotificationIds.remove(idKey)
+            }
+            throw error
+        }
         print("🔥🔥🔥 DEBUG: [FIREBASE SAVE NOTIFICATION OK] org=\(organizationId) id=\(notification.id.uuidString) type=\(notification.type.rawValue) target=\(notification.userId ?? "broadcast")")
     }
     
@@ -6349,40 +6425,194 @@ class FirebaseBackend: ObservableObject {
 
         return notifications
     }
+
+    /// Applies `resolveInviteEmailClaim`. A non-empty `reuseUserId` is the leftover placeholder.
+    /// An allow with no reuse id is a new document. This does not decide who is blocked.
+    static func invitedUserDocumentId(
+        decision: CanonicalBusinessEngine.CanonicalInviteEmailClaimDecision,
+        generatedId: String
+    ) -> String {
+        let reuse = decision.reuseUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if decision.action == "allow", !reuse.isEmpty { return reuse }
+        return generatedId
+    }
+
+    /// The two fields the in-org Add User `users` query uses. Nil when either side is empty, so the query is not run.
+    struct InviteEmailUsersQuery: Equatable {
+        var organizationId: String
+        var email: String
+    }
+
+    static func inviteEmailUsersQuery(organizationId: String, email: String) -> InviteEmailUsersQuery? {
+        guard let lookup = CanonicalBusinessEngine.inviteEmailOrgLookupConstraints(
+            organizationId: organizationId,
+            email: email
+        ) else { return nil }
+        guard !lookup.organizationId.isEmpty, !lookup.email.isEmpty else { return nil }
+        return InviteEmailUsersQuery(organizationId: lookup.organizationId, email: lookup.email)
+    }
+
+    /// Collections `createUserInvitation` may write. Nil when the script did not run.
+    /// `operativeProfiles` is present only when `inviteWritesOperativeProfile` is true.
+    static func inviteWriteCollectionNames() -> [String]? {
+        guard let writesProfile = CanonicalBusinessEngine.inviteWritesOperativeProfile() else { return nil }
+        var names = ["invitations", "users", "userEmails"]
+        if writesProfile {
+            names.append("operativeProfiles")
+        }
+        return names
+    }
+
+    /// A typed Add User day rate, stored on `users/{uid}`. `hourlyRate` stays nil.
+    /// Nil when no rate was entered, or when the script did not allow that user-document write.
+    struct InviteUserRateFields: Equatable {
+        var payBasis: String
+        var dayRate: Double
+        var hourlyRate: Double?
+    }
+
+    static func inviteUserRateFields(dayRate: Double?) -> InviteUserRateFields? {
+        guard let dayRate else { return nil }
+        guard let collections = inviteWriteCollectionNames(),
+              collections.contains("users"),
+              collections.contains("operativeProfiles") == false else { return nil }
+        return InviteUserRateFields(payBasis: "day", dayRate: dayRate, hourlyRate: nil)
+    }
+
+    /// Loads `users` rows for this email and `organizations/{orgId}/userEmails/{email}`.
+    /// A failed `userEmails` read is a nil pointer, which the script treats as still claimed.
+    func inviteEmailClaimInput(
+        email: String,
+        organizationId: String
+    ) async throws -> CanonicalBusinessEngine.CanonicalInviteEmailClaimInput {
+        guard let lookup = Self.inviteEmailUsersQuery(organizationId: organizationId, email: email) else {
+            throw NSError(
+                domain: "UserCreationError",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organisation and email are required to invite a user."]
+            )
+        }
+        let emailLower = lookup.email
+        let orgId = lookup.organizationId
+        let existingDocs = try await db.collection("users")
+            .whereField("email", isEqualTo: emailLower)
+            .whereField("organizationId", isEqualTo: orgId)
+            .getDocuments(source: .server)
+        var existingUsers = existingDocs.documents.map { doc in
+            Self.inviteClaimUser(userId: doc.documentID, data: doc.data())
+        }
+        let pointerRef = db.collection("organizations").document(orgId).collection("userEmails").document(emailLower)
+        let pointerSnap: DocumentSnapshot?
+        do {
+            pointerSnap = try await pointerRef.getDocument(source: .server)
+        } catch {
+            print("🔥🔥🔥 DEBUG: userEmails read failed for \(emailLower) — claim check keeps pending invites")
+            pointerSnap = nil
+        }
+        let pointer: CanonicalBusinessEngine.CanonicalInviteEmailPointer?
+        if let pointerSnap {
+            let pointedId = (pointerSnap.data()?["userId"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var pointedUser: CanonicalBusinessEngine.CanonicalInviteEmailClaimUser?
+            if pointerSnap.exists, !pointedId.isEmpty {
+                let userSnap = try? await db.collection("users").document(pointedId).getDocument(source: .server)
+                if let userSnap, userSnap.exists, let data = userSnap.data() {
+                    pointedUser = Self.inviteClaimUser(userId: pointedId, data: data)
+                }
+            }
+            if let pointedUser, existingUsers.contains(where: { $0.userId == pointedUser.userId }) == false {
+                existingUsers.append(pointedUser)
+            }
+            pointer = CanonicalBusinessEngine.CanonicalInviteEmailPointer(
+                exists: pointerSnap.exists,
+                pointedUserId: pointedId.isEmpty ? nil : pointedId,
+                pointedUser: pointedUser
+            )
+        } else {
+            pointer = nil
+        }
+        return CanonicalBusinessEngine.CanonicalInviteEmailClaimInput(
+            inviteEmail: emailLower,
+            existingUsers: existingUsers,
+            emailPointer: pointer
+        )
+    }
+
+    /// Raw claim fields. Missing `passwordSet` stays nil; `parseAppUserDocument` still defaults that flag for the roster.
+    private static func inviteClaimUser(
+        userId: String,
+        data: [String: Any]
+    ) -> CanonicalBusinessEngine.CanonicalInviteEmailClaimUser {
+        func text(_ key: String) -> String {
+            (data[key] as? String) ?? ""
+        }
+        let mobile = text("mobileNumber")
+        return CanonicalBusinessEngine.CanonicalInviteEmailClaimUser(
+            userId: userId,
+            email: text("email"),
+            firstName: text("firstName"),
+            surname: text("surname"),
+            lastName: text("lastName").isEmpty ? nil : text("lastName"),
+            name: text("name"),
+            displayName: text("displayName"),
+            passwordSet: firestoreBool(data["passwordSet"]),
+            isActive: firestoreBool(data["isActive"]),
+            mobileNumber: mobile.isEmpty ? nil : mobile
+        )
+    }
     
     // MARK: - User Invitation
     
     func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
-        
-        let emailLower = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        // Check if user already exists in this organization (case-insensitive).
-        // Use server source so we don't treat a deleted user as still existing due to cache.
-        let existingUsersQuery = try await db.collection("users")
-            .whereField("email", isEqualTo: emailLower)
-            .whereField("organizationId", isEqualTo: organizationId)
-            .getDocuments(source: .server)
-        
-        if !existingUsersQuery.documents.isEmpty {
-            print("🔥🔥🔥 DEBUG: ❌ ERROR: User with email \(email) already exists in this organization")
-            // Check if it's the same user or a duplicate
-            for doc in existingUsersQuery.documents {
-                let data = doc.data()
-                let existingEmail = data["email"] as? String ?? ""
-                let existingFirstName = data["firstName"] as? String ?? ""
-                let existingSurname = data["surname"] as? String ?? ""
-                print("🔥🔥🔥 DEBUG: Found existing user document: \(doc.documentID), name: \(existingFirstName) \(existingSurname), email: \(existingEmail)")
-            }
-            // Throw error to prevent duplicate creation
+        guard let lookup = Self.inviteEmailUsersQuery(organizationId: organizationId, email: email) else {
             throw NSError(
                 domain: "UserCreationError",
-                code: 409, // Conflict
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organisation and email are required to invite a user."]
+            )
+        }
+        let organizationId = lookup.organizationId
+        let email = lookup.email
+
+        let claimInput = try await inviteEmailClaimInput(email: email, organizationId: organizationId)
+        let emailLower = claimInput.inviteEmail
+        guard let decision = CanonicalBusinessEngine.resolveInviteEmailClaim(claimInput) else {
+            throw NSError(
+                domain: "UserCreationError",
+                code: 503,
                 userInfo: [
-                    NSLocalizedDescriptionKey: "A user with the email address '\(email)' already exists in this organization. Each email address can only be used once per organization."
+                    NSLocalizedDescriptionKey: "Could not check whether \(email) is already in this organisation. Try again."
                 ]
             )
         }
-        
+        guard decision.action == "allow" else {
+            print("🔥🔥🔥 DEBUG: ❌ ERROR: Live email claim blocks \(email) action=\(decision.action)")
+            throw NSError(
+                domain: "UserCreationError",
+                code: decision.action == "block" ? 409 : 503,
+                userInfo: [
+                    NSLocalizedDescriptionKey: decision.action == "block"
+                        ? "A user with the email address '\(email)' already exists in this organization. Each email address can only be used once per organization."
+                        : "Could not check whether \(email) is already in this organisation. Try again."
+                ]
+            )
+        }
+        guard let inviteCollections = Self.inviteWriteCollectionNames() else {
+            throw NSError(
+                domain: "UserCreationError",
+                code: 503,
+                userInfo: [NSLocalizedDescriptionKey: "Could not check the invite placeholder. Try again."]
+            )
+        }
+        guard inviteCollections.contains("operativeProfiles") == false else {
+            throw NSError(
+                domain: "UserCreationError",
+                code: 500,
+                userInfo: [NSLocalizedDescriptionKey: "Invite rates belong on the user document."]
+            )
+        }
+
         // Create invitation document
         let invitationId = UUID().uuidString
         print("🔥🔥🔥 DEBUG: Generated invitation ID: \(invitationId)")
@@ -6435,11 +6665,13 @@ class FirebaseBackend: ObservableObject {
         if hasNoLineManager {
             invitationData["hasNoLineManager"] = true
         }
-        if permissions.operativeMode, let dr = invitedOperativeDayRate {
-            invitationData["dayRate"] = dr
+        if permissions.operativeMode, let fields = Self.inviteUserRateFields(dayRate: invitedOperativeDayRate) {
+            invitationData["payBasis"] = fields.payBasis
+            invitationData["dayRate"] = fields.dayRate
         }
-        if permissions.manager, let dr = invitedManagerDayRate {
-            invitationData["dayRate"] = dr
+        if permissions.manager, let fields = Self.inviteUserRateFields(dayRate: invitedManagerDayRate) {
+            invitationData["payBasis"] = fields.payBasis
+            invitationData["dayRate"] = fields.dayRate
         }
         if permissions.operativeMode || permissions.manager {
             let tp = invitedTradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -6487,11 +6719,33 @@ class FirebaseBackend: ObservableObject {
         
         print("🔥🔥🔥 DEBUG: Invitation document created successfully")
         
-        // Only create user document if they don't already exist
-        if existingUsersQuery.documents.isEmpty {
-            // Create user document immediately so they appear in manage users list
+        // Create user document immediately so they appear in manage users list
             // User will have passwordSet: false until they accept invitation
-            let userId = UUID().uuidString
+            let userId = Self.invitedUserDocumentId(decision: decision, generatedId: UUID().uuidString)
+            guard let requiresAge = CanonicalBusinessEngine.userCreateRequiresAgeConfirmation(
+                creatorUserId: invitedBy,
+                targetUserId: userId
+            ) else {
+                throw NSError(
+                    domain: "UserCreationError",
+                    code: 503,
+                    userInfo: [NSLocalizedDescriptionKey: "Could not check the invite placeholder. Try again."]
+                )
+            }
+            if requiresAge {
+                throw NSError(
+                    domain: "UserCreationError",
+                    code: 400,
+                    userInfo: [NSLocalizedDescriptionKey: "Invite placeholders must not use the self-create path."]
+                )
+            }
+            guard let placeholder = CanonicalBusinessEngine.invitePlaceholderUserWriteFields() else {
+                throw NSError(
+                    domain: "UserCreationError",
+                    code: 503,
+                    userInfo: [NSLocalizedDescriptionKey: "Could not check the invite placeholder. Try again."]
+                )
+            }
             // Determine role based on permissions
             var userRole: UserRole = .basic
             if permissions.adminAccess {
@@ -6519,10 +6773,11 @@ class FirebaseBackend: ObservableObject {
                 firstName: firstName,
                 surname: surname,
                 mobileNumber: mobileNumber,
-                isActive: true,
-                passwordSet: false, // Will be set to true when they accept invitation and set password
+                isActive: placeholder.isActive,
+                passwordSet: placeholder.passwordSet,
                 permissions: permissions, // Use the permissions from the invitation
-                isSuperAdmin: false,
+                isSuperAdmin: placeholder.isSuperAdmin,
+                policyAccepted: placeholder.policyAccepted,
                 assignedManagerUserId: operativeManagerId,
                 assignedManagerUserIds: resolvedManagerIds,
                 hasNoLineManager: hasNoLineManager,
@@ -6685,6 +6940,12 @@ class FirebaseBackend: ObservableObject {
                 print("🔥🔥🔥 DEBUG: Set userEmails claim for \(emailLower) -> \(userId)")
                 
                 try await saveUser(newUser)
+                if let fields = Self.inviteUserRateFields(dayRate: newUser.dayRate) {
+                    try await db.collection("users").document(userId).setData([
+                        "payBasis": fields.payBasis,
+                        "dayRate": fields.dayRate
+                    ], merge: true)
+                }
                 print("🔥🔥🔥 DEBUG: ✅ saveUser succeeded!")
                 print("🔥🔥🔥 DEBUG: ✅ User document saved successfully for invited user: \(email)")
                 print("🔥🔥🔥 DEBUG: User ID: \(userId)")
@@ -6708,48 +6969,6 @@ class FirebaseBackend: ObservableObject {
                 }
                 throw error
             }
-        } else {
-            print("🔥🔥🔥 DEBUG: User already exists - updating existing user with new invitation info if needed")
-            // Optionally update the existing user's permissions if they changed
-            if let existingDoc = existingUsersQuery.documents.first {
-                let existingUserId = existingDoc.documentID
-                
-                // Update user with latest invitation info (permissions, etc.)
-                var updateData: [String: Any] = [
-                    "firstName": firstName,
-                    "surname": surname,
-                    "employmentType": employmentType.rawValue,
-                    "adminAccess": permissions.adminAccess,
-                    "manager": permissions.manager,
-                    "operatives": permissions.operatives,
-                    "skills": false,
-                    "qualifications": permissions.qualifications,
-                    "materials": permissions.materials,
-                    "projects": permissions.projects,
-                    "smallWorks": permissions.smallWorks,
-                    "operativeMode": permissions.operativeMode,
-                    "annualLeaveSelfBook": permissions.annualLeaveSelfBook,
-                    "weeklyReports": permissions.weeklyReports,
-                    "dailyOverview": permissions.dailyOverview,
-                    "subContractors": permissions.subContractors,
-                    "siteAudit": permissions.siteAudit,
-                    "wholesalersOrderHistory": permissions.wholesalersOrderHistory
-                ]
-                
-                if permissions.operativeMode, let mid = assignedManagerUserId, !mid.isEmpty {
-                    updateData["assignedManagerUserId"] = mid
-                } else {
-                    updateData["assignedManagerUserId"] = FieldValue.delete()
-                }
-                
-                if let mobileNumber = mobileNumber, !mobileNumber.isEmpty {
-                    updateData["mobileNumber"] = mobileNumber
-                }
-                
-                try await db.collection("users").document(existingUserId).updateData(updateData)
-                print("🔥🔥🔥 DEBUG: ✅ Updated existing user with new invitation data")
-            }
-        }
         
         // Send invitation email
         await sendInvitationEmail(email: email, firstName: firstName, surname: surname, invitationId: invitationId)
@@ -6758,14 +6977,16 @@ class FirebaseBackend: ObservableObject {
     func sendInvitationEmail(email: String, firstName: String, surname: String, invitationId: String) async {
         print("🔥🔥🔥 DEBUG: Sending invitation email to: \(email)")
         
-        let fromName = currentOrganization?.name
+        let organizationName = CanonicalBusinessEngine.parseOrganizationName(
+            Organization.nameParsePayload(from: ["name": currentOrganization?.name ?? ""])
+        ) ?? ""
         let resendService = ResendEmailService()
         let success = await resendService.sendPasswordSetupEmail(
             to: email,
             firstName: firstName,
             surname: surname,
             invitationCode: invitationId,
-            fromName: fromName
+            fromName: organizationName.isEmpty ? nil : organizationName
         )
         
         if success {
@@ -6773,11 +6994,18 @@ class FirebaseBackend: ObservableObject {
         } else {
             print("🔥🔥🔥 DEBUG: ❌ Failed to send invitation email to: \(email)")
             // Fallback to plain text email via EmailService
+            let displayFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let helloName = displayFirst.isEmpty ? "there" : displayFirst
+            let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hello = trimmedSurname.isEmpty ? helloName : "\(helloName) \(trimmedSurname)"
+            let invitedLine = organizationName.isEmpty
+                ? "You have been invited to join the Project Planner system."
+                : "\(organizationName) has invited you to join them on Project Planner."
             let subject = "Welcome to Project Planner - Set Up Your Account"
             let body = """
-            Hello \(firstName) \(surname),
+            Hello \(hello),
             
-            You have been invited to join the Project Planner system.
+            \(invitedLine)
             
             To set up your account and create your password, please visit:
             https://www.projectplanner.us/setup-password.html?token=\(invitationId)
@@ -6902,12 +7130,72 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Booking saved successfully to Firebase")
     }
     
-    func loadBookings(organizationId: String) async throws -> [Booking] {
+    /// Earlier of the warning-scan start and the current week. Launch does not subscribe to older bookings.
+    func launchScheduleLowerBound(now: Date = Date()) -> Date {
+        let detection = currentOrganization?.settings.warningDetection ?? .default
+        let invoicing = currentOrganization?.settings.invoicing ?? .default
+        let bounds = CanonicalBusinessEngine.warningBounds(
+            detection: detection,
+            invoicing: invoicing,
+            reference: now
+        )
+        let week = WeekRange.from(start: now)
+        return LaunchStartupPolicy.launchBookingLowerBound(warningStart: bounds.start, weekStart: week.start)
+    }
+
+    func prepareLaunchScheduleQueryIfNeeded(now: Date = Date()) {
+        guard !scheduleHistoryIsFull, scheduleHistoryStart == nil else { return }
+        scheduleHistoryStart = launchScheduleLowerBound(now: now)
+    }
+
+    /// True when the listener bound moved earlier and stores should reload.
+    @discardableResult
+    func noteScheduleNeedsDate(_ date: Date) -> Bool {
+        if scheduleHistoryIsFull { return false }
+        prepareLaunchScheduleQueryIfNeeded()
+        guard let current = scheduleHistoryStart else { return false }
+        let day = Calendar.current.startOfDay(for: date)
+        guard day < current else { return false }
+        scheduleHistoryStart = day
+        return true
+    }
+
+    /// Weekly report, invoicing, and a project week outside the launch window ask for the archive.
+    @discardableResult
+    func noteScheduleNeedsFullHistory() -> Bool {
+        guard !scheduleHistoryIsFull else { return false }
+        scheduleHistoryIsFull = true
+        scheduleHistoryStart = nil
+        return true
+    }
+
+    func scheduleBookingQueryStart() -> Date? {
+        scheduleHistoryIsFull ? nil : scheduleHistoryStart
+    }
+
+    func loadBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [Booking] {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
-        let bookingsRef = db.collection("organizations").document(orgId).collection("bookings")
-        let snapshot = try await getDocumentsPreferringServer(bookingsRef)
+        var bookingsQuery: Query = db.collection("organizations").document(orgId).collection("bookings")
+        if let start {
+            bookingsQuery = bookingsQuery.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
+        }
+        let snapshot = try await getQueryPreferringServer(bookingsQuery)
         
         return snapshot.documents.compactMap { bookingFromFirestoreDocument($0) }
+    }
+
+    private func getQueryPreferringServer(_ query: Query) async throws -> QuerySnapshot {
+        do {
+            return try await Self.readCollectionFromServer(query, timeoutSeconds: 8)
+        } catch {
+            let timedOut = error is ServerReadTimeoutError
+            guard timedOut || isFirestorePermissionDenied(error) || isOfflineNetworkError(error) else { throw error }
+            let cached = try await query.getDocuments(source: .cache)
+            if cached.documents.isEmpty {
+                throw error
+            }
+            return cached
+        }
     }
 
     func bookingFromFirestoreDocument(_ doc: QueryDocumentSnapshot) -> Booking? {
@@ -6960,11 +7248,25 @@ class FirebaseBackend: ObservableObject {
             )
     }
 
-    func listenBookings(organizationId: String, onChange: @escaping (_ bookings: [Booking], _ fromCache: Bool) -> Void) {
-        bookingsLiveListener?.remove()
+    func listenBookings(
+        organizationId: String,
+        startingOn start: Date? = nil,
+        onChange: @escaping (_ bookings: [Booking], _ fromCache: Bool) -> Void
+    ) {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
-        bookingsLiveListener = db.collection("organizations").document(orgId).collection("bookings")
+        let target = "bookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)"
+        guard LaunchStartupPolicy.shouldAttachListener(
+            activeTarget: bookingsLiveListenerTarget,
+            requestedTarget: target
+        ) else { return }
+        bookingsLiveListener?.remove()
+        bookingsLiveListenerTarget = target
+        var bookingsQuery: Query = db.collection("organizations").document(orgId).collection("bookings")
+        if let start {
+            bookingsQuery = bookingsQuery.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
+        }
+        bookingsLiveListener = bookingsQuery
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error {
                     print("🔥🔥🔥 DEBUG: bookings live listener error: \(error.localizedDescription)")
@@ -7036,8 +7338,12 @@ class FirebaseBackend: ObservableObject {
         try await db.collection("organizations").document(organizationId).collection("managerSiteBookings").document(booking.id.uuidString).setData(data, merge: true)
     }
 
-    func loadManagerSiteBookings(organizationId: String) async throws -> [ManagerSiteBooking] {
-        let snapshot = try await db.collection("organizations").document(organizationId).collection("managerSiteBookings").getDocuments()
+    func loadManagerSiteBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [ManagerSiteBooking] {
+        var query: Query = db.collection("organizations").document(organizationId).collection("managerSiteBookings")
+        if let start {
+            query = query.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
+        }
+        let snapshot = try await getQueryPreferringServer(query)
         return snapshot.documents.compactMap { managerSiteBookingFromFirestoreDocument($0) }
     }
 
@@ -7075,11 +7381,25 @@ class FirebaseBackend: ObservableObject {
         )
     }
 
-    func listenManagerSiteBookings(organizationId: String, onChange: @escaping ([ManagerSiteBooking]) -> Void) {
-        managerScheduleLiveListener?.remove()
+    func listenManagerSiteBookings(
+        organizationId: String,
+        startingOn start: Date? = nil,
+        onChange: @escaping ([ManagerSiteBooking]) -> Void
+    ) {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
-        managerScheduleLiveListener = db.collection("organizations").document(orgId).collection("managerSiteBookings")
+        let target = "managerSiteBookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)"
+        guard LaunchStartupPolicy.shouldAttachListener(
+            activeTarget: managerScheduleLiveListenerTarget,
+            requestedTarget: target
+        ) else { return }
+        managerScheduleLiveListener?.remove()
+        managerScheduleLiveListenerTarget = target
+        var query: Query = db.collection("organizations").document(orgId).collection("managerSiteBookings")
+        if let start {
+            query = query.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
+        }
+        managerScheduleLiveListener = query
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error {
                     print("🔥🔥🔥 DEBUG: manager schedule live listener error: \(error.localizedDescription)")
@@ -9344,14 +9664,16 @@ extension FirebaseBackend {
             let subject = isQuote
                 ? MaterialRequestEmailBuilder.quoteSubject(jobNumber: request.projectNumber, company: company)
                 : MaterialRequestEmailBuilder.orderSubject(jobNumber: request.projectNumber, company: company)
+            let replyTo = ExportTextEscaping.sanitizeReplyToAddress(senderEmail)
+            let fromName = ExportTextEscaping.sanitizeFromDisplayName("\(senderName) (via Project Planner)")
 
             let emailService = ResendEmailService()
             let success = await emailService.sendEmail(
                 to: contact.email,
                 subject: subject,
                 htmlContent: emailBody,
-                replyTo: senderEmail,
-                fromName: "\(senderName) (via Project Planner)"
+                replyTo: replyTo,
+                fromName: fromName
             )
 
             if success {
@@ -9361,10 +9683,10 @@ extension FirebaseBackend {
                 if !copyAddress.isEmpty {
                     let copied = await emailService.sendEmail(
                         to: copyAddress,
-                        subject: "Copy: \(subject)",
+                        subject: ExportTextEscaping.sanitizeEmailSubject("Copy: \(subject)"),
                         htmlContent: emailBody,
-                        replyTo: senderEmail,
-                        fromName: "\(senderName) (via Project Planner)"
+                        replyTo: replyTo,
+                        fromName: fromName
                     )
                     if !copied {
                         print("🔥🔥🔥 DEBUG: [materials/send] user copy failed for \(copyAddress)")

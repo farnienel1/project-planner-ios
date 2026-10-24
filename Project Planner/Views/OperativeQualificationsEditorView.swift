@@ -24,20 +24,20 @@ struct OperativeQualificationsEditorView: View {
     var usesOwnNavigationStack: Bool = true
 
     @State private var selectedQualifications: Set<Qualification>
-    @State private var qualificationExpiryDates: [UUID: Date]
-    @State private var qualificationCertificateURLs: [UUID: String]
+    @State private var qualificationExpiryDates: [String: Date]
+    @State private var qualificationCertificateURLs: [String: String]
     /// Local temp copies of security-scoped picks, ready to upload on Save.
-    @State private var certificateUploadTargets: [UUID: URL] = [:]
+    @State private var certificateUploadTargets: [String: URL] = [:]
     /// Kept separate from the importer presented flag so dismissing the picker cannot clear the target id before the result arrives.
-    @State private var pendingUploadQualificationId: UUID?
+    @State private var pendingUploadQualificationId: String?
     @State private var showingCertificateImporter = false
     @State private var certificateViewerURL: IdentifiableURL?
     @State private var isSaving = false
     @State private var errorMessage: String?
 
     @State private var baselineQualifications: Set<Qualification>
-    @State private var baselineExpiry: [UUID: Date]
-    @State private var baselineCerts: [UUID: String]
+    @State private var baselineExpiry: [String: Date]
+    @State private var baselineCerts: [String: String]
 
     @State private var showingAssignQualificationsPicker = false
     @State private var showingListFilters = false
@@ -78,7 +78,7 @@ struct OperativeQualificationsEditorView: View {
         return false
     }
 
-    private func expiryMapsMatch(_ lhs: [UUID: Date], _ rhs: [UUID: Date]) -> Bool {
+    private func expiryMapsMatch(_ lhs: [String: Date], _ rhs: [String: Date]) -> Bool {
         guard lhs.keys == rhs.keys else { return false }
         let cal = Calendar.current
         return lhs.allSatisfy { id, date in
@@ -419,7 +419,7 @@ struct OperativeQualificationsEditorView: View {
                     Text("Tap Save to store this certificate on your qualifications.")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                } else if let existingURLString = qualificationCertificateURLs[qualification.id],
+                } else if let existingURLString = certificateURL(for: qualification.id),
                           !existingURLString.isEmpty {
                     HStack(spacing: 12) {
                         Text("Certificate uploaded")
@@ -441,7 +441,7 @@ struct OperativeQualificationsEditorView: View {
                         .foregroundColor(.secondary)
                 }
 
-                if qualificationCertificateURLs[qualification.id] != nil || certificateUploadTargets[qualification.id] != nil {
+                if certificateURL(for: qualification.id) != nil || certificateUploadTargets[qualification.id] != nil {
                     Button("Remove Certificate") {
                         qualificationCertificateURLs.removeValue(forKey: qualification.id)
                         certificateUploadTargets.removeValue(forKey: qualification.id)
@@ -603,7 +603,7 @@ struct OperativeQualificationsEditorView: View {
     @discardableResult
     private func saveChanges(
         dismissAfterSave: Bool,
-        mergeAdditions: (Set<Qualification>, [UUID: Date], [UUID: URL])?
+        mergeAdditions: (Set<Qualification>, [String: Date], [String: URL])?
     ) async -> Bool {
         guard canEditAssignments else { return false }
         guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
@@ -613,8 +613,8 @@ struct OperativeQualificationsEditorView: View {
 
         let mergeRollback: (
             quals: Set<Qualification>,
-            expiry: [UUID: Date],
-            pending: [UUID: URL]
+            expiry: [String: Date],
+            pending: [String: URL]
         )?
         if let mergeAdditions {
             let (added, newExpiries, newPending) = mergeAdditions
@@ -634,53 +634,130 @@ struct OperativeQualificationsEditorView: View {
         errorMessage = nil
         defer { isSaving = false }
 
-        var updatedCertificateURLs = qualificationCertificateURLs
-
-        for (qualificationId, fileURL) in certificateUploadTargets {
-            do {
-                let data = try Data(contentsOf: fileURL)
-                let kind = try Self.detectCertificateKind(data: data, pathExtension: fileURL.pathExtension)
-                let uploadedURL = try await firebaseBackend.uploadQualificationDocument(
-                    data: data,
-                    organizationId: organizationId,
-                    operativeId: operative.id,
-                    qualificationId: qualificationId,
-                    fileName: fileURL.lastPathComponent,
-                    contentType: kind.contentType
-                )
-                updatedCertificateURLs[qualificationId] = uploadedURL
-            } catch {
-                errorMessage = "Upload failed for one of the certificates: \(error.localizedDescription)"
-                if let mergeRollback {
-                    selectedQualifications = mergeRollback.quals
-                    qualificationExpiryDates = mergeRollback.expiry
-                    certificateUploadTargets = mergeRollback.pending
-                }
-                return false
-            }
-        }
-
-        var updatedOperative = operativeStore.allOperatives.first(where: { $0.id == operative.id }) ?? operative
-        updatedOperative.qualifications = selectedQualifications
-        updatedOperative.qualificationExpiryDates = qualificationExpiryDates.filter { entry in
+        let stored = operativeStore.allOperatives.first(where: { $0.id == operative.id }) ?? operative
+        let editorExpiry = qualificationExpiryDates.filter { entry in
             selectedQualifications.contains(where: { $0.id == entry.key })
         }.mapValues { Calendar.current.startOfDay(for: $0) }
-        updatedOperative.qualificationCertificateURLs = updatedCertificateURLs.filter { entry in
-            selectedQualifications.contains(where: { $0.id == entry.key })
+        guard let assignment = OperativeQualificationPatch.mergedWrite(
+            stored: OperativeQualificationPatch.Maps(
+                qualifications: Array(stored.qualifications),
+                expiryDates: stored.qualificationExpiryDates,
+                certificateURLs: stored.qualificationCertificateURLs
+            ),
+            baselineIds: Set(baselineQualifications.map(\.id)),
+            editor: OperativeQualificationPatch.Maps(
+                qualifications: Array(selectedQualifications),
+                expiryDates: editorExpiry,
+                certificateURLs: qualificationCertificateURLs
+            )
+        ) else {
+            errorMessage = "Could not save qualifications."
+            if let mergeRollback {
+                selectedQualifications = mergeRollback.quals
+                qualificationExpiryDates = mergeRollback.expiry
+                certificateUploadTargets = mergeRollback.pending
+            }
+            return false
         }
+
+        let savedQualifications = OperativeQualificationPatch.qualifications(
+            from: assignment.qualifications,
+            preferring: Array(selectedQualifications) + Array(stored.qualifications)
+        )
+        let savedExpiry = OperativeQualificationPatch.expiryDates(from: assignment.qualificationExpiryDates)
+        var savedCertificates = assignment.qualificationCertificateURLs
+
+        do {
+            try await firebaseBackend.patchOperativeQualificationMaps(
+                operativeId: operative.id,
+                organizationId: organizationId,
+                write: assignment
+            )
+        } catch {
+            errorMessage = "Could not save qualifications. \(error.localizedDescription)"
+            if let mergeRollback {
+                selectedQualifications = mergeRollback.quals
+                qualificationExpiryDates = mergeRollback.expiry
+                certificateUploadTargets = mergeRollback.pending
+            }
+            return false
+        }
+
+        var updatedOperative = stored
+        updatedOperative.qualifications = Set(savedQualifications)
+        updatedOperative.qualificationExpiryDates = savedExpiry
+        updatedOperative.qualificationCertificateURLs = savedCertificates
         updatedOperative.updatedAt = Date()
+        operativeStore.replaceOperativeInMemory(updatedOperative)
+        selectedQualifications = Set(savedQualifications)
+        qualificationExpiryDates = savedExpiry
+        qualificationCertificateURLs = savedCertificates
 
-        await operativeStore.updateOperative(updatedOperative)
+        if !certificateUploadTargets.isEmpty {
+            var uploaded: [String: String] = [:]
+            do {
+                for (qualificationId, fileURL) in certificateUploadTargets {
+                    let data = try Data(contentsOf: fileURL)
+                    let kind = try Self.detectCertificateKind(data: data, pathExtension: fileURL.pathExtension)
+                    let uploadedURL = try await firebaseBackend.uploadQualificationDocument(
+                        data: data,
+                        organizationId: organizationId,
+                        operativeId: operative.id,
+                        qualificationId: qualificationId,
+                        fileName: "certificate.\(kind.pathExtension)",
+                        contentType: kind.contentType
+                    )
+                    uploaded[qualificationId] = uploadedURL
+                }
+            } catch {
+                errorMessage = "Upload failed for one of the certificates: \(error.localizedDescription)"
+                syncBaselineFromWorkingState()
+                await notificationService.refreshQualificationExpiryReminders()
+                return false
+            }
 
-        qualificationCertificateURLs = updatedOperative.qualificationCertificateURLs
+            guard let mergedURLs = CanonicalBusinessEngine.mergeQualificationCertificateUrls(
+                existing: savedCertificates,
+                uploaded: uploaded
+            ) else {
+                errorMessage = "Could not save the certificate."
+                syncBaselineFromWorkingState()
+                return false
+            }
+            savedCertificates = mergedURLs
+            var withCertificates = assignment
+            withCertificates.qualificationCertificateURLs = mergedURLs
+            do {
+                try await firebaseBackend.patchOperativeQualificationMaps(
+                    operativeId: operative.id,
+                    organizationId: organizationId,
+                    write: withCertificates
+                )
+            } catch {
+                errorMessage = "Could not save the certificate. \(error.localizedDescription)"
+                syncBaselineFromWorkingState()
+                return false
+            }
+            updatedOperative.qualificationCertificateURLs = mergedURLs
+            updatedOperative.updatedAt = Date()
+            operativeStore.replaceOperativeInMemory(updatedOperative)
+            qualificationCertificateURLs = mergedURLs
+        }
+
         certificateUploadTargets = [:]
         syncBaselineFromWorkingState()
-
         await notificationService.refreshQualificationExpiryReminders()
 
         if dismissAfterSave {
             dismiss()
         }
         return true
+    }
+
+    private func certificateURL(for qualificationId: String) -> String? {
+        CanonicalBusinessEngine.qualificationCertificateUrl(
+            urls: qualificationCertificateURLs,
+            qualificationId: qualificationId
+        )
     }
 }

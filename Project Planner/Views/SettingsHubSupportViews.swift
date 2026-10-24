@@ -117,8 +117,15 @@ struct SettingsProfileDetailView: View {
     @State private var profilePhotoUploadMessage: String?
     @State private var vatNumberDraft = ""
     @State private var utrNumberDraft = ""
+    @State private var baselineVat = ""
+    @State private var baselineUtr = ""
     @State private var isSavingBillingDetails = false
     @State private var billingSaveMessage: String?
+    @Environment(\.dismiss) private var dismiss
+
+    private var isDirty: Bool {
+        vatNumberDraft != baselineVat || utrNumberDraft != baselineUtr
+    }
 
     private var displayName: String {
         if let u = userStore.currentUser {
@@ -137,6 +144,16 @@ struct SettingsProfileDetailView: View {
             .navigationTitle("My profile")
             .navigationBarTitleDisplayMode(.inline)
             .appChromeNavigationBarSurface()
+            .safeAreaInset(edge: .bottom) {
+                SettingsStickySaveBar(isDirty: isDirty, isSaving: isSavingBillingDetails) {
+                    Task { await saveBillingDetails() }
+                }
+            }
+            .settingsUnsavedLeave(isDirty: isDirty) {
+                vatNumberDraft = baselineVat
+                utrNumberDraft = baselineUtr
+                dismiss()
+            }
             .modifier(SettingsProfileSheetsModifier(
                 showingManualLinkSheet: $showingManualLinkSheet,
                 manualLinkOrganizationId: $manualLinkOrganizationId,
@@ -153,15 +170,11 @@ struct SettingsProfileDetailView: View {
                 }
             ))
             .onAppear(perform: syncBillingDraftsFromUser)
-            .onChange(of: userStore.currentUser?.vatNumber) { _, newValue in
-                if !isSavingBillingDetails {
-                    vatNumberDraft = newValue ?? ""
-                }
+            .onChange(of: userStore.currentUser?.vatNumber) { _, _ in
+                syncBillingDraftsFromUser()
             }
-            .onChange(of: userStore.currentUser?.utrNumber) { _, newValue in
-                if !isSavingBillingDetails {
-                    utrNumberDraft = newValue ?? ""
-                }
+            .onChange(of: userStore.currentUser?.utrNumber) { _, _ in
+                syncBillingDraftsFromUser()
             }
     }
 
@@ -203,7 +216,10 @@ struct SettingsProfileDetailView: View {
                         SettingsHubChrome.divider()
                     }
                     if let org = firebaseBackend.currentOrganization {
-                        profileValueRow("Organisation", org.name)
+                        profileValueRow(
+                            "Organisation",
+                            CanonicalBusinessEngine.displayOrganizationName(org.name) ?? org.name
+                        )
                     } else {
                         profileValueRow("Organisation", "Not linked", valueColor: ProjectWorksRevampColors.requiredPillFg)
                     }
@@ -232,20 +248,6 @@ struct SettingsProfileDetailView: View {
                             .autocorrectionDisabled()
                             .font(.system(size: 13, weight: .medium))
                         SettingsHubChrome.divider()
-                        Button {
-                            Task { await saveBillingDetails() }
-                        } label: {
-                            HStack {
-                                if isSavingBillingDetails { ProgressView().scaleEffect(0.85) }
-                                Text(isSavingBillingDetails ? "Saving…" : "Save billing details")
-                                    .font(.system(size: 13, weight: .semibold))
-                            }
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
-                            .padding(.vertical, 12)
-                        }
-                        .accessibilityIdentifier("settingsProfileDetail.saving")
-                        .disabled(isSavingBillingDetails)
-                        .buttonStyle(.plain)
                         if let billingSaveMessage {
                             Text(billingSaveMessage)
                                 .font(.system(size: 11))
@@ -289,8 +291,13 @@ struct SettingsProfileDetailView: View {
     }
 
     private func syncBillingDraftsFromUser() {
-        vatNumberDraft = userStore.currentUser?.vatNumber ?? ""
-        utrNumberDraft = userStore.currentUser?.utrNumber ?? ""
+        guard !isDirty, !isSavingBillingDetails else { return }
+        let vat = userStore.currentUser?.vatNumber ?? ""
+        let utr = userStore.currentUser?.utrNumber ?? ""
+        vatNumberDraft = vat
+        utrNumberDraft = utr
+        baselineVat = vat
+        baselineUtr = utr
     }
 
     @ViewBuilder
@@ -339,6 +346,12 @@ struct SettingsProfileDetailView: View {
         )
         await MainActor.run {
             isSavingBillingDetails = false
+            if ok {
+                baselineVat = vat
+                baselineUtr = utr
+                vatNumberDraft = vat
+                utrNumberDraft = utr
+            }
             billingSaveMessage = ok ? "Billing details saved." : (userStore.errorMessage ?? "Could not save billing details.")
         }
     }
@@ -378,21 +391,27 @@ struct SettingsNotificationsHubView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var userStore: UserStore
+    @Environment(\.dismiss) private var dismiss
     let canConfigureMaterialCutOff: Bool
 
-    private var visibleToggles: [UserNotificationToggle] {
-        guard let user = userStore.currentUser else { return [] }
-        return UserNotificationToggle.visible(for: user).filter { key in
-            if key == .materialOrderCutOff { return canConfigureMaterialCutOff }
-            return true
-        }
+    @State private var draft = NotificationSettings()
+    @State private var baseline = NotificationSettings()
+    @State private var isSaving = false
+    @State private var didLoad = false
+
+    private var isDirty: Bool { didLoad && draft != baseline }
+
+    private var preferenceKeys: [String] {
+        _ = canConfigureMaterialCutOff
+        guard let audience = userStore.notificationPreferenceAudience() else { return [] }
+        return CanonicalBusinessEngine.visibleNotificationPreferenceKeys(audience) ?? []
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 SettingsHubChrome.sectionTitle("Notifications")
-                if visibleToggles.isEmpty {
+                if preferenceKeys.isEmpty {
                     SettingsHubChrome.card {
                         Text("Notification options for this account are managed by your organisation.")
                             .font(.system(size: 13))
@@ -401,30 +420,30 @@ struct SettingsNotificationsHubView: View {
                     }
                 } else {
                     SettingsHubChrome.card {
-                        ForEach(Array(visibleToggles.enumerated()), id: \.element.id) { index, key in
+                        ForEach(Array(preferenceKeys.enumerated()), id: \.element) { index, key in
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(key.title)
+                                    Text(preferenceCopy(for: key).title)
                                         .font(.system(size: 13, weight: .medium))
                                         .foregroundStyle(ProjectWorksRevampColors.ink)
-                                    Text(key.subtitle)
+                                    Text(preferenceCopy(for: key).subtitle)
                                         .font(.system(size: 11))
                                         .foregroundStyle(ProjectWorksRevampColors.muted)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                                 Spacer(minLength: 8)
                                 Toggle("", isOn: Binding(
-                                    get: { appSettings.settings.notifications.isEnabled(key) },
+                                    get: { draft.canonicalPreferenceIsOn(key) },
                                     set: { enabled in
-                                        Task { await updateToggle(key, enabled: enabled) }
+                                        draft.setCanonicalPreference(key, enabled: enabled)
                                     }
                                 ))
-                                .accessibilityIdentifier("settingsNotificationsHub.row.\(key.id).toggle")
+                                .accessibilityIdentifier("settingsNotificationsHub.row.\(key).toggle")
                                 .labelsHidden()
                                 .tint(ProjectWorksRevampColors.blue)
                             }
                             .padding(.vertical, 11)
-                            if index < visibleToggles.count - 1 {
+                            if index < preferenceKeys.count - 1 {
                                 SettingsHubChrome.divider()
                             }
                         }
@@ -438,17 +457,59 @@ struct SettingsNotificationsHubView: View {
         .navigationTitle("My notifications")
         .navigationBarTitleDisplayMode(.inline)
         .appChromeNavigationBarSurface()
+        .safeAreaInset(edge: .bottom) {
+            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+                Task { await save() }
+            }
+        }
+        .settingsUnsavedLeave(isDirty: isDirty) {
+            draft = baseline
+            dismiss()
+        }
+        .onAppear(perform: loadDraft)
     }
 
-    private func updateToggle(_ key: UserNotificationToggle, enabled: Bool) async {
-        var updated = appSettings.settings.notifications
-        updated.set(key, enabled: enabled)
-        await appSettings.updateNotifications(updated)
-        if key == .materialOrderCutOff {
+    private func loadDraft() {
+        guard !didLoad else { return }
+        draft = appSettings.settings.notifications
+        baseline = draft
+        didLoad = true
+    }
+
+    private func save() async {
+        guard !isSaving else { return }
+        isSaving = true
+        defer { isSaving = false }
+        let previous = baseline
+        await appSettings.updateNotifications(draft, changedKeys: changedVisiblePreferences())
+        if previous.canonicalPreferenceIsOn("materialOrderCutOff") != draft.canonicalPreferenceIsOn("materialOrderCutOff") {
             await notificationService.refreshDailyMaterialCutOffReminder()
         }
-        if key == .qualificationExpiry {
+        if previous.canonicalPreferenceIsOn("qualificationExpiry") != draft.canonicalPreferenceIsOn("qualificationExpiry") {
             await notificationService.refreshQualificationExpiryReminders()
         }
+        if previous.canonicalPreferenceIsOn("timesheetSubmissionReminder") != draft.canonicalPreferenceIsOn("timesheetSubmissionReminder") {
+            await notificationService.refreshTimesheetSubmissionReminders()
+        }
+        baseline = draft
+    }
+
+    /// Visible keys whose draft differs from the loaded values. Hidden keys are not in this patch.
+    private func changedVisiblePreferences() -> [String: Bool] {
+        var patch: [String: Bool] = [:]
+        for key in preferenceKeys where draft.canonicalPreferenceIsOn(key) != baseline.canonicalPreferenceIsOn(key) {
+            patch[key] = draft.canonicalPreferenceIsOn(key)
+        }
+        return patch
+    }
+
+    private func preferenceCopy(for key: String) -> (title: String, subtitle: String) {
+        guard let copy = CanonicalBusinessEngine.notificationPreferenceCopy(
+            key,
+            audience: userStore.notificationPreferenceAudience()
+        ), !copy.label.isEmpty else {
+            return (key, "")
+        }
+        return (copy.label, copy.description)
     }
 }

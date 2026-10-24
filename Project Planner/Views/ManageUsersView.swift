@@ -45,6 +45,14 @@ struct ManageUsersView: View {
     private var needsProfileBeforeManageUsersGate: Bool {
         Auth.auth().currentUser != nil && userStore.currentUser == nil
     }
+
+    private func openPendingUserEdit() {
+        guard let userId = WorkCatalogueDeepLink.pendingEditUserId else { return }
+        guard let user = userStore.organizationUsers.first(where: { $0.id == userId })
+                ?? (userStore.currentUser?.id == userId ? userStore.currentUser : nil) else { return }
+        WorkCatalogueDeepLink.pendingEditUserId = nil
+        selectedUser = user
+    }
     
     var body: some View {
         NavigationStack {
@@ -109,6 +117,13 @@ struct ManageUsersView: View {
             .sheet(isPresented: $showingAddUser) {
                 AddUserView(mode: .admin)
                     .environmentObject(userStore)
+                    .environmentObject(firebaseBackend)
+            }
+            .onAppear {
+                openPendingUserEdit()
+            }
+            .onChange(of: userStore.organizationUsers.count) { _, _ in
+                openPendingUserEdit()
             }
             .sheet(item: $selectedUser) { user in
                 NavigationStack {
@@ -500,14 +515,23 @@ struct ManageUsersView: View {
 
     private var filteredUsers: [AppUser] {
         let tab = userStore.canManageUsers() ? selectedTab : 2
-        var users = usersForRoleTab(tab).filter { rosterSegment.matches($0) }
+        var users = rosterListed(usersForRoleTab(tab), segment: rosterSegment)
         users = users.filter { ManageOperativesSearch.matches(user: $0, query: searchText) }
         return ManageOperativesSearch.sorted(users, query: searchText)
     }
 
     private func rosterCount(for segment: UserRosterSegment) -> Int {
         let tab = userStore.canManageUsers() ? selectedTab : 2
-        return usersForRoleTab(tab).filter { segment.matches($0) }.count
+        return rosterListed(usersForRoleTab(tab), segment: segment).count
+    }
+
+    /// People on this tab. The claim set is `organizations/{orgId}/userEmails` document ids.
+    private func rosterListed(_ users: [AppUser], segment: UserRosterSegment) -> [AppUser] {
+        let listed = CanonicalBusinessEngine.listedRosterUsers(
+            users,
+            claimedEmails: userStore.organizationUserEmailClaims
+        ) ?? []
+        return listed.filter { CanonicalBusinessEngine.rosterSegment($0) == segment.canonicalSegment }
     }
     
     // MARK: - Access Denied (non-admins)
@@ -606,9 +630,10 @@ struct ManageUsersView: View {
     // MARK: - Filtered Lists
     
     private var adminsList: some View {
-        let admins = userStore.organizationUsers.filter { user in
-            user.appearsOnAdminsList && rosterSegment.matches(user)
-        }
+        let admins = rosterListed(
+            userStore.organizationUsers.filter(\.appearsOnAdminsList),
+            segment: rosterSegment
+        )
         return List {
             ForEach(admins) { user in
                 ManageUserRowView(user: user, showAdminBadge: false) {
@@ -633,9 +658,10 @@ struct ManageUsersView: View {
     }
     
     private var managersList: some View {
-        let managers = userStore.organizationUsers.filter { user in
-            user.appearsOnManagersList && rosterSegment.matches(user)
-        }
+        let managers = rosterListed(
+            userStore.organizationUsers.filter(\.appearsOnManagersList),
+            segment: rosterSegment
+        )
         return List {
             ForEach(managers) { user in
                 ManageUserRowView(user: user, showAdminBadge: user.permissions.adminAccess || user.isSuperAdmin) {
@@ -660,9 +686,10 @@ struct ManageUsersView: View {
     }
     
     private var operativesList: some View {
-        let operatives = userStore.organizationUsers.filter { user in
-            user.appearsOnOperativesList && rosterSegment.matches(user)
-        }
+        let operatives = rosterListed(
+            userStore.organizationUsers.filter(\.appearsOnOperativesList),
+            segment: rosterSegment
+        )
         return List {
             ForEach(operatives) { user in
                 ManageUserRowView(user: user, showAdminBadge: false) {
@@ -916,12 +943,12 @@ struct ManageUserRowView: View {
         if let trade = tradeBadgeLabel {
             items.append(.init(label: trade, foreground: ManageUserProfilePalette.textSecondary, background: ProjectWorksRevampColors.grayTint, border: ProjectWorksRevampColors.searchBorder))
         }
-        if !user.isActive && user.passwordSet {
+        if user.rosterSegment == .inactive {
             items.append(.init(label: "Inactive", foreground: ManageUserProfilePalette.textSecondary, background: Color(red: 0xEC / 255, green: 0xEC / 255, blue: 0xEF / 255), border: nil))
+        } else if user.rosterSegment == .pending {
+            items.append(.init(label: "Pending invite", foreground: Color(red: 0xE0 / 255, green: 0x86 / 255, blue: 0x00 / 255), background: Color(red: 0xFF / 255, green: 0xF5 / 255, blue: 0xE6 / 255), border: nil))
         } else if user.passwordSet {
             items.append(.init(label: "Verified", foreground: Color(red: 0x15 / 255, green: 0xA3 / 255, blue: 0x4A / 255), background: Color(red: 0xE9 / 255, green: 0xF9 / 255, blue: 0xEF / 255), border: nil))
-        } else {
-            items.append(.init(label: "Pending invite", foreground: Color(red: 0xE0 / 255, green: 0x86 / 255, blue: 0x00 / 255), background: Color(red: 0xFF / 255, green: 0xF5 / 255, blue: 0xE6 / 255), border: nil))
         }
         if showAdminBadge && !items.contains(where: { $0.label == "Administrator" }) {
             items.insert(.init(label: "Admin", foreground: Color(red: 0xE1 / 255, green: 0x1D / 255, blue: 0x48 / 255), background: Color(red: 0xFD / 255, green: 0xEC / 255, blue: 0xF1 / 255), border: nil), at: 0)

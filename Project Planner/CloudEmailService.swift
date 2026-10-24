@@ -22,12 +22,13 @@ class CloudEmailService {
         
         let resendService = ResendEmailService()
         
-        // Convert plain text body to HTML for Resend
+        // Encode user text first, then turn newlines into breaks so the inserted tags stay tags.
+        let escapedBody = ExportTextEscaping.escapeHTML(body)
         let htmlBody = """
         <html>
         <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="white-space: pre-line; line-height: 1.6; color: #333;">
-            \(body.replacingOccurrences(of: "\n", with: "<br>"))
+            \(escapedBody.replacingOccurrences(of: "\n", with: "<br>"))
             </div>
         </body>
         </html>
@@ -35,7 +36,7 @@ class CloudEmailService {
         
         let success = await resendService.sendEmail(
             to: recipient,
-            subject: subject,
+            subject: ExportTextEscaping.sanitizeEmailSubject(subject),
             htmlContent: htmlBody
         )
         
@@ -64,9 +65,9 @@ class CloudEmailService {
         request.setValue("Bearer \(resendAPIKey)", forHTTPHeaderField: "Authorization")
         
         let resendPayload: [String: Any] = [
-            "from": "Project Planner <\(fromEmail)>",
+            "from": "\(ExportTextEscaping.sanitizeFromDisplayName("Project Planner")) <\(fromEmail)>",
             "to": [recipient],
-            "subject": subject,
+            "subject": ExportTextEscaping.sanitizeEmailSubject(subject),
             "text": body
         ]
         

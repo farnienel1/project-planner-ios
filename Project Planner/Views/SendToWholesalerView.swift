@@ -22,8 +22,8 @@ struct SendToWholesalerView: View {
     @State private var selectedContacts: Set<UUID> = []
     @State private var requestType: MaterialOrderRequest.RequestType = .quote
     @State private var isSending = false
-    @State private var showingDeliveryDate = false
-    @State private var requiredDeliveryDate = Date()
+    @State private var requiredDeliveryAt: Date?
+    @State private var sendErrorMessage: String?
     
     var body: some View {
         NavigationView {
@@ -47,15 +47,7 @@ struct SendToWholesalerView: View {
                     
                     Button(action: {
                         requestType = .order
-                        let selectedWholesalerIds = Set(wholesalers.compactMap { wholesaler in
-                            wholesaler.contacts.contains(where: { selectedContacts.contains($0.id) }) ? wholesaler.id : nil
-                        })
-                        if selectedWholesalerIds.count > 1 {
-                            showingMultipleWholesalerAlert = true
-                            return
-                        }
-                        requiredDeliveryDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-                        showingDeliveryDate = true
+                        sendRequest()
                     }) {
                         Text("Send Order")
                             .font(.headline)
@@ -72,6 +64,9 @@ struct SendToWholesalerView: View {
                 .background(Color(.systemGroupedBackground))
                 
                 Form {
+                    Section {
+                        MaterialRequiredDeliveryEditor(deliveryAt: $requiredDeliveryAt, showsCard: false)
+                    }
                     Section("Project Information") {
                         HStack {
                             Text("Project Number")
@@ -169,13 +164,14 @@ struct SendToWholesalerView: View {
                         .accessibilityIdentifier("sendToWholesaler.cancel")
                 }
             }
-            .sheet(isPresented: $showingDeliveryDate) {
-                MaterialOrderDeliveryDateSheet(date: $requiredDeliveryDate) {
-                    showingDeliveryDate = false
-                    sendRequest()
-                } onCancel: {
-                    showingDeliveryDate = false
-                }
+            .alert("Could not send", isPresented: Binding(
+                get: { sendErrorMessage != nil },
+                set: { if !$0 { sendErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { sendErrorMessage = nil }
+                    .accessibilityIdentifier("sendToWholesaler.sendErrorOk")
+            } message: {
+                Text(sendErrorMessage ?? "")
             }
             .alert("Multiple Wholesalers Selected", isPresented: $showingMultipleWholesalerAlert) {
                 Button("OK", role: .cancel) { }
@@ -203,6 +199,11 @@ struct SendToWholesalerView: View {
     
     @State private var showingMultipleWholesalerAlert = false
     
+    private var orderDeliveryInstant: Date? {
+        guard CanonicalBusinessEngine.materialOrderIncludesDeliveryRequired(requestType.rawValue) == true else { return nil }
+        return requiredDeliveryAt
+    }
+
     private func sendRequest() {
         guard !selectedMaterials.isEmpty, !selectedContacts.isEmpty else { return }
         
@@ -255,7 +256,7 @@ struct SendToWholesalerView: View {
             senderPhone: userPhone?.isEmpty == false ? userPhone : nil,
             senderCompany: orgName,
             companyLogoURL: firebaseBackend.currentOrganization?.companyLogoURL,
-            requiredDeliveryDate: requestType == .order ? requiredDeliveryDate : nil
+            requiredDeliveryDate: orderDeliveryInstant
         )
         let recipientSnapshots = selectedContactObjects.map { contact in
             let wholesalerName = wholesalers.first { $0.contacts.contains(where: { $0.id == contact.id }) }?.name
@@ -269,6 +270,7 @@ struct SendToWholesalerView: View {
             projectId: project.id,
             requestType: requestType,
             materialsDate: materialsDay,
+            deliveryRequiredAt: orderDeliveryInstant,
             sentBy: userName,
             recipients: recipientSnapshots,
             lines: selectedMaterialItems.map(\.sendLineSnapshot)
@@ -302,52 +304,12 @@ struct SendToWholesalerView: View {
                     isPresented = false
                 }
             } catch {
-                print("Error sending material request: \(error.localizedDescription)")
                 await MainActor.run {
                     isSending = false
+                    sendErrorMessage = MaterialOfflineService.sendFailureMessage(error)
                 }
             }
         }
-    }
-}
-
-private struct MaterialOrderDeliveryDateSheet: View {
-    @Binding var date: Date
-    let onConfirm: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Choose the date these materials must arrive on site. The wholesaler email includes this date.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                DatePicker(
-                    "Required delivery date",
-                    selection: $date,
-                    in: Calendar.current.startOfDay(for: Date())...,
-                    displayedComponents: .date
-                )
-                .accessibilityIdentifier("materialOrderDeliveryDate.requiredDeliveryDate")
-                .datePickerStyle(.graphical)
-                Spacer(minLength: 0)
-            }
-            .padding(20)
-            .navigationTitle("Confirm delivery date")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                        .accessibilityIdentifier("materialOrderDeliveryDate.cancel")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Send order", action: onConfirm)
-                        .accessibilityIdentifier("materialOrderDeliveryDate.sendOrder")
-                        .fontWeight(.semibold)
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
     }
 }
 

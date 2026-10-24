@@ -48,8 +48,15 @@ struct GeneralAppSettingsView: View {
 
 struct MyScheduleGeneralOptionsView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
+    @Environment(\.dismiss) private var dismiss
     @State private var showingAddItemAlert = false
     @State private var newItemName = ""
+    @State private var draft = MyScheduleOptions()
+    @State private var baseline = MyScheduleOptions()
+    @State private var isSaving = false
+    @State private var didLoad = false
+
+    private var isDirty: Bool { didLoad && draft != baseline }
     
     var body: some View {
         ScrollView {
@@ -63,35 +70,17 @@ struct MyScheduleGeneralOptionsView: View {
 
                 SettingsHubChrome.sectionTitle("Additional Options")
                 SettingsHubChrome.card {
-                    scheduleToggle("Office", isOn: Binding(
-                        get: { appSettings.settings.myScheduleOptions.showOffice },
-                        set: { newValue in
-                            appSettings.settings.myScheduleOptions.showOffice = newValue
-                            Task { await appSettings.updateMyScheduleOptions(appSettings.settings.myScheduleOptions) }
-                        }
-                    ))
+                    scheduleToggle("Office", isOn: $draft.showOffice)
                     SettingsHubChrome.divider()
-                    scheduleToggle("Working From Home", isOn: Binding(
-                        get: { appSettings.settings.myScheduleOptions.showWorkingFromHome },
-                        set: { newValue in
-                            appSettings.settings.myScheduleOptions.showWorkingFromHome = newValue
-                            Task { await appSettings.updateMyScheduleOptions(appSettings.settings.myScheduleOptions) }
-                        }
-                    ))
+                    scheduleToggle("Working From Home", isOn: $draft.showWorkingFromHome)
                     SettingsHubChrome.divider()
-                    scheduleToggle("Site Survey", isOn: Binding(
-                        get: { appSettings.settings.myScheduleOptions.showSiteSurvey },
-                        set: { newValue in
-                            appSettings.settings.myScheduleOptions.showSiteSurvey = newValue
-                            Task { await appSettings.updateMyScheduleOptions(appSettings.settings.myScheduleOptions) }
-                        }
-                    ))
+                    scheduleToggle("Site Survey", isOn: $draft.showSiteSurvey)
                 }
                 
-                if !appSettings.settings.myScheduleOptions.customItems.isEmpty {
+                if !draft.customItems.isEmpty {
                     SettingsHubChrome.sectionTitle("Custom Items")
                     SettingsHubChrome.card {
-                        ForEach(Array(appSettings.settings.myScheduleOptions.customItems.enumerated()), id: \.offset) { index, item in
+                        ForEach(Array(draft.customItems.enumerated()), id: \.offset) { index, item in
                             HStack {
                                 Text(item)
                                     .font(.system(size: 13, weight: .medium))
@@ -108,7 +97,7 @@ struct MyScheduleGeneralOptionsView: View {
                                 .buttonStyle(.plain)
                             }
                             .padding(.vertical, 12)
-                            if index < appSettings.settings.myScheduleOptions.customItems.count - 1 {
+                            if index < draft.customItems.count - 1 {
                                 SettingsHubChrome.divider()
                             }
                         }
@@ -123,6 +112,21 @@ struct MyScheduleGeneralOptionsView: View {
         .scrollContentBackground(.hidden)
         .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
         .appChromeNavigationBarSurface()
+        .safeAreaInset(edge: .bottom) {
+            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+                Task { await save() }
+            }
+        }
+        .settingsUnsavedLeave(isDirty: isDirty) {
+            draft = baseline
+            dismiss()
+        }
+        .onAppear {
+            guard !didLoad else { return }
+            draft = appSettings.settings.myScheduleOptions
+            baseline = draft
+            didLoad = true
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -160,18 +164,25 @@ struct MyScheduleGeneralOptionsView: View {
     private func addCustomItem() {
         let trimmed = newItemName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard !appSettings.settings.myScheduleOptions.customItems.contains(where: {
+        guard !draft.customItems.contains(where: {
             $0.caseInsensitiveCompare(trimmed) == .orderedSame
         }) else { return }
-        appSettings.settings.myScheduleOptions.customItems.append(trimmed)
-        appSettings.settings.myScheduleOptions.customItems.sort()
-        Task { await appSettings.updateMyScheduleOptions(appSettings.settings.myScheduleOptions) }
+        draft.customItems.append(trimmed)
+        draft.customItems.sort()
+        draft.customItemEnabled[trimmed] = true
     }
 
     private func deleteCustomItem(at index: Int) {
-        guard appSettings.settings.myScheduleOptions.customItems.indices.contains(index) else { return }
-        let name = appSettings.settings.myScheduleOptions.customItems.remove(at: index)
-        appSettings.settings.myScheduleOptions.customItemEnabled.removeValue(forKey: name)
-        Task { await appSettings.updateMyScheduleOptions(appSettings.settings.myScheduleOptions) }
+        guard draft.customItems.indices.contains(index) else { return }
+        let name = draft.customItems.remove(at: index)
+        draft.customItemEnabled.removeValue(forKey: name)
+    }
+
+    private func save() async {
+        guard !isSaving else { return }
+        isSaving = true
+        defer { isSaving = false }
+        await appSettings.updateMyScheduleOptions(draft)
+        baseline = draft
     }
 }

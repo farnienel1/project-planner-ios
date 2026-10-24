@@ -678,6 +678,12 @@ struct WholesalerDetailView: View {
                                 .font(.system(size: 11.5))
                                 .foregroundStyle(WholesalersTheme.inkMut)
                                 .lineLimit(1)
+                            if let required = record.requiredDeliverySummary {
+                                Text(required)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(WholesalersTheme.inkMut)
+                                    .lineLimit(2)
+                            }
                         }
                         Spacer(minLength: 0)
                         Text(record.sentAt.formatted(.relative(presentation: .named)))
@@ -978,6 +984,11 @@ struct WholesalerSendHistoryView: View {
                     Text("Materials day: \(record.historyDay().formatted(date: .abbreviated, time: .omitted)) · by \(record.sentBy)")
                         .font(.system(size: 12))
                         .foregroundStyle(WholesalersTheme.inkMut)
+                    if let required = record.requiredDeliverySummary {
+                        Text(required)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(WholesalersTheme.ink)
+                    }
                     if !isExpanded, !record.lines.isEmpty {
                         Text(record.lines.map(\.name).joined(separator: " · "))
                             .font(.system(size: 12))

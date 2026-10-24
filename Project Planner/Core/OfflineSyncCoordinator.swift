@@ -97,7 +97,11 @@ enum OfflineSyncCoordinator {
             let payload = try decoder.decode(OfflineSendMaterialRequestPayload.self, from: entry.payload)
             try await firebaseBackend.sendMaterialRequest(payload.request, organizationId: entry.organizationId)
             if let record = payload.sendRecord {
-                try? await firebaseBackend.saveMaterialSendRecord(record, organizationId: entry.organizationId)
+                do {
+                    try await firebaseBackend.saveMaterialSendRecord(record, organizationId: entry.organizationId)
+                } catch {
+                    print("🔥🔥🔥 DEBUG: [materials/send] email sent; send-record write failed: \(error.localizedDescription)")
+                }
             }
 
         case .saveDeadlines:

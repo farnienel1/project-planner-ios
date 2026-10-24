@@ -34,6 +34,16 @@ struct AdminManagerMaterialsView: View {
         materials.filter { $0.status == .draft }.count
     }
 
+    private var draftCutOffLabel: String? {
+        guard let clock = OrgMaterialCutOff.resolve(
+            stored: firebaseBackend.currentOrganization?.settings.materialCutOff,
+            organizationLoaded: firebaseBackend.currentOrganization != nil
+        ), let label = CanonicalBusinessEngine.formatMaterialCutOffClock(clock) else {
+            return nil
+        }
+        return "Cut-off \(label) today"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             MaterialsWeekNavigator(
@@ -158,7 +168,7 @@ struct AdminManagerMaterialsView: View {
                     }
                 }
                 if draftCount > 0 {
-                    MaterialsDraftSendBanner(draftCount: draftCount) {
+                    MaterialsDraftSendBanner(draftCount: draftCount, cutOffLabel: draftCutOffLabel) {
                         selectedMaterials = Set(materials.filter { $0.status == .draft }.map(\.id))
                         showingSendToWholesaler = true
                     }

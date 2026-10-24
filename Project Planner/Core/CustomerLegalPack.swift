@@ -152,7 +152,7 @@ enum CustomerLegalPack {
     8. Sub-processors
     The Customer gives general authorisation for the Provider to use sub-processors reasonably required to operate the Platform, including hosting, database, authentication, email, monitoring, support and backup providers. The Provider will maintain a current list of material sub-processors and will provide reasonable notice of material changes where required by law. The Customer may object on reasonable data-protection grounds. The Provider will impose appropriate data protection obligations on sub-processors and remains responsible for their performance to the extent required by applicable law.
 
-    A current list of material sub-processors is published at https://projectplanner.us.
+    A current list of material sub-processors is published at https://www.projectplanner.us/processors.
 
     9. International Transfers
     Where personal data is transferred outside the UK, the Provider will use a lawful transfer mechanism and appropriate safeguards required by applicable UK data protection law. The Provider may use UK adequacy regulations, the UK International Data Transfer Agreement, the UK Addendum to EU Standard Contractual Clauses, or another lawful mechanism where applicable.

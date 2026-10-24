@@ -108,6 +108,12 @@ struct ProjectsView: View {
                 if selectedStatus == .inactive || selectedStatus == nil {
                     selectedStatus = .active
                 }
+                openPendingCatalogueJob()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .pushWorkCatalogueDetail)) { note in
+                let isSmallWorks = note.userInfo?["isSmallWorks"] as? Bool ?? false
+                guard !isSmallWorks else { return }
+                openPendingCatalogueJob()
             }
             .task {
                 await refreshDeadlineAssignedProjectIds()
@@ -398,6 +404,12 @@ struct ProjectsView: View {
 
         var seen = Set<UUID>()
         return projects.filter { seen.insert($0.id).inserted }
+    }
+
+    private func openPendingCatalogueJob() {
+        guard let projectId = WorkCatalogueDeepLink.take(isSmallWorks: false) else { return }
+        navigationPath = NavigationPath()
+        navigationPath.append(OpenedProjectToken(projectId: projectId))
     }
 
     @ViewBuilder

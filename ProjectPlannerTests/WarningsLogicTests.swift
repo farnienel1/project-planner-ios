@@ -26,9 +26,9 @@ final class WarningsLogicTests: XCTestCase {
                     emailLowercased: "ada@example.com",
                     isActive: true,
                     qualificationExpiries: [
-                        .init(qualificationId: expiredQualification, qualificationName: "IPAF", expiryDate: yesterday),
-                        .init(qualificationId: soonQualification, qualificationName: "CSCS", expiryDate: soon),
-                        .init(qualificationId: laterQualification, qualificationName: "First aid", expiryDate: later),
+                        .init(qualificationId: expiredQualification.uuidString, qualificationName: "IPAF", expiryDate: yesterday),
+                        .init(qualificationId: soonQualification.uuidString, qualificationName: "CSCS", expiryDate: soon),
+                        .init(qualificationId: laterQualification.uuidString, qualificationName: "First aid", expiryDate: later),
                     ]
                 ),
                 .init(
@@ -37,7 +37,7 @@ final class WarningsLogicTests: XCTestCase {
                     emailLowercased: "old@example.com",
                     isActive: false,
                     qualificationExpiries: [
-                        .init(qualificationId: inactiveQualification, qualificationName: "CSCS", expiryDate: yesterday),
+                        .init(qualificationId: inactiveQualification.uuidString, qualificationName: "CSCS", expiryDate: yesterday),
                     ]
                 ),
             ],
@@ -109,8 +109,8 @@ final class WarningsLogicTests: XCTestCase {
         var snapshot = qualificationSnapshot(
             operativeId: activeId,
             expiries: [
-                (expiredQualification, "IPAF", yesterday),
-                (soonQualification, "CSCS", soon),
+                (expiredQualification.uuidString, "IPAF", yesterday),
+                (soonQualification.uuidString, "CSCS", soon),
             ]
         )
         snapshot.dismissedQualificationKeys = [expiredKey, soonKey]
@@ -175,7 +175,7 @@ final class WarningsLogicTests: XCTestCase {
 
     private func qualificationSnapshot(
         operativeId: UUID,
-        expiries: [(UUID, String, Date)]
+        expiries: [(String, String, Date)]
     ) -> WarningsComputationSnapshot {
         let today = CanonicalBusinessEngine.businessCalendar.startOfDay(for: Date())
         return WarningsComputationSnapshot(

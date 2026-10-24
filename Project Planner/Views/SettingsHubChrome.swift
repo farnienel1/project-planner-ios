@@ -6,10 +6,11 @@
 //
 
 import SwiftUI
+import UIKit
 
 enum SettingsHubChrome {
-    static func sectionTitle(_ text: String) -> some View {
-        Text(text.uppercased())
+    static func sectionTitle(_ text: String, sentenceCase: Bool = false) -> some View {
+        Text(sentenceCase ? text : text.uppercased())
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(ProjectWorksRevampColors.muted)
             .tracking(0.4)
@@ -116,5 +117,131 @@ private struct SettingsHubFormChromeModifier: ViewModifier {
 extension View {
     func settingsHubFormChrome() -> some View {
         modifier(SettingsHubFormChromeModifier())
+    }
+
+    /// Sticky Save plus a Back that asks before leaving a dirty nested editor.
+    func settingsUnsavedLeave(isDirty: Bool, onLeave: @escaping () -> Void) -> some View {
+        modifier(SettingsUnsavedLeaveModifier(isDirty: isDirty, onLeave: onLeave))
+    }
+}
+
+/// Grey until the draft differs from the last loaded document. Blue once it does.
+struct SettingsStickySaveBar: View {
+    var title: String = "Save"
+    var isDirty: Bool
+    var isSaving: Bool
+    var action: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(isDirty
+                 ? "Save your changes, or they will be lost if you leave."
+                 : "Changes are only saved when you press Save.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: action) {
+                HStack(spacing: 8) {
+                    if isSaving {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: isDirty ? .white : saveInk))
+                    }
+                    Text(isSaving ? "Saving…" : title)
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                .foregroundStyle(isDirty ? Color.white : saveInk)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(isDirty ? ProjectWorksRevampColors.blue : saveFill)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(!isDirty || isSaving)
+            .accessibilityIdentifier("settingsStickySaveBar.save")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .background(.ultraThinMaterial)
+    }
+
+    private var saveFill: Color {
+        Color(red: 0.82, green: 0.84, blue: 0.87)
+    }
+
+    private var saveInk: Color {
+        Color(red: 0.42, green: 0.45, blue: 0.50)
+    }
+}
+
+struct SettingsSwipeBackGuard: UIViewControllerRepresentable {
+    var disabled: Bool
+
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.disabled = disabled
+        controller.apply()
+    }
+
+    final class Controller: UIViewController {
+        var disabled = false
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            apply()
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            apply()
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            navigationController?.interactivePopGestureRecognizer?.isEnabled = true
+        }
+
+        func apply() {
+            navigationController?.interactivePopGestureRecognizer?.isEnabled = !disabled
+        }
+    }
+}
+
+private struct SettingsUnsavedLeaveModifier: ViewModifier {
+    let isDirty: Bool
+    let onLeave: () -> Void
+    @State private var showingConfirm = false
+
+    func body(content: Content) -> some View {
+        content
+            .navigationBarBackButtonHidden(true)
+            .background(SettingsSwipeBackGuard(disabled: isDirty))
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: requestLeave) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                    }
+                    .accessibilityIdentifier("settingsUnsavedLeave.back")
+                }
+            }
+            .alert("Unsaved changes", isPresented: $showingConfirm) {
+                Button("Cancel", role: .cancel) {}
+                    .accessibilityIdentifier("settingsUnsavedLeave.cancel")
+                Button("Continue", action: onLeave)
+                    .accessibilityIdentifier("settingsUnsavedLeave.continue")
+            } message: {
+                Text("You have changes that have not been saved. Leave this page and discard them?")
+            }
+    }
+
+    private func requestLeave() {
+        if isDirty {
+            showingConfirm = true
+        } else {
+            onLeave()
+        }
     }
 }

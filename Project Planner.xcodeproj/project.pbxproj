@@ -12,6 +12,7 @@
 		2747794A2EA6AEF90000D1F8 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 274779492EA6AEF90000D1F8 /* FirebaseFirestore */; };
 		2747794C2EA6AEF90000D1F9 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 2747794B2EA6AEF90000D1F9 /* FirebaseStorage */; };
 		274779502EA6AEF90000D1FC /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 2747794F2EA6AEF90000D1FC /* FirebaseMessaging */; };
+		274779522EA6AEF90000D1FD /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = 274779512EA6AEF90000D1FD /* FirebaseAppCheck */; };
 		F8B22E0E2F9C300100A1D00E /* SnapshotTesting in Frameworks */ = {isa = PBXBuildFile; productRef = F8B22E0D2F9C300100A1D00D /* SnapshotTesting */; };
 /* End PBXBuildFile section */
 
@@ -66,6 +67,7 @@
 				2747794A2EA6AEF90000D1F8 /* FirebaseFirestore in Frameworks */,
 				2747794C2EA6AEF90000D1F9 /* FirebaseStorage in Frameworks */,
 				274779502EA6AEF90000D1FC /* FirebaseMessaging in Frameworks */,
+				274779522EA6AEF90000D1FD /* FirebaseAppCheck in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -135,6 +137,7 @@
 				274779492EA6AEF90000D1F8 /* FirebaseFirestore */,
 				2747794B2EA6AEF90000D1F9 /* FirebaseStorage */,
 				2747794F2EA6AEF90000D1FC /* FirebaseMessaging */,
+				274779512EA6AEF90000D1FD /* FirebaseAppCheck */,
 			);
 			productName = "Project Planner";
 			productReference = 27090EBB2E8ADF3000528ADD /* Project Planner.app */;
@@ -732,6 +735,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 274779442EA6AE970000D1F8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseMessaging;
+		};
+		274779512EA6AEF90000D1FD /* FirebaseAppCheck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 274779442EA6AE970000D1F8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAppCheck;
 		};
 		F8B22E0D2F9C300100A1D00D /* SnapshotTesting */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -159,6 +159,12 @@ struct SelectOperativesView: View {
                 }
             }
         }
+        .onAppear {
+            guard let earliest = selectedDates.min() else { return }
+            guard firebaseBackend.noteScheduleNeedsDate(earliest) else { return }
+            bookingStore.loadData()
+            managerScheduleStore.loadData(force: true)
+        }
     }
 
     private var emptyState: some View {

@@ -21,7 +21,6 @@ class EmailService: NSObject, ObservableObject {
     
     // Microsoft 365 Email Configuration
     private let fromEmail = "info@raccordmep.co.uk"
-    private let fromPassword = "Raccord50!"
     private let smtpServer = "smtp.office365.com"
     private let smtpPort = 587
     
@@ -87,7 +86,6 @@ struct EmailConfiguration {
     static let smtpServer = "smtp.office365.com"
     static let smtpPort = 587
     static let fromEmail = "info@raccordmep.co.uk"
-    static let fromPassword = "Raccord50!"
     static let useTLS = true
     static let useAuth = true
 }

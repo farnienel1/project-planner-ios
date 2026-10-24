@@ -89,6 +89,10 @@ struct OrganisationWorkingHoursView: View {
                         .padding(.bottom, 12)
                 }
 
+                dayTimelineCard
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+
                 weekAtAGlanceCard
                     .padding(.horizontal, 16)
                     .padding(.bottom, 4)
@@ -171,15 +175,17 @@ struct OrganisationWorkingHoursView: View {
         } message: {
             Text("If you save these settings now, they will take immediate effect. Any bookings on today's schedule will have these new working hours applied. This will be reflected in the weekly report, timesheets and on invoices. If you would like these changes to take effect from a future date, then use the Schedule Changes Button.")
         }
-        .alert("Discard changes?", isPresented: $showingCancelConfirm) {
-            Button("Keep editing", role: .cancel) { }
+        .background(SettingsSwipeBackGuard(disabled: isDirty))
+        .alert("Unsaved changes", isPresented: $showingCancelConfirm) {
+            Button("Cancel", role: .cancel) {}
                 .accessibilityIdentifier("organisationWorkingHours.keepEditing")
-            Button("Discard", role: .destructive) {
+            Button("Continue") {
+                draft = baselineDraft
                 dismiss()
             }
                 .accessibilityIdentifier("organisationWorkingHours.discard")
         } message: {
-            Text("You have unsaved changes. Discard them and leave this screen?")
+            Text("You have changes that have not been saved. Leave this page and discard them?")
         }
     }
 
@@ -361,8 +367,6 @@ struct OrganisationWorkingHoursView: View {
 
                 cardDivider
 
-                weekdayTimelineBar
-
                 gradientSummaryCard(
                     topColor: WorkingHoursPalette.indigoGradientTop,
                     bottomColor: WorkingHoursPalette.indigoGradientBottom,
@@ -388,29 +392,82 @@ struct OrganisationWorkingHoursView: View {
         }
     }
 
-    private var weekdayTimelineBar: some View {
-        VStack(spacing: 6) {
-            WorkingHoursTimelineBar(
-                windowStart: draft.standardDayStart,
-                windowEnd: draft.standardDayEnd,
-                breakStart: draft.breakPaid ? nil : draft.breakWindowStart,
-                breakEnd: draft.breakPaid ? nil : draft.breakWindowEnd,
-                accentColor: WorkingHoursPalette.indigo,
-                axisStartMinutes: 6 * 60,
-                axisEndMinutes: 18 * 60
-            )
-            .frame(height: 7)
+    private var dayTimelineValid: Bool {
+        isValidHM(draft.standardDayStart)
+            && isValidHM(draft.standardDayEnd)
+            && isValidHM(draft.breakWindowStart)
+            && isValidHM(draft.breakWindowEnd)
+            && (ManagerScheduleInterval.parseMinutes(draft.standardDayEnd) ?? 0)
+                > (ManagerScheduleInterval.parseMinutes(draft.standardDayStart) ?? 0)
+    }
 
-            HStack {
-                Text("06:00")
-                Spacer()
-                Text("12:00")
-                Spacer()
-                Text("18:00")
+    private var dayTimelineCard: some View {
+        workingHoursCard {
+            if dayTimelineValid {
+                WorkingHoursDayTimeline(
+                    dayStart: draft.standardDayStart,
+                    dayEnd: draft.standardDayEnd,
+                    breakStart: draft.breakWindowStart,
+                    breakEnd: draft.breakWindowEnd
+                )
+                HStack {
+                    Text("05:00")
+                    Spacer(minLength: 0)
+                    Text("09:00")
+                    Spacer(minLength: 0)
+                    Text("13:00")
+                    Spacer(minLength: 0)
+                    Text("17:00")
+                    Spacer(minLength: 0)
+                    Text("21:00")
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(WorkingHoursPalette.muted)
+                .padding(.top, 2)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    dayLegendRow(color: WorkingHoursPalette.indigo, text: "Standard day \(draft.standardDayStart)–\(draft.standardDayEnd)")
+                    dayLegendRow(
+                        color: WorkingHoursPalette.cardBorder,
+                        text: "Unpaid break \(draft.unpaidBreakMinutes) min (\(draft.breakWindowStart)–\(draft.breakWindowEnd))"
+                    )
+                    dayLegendRow(
+                        color: WorkingHoursPalette.amber,
+                        text: "Overtime ×\(formatMultiplier(draft.weekdayOutsideStandardMultiplier))"
+                    )
+                }
+                .padding(.top, 8)
+            } else {
+                Text("Enter valid 24h times to see the day.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(WorkingHoursPalette.muted)
             }
-            .font(.system(size: 10.5, weight: .medium))
-            .foregroundStyle(Color(.systemGray))
         }
+    }
+
+    private func dayLegendRow(color: Color, text: String) -> some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(color)
+                .frame(width: 10, height: 10)
+            Text(text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(WorkingHoursPalette.ink)
+        }
+    }
+
+    private func setWeekendMode(keyPath: WritableKeyPath<OrgPayrollTimePolicy, OrgWeekendDayPayrollSettings>, allHours: Bool) {
+        var settings = draft[keyPath: keyPath]
+        if allHours {
+            settings.allHoursAtMultiplierMode = true
+        } else {
+            settings.allHoursAtMultiplierMode = false
+            settings.useCustomStandardDayWindow = true
+            if settings.customStandardStart == nil { settings.customStandardStart = draft.standardDayStart }
+            if settings.customStandardEnd == nil { settings.customStandardEnd = "13:00" }
+            if settings.countsAsHours == nil { settings.countsAsHours = draft.standardPaidHours }
+        }
+        draft[keyPath: keyPath] = settings
     }
 
     // MARK: - Saturday
@@ -437,20 +494,12 @@ struct OrganisationWorkingHoursView: View {
 
                 WorkingHoursSegmentedPicker(
                     selection: Binding(
-                        get: { draft.saturday.allHoursAtMultiplierMode ? 1 : 0 },
+                        get: { draft.saturday.allHoursAtMultiplierMode ? 0 : 1 },
                         set: { mode in
-                            var sat = draft.saturday
-                            sat.allHoursAtMultiplierMode = mode == 1
-                            if mode == 0 {
-                                sat.useCustomStandardDayWindow = true
-                                if sat.customStandardStart == nil { sat.customStandardStart = draft.standardDayStart }
-                                if sat.customStandardEnd == nil { sat.customStandardEnd = "13:00" }
-                                if sat.countsAsHours == nil { sat.countsAsHours = draft.standardPaidHours }
-                            }
-                            draft.saturday = sat
+                            setWeekendMode(keyPath: \.saturday, allHours: mode == 0)
                         }
                     ),
-                    options: [(0, "Defined window"), (1, "Hours × multiplier")]
+                    options: [(0, "All hours at one rate"), (1, "Standard window + overtime")]
                 )
 
                 if draft.saturday.allHoursAtMultiplierMode {
@@ -465,11 +514,11 @@ struct OrganisationWorkingHoursView: View {
     @ViewBuilder
     private func saturdayWindowContent(settings: Binding<OrgWeekendDayPayrollSettings>, title: String) -> some View {
         HStack(spacing: 12) {
-            timeFieldColumn(label: "Window starts", text: Binding(
+            timeFieldColumn(label: "Window start", text: Binding(
                 get: { settings.wrappedValue.customStandardStart ?? "" },
                 set: { settings.wrappedValue.customStandardStart = $0.isEmpty ? nil : $0 }
             ))
-            timeFieldColumn(label: "Window ends", text: Binding(
+            timeFieldColumn(label: "Window end", text: Binding(
                 get: { settings.wrappedValue.customStandardEnd ?? "" },
                 set: { settings.wrappedValue.customStandardEnd = $0.isEmpty ? nil : $0 }
             ))
@@ -493,8 +542,8 @@ struct OrganisationWorkingHoursView: View {
         )
 
         multiplierRow(
-            title: "Outside the window",
-            subtitle: "Time worked before \(settings.wrappedValue.customStandardStart ?? draft.standardDayStart) or after \(settings.wrappedValue.customStandardEnd ?? "13:00")",
+            title: "Rate outside the window",
+            subtitle: "Hours inside the window count as standard hours.",
             value: Binding(
                 get: { settings.wrappedValue.outsideStandardWindowMultiplier },
                 set: { settings.wrappedValue.outsideStandardWindowMultiplier = $0 }
@@ -586,20 +635,12 @@ struct OrganisationWorkingHoursView: View {
                 } else {
                     WorkingHoursSegmentedPicker(
                         selection: Binding(
-                            get: { draft.sunday.allHoursAtMultiplierMode ? 1 : 0 },
+                            get: { draft.sunday.allHoursAtMultiplierMode ? 0 : 1 },
                             set: { mode in
-                                var sun = draft.sunday
-                                sun.allHoursAtMultiplierMode = mode == 1
-                                if mode == 0 {
-                                    sun.useCustomStandardDayWindow = true
-                                    if sun.customStandardStart == nil { sun.customStandardStart = draft.standardDayStart }
-                                    if sun.customStandardEnd == nil { sun.customStandardEnd = "13:00" }
-                                    if sun.countsAsHours == nil { sun.countsAsHours = draft.standardPaidHours }
-                                }
-                                draft.sunday = sun
+                                setWeekendMode(keyPath: \.sunday, allHours: mode == 0)
                             }
                         ),
-                        options: [(0, "Defined window"), (1, "Hours × multiplier")]
+                        options: [(0, "All hours at one rate"), (1, "Standard window + overtime")]
                     )
 
                     if draft.sunday.allHoursAtMultiplierMode {
@@ -657,12 +698,12 @@ struct OrganisationWorkingHoursView: View {
                 }
                 .accessibilityIdentifier("organisationWorkingHours.save")
                 .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .background(WorkingHoursPalette.indigo)
+                .foregroundStyle(isDirty ? Color.white : WorkingHoursPalette.muted)
+                .background(isDirty ? WorkingHoursPalette.indigo : Color(red: 0.82, green: 0.84, blue: 0.87))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: WorkingHoursPalette.indigo.opacity(0.25), radius: 4, y: 2)
-                .disabled(!isFormValid || isSaving)
-                .opacity(!isFormValid || isSaving ? 0.55 : 1)
+                .shadow(color: isDirty ? WorkingHoursPalette.indigo.opacity(0.25) : .clear, radius: 4, y: 2)
+                .disabled(!isDirty || !isFormValid || isSaving)
+                .opacity((!isDirty || !isFormValid || isSaving) ? 0.85 : 1)
 
                 Button {
                     showingScheduleSheet = true
@@ -1286,6 +1327,51 @@ private struct WorkingHoursTimeField: View {
             }
         }
         return fallback
+    }
+}
+
+/// Mon–Fri day from 05:00 to 21:00: overtime behind, the standard window, then the unpaid break.
+private struct WorkingHoursDayTimeline: View {
+    let dayStart: String
+    let dayEnd: String
+    let breakStart: String
+    let breakEnd: String
+
+    private let from = 5 * 60
+    private let to = 21 * 60
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let height = geo.size.height
+            let span = CGFloat(max(1, to - from))
+            let xPos: (Int) -> CGFloat = { minutes in
+                let clipped = min(to, max(from, minutes))
+                return CGFloat(clipped - from) / span * width
+            }
+            let start = ManagerScheduleInterval.parseMinutes(dayStart) ?? from
+            let end = ManagerScheduleInterval.parseMinutes(dayEnd) ?? to
+            let breakFrom = ManagerScheduleInterval.parseMinutes(breakStart) ?? start
+            let breakTo = ManagerScheduleInterval.parseMinutes(breakEnd) ?? start
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(red: 1.0, green: 0.945, blue: 0.812))
+                if end > start {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(WorkingHoursPalette.indigo)
+                        .frame(width: max(4, xPos(end) - xPos(start)), height: height)
+                        .offset(x: xPos(start))
+                }
+                if breakTo > breakFrom {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.8))
+                        .frame(width: max(3, xPos(breakTo) - xPos(breakFrom)), height: height)
+                        .offset(x: xPos(breakFrom))
+                }
+            }
+        }
+        .frame(height: 36)
+        .accessibilityHidden(true)
     }
 }
 

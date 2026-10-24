@@ -46,55 +46,116 @@ enum TimesheetPayrollPolicy {
         user.employmentType(on: calendar.startOfDay(for: day)) == .selfEmployed
     }
 
-    /// Pay run that **contains** `referenceDate` (e.g. 10 Sep → 1–15 Sep for half-month orgs).
-    /// Use this for "Current pay run" in My Timesheets.
+    static let organizationTimeZone = "Europe/London"
+
+    /// Pay run that **contains** `referenceDate`. The window comes from `timesheetPeriodFromInvoicing`.
+    /// A nil script result is the reference day only, never a 1–15 or ISO-week window.
     static func payPeriodContaining(
         referenceDate: Date = Date(),
         settings: OrganizationInvoicingSettings,
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> WeekRange {
-        let info = InvoicingPeriodResolver.resolve(
-            invoicing: settings,
-            referenceDate: referenceDate,
-            calendar: calendar
-        )
-        return WeekRange.titled(
-            start: info.currentPeriodStart,
-            end: info.currentPeriodEnd,
-            calendar: calendar
+        if let period = timesheetPeriod(referenceDate: referenceDate, settings: settings),
+           let range = weekRange(for: period) {
+            return range
+        }
+        let day = CanonicalBusinessEngine.businessCalendar.startOfDay(for: referenceDate)
+        return WeekRange.titled(start: day, end: day, calendar: CanonicalBusinessEngine.businessCalendar)
+    }
+
+    /// A stored start and end stay that window. The live 1–15 setting does not rewrite a stored 1–7.
+    static func periodMatchingStoredStart(
+        _ storedStart: Date,
+        storedEnd: Date? = nil,
+        settings: OrganizationInvoicingSettings,
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
+    ) -> WeekRange {
+        let zone = organizationTimeZone
+        let orgCalendar = CanonicalBusinessEngine.businessCalendar
+        let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(storedStart, timeZone: zone)
+        let endKey = storedEnd.flatMap { CanonicalBusinessEngine.dayKeyInOrganizationZone($0, timeZone: zone) }
+        let live = timesheetPeriod(referenceDate: Date(), settings: settings)
+        if let startKey, let live,
+           let resolved = CanonicalBusinessEngine.resolveTimesheetPeriod(
+            storedStartDayKey: startKey,
+            storedEndDayKey: endKey,
+            currentPeriod: live
+           ),
+           let range = weekRange(for: resolved) {
+            return range
+        }
+        let day = orgCalendar.startOfDay(for: storedStart)
+        let end = storedEnd.map { orgCalendar.startOfDay(for: $0) } ?? day
+        return WeekRange.titled(start: day, end: end, calendar: orgCalendar)
+    }
+
+    static func timesheetPeriod(
+        referenceDate: Date = Date(),
+        settings: OrganizationInvoicingSettings
+    ) -> CanonicalBusinessEngine.CanonicalTimesheetPeriod? {
+        guard let referenceDayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(
+            referenceDate,
+            timeZone: organizationTimeZone
+        ) else {
+            return nil
+        }
+        return CanonicalBusinessEngine.timesheetPeriodFromInvoicing(
+            paymentRunMode: settings.paymentRunMode.rawValue,
+            ranges: settings.paymentRunDateRanges.map {
+                CanonicalBusinessEngine.CanonicalPaymentRunRange(startDay: $0.startDay, endDay: $0.endDay)
+            },
+            recurringRunStartDay: settings.recurringRunStartDay.rawValue,
+            recurringRunEndDay: settings.recurringRunEndDay.rawValue,
+            referenceDayKey: referenceDayKey,
+            timeZone: organizationTimeZone
         )
     }
 
-    /// Rebuild a stored timesheet's display period without remapping half-months onto ISO weeks.
-    static func periodMatchingStoredStart(
-        _ storedStart: Date,
-        settings: OrganizationInvoicingSettings,
-        calendar: Calendar = .current
-    ) -> WeekRange {
-        let day = calendar.startOfDay(for: storedStart)
-        let containing = payPeriodContaining(referenceDate: day, settings: settings, calendar: calendar)
-        if calendar.isDate(containing.start, inSameDayAs: day)
-            || (day >= containing.start && day <= containing.end) {
-            return containing
+    static func weekRange(for period: CanonicalBusinessEngine.CanonicalTimesheetPeriod) -> WeekRange? {
+        guard let start = CanonicalBusinessEngine.date(fromDayKey: period.startDayKey),
+              let end = CanonicalBusinessEngine.date(fromDayKey: period.endDayKey) else {
+            return nil
         }
-        // Fallback: keep the stored start, estimate a 7-day window only for legacy weekly keys.
-        return WeekRange.from(start: day)
+        return WeekRange.titled(start: start, end: end, calendar: CanonicalBusinessEngine.businessCalendar)
+    }
+
+    static func selectablePayPeriods(
+        settings: OrganizationInvoicingSettings,
+        observed: [CanonicalBusinessEngine.CanonicalTimesheetPeriod] = [],
+        referenceDate: Date = Date(),
+        lookbackCount: Int = 120
+    ) -> [WeekRange] {
+        guard let referenceDayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(
+            referenceDate,
+            timeZone: organizationTimeZone
+        ),
+              let periods = CanonicalBusinessEngine.selectableTimesheetPaymentRunPeriods(
+                current: settings.paymentRunWindow(),
+                historicalWindows: settings.paymentRunHistory,
+                observedPeriods: observed,
+                referenceDayKey: referenceDayKey,
+                lookbackCount: lookbackCount,
+                timeZone: organizationTimeZone
+              ) else {
+            return []
+        }
+        return periods.compactMap { weekRange(for: CanonicalBusinessEngine.CanonicalTimesheetPeriod(startDayKey: $0.startDayKey, endDayKey: $0.endDayKey)) }
     }
 
     /// Most recent **completed** pay run (in arrears). Used for invoice generation of finished periods.
     static func timesheetWeekRange(
         for settings: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> WeekRange {
-        let today = calendar.startOfDay(for: referenceDate)
-        let current = payPeriodContaining(referenceDate: today, settings: settings, calendar: calendar)
-        // If today's period has not ended yet, step to the immediately previous completed period.
+        let orgCalendar = CanonicalBusinessEngine.businessCalendar
+        let today = orgCalendar.startOfDay(for: referenceDate)
+        let current = payPeriodContaining(referenceDate: today, settings: settings, calendar: orgCalendar)
         if current.end >= today {
-            guard let dayBefore = calendar.date(byAdding: .day, value: -1, to: current.start) else {
+            guard let dayBefore = orgCalendar.date(byAdding: .day, value: -1, to: current.start) else {
                 return current
             }
-            return payPeriodContaining(referenceDate: dayBefore, settings: settings, calendar: calendar)
+            return payPeriodContaining(referenceDate: dayBefore, settings: settings, calendar: orgCalendar)
         }
         return current
     }
@@ -130,7 +191,7 @@ enum TimesheetPayrollPolicy {
         referenceDate: Date = Date(),
         calendar: Calendar = .current
     ) -> Bool {
-        let today = calendar.startOfDay(for: referenceDate)
+        let today = CanonicalBusinessEngine.businessCalendar.startOfDay(for: referenceDate)
         let isSelfEmployed = user.employmentType(on: referenceDate) == .selfEmployed
 
         // Self-employed always retain personal timesheet access (sign-off / invoicing).
@@ -138,7 +199,7 @@ enum TimesheetPayrollPolicy {
             return true
         }
 
-        let period = payPeriodContaining(referenceDate: referenceDate, settings: settings, calendar: calendar)
+        let period = payPeriodContaining(referenceDate: referenceDate, settings: settings, calendar: CanonicalBusinessEngine.businessCalendar)
         let hasSelfEmployedDays = calendarDays(from: period.start, to: period.end, calendar: calendar)
             .contains { isBillableSelfEmployedDay(user, on: $0, calendar: calendar) }
         guard hasSelfEmployedDays else { return false }
@@ -187,15 +248,20 @@ enum TimesheetPayrollPolicy {
         before referenceDate: Date = Date(),
         count: Int = 120,
         settings: OrganizationInvoicingSettings,
-        calendar: Calendar = .current
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> [WeekRange] {
+        let orgCalendar = CanonicalBusinessEngine.businessCalendar
         var periods: [WeekRange] = []
-        let current = payPeriodContaining(referenceDate: referenceDate, settings: settings, calendar: calendar)
+        let current = payPeriodContaining(referenceDate: referenceDate, settings: settings, calendar: orgCalendar)
         var cursor = current.start
         for _ in 0..<max(1, count) {
-            guard let dayBefore = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
-            let previous = payPeriodContaining(referenceDate: dayBefore, settings: settings, calendar: calendar)
-            if periods.contains(where: { calendar.isDate($0.start, inSameDayAs: previous.start) }) { break }
+            guard let dayBefore = orgCalendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            let previous = payPeriodContaining(referenceDate: dayBefore, settings: settings, calendar: orgCalendar)
+            if periods.contains(where: { orgCalendar.isDate($0.start, inSameDayAs: previous.start) }) { break }
+            if orgCalendar.isDate(previous.start, inSameDayAs: current.start),
+               orgCalendar.isDate(previous.end, inSameDayAs: current.end) {
+                break
+            }
             periods.append(previous)
             cursor = previous.start
         }

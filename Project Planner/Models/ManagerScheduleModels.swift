@@ -69,6 +69,19 @@ enum ManagerTimeSlot: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
+    /// A manager day saved as `FULL DAY` is the same slot as `FULL_DAY`.
+    static func fromStored(_ raw: String) -> ManagerTimeSlot? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let direct = ManagerTimeSlot(rawValue: trimmed) { return direct }
+        switch CanonicalBusinessEngine.namedSlotKind(trimmed) {
+        case "FULL_DAY": return .fullDay
+        case "AM": return .morning
+        case "PM": return .afternoon
+        case "CUSTOM": return .customHours
+        default: return nil
+        }
+    }
+
     var displayName: String {
         switch self {
         case .morning: return "AM"

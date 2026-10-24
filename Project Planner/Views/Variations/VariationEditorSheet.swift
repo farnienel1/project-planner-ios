@@ -340,7 +340,7 @@ struct VariationEditorSheet: View {
                 isPresented: $showingLibrary,
                 selection: $photoItems,
                 maxSelectionCount: max(1, Self.maxEvidence - evidence.count),
-                matching: .any(of: [.images, .videos])
+                matching: .images
             )
             .onChange(of: photoItems) { _, items in
                 guard !items.isEmpty else { return }
@@ -354,7 +354,7 @@ struct VariationEditorSheet: View {
             }
             .fileImporter(
                 isPresented: $showingFileImporter,
-                allowedContentTypes: [.item],
+                allowedContentTypes: StorageUploadPolicy.workFileContentTypes,
                 allowsMultipleSelection: true
             ) { result in
                 if case .success(let urls) = result {
@@ -1468,10 +1468,8 @@ struct VariationEditorSheet: View {
         if type.hasPrefix("image/") || UTType(mimeType: contentType)?.conforms(to: .image) == true,
            let image = UIImage(data: data),
            let jpeg = VariationEvidenceProcessor.preparedImageData(image) {
-            let jpegName = (fileName as NSString).pathExtension.lowercased() == "jpg" || (fileName as NSString).pathExtension.lowercased() == "jpeg"
-                ? fileName
-                : "photo.jpg"
-            await uploadData(jpeg, fileName: jpegName, contentType: "image/jpeg")
+            let displayName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+            await uploadData(jpeg, fileName: displayName.isEmpty ? "photo.jpg" : displayName, contentType: "image/jpeg")
             return
         }
         await uploadData(data, fileName: fileName, contentType: contentType.isEmpty ? mime(for: fileName) : contentType)
@@ -1511,14 +1509,18 @@ struct VariationEditorSheet: View {
 
     private func addImage(_ image: UIImage, fileName: String) async {
         guard let data = VariationEvidenceProcessor.preparedImageData(image) else { return }
-        await uploadData(data, fileName: fileName.hasSuffix(".pdf") ? "photo.jpg" : fileName, contentType: "image/jpeg")
+        let displayName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        await uploadData(data, fileName: displayName.isEmpty ? "photo.jpg" : displayName, contentType: "image/jpeg")
     }
 
     private func uploadData(_ data: Data, fileName: String, contentType: String) async {
-        guard VariationEvidenceProcessor.isAllowed(fileName: fileName, contentType: contentType, byteCount: data.count) else {
-            errorMessage = data.count > VariationEvidenceProcessor.maxBytes
-                ? "That file is too large. Evidence must be 20 MB or smaller."
-                : "That file could not be added."
+        if let message = StorageUploadPolicy.refusal(
+            family: .variationEvidence,
+            fileExtension: (fileName as NSString).pathExtension,
+            contentType: contentType,
+            byteCount: data.count
+        ) {
+            errorMessage = message
             return
         }
         guard evidence.count < Self.maxEvidence else {
@@ -1669,6 +1671,7 @@ struct VariationEditorSheet: View {
     private func uploadQueuedEvidence(orgId: String) async -> String? {
         let queued = evidence.filter(\.isPending)
         var failed = 0
+        var refusal: String?
         for item in queued {
             guard let data = pendingEvidenceBytes[item.id] else { continue }
             inFlightUploads += 1
@@ -1690,10 +1693,16 @@ struct VariationEditorSheet: View {
                 pendingEvidenceBytes[item.id] = nil
             } catch {
                 failed += 1
+                if refusal == nil {
+                    refusal = error.localizedDescription
+                }
             }
             inFlightUploads = max(0, inFlightUploads - 1)
         }
         if failed == 0 { return nil }
+        if let refusal {
+            return "The variation was saved. \(refusal)"
+        }
         return failed == 1
             ? "The variation was saved. One file did not upload."
             : "The variation was saved. \(failed) files did not upload."
@@ -1744,9 +1753,6 @@ private struct PickedEvidenceFile: Transferable {
 
     static var transferRepresentation: some TransferRepresentation {
         DataRepresentation(importedContentType: .image) { data in
-            PickedEvidenceFile(data: data, fileName: "")
-        }
-        DataRepresentation(importedContentType: .movie) { data in
             PickedEvidenceFile(data: data, fileName: "")
         }
         DataRepresentation(importedContentType: .pdf) { data in

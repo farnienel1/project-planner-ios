@@ -342,8 +342,10 @@ struct MaterialSendRecord: Identifiable, Codable, Hashable {
     var projectId: UUID
     var requestType: MaterialOrderRequest.RequestType
     var sentAt: Date
-    /// Calendar day the materials were scheduled for (matches materials list day strip).
+    /// Calendar day the materials were scheduled for (matches materials list day strip). Not the required delivery.
     var materialsDate: Date?
+    /// Orders only. The instant the wholesaler must deliver. Quotes leave this empty.
+    var deliveryRequiredAt: Date?
     var sentBy: String
     var recipients: [MaterialSendRecipientSnapshot]
     var lines: [MaterialSendLineSnapshot]
@@ -354,6 +356,7 @@ struct MaterialSendRecord: Identifiable, Codable, Hashable {
         requestType: MaterialOrderRequest.RequestType,
         sentAt: Date = Date(),
         materialsDate: Date? = nil,
+        deliveryRequiredAt: Date? = nil,
         sentBy: String,
         recipients: [MaterialSendRecipientSnapshot],
         lines: [MaterialSendLineSnapshot]
@@ -363,12 +366,22 @@ struct MaterialSendRecord: Identifiable, Codable, Hashable {
         self.requestType = requestType
         self.sentAt = sentAt
         self.materialsDate = materialsDate
+        self.deliveryRequiredAt = deliveryRequiredAt
         self.sentBy = sentBy
         self.recipients = recipients
         self.lines = lines
     }
 
-    /// Day used for per-day history (materials delivery day, not necessarily send timestamp).
+    /// "Required Monday 12 October at 08:00" for an order that stored an instant. Quotes stay empty.
+    var requiredDeliverySummary: String? {
+        guard let label = CanonicalBusinessEngine.orderDeliveryRequiredLabel(
+            requestType: requestType.rawValue,
+            at: deliveryRequiredAt
+        ) else { return nil }
+        return "Required \(label)"
+    }
+
+    /// Day used for per-day history. This is the materials-list day, not `deliveryRequiredAt`.
     func historyDay(calendar: Calendar = .current) -> Date {
         let raw = materialsDate ?? sentAt
         return calendar.startOfDay(for: raw)
@@ -516,7 +529,7 @@ struct MaterialOrderRequest: Codable {
     var companyLogoURL: String?
     /// When true, email body is plain text (same facts as the HTML template).
     var sendAsPlainText: Bool
-    /// Required on orders. The wholesaler email includes this date. Quotes leave it empty.
+    /// Required on orders: the delivery instant from the canonical script. Quotes leave it empty.
     var requiredDeliveryDate: Date?
     
     enum RequestType: String, Codable {
