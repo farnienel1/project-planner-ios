@@ -4,6 +4,15 @@ Business rules shared with the web app are not reimplemented here.
 
 The source is `lib/canonical/engine.ts` in `project-planner-web`. This app runs the generated `Project Planner/Canonical/canonical-business.js` through `Project Planner/Canonical/CanonicalBusinessEngine.swift`. Read `docs/CANONICAL_ARCHITECTURE.md` before changing bookings, warnings, invoicing, labour, organisation context, or dates.
 
+## Rule 0: the rulebook comes first
+
+The canonical rulebook (`project-planner-web/lib/canonical`, run here as `canonical-business.js` through `CanonicalBusinessEngine`) is the single source of business behaviour for both apps. Before any change that decides who sees what, what is counted, what is written to Firestore, or how a date, booking, warning, timesheet, invite, notification, or permission behaves:
+
+- Name the rulebook function the change calls, or state that none exists.
+- If none exists, the rule is added to `lib/canonical` first, the script is rebuilt, and Swift calls it. Swift never gets its own version, not even as a stopgap.
+- A screen or store only passes inputs to the rulebook and shows its result.
+- A plan, review, or hand-off that touches business behaviour names the rulebook functions it relies on.
+
 ## Rules
 
 1. Canonical business logic. Search `CanonicalBusinessEngine` and the web `lib/canonical` module before adding a business rule. Do not add a parallel calculator in a view or store.
