@@ -26,6 +26,9 @@ struct OrgMembershipSummary: Identifiable, Equatable {
     let roleInOrg: String
     let isTrial: Bool
     let trialAccessBlocked: Bool
+    /// `CanonicalBusinessEngine.hasAccess` for this company's nested billing map. Missing billing stays open.
+    /// Trial locks stay on `trialAccessBlocked` and do not set this flag.
+    let subscriptionHasAccess: Bool
     let createdAt: Date?
 
     var isActive: Bool { !trialAccessBlocked }
@@ -41,11 +44,54 @@ struct OrgMembershipSummary: Identifiable, Equatable {
     }
 }
 
+/// Companies the phone already knows. Built from `sessionMembershipIds` with an empty members scan.
+enum OrganizationSwitcherCatalog {
+    static func knownCompaniesBeforeScan(
+        previous: [OrgMembershipSummary],
+        rememberedOrganizationId: String?,
+        documentOrganizationId: String?,
+        explicitOrganizationId: String?,
+        currentOrganizationId: String?,
+        currentOrganizationName: String?,
+        cachedNameForRemembered: String?
+    ) -> [OrgMembershipSummary] {
+        let ids = CanonicalBusinessEngine.sessionMembershipIds(
+            discoveredIds: [],
+            previousIds: previous.map(\.id),
+            rememberedOrganizationId: rememberedOrganizationId,
+            documentOrganizationId: documentOrganizationId,
+            explicitOrganizationId: explicitOrganizationId,
+            discoveryIncomplete: true
+        ) ?? previous.map(\.id)
+        return ids.map { organizationId in
+            if let existing = previous.first(where: { organizationIdsMatch($0.id, organizationId) }) {
+                return existing
+            }
+            let knownName: String? = {
+                if organizationIdsMatch(currentOrganizationId, organizationId) { return currentOrganizationName }
+                if organizationIdsMatch(rememberedOrganizationId, organizationId) { return cachedNameForRemembered }
+                return nil
+            }()
+            let coalesced = CanonicalBusinessEngine.coalesceOrganizationName([knownName]) ?? ""
+            return OrgMembershipSummary(
+                id: organizationId,
+                name: CanonicalBusinessEngine.displayOrganizationName(coalesced) ?? "Organisation",
+                roleInOrg: "member",
+                isTrial: false,
+                trialAccessBlocked: false,
+                subscriptionHasAccess: true,
+                createdAt: nil
+            )
+        }
+    }
+}
+
 enum OrganizationSwitchError: LocalizedError {
     case notAuthenticated
     case organizationNotFound
     case notAMember
     case trialBlocked(String)
+    case subscriptionLapsed
 
     var errorDescription: String? {
         switch self {
@@ -57,6 +103,8 @@ enum OrganizationSwitchError: LocalizedError {
             return "You are not a member of that organisation."
         case .trialBlocked(let message):
             return message
+        case .subscriptionLapsed:
+            return SubscriptionLapsedCopy.headline
         }
     }
 }
@@ -125,19 +173,17 @@ enum OrganizationTrialPolicy {
             }
             return nil
         }()
+        let parsed = CanonicalBusinessEngine.parseOrganizationName(Organization.nameParsePayload(from: orgData)) ?? ""
         return OrgMembershipSummary(
             id: organizationId,
-            name: (orgData["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Organisation",
+            name: CanonicalBusinessEngine.displayOrganizationName(parsed) ?? "Organisation",
             roleInOrg: roleInOrg,
             isTrial: isTrialOrganization(orgData),
             trialAccessBlocked: isAccessBlocked(orgData),
+            subscriptionHasAccess: CanonicalBusinessEngine.hasAccess(
+                billing: OrganizationBillingMap.payload(from: orgData)
+            ) ?? true,
             createdAt: createdAt
         )
-    }
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
     }
 }

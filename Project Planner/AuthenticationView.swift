@@ -88,7 +88,7 @@ struct AuthenticationView: View {
         .onSubmit {
             if focusedField == .email {
                 focusedField = .password
-            } else if isFormValid {
+            } else {
                 signIn()
             }
         }
@@ -277,7 +277,7 @@ struct AuthenticationView: View {
             }
             .accessibilityIdentifier("signIn.signIn")
             .buttonStyle(.plain)
-            .disabled(firebaseBackend.isLoading || !isFormValid)
+            .disabled(firebaseBackend.isLoading)
             .padding(.bottom, 24)
 
             HStack(spacing: 12) {
@@ -307,6 +307,29 @@ struct AuthenticationView: View {
             }
             .accessibilityIdentifier("signIn.globe")
             .buttonStyle(.plain)
+
+            HStack(spacing: 20) {
+                Spacer(minLength: 0)
+                Button("Privacy Policy") {
+                    AppBranding.openPrivacyPolicy()
+                }
+                .accessibilityIdentifier("signIn.privacyPolicy")
+                .accessibilityAddTraits(.isLink)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(LoginBrand.cyan.opacity(0.8))
+                .buttonStyle(.plain)
+
+                Button("Terms of Service") {
+                    AppBranding.openTermsOfService()
+                }
+                .accessibilityIdentifier("signIn.termsOfService")
+                .accessibilityAddTraits(.isLink)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(LoginBrand.cyan.opacity(0.8))
+                .buttonStyle(.plain)
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 16)
 
             Text(versionLine)
                 .font(.system(size: 11, weight: .medium))
@@ -360,22 +383,19 @@ struct AuthenticationView: View {
     }
 
     private var isFormValid: Bool {
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmedEmail.isEmpty && !password.isEmpty
+        AuthFormValidation.loginMessages(email: email, password: password).isEmpty
     }
 
     private func signIn() {
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedEmail.isEmpty else {
-            firebaseBackend.errorMessage = "Please enter your email address."
-            return
-        }
-        guard !trimmedPassword.isEmpty else {
-            firebaseBackend.errorMessage = "Please enter your password."
+        let validationMessages = AuthFormValidation.loginMessages(email: email, password: password)
+        if !validationMessages.isEmpty {
+            userStore.errorMessage = nil
+            firebaseBackend.errorMessage = validationMessages.joined(separator: "\n")
             return
         }
 
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
         userStore.errorMessage = nil
         Task { @MainActor in
             do {

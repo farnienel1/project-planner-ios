@@ -7,6 +7,8 @@ alwaysApply: true
 
 `Project Planner/Canonical/canonical-business.js` is generated from `project-planner-web/lib/canonical`. `CanonicalBusinessEngine.swift` is the Swift entry. `docs/CANONICAL_ARCHITECTURE.md` describes the boundary.
 
+Rule 0 in `AGENTS.md` applies to every change: name the rulebook function a change relies on, or state that none exists and add it to `lib/canonical` first. Both apps follow that one rulebook.
+
 Before adding or changing a booking, warning, invoicing, labour, organisation, or date rule:
 
 1. Call `CanonicalBusinessEngine` or the existing Swift wrapper that already calls it.

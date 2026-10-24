@@ -52,6 +52,8 @@ class NotificationService: ObservableObject {
     private var pendingScheduledDeadlineNotifications: [AppNotification] = []
     /// True after a launch-time badge warm or an explicit inbox load.
     private var hasLoadedNotificationsThisSession = false
+    private var notificationAuthorizationTask: Task<Bool, Never>?
+    private var didLogNotificationAuthorization = false
     private static let dismissedSyntheticKeyPrefix = "NotificationService.dismissedSyntheticKey."
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
@@ -88,6 +90,8 @@ class NotificationService: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             guard !Task.isCancelled else { return }
             await performDailyMaterialCutOffReminderRefresh()
+            guard !Task.isCancelled else { return }
+            await performTimesheetSubmissionReminderRefresh()
         }
         materialCutoffRefreshTask = task
         await task.value
@@ -105,19 +109,103 @@ class NotificationService: ObservableObject {
             return
         }
 
-        let notificationSettings = appSettingsStore?.settings.notifications ?? NotificationSettings()
-        let notificationsEnabled = notificationSettings.materialOrderCutOff
+        guard firebaseBackend?.currentOrganization != nil else { return }
+        guard let clock = OrgMaterialCutOff.resolve(
+            stored: firebaseBackend?.currentOrganization?.settings.materialCutOff,
+            organizationLoaded: true
+        ) else { return }
+
+        let notificationsEnabled = deliveryAllowed(type: AppNotification.NotificationType.materialOrderCutOff.rawValue)
+            && clock.materialOrderCutOff
         guard notificationsEnabled else {
             await LocalNotificationService.shared.removeAllMaterialCutOffReminders()
             return
         }
 
         await LocalNotificationService.shared.scheduleDailyMaterialCutOffReminder(
-            hour: notificationSettings.materialCutOffHour,
-            minute: notificationSettings.materialCutOffMinute,
-            includeSaturday: notificationSettings.materialCutOffOnSaturday,
-            includeSunday: notificationSettings.materialCutOffOnSunday
+            hour: clock.materialCutOffHour,
+            minute: clock.materialCutOffMinute,
+            includeSaturday: clock.materialCutOffOnSaturday,
+            includeSunday: clock.materialCutOffOnSunday
         )
+    }
+
+    func refreshTimesheetSubmissionReminders() async {
+        await performTimesheetSubmissionReminderRefresh()
+    }
+
+    /// Inbox row once the notice is due. The device alert is the FCM send for that id, not a local banner.
+    /// Only the signed-in person who already participates in timesheets. The toggle does not add recipients.
+    private func performTimesheetSubmissionReminderRefresh() async {
+        let noticeType = CanonicalBusinessEngine.timesheetSubmissionNoticeType
+            ?? AppNotification.NotificationType.timesheetSubmissionReminder.rawValue
+        guard let user = userStore?.currentUser, user.isActive, user.participatesInTimesheets() else {
+            await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
+            return
+        }
+        guard deliveryAllowed(type: noticeType) else {
+            await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
+            return
+        }
+        guard let firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
+            return
+        }
+        let invoicing = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        let now = Date()
+        var sawAnswer = false
+        var notices: [String: CanonicalBusinessEngine.CanonicalTimesheetSubmissionNotice] = [:]
+        var dueNow = Set<String>()
+        for offset in [0, 14, 28, 42] {
+            guard let anchor = calendar.date(byAdding: .day, value: offset, to: now) else { continue }
+            guard let rows = CanonicalBusinessEngine.dueTimesheetSubmissionNotices(
+                reference: anchor,
+                invoicing: invoicing
+            ) else { continue }
+            sawAnswer = true
+            for row in rows {
+                notices[row.occurrenceKey] = row
+                if offset == 0 { dueNow.insert(row.occurrenceKey) }
+            }
+        }
+        guard sawAnswer else {
+            await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
+            return
+        }
+        guard firebaseBackend.currentOrganization?.firestoreDocumentId == organizationId else { return }
+
+        for notice in notices.values {
+            guard !notice.title.isEmpty, !notice.message.isEmpty else { continue }
+            guard let dedupKey = CanonicalBusinessEngine.timesheetSubmissionNoticeDedupKey(
+                organizationId: organizationId,
+                paymentDayKey: notice.paymentDayKey,
+                runIndex: notice.runIndex,
+                userId: user.id
+            ) else { continue }
+            guard dueNow.contains(notice.occurrenceKey), !notice.message.isEmpty else { continue }
+            guard firebaseBackend.currentOrganization?.firestoreDocumentId == organizationId else { return }
+            let notification = AppNotification(
+                id: syntheticNotificationId(from: dedupKey),
+                organizationId: organizationId,
+                type: .timesheetSubmissionReminder,
+                title: notice.title,
+                message: notice.message,
+                userId: user.id,
+                isRead: false,
+                createdAt: Date(),
+                deepLinkWeekStart: CanonicalBusinessEngine.date(fromDayKey: notice.paymentDayKey),
+                dayKey: notice.paymentDayKey
+            )
+            await saveNotification(
+                notification,
+                deliverLocalPush: false,
+                preserveExistingReadState: true,
+                onlyIfMissing: true
+            )
+        }
+        await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
     }
 
     /// Schedules local notifications 3 months, 1 month, 1 week and 1 day before each qualification expiry (09:00).
@@ -142,8 +230,7 @@ class NotificationService: ObservableObject {
         await LocalNotificationService.shared.removeQualificationExpiryReminders()
         let authorized = await LocalNotificationService.shared.requestAuthorization()
         guard authorized else { return }
-        let prefs = appSettingsStore?.settings.notifications ?? NotificationSettings()
-        guard prefs.qualificationExpiry else { return }
+        guard deliveryAllowed(type: AppNotification.NotificationType.qualificationExpiry.rawValue) else { return }
 
         let myCanonicalId = await resolvedRecipientUserIdResolvingStaleIds(currentUser.id)
 
@@ -216,7 +303,7 @@ class NotificationService: ObservableObject {
                     body = "\(operative.name): \(qualName) expires on \(expiryFormatted)."
                 }
                 let roleTag = audience == .operative ? "op" : "lm"
-                let ident = "\(prefix)\(operative.id.uuidString)-\(qualId.uuidString)-\(schedule.suffix)-\(roleTag)"
+                let ident = "\(prefix)\(operative.id.uuidString)-\(qualId)-\(schedule.suffix)-\(roleTag)"
                 await LocalNotificationService.shared.scheduleQualificationExpiryOneShot(
                     identifier: ident,
                     title: title,
@@ -229,7 +316,15 @@ class NotificationService: ObservableObject {
     
     // MARK: - Notification Creation
     
-    func notifyBookingCreated(bookingId: UUID, operativeId: UUID, projectName: String, date: Date, createdBy: String) async {
+    func notifyBookingCreated(
+        bookingId: UUID,
+        operativeId: UUID,
+        projectName: String,
+        date: Date,
+        createdBy: String,
+        projectId: UUID? = nil,
+        catalogue: String? = nil
+    ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         
@@ -253,8 +348,10 @@ class NotificationService: ObservableObject {
                         title: "You've Been Booked",
                         message: "\(createdBy) booked you for \(projectName) on \(date.formatted(date: .abbreviated, time: .omitted))",
                         userId: canonicalUserId,
-                        relatedId: bookingId,
-                        requiresPermission: nil // No permission check needed since it's user-specific
+                        relatedId: projectId ?? bookingId,
+                        requiresPermission: nil,
+                        dayKey: CanonicalBusinessEngine.dayKey(for: date),
+                        catalogue: catalogue
                     )
                     await saveNotification(notification)
                 }
@@ -283,7 +380,9 @@ class NotificationService: ObservableObject {
     func notifyBookedUsers(
         projectName: String,
         bookedBy: String,
-        recipients: [BookedUserRecipient]
+        recipients: [BookedUserRecipient],
+        projectId: UUID? = nil,
+        catalogue: String? = nil
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
@@ -314,6 +413,7 @@ class NotificationService: ObservableObject {
             let dedupeKey = "bookedUsers|\(canonicalUserId)|\(recipient.operativeId.uuidString)|\(projectName.lowercased())|\(dateText.lowercased())"
             let dedupeRelatedId = syntheticNotificationId(from: "bookedUsersRelated|\(dedupeKey)")
             
+            let day = recipient.dates.sorted().first
             let notification = AppNotification(
                 id: syntheticNotificationId(from: dedupeKey),
                 organizationId: organizationId,
@@ -321,8 +421,10 @@ class NotificationService: ObservableObject {
                 title: "You've Been Booked",
                 message: message,
                 userId: canonicalUserId,
-                relatedId: dedupeRelatedId,
-                requiresPermission: nil
+                relatedId: projectId ?? dedupeRelatedId,
+                requiresPermission: nil,
+                dayKey: day.map { CanonicalBusinessEngine.dayKey(for: $0) },
+                catalogue: catalogue
             )
             await saveNotification(notification)
         }
@@ -527,21 +629,33 @@ class NotificationService: ObservableObject {
         }
     }
     
-    func notifyBookingClash(booking1Id: UUID, booking2Id: UUID, operativeName: String, date: Date, userId1: String, userId2: String) async {
+    func notifyBookingClash(
+        booking1Id: UUID,
+        booking2Id: UUID,
+        operativeName: String,
+        date: Date,
+        userId1: String,
+        userId2: String,
+        projectId: UUID? = nil,
+        catalogue: String? = nil
+    ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         
         let message = "Booking clash detected for \(operativeName) on \(date.formatted(date: .abbreviated, time: .omitted))"
         
         // Send notification to both users involved in the clash
+        let dayKey = CanonicalBusinessEngine.dayKey(for: date)
         let notification1 = AppNotification(
             organizationId: organizationId,
             type: .bookingClash,
             title: "Booking Clash",
             message: message,
             userId: userId1,
-            relatedId: booking1Id,
-            requiresPermission: "canBookWork"
+            relatedId: projectId ?? booking1Id,
+            requiresPermission: "canBookWork",
+            dayKey: dayKey,
+            catalogue: catalogue
         )
         
         let notification2 = AppNotification(
@@ -550,8 +664,10 @@ class NotificationService: ObservableObject {
             title: "Booking Clash",
             message: message,
             userId: userId2,
-            relatedId: booking2Id,
-            requiresPermission: "canBookWork"
+            relatedId: projectId ?? booking2Id,
+            requiresPermission: "canBookWork",
+            dayKey: dayKey,
+            catalogue: catalogue
         )
         
         await saveNotification(notification1)
@@ -934,7 +1050,7 @@ class NotificationService: ObservableObject {
         let html = MaterialRequestEmailBuilder.plainTextAsSimpleHTML(plain)
         let sent = await ResendEmailService().sendEmail(
             to: trimmedEmail,
-            subject: "Annual leave cancelled",
+            subject: ExportTextEscaping.sanitizeEmailSubject("Annual leave cancelled"),
             htmlContent: html
         )
         print("🔥🔥🔥 DEBUG: [HOLIDAY CANCEL EMAIL] to=\(trimmedEmail) sent=\(sent)")
@@ -970,13 +1086,7 @@ class NotificationService: ObservableObject {
             relatedId: nil,
             requiresPermission: nil
         )
-        await saveNotification(notification)
-        scheduleLocalInAppMirrorAlert(
-            title: "Annual leave update",
-            message: "Please check your annual leave and request any annual leave days moving forward.",
-            dedupeIdentifier: dedupeId.uuidString,
-            userInfo: NotificationDeepLink.userInfo(for: notification)
-        )
+        await saveNotification(notification, deliverLocalPush: false)
     }
 
     /// Sent when a manager/admin books approved annual leave on behalf of a team member.
@@ -1132,10 +1242,62 @@ class NotificationService: ObservableObject {
         unreadCount = 0
     }
 
-    /// Lightweight post-idle unread badge warm. Skips if inbox already loaded this session.
+    /// Attaches the inbox listener so the bell badge and list follow notification documents.
+    /// Does not reload projects, people, or other company data.
+    func startInboxListenerIfNeeded() {
+        guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId,
+              let userId = userStore?.currentUser?.id,
+              !userId.isEmpty else { return }
+        startNotificationsListenerIfNeeded(organizationId: organizationId, userId: userId)
+    }
+
+    /// Asks for alert permission once the signed-in shell is on screen, if the system has never been asked.
+    /// A Settings toggle is not the same as this authorization status.
+    @discardableResult
+    func ensureSystemNotificationAuthorizationIfNeeded() async -> Bool {
+        if let notificationAuthorizationTask {
+            return await notificationAuthorizationTask.value
+        }
+        let task = Task { @MainActor () -> Bool in
+            let center = UNUserNotificationCenter.current()
+            let settings = await center.notificationSettings()
+            if !self.didLogNotificationAuthorization {
+                self.didLogNotificationAuthorization = true
+                print("🔥🔥🔥 DEBUG: Notification authorization status=\(settings.authorizationStatus)")
+            }
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                self.registerForRemoteNotificationsIfPossible()
+                return true
+            case .denied:
+                print("🔥🔥🔥 DEBUG: Notification authorization denied. Local banners and remote pushes stay off until Project Planner is allowed in Settings.")
+                return false
+            case .notDetermined:
+                let granted = await LocalNotificationService.shared.requestAuthorization()
+                print("🔥🔥🔥 DEBUG: Signed-in notification authorization granted=\(granted)")
+                if granted {
+                    self.registerForRemoteNotificationsIfPossible()
+                }
+                return granted
+            @unknown default:
+                return false
+            }
+        }
+        notificationAuthorizationTask = task
+        let granted = await task.value
+        notificationAuthorizationTask = nil
+        return granted
+    }
+
+    private func registerForRemoteNotificationsIfPossible() {
+        #if canImport(UIKit)
+        UIApplication.shared.registerForRemoteNotifications()
+        #endif
+    }
+
+    /// Lightweight inbox attach. The listener is the badge update; this does not fetch company data.
     func warmUnreadBadgeIfNeeded() async {
-        guard !hasLoadedNotificationsThisSession else { return }
-        await loadNotifications()
+        startInboxListenerIfNeeded()
     }
 
     func loadNotifications() async {
@@ -1144,27 +1306,26 @@ class NotificationService: ObservableObject {
               let currentUser = userStore?.currentUser else { return }
 
         hasLoadedNotificationsThisSession = true
-        let fetched = try? await firebaseBackend.loadNotifications(organizationId: organizationId, limit: 150)
+        let fetched = try? await firebaseBackend.loadNotifications(
+            organizationId: organizationId,
+            userId: currentUser.id,
+            limit: 150
+        )
         let fallbackExisting = notifications.filter { !isSyntheticInboxItem($0) }
         let allNotifications = fetched ?? fallbackExisting
         print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] currentUser=\(currentUser.id) totalLoaded=\(allNotifications.count)")
         capturePendingDeadlineNotifications(from: allNotifications, currentUser: currentUser)
 
-        // Filter notifications based on user permissions
-        let filteredNotifications = allNotifications.filter { notification in
-            shouldShowNotification(notification, for: currentUser)
-        }
         let synthetic = syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
         let delivered = await deliveredLocalInboxNotifications(organizationId: organizationId, userId: currentUser.id)
         let merged = dedupeVisibleNotifications(
-            dedupeHolidayNotificationRows((filteredNotifications + synthetic + delivered).sorted { $0.createdAt > $1.createdAt })
+            dedupeHolidayNotificationRows(allNotifications + synthetic + delivered)
         )
-        let targetedToCurrent = allNotifications.filter { $0.userId == currentUser.id }.count
-        let broadcastCount = allNotifications.filter { $0.userId == nil }.count
-        print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] targetedToCurrent=\(targetedToCurrent) broadcasts=\(broadcastCount) filteredVisible=\(filteredNotifications.count)")
+        let listed = listedInbox(applyLocalReadState(to: merged), userId: currentUser.id)
+        print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] listed=\(listed.count)")
         
         await MainActor.run {
-            self.notifications = self.applyLocalReadState(to: merged)
+            self.notifications = listed
             self.setUnreadCount(from: self.notifications)
             // Catch-up path: if app was closed/backgrounded and new notifications arrived,
             // alert once for notifications newer than the last processed timestamp.
@@ -1188,7 +1349,8 @@ class NotificationService: ObservableObject {
         guard !newlyVisible.isEmpty else { return }
         pendingScheduledDeadlineNotifications.removeAll { $0.createdAt <= now }
         let merged = dedupeVisibleNotifications(notifications + newlyVisible)
-        notifications = applyLocalReadState(to: merged)
+        let userId = userStore?.currentUser?.id ?? ""
+        notifications = listedInbox(applyLocalReadState(to: merged), userId: userId)
         setUnreadCount(from: notifications)
     }
     
@@ -1223,7 +1385,7 @@ class NotificationService: ObservableObject {
         }
     }
 
-    /// Clears the home-screen badge immediately when the user opens the inbox. Firestore persistence runs separately.
+    /// Marks every listed row read. The notification centre does not call this; a row is marked when it is opened.
     func prepareInboxPresentation() {
         loadDismissedSyntheticIdsIfNeeded()
         pendingReadNotificationIds = Set(notifications.map(\.id))
@@ -1240,10 +1402,10 @@ class NotificationService: ObservableObject {
         }
         persistDismissedSyntheticIds()
         persistDismissedSyntheticStableKeys()
-        setUnreadCount(0)
+        setUnreadCount(from: notifications)
     }
 
-    /// Mark all notifications as read. Call when the user opens the notification list so the badge clears.
+    /// Marks every listed row read and writes that state. Opening the centre does not call this.
     func markAllAsRead() async {
         prepareInboxPresentation()
         guard let firebaseBackend = firebaseBackend,
@@ -1295,11 +1457,13 @@ class NotificationService: ObservableObject {
             }
         }
 
-        if let key = UserNotificationToggle.preference(for: notification.type) {
-            let settings = appSettingsStore?.settings.notifications ?? NotificationSettings()
-            return settings.isEnabled(key)
-        }
-        return true
+        return deliveryAllowed(type: notification.type.rawValue)
+    }
+
+    /// The signed-in user's toggles. A type with no key stays allowed. A nil script result does not block.
+    private func deliveryAllowed(type: String) -> Bool {
+        guard let prefs = appSettingsStore?.settings.notifications.preferenceValues else { return true }
+        return CanonicalBusinessEngine.notificationPreferenceAllowsDelivery(prefs: prefs, type: type) ?? true
     }
 
     private func dedupeVisibleNotifications(_ notifications: [AppNotification]) -> [AppNotification] {
@@ -1329,19 +1493,27 @@ class NotificationService: ObservableObject {
     private func saveNotification(
         _ notification: AppNotification,
         deliverLocalPush: Bool = true,
-        preserveExistingReadState: Bool = false
+        preserveExistingReadState: Bool = false,
+        onlyIfMissing: Bool = false
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        if let target = notification.userId,
+           let me = userStore?.currentUser?.id,
+           resolvedRecipientUserId(target) == resolvedRecipientUserId(me),
+           !deliveryAllowed(type: notification.type.rawValue) {
+            return
+        }
         
         do {
             try await firebaseBackend.saveNotification(
                 notification,
                 organizationId: organizationId,
-                preserveExistingReadState: preserveExistingReadState
+                preserveExistingReadState: preserveExistingReadState,
+                onlyIfMissing: onlyIfMissing
             )
             print("🔥🔥🔥 DEBUG: [NOTIFY SAVE OK] id=\(notification.id.uuidString) type=\(notification.type.rawValue) target=\(notification.userId ?? "broadcast") related=\(notification.relatedId?.uuidString ?? "none")")
-            if deliverLocalPush, !isFutureScheduledDeadline(notification) {
+            if deliverLocalPush, !isFutureScheduledDeadline(notification), !isDevicePush(notification.type.rawValue) {
                 deliverLocalPushIfNeeded(for: notification)
             }
         } catch {
@@ -1379,39 +1551,44 @@ class NotificationService: ObservableObject {
             .collection("organizations")
             .document(organizationId)
             .collection("notifications")
-            .order(by: "createdAt", descending: true)
+            .whereField("userId", isEqualTo: userId)
             .limit(to: 150)
             .addSnapshotListener { [weak self] snapshot, error in
-                guard let self else { return }
                 if let error {
                     print("🔥🔥🔥 DEBUG: Notifications listener error: \(error.localizedDescription)")
                     return
                 }
-                guard let docs = snapshot?.documents,
-                      let currentUser = self.userStore?.currentUser else { return }
+                guard let snapshot else { return }
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard let currentUser = self.userStore?.currentUser else { return }
 
-                let parsed = docs.compactMap { self.parseNotificationDocument($0) }
-                self.capturePendingDeadlineNotifications(from: parsed, currentUser: currentUser)
-                let filtered = parsed.filter { self.shouldShowNotification($0, for: currentUser) }
-                let sorted = filtered.sorted { $0.createdAt > $1.createdAt }
-                let synthetic = self.syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
-                let changedParsed = (snapshot?.documentChanges ?? [])
-                    .compactMap { change -> AppNotification? in
-                        // Alert only for newly added notifications after the stream is primed.
+                    let parsed = snapshot.documents.compactMap { self.parseNotificationDocument($0) }
+                    self.capturePendingDeadlineNotifications(from: parsed, currentUser: currentUser)
+                    let synthetic = self.syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
+                    let changedParsed = snapshot.documentChanges.compactMap { change -> AppNotification? in
                         guard change.type == .added else { return nil }
                         return self.parseNotificationDocument(change.document)
                     }
                     .filter { self.shouldShowNotification($0, for: currentUser) }
 
-                Task { @MainActor in
                     let delivered = await self.deliveredLocalInboxNotifications(organizationId: organizationId, userId: currentUser.id)
                     let merged = self.dedupeVisibleNotifications(
-                        self.dedupeHolidayNotificationRows((sorted + synthetic + delivered).sorted { $0.createdAt > $1.createdAt })
+                        self.dedupeHolidayNotificationRows(parsed + synthetic + delivered)
                     )
                     let reconciled = self.applyLocalReadState(to: merged)
-                    self.notifications = reconciled
-                    self.setUnreadCount(from: reconciled)
+                    let listed = self.listedInbox(reconciled, userId: currentUser.id)
+                    self.notifications = listed
+                    self.setUnreadCount(from: listed)
+                    self.hasLoadedNotificationsThisSession = true
                     if !self.didPrimeNotificationStream {
+                        if let cutoff = self.lastProcessedNotificationAt {
+                            let catchUp = merged.filter { $0.createdAt > cutoff }
+                            self.processBookingToasts(from: catchUp)
+                            self.processHolidayRequestAlerts(from: catchUp)
+                            self.processHolidayDecisionAlerts(from: catchUp)
+                            self.processGeneralLocalAlerts(from: catchUp)
+                        }
                         self.primeLocalAlertDedup(with: merged)
                         self.didPrimeNotificationStream = true
                         self.advanceLastProcessedNotificationDate(using: merged)
@@ -1458,32 +1635,22 @@ class NotificationService: ObservableObject {
             createdAt: createdAt,
             requiresPermission: requiresPermission,
             deepLinkUserId: data["deepLinkUserId"] as? String,
-            deepLinkWeekStart: (data["deepLinkWeekStart"] as? Timestamp)?.dateValue()
+            deepLinkWeekStart: (data["deepLinkWeekStart"] as? Timestamp)?.dateValue(),
+            dayKey: AppNotification.inboxDayKey(storedDayKey: data["dayKey"] as? String, relatedId: relatedIdString),
+            catalogue: data["catalogue"] as? String
         )
     }
 
     private func processBookingToasts(from notifications: [AppNotification]) {
         guard userStore?.isOperativeMode() == true else { return }
-        loadPersistedLocalAlertDedupKeysIfNeeded()
-        let bookingNotifications = notifications
-            .filter { $0.type == .bookingCreated }
-            .sorted { $0.createdAt > $1.createdAt }
-        for n in bookingNotifications where !seenBookingNotificationIds.contains(n.id) {
-            seenBookingNotificationIds.insert(n.id)
-            if !n.isRead {
-                bookingToastMessage = n.message
-                let key = notificationDedupKey(for: n)
-                guard !seenLocalAlertNotificationKeys.contains(key) else { break }
-                recordLocalAlertDedupKey(key)
-                scheduleLocalInAppMirrorAlert(
-                    title: n.title,
-                    message: n.message,
-                    dedupeIdentifier: key,
-                    userInfo: NotificationDeepLink.userInfo(for: n)
-                )
-            }
-            break
+        let unseen = notifications.filter {
+            $0.type == .bookingCreated && !$0.isRead && !seenBookingNotificationIds.contains($0.id)
         }
+        guard let newest = unseen.max(by: { $0.createdAt < $1.createdAt }) else { return }
+        for notification in unseen {
+            seenBookingNotificationIds.insert(notification.id)
+        }
+        bookingToastMessage = newest.message
     }
 
     private func processHolidayRequestAlerts(from notifications: [AppNotification]) {
@@ -1516,13 +1683,10 @@ class NotificationService: ObservableObject {
         let sorted = notifications.sorted { $0.createdAt > $1.createdAt }
         for notification in sorted {
             switch notification.type {
-            case .bookingCreated:
-                // Handled by processBookingToasts; avoid duplicate scheduling.
-                continue
             case .holidayRequestSubmitted, .holidayRequestApproved, .holidayRequestDeclined:
                 continue
-            case .deadlineReminder, .deadlineDue:
-                // OS banners are scheduled for the fire time; don't also mirror immediately.
+            case .deadlineReminder, .deadlineDue, .materialOrderCutOff, .qualificationExpiry, .timesheetSubmissionReminder:
+                // Clocks and the timesheet FCM alert. Do not mirror them as an immediate local banner.
                 continue
             default:
                 triggerLocalAlertIfNeeded(for: notification)
@@ -1532,7 +1696,7 @@ class NotificationService: ObservableObject {
 
     private func scheduleLocalInAppMirrorAlert(title: String, message: String, dedupeIdentifier: String, userInfo: [AnyHashable: Any] = [:]) {
         Task {
-            let granted = await LocalNotificationService.shared.requestAuthorization()
+            let granted = await ensureSystemNotificationAuthorizationIfNeeded()
             guard granted else {
                 print("🔥🔥🔥 DEBUG: Local notification permission not granted; skipping banner")
                 return
@@ -1551,6 +1715,7 @@ class NotificationService: ObservableObject {
             content.title = title
             content.body = message
             content.sound = .default
+            content.interruptionLevel = .active
             content.userInfo = userInfo
             // OS banners are scheduled 1 second out so they appear while the app is in the
             // foreground (immediate triggers are delivered silently). Firestore itself is
@@ -1562,6 +1727,7 @@ class NotificationService: ObservableObject {
             )
             do {
                 try await center.add(request)
+                print("🔥🔥🔥 DEBUG: Scheduled local notification: \(title)")
             } catch {
                 print("🔥🔥🔥 DEBUG: Local in-app notification error: \(error.localizedDescription)")
             }
@@ -1779,16 +1945,28 @@ class NotificationService: ObservableObject {
     }
 
     private func requestLocalNotificationPermissionIfNeeded() {
+        guard firebaseBackend?.isAuthenticated == true else { return }
         guard !hasRequestedLocalNotificationPermission else { return }
         hasRequestedLocalNotificationPermission = true
         Task {
-            _ = await LocalNotificationService.shared.requestAuthorization()
+            _ = await ensureSystemNotificationAuthorizationIfNeeded()
         }
     }
 
+    private func localBannerEvent(for notification: AppNotification) -> LocalNotificationBannerPolicy.Event {
+        LocalNotificationBannerPolicy.Event(
+            id: notification.id.uuidString,
+            type: notification.type,
+            relatedId: notification.relatedId?.uuidString,
+            targetUserId: notification.userId.map { resolvedRecipientUserId($0) },
+            isRead: notification.isRead,
+            isSynthetic: isSyntheticInboxItem(notification),
+            isFutureScheduledDeadline: isFutureScheduledDeadline(notification)
+        )
+    }
+
     private func notificationDedupKey(for notification: AppNotification) -> String {
-        let related = notification.relatedId?.uuidString ?? "none"
-        return "\(notification.type.rawValue)|\(related)|\(notification.userId ?? "broadcast")"
+        LocalNotificationBannerPolicy.dedupeKey(for: localBannerEvent(for: notification))
     }
 
     private func pushTokenCount(for userId: String) async -> Int {
@@ -1814,29 +1992,18 @@ class NotificationService: ObservableObject {
     }
 
     private func triggerLocalAlertIfNeeded(for notification: AppNotification) {
+        guard !isDevicePush(notification.type.rawValue) else { return }
         guard let currentUser = userStore?.currentUser else { return }
         guard shouldShowNotification(notification, for: currentUser) else { return }
-        if let userId = notification.userId {
-            let target = resolvedRecipientUserId(userId)
-            let me = resolvedRecipientUserId(currentUser.id)
-            guard target == me else { return }
-        }
         loadPersistedLocalAlertDedupKeysIfNeeded()
-        guard !notification.isRead else { return }
-        // Synthetic approve/decline is in-app fallback only (derived from holiday bookings). OS banners for
-        // those come from real Firestore notification docs; otherwise operatives get repeat foreground banners.
-        if isSyntheticInboxItem(notification) {
-            switch notification.type {
-            case .holidayRequestSubmitted:
-                break
-            case .holidayRequestApproved, .holidayRequestDeclined:
-                return
-            default:
-                return
-            }
-        }
-        let key = notificationDedupKey(for: notification)
-        guard !seenLocalAlertNotificationKeys.contains(key) else { return }
+        let event = localBannerEvent(for: notification)
+        let me = resolvedRecipientUserId(currentUser.id)
+        guard LocalNotificationBannerPolicy.shouldScheduleBanner(
+            for: event,
+            currentUserId: me,
+            seenKeys: seenLocalAlertNotificationKeys
+        ) else { return }
+        let key = LocalNotificationBannerPolicy.dedupeKey(for: event)
         recordLocalAlertDedupKey(key)
         scheduleLocalInAppMirrorAlert(
             title: notification.title,
@@ -2023,28 +2190,63 @@ class NotificationService: ObservableObject {
         }
     }
 
-    private func setUnreadCount(_ count: Int) {
-        unreadCount = max(0, count)
-        syncAppIconBadge()
+    /// Server-push types must not also schedule a local banner for the same inbox id.
+    private func isDevicePush(_ type: String) -> Bool {
+        CanonicalBusinessEngine.notificationDeliversDevicePush(type) == true
     }
 
-    private func setUnreadCount(from items: [AppNotification]) {
-        setUnreadCount(items.filter { !$0.isRead }.count)
+    func foregroundPresentationOptions(isRemote: Bool, type: String?) -> UNNotificationPresentationOptions {
+        if isRemote {
+            guard let type, isDevicePush(type), deliveryAllowed(type: type) else { return [] }
+            clearAppIconBadgeIfNeeded()
+            return [.banner, .sound, .list]
+        }
+        return [.banner, .sound, .list]
     }
 
-    private func syncAppIconBadge() {
-        let count = unreadCount
+    /// Home-screen icon only. The in-app number stays until the listed rows are read.
+    func clearAppIconBadgeIfNeeded() {
+        guard CanonicalBusinessEngine.notificationIconBadgeClearsOnForeground == true else { return }
         if #available(iOS 16.0, *) {
-            Task {
-                try? await UNUserNotificationCenter.current().setBadgeCount(count)
-            }
+            UNUserNotificationCenter.current().setBadgeCount(0) { _ in }
         } else {
             #if canImport(UIKit)
-            DispatchQueue.main.async {
-                UIApplication.shared.applicationIconBadgeNumber = count
-            }
+            UIApplication.shared.applicationIconBadgeNumber = 0
             #endif
         }
+    }
+
+    /// Rows the centre shows. Visibility and newest-first order come from the script.
+    func listedInbox(_ items: [AppNotification], userId: String) -> [AppNotification] {
+        let rows = items.map { item in
+            CanonicalBusinessEngine.CanonicalInboxNotificationRow(
+                id: item.id.uuidString,
+                userId: item.userId,
+                isRead: item.isRead,
+                createdAt: item.createdAt.timeIntervalSince1970 * 1000
+            )
+        }
+        guard let visible = CanonicalBusinessEngine.visibleSortedInboxNotifications(rows, userId: userId) else {
+            return items
+        }
+        let byId = Dictionary(uniqueKeysWithValues: items.map { ($0.id.uuidString, $0) })
+        return visible.compactMap { byId[$0.id] }
+    }
+
+    private func setUnreadCount(_ count: Int) {
+        unreadCount = max(0, count)
+    }
+
+    func setUnreadCount(from items: [AppNotification]) {
+        let userId = userStore?.currentUser?.id ?? ""
+        let rows = items.map {
+            CanonicalBusinessEngine.CanonicalUnreadNotificationRow(userId: $0.userId, isRead: $0.isRead)
+        }
+        guard let count = CanonicalBusinessEngine.unreadNotificationBadgeCount(
+            notifications: rows,
+            userId: userId
+        ) else { return }
+        setUnreadCount(count)
     }
 
     private func isSyntheticInboxItem(_ notification: AppNotification) -> Bool {

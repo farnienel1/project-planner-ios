@@ -12,33 +12,76 @@
 // User-created qualifications model
 // All properties are Sendable types. Hashable conformance is in extension with nonisolated methods.
 struct Qualification: Identifiable, Codable, Sendable {
-    let id: UUID
+    /// Firestore document id. Library rows use the stable code (`EL-ECS-IE`). Custom templates use an uppercase UUID.
+    let id: String
     var name: String
     var hasEndDate: Bool
     var endDate: Date?
     var createdAt: Date
     var updatedAt: Date
-    
-    nonisolated init(id: UUID = UUID(), name: String, hasEndDate: Bool = false, endDate: Date? = nil, createdAt: Date = Date(), updatedAt: Date = Date()) {
+    var code: String?
+    var section: String?
+    var subsection: String?
+    var awardingBody: String?
+    var level: Int?
+    var renewYears: Double?
+    var renewalType: String?
+    var status: String?
+    var notes: String?
+
+    nonisolated init(
+        id: String = UUID().uuidString,
+        name: String,
+        hasEndDate: Bool = false,
+        endDate: Date? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        code: String? = nil,
+        section: String? = nil,
+        subsection: String? = nil,
+        awardingBody: String? = nil,
+        level: Int? = nil,
+        renewYears: Double? = nil,
+        renewalType: String? = nil,
+        status: String? = nil,
+        notes: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.hasEndDate = hasEndDate
         self.endDate = endDate
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.code = code
+        self.section = section
+        self.subsection = subsection
+        self.awardingBody = awardingBody
+        self.level = level
+        self.renewYears = renewYears
+        self.renewalType = renewalType
+        self.status = status
+        self.notes = notes
     }
-    
-    // Codable conformance - make init(from:) nonisolated
+
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
+        id = try container.decode(String.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         hasEndDate = try container.decode(Bool.self, forKey: .hasEndDate)
         endDate = try container.decodeIfPresent(Date.self, forKey: .endDate)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        code = try container.decodeIfPresent(String.self, forKey: .code)
+        section = try container.decodeIfPresent(String.self, forKey: .section)
+        subsection = try container.decodeIfPresent(String.self, forKey: .subsection)
+        awardingBody = try container.decodeIfPresent(String.self, forKey: .awardingBody)
+        level = try container.decodeIfPresent(Int.self, forKey: .level)
+        renewYears = try container.decodeIfPresent(Double.self, forKey: .renewYears)
+        renewalType = try container.decodeIfPresent(String.self, forKey: .renewalType)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
     }
-    
+
     nonisolated func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -47,10 +90,29 @@ struct Qualification: Identifiable, Codable, Sendable {
         try container.encodeIfPresent(endDate, forKey: .endDate)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(code, forKey: .code)
+        try container.encodeIfPresent(section, forKey: .section)
+        try container.encodeIfPresent(subsection, forKey: .subsection)
+        try container.encodeIfPresent(awardingBody, forKey: .awardingBody)
+        try container.encodeIfPresent(level, forKey: .level)
+        try container.encodeIfPresent(renewYears, forKey: .renewYears)
+        try container.encodeIfPresent(renewalType, forKey: .renewalType)
+        try container.encodeIfPresent(status, forKey: .status)
+        try container.encodeIfPresent(notes, forKey: .notes)
     }
-    
+
     private enum CodingKeys: String, CodingKey {
         case id, name, hasEndDate, endDate, createdAt, updatedAt
+        case code, section, subsection, awardingBody, level, renewYears, renewalType, status, notes
+    }
+
+    /// Library line under the name: awarding body and code, when the template has them.
+    var librarySubtitle: String? {
+        let parts = [awardingBody, code].compactMap { value -> String? in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 
@@ -120,8 +182,8 @@ struct Operative: Identifiable, Codable {
     var startDate: Date
     var skills: Set<String>
     var qualifications: Set<Qualification>
-    var qualificationExpiryDates: [UUID: Date]
-    var qualificationCertificateURLs: [UUID: String]
+    var qualificationExpiryDates: [String: Date]
+    var qualificationCertificateURLs: [String: String]
     var isActive: Bool
     var hourlyRate: Double?
     /// Preferred day-rate field (distinct from legacy `hourlyRate` where both exist).
@@ -148,8 +210,8 @@ struct Operative: Identifiable, Codable {
         startDate: Date,
         skills: Set<String> = [],
         qualifications: [Qualification] = [],
-        qualificationExpiryDates: [UUID: Date] = [:],
-        qualificationCertificateURLs: [UUID: String] = [:],
+        qualificationExpiryDates: [String: Date] = [:],
+        qualificationCertificateURLs: [String: String] = [:],
         isActive: Bool = true,
         hourlyRate: Double? = nil,
         dayRate: Double? = nil,
@@ -167,7 +229,7 @@ struct Operative: Identifiable, Codable {
         self.phone = phone
         self.startDate = startDate
         self.skills = skills
-        var qualDict: [UUID: Qualification] = [:]
+        var qualDict: [String: Qualification] = [:]
         for qual in qualifications {
             qualDict[qual.id] = qual
         }
@@ -194,8 +256,8 @@ struct Operative: Identifiable, Codable {
         startDate: Date,
         skills: Set<String> = [],
         qualifications: [Qualification] = [],
-        qualificationExpiryDates: [UUID: Date] = [:],
-        qualificationCertificateURLs: [UUID: String] = [:],
+        qualificationExpiryDates: [String: Date] = [:],
+        qualificationCertificateURLs: [String: String] = [:],
         isActive: Bool = true,
         hourlyRate: Double? = nil,
         dayRate: Double? = nil,
@@ -214,7 +276,7 @@ struct Operative: Identifiable, Codable {
         self.phone = phone
         self.startDate = startDate
         self.skills = skills
-        var qualDict: [UUID: Qualification] = [:]
+        var qualDict: [String: Qualification] = [:]
         for qual in qualifications {
             qualDict[qual.id] = qual
         }

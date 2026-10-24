@@ -9,10 +9,33 @@ import UIKit
 enum AppBranding {
     static let webAppBaseURL = "https://www.projectplanner.us"
     static let organisationSetupURL = "\(webAppBaseURL)/setup"
+    static let privacyPolicyURL = "https://www.projectplanner.us/privacy"
+    static let termsOfServiceURL = "https://www.projectplanner.us/terms"
+    static let processorsURL = "https://www.projectplanner.us/processors"
 
     @MainActor
     static func openOrganisationSetup() {
-        guard let url = URL(string: organisationSetupURL) else { return }
+        open(organisationSetupURL)
+    }
+
+    @MainActor
+    static func openPrivacyPolicy() {
+        open(privacyPolicyURL)
+    }
+
+    @MainActor
+    static func openTermsOfService() {
+        open(termsOfServiceURL)
+    }
+
+    @MainActor
+    static func openProcessors() {
+        open(processorsURL)
+    }
+
+    @MainActor
+    private static func open(_ urlString: String) {
+        guard let url = URL(string: urlString) else { return }
         UIApplication.shared.open(url)
     }
 }

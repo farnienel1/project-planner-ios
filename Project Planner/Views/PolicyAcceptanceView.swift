@@ -47,6 +47,8 @@ struct PolicyAcceptanceView: View {
                             .foregroundStyle(.secondary)
                     }
 
+                    CustomerLegalWebLinks()
+
                     Text(CustomerLegalPack.toolboxTalkDisclaimer)
                         .font(.footnote)
                         .foregroundStyle(.primary)

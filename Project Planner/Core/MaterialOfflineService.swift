@@ -101,7 +101,11 @@ enum MaterialOfflineService {
         do {
             try await firebaseBackend.sendMaterialRequest(request, organizationId: organizationId)
             if let sendRecord {
-                try? await firebaseBackend.saveMaterialSendRecord(sendRecord, organizationId: organizationId)
+                do {
+                    try await firebaseBackend.saveMaterialSendRecord(sendRecord, organizationId: organizationId)
+                } catch {
+                    print("🔥🔥🔥 DEBUG: [materials/send] email sent; send-record write failed: \(error.localizedDescription)")
+                }
             }
             return .syncedImmediately
         } catch where OfflineWriteSupport.shouldQueue(error: error, isOnline: isOnline) {
@@ -112,5 +116,15 @@ enum MaterialOfflineService {
             )
             return .queuedForSync
         }
+    }
+
+    /// Shown only when the wholesaler email did not go. A permission failure after a successful send is not this path.
+    static func sendFailureMessage(_ error: Error) -> String {
+        let message = error.localizedDescription
+        let lowered = message.lowercased()
+        if lowered.contains("insufficient permissions") || lowered.contains("permission-denied") {
+            return "Could not send this list. Check you are signed in to this organisation and try again."
+        }
+        return message
     }
 }

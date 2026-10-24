@@ -18,6 +18,9 @@ class UserStore: ObservableObject {
     /// When set, tab visibility and `can*` helpers use a simulated role. Identity and Firestore still use `currentUser`.
     @Published var roleTestingPreset: RoleTestingPreset?
     @Published var organizationUsers: [AppUser] = []
+    /// Document ids of `organizations/{orgId}/userEmails/{email}` from the last successful roster read.
+    /// Nil when that read has not completed or failed. People lists pass this into `listedRosterUsers`.
+    @Published var organizationUserEmailClaims: Set<String>?
     @Published var isLoading = false
     @Published var errorMessage: String?
     
@@ -33,6 +36,7 @@ class UserStore: ObservableObject {
     private var organizationUsersLoadOrganizationId: String?
     private var lastOrganizationUsersLoadAt: Date?
     private var currentUserListener: ListenerRegistration?
+    private var currentUserListenerTarget: String?
     /// Stops a roster reload that started before a name save from putting the old name back.
     private var identityRevision: IdentityRevision?
 
@@ -69,6 +73,7 @@ class UserStore: ObservableObject {
     }
 
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
+        guard LaunchStartupPolicy.shouldRewireStore(isSameInstance: self.firebaseBackend === firebaseBackend) else { return }
         self.firebaseBackend = firebaseBackend
     }
     
@@ -245,7 +250,7 @@ class UserStore: ObservableObject {
                     switch probe {
                     case .present(let existing):
                         userData = existing
-                    case .unconfirmed:
+                    case .unconfirmed, .permissionDenied:
                         print("🔥🔥🔥 DEBUG: Not creating a user document — the server did not confirm users/\(firebaseUser.uid) is missing")
                     case .confirmedMissing:
                         let superAdminPermissions = UserPermissions(
@@ -356,6 +361,7 @@ class UserStore: ObservableObject {
         guard !orgId.isEmpty else { return }
         let cached = RosterRetention.users(for: orgId)
         organizationUsers = cached
+        organizationUserEmailClaims = nil
         organizationUsersLoadOrganizationId = orgId
         let managers = cached.filter(\.appearsOnManagersList).count
         let operatives = cached.filter(\.appearsOnOperativesList).count
@@ -418,7 +424,8 @@ class UserStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: loadOrganizationUsers called for organizationId: \(requestedOrganizationId)")
         
         do {
-            let users = try await firebaseBackend.getOrganizationUsers(organizationId: requestedOrganizationId)
+            let roster = try await firebaseBackend.getOrganizationUsers(organizationId: requestedOrganizationId)
+            let users = roster.users
             let cloudOverrides = (try? await firebaseBackend.loadOperativeProfileMetadataFallback(
                 organizationId: requestedOrganizationId
             )) ?? [:]
@@ -443,7 +450,12 @@ class UserStore: ObservableObject {
                 incoming: usersWithOverrides,
                 organizationId: requestedOrganizationId
             )
-            let sortedUsers = healed.sorted { user1, user2 in
+            guard let listed = CanonicalBusinessEngine.listedRosterUsers(healed, claimedEmails: roster.claimedEmails) else {
+                print("🔥🔥🔥 DEBUG: ROSTER_LIST script did not return a list — keeping the roster already on screen")
+                return
+            }
+            organizationUserEmailClaims = roster.claimedEmails
+            let sortedUsers = listed.sorted { user1, user2 in
                 if user1.isSuperAdmin != user2.isSuperAdmin {
                     return user1.isSuperAdmin
                 }
@@ -478,7 +490,8 @@ class UserStore: ObservableObject {
     }
 
     /// A short Firestore query must not delete managers or operatives who were already on the list.
-    /// Someone leaves only when their user document is confirmed gone, or an admin deletes them in the app.
+    /// Someone leaves when their user document is confirmed gone, an admin deletes them, or that
+    /// document's read is permission-denied. A timeout is not a reason to drop them.
     private func healRosterKeepingKnownPeople(incoming: [AppUser], organizationId: String) async -> [AppUser] {
         guard let firebaseBackend else { return incoming }
         var byId: [String: AppUser] = [:]
@@ -516,18 +529,38 @@ class UserStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ROSTER_KEPT remaining people — stopped confirming absences after 8s")
                 break
             }
-            switch await firebaseBackend.probeOrganizationUser(userId: id, organizationId: organizationId) {
-            case .present(let user):
-                var kept = user
-                if byId[id]?.placedByManagersRecord == true {
-                    kept.placedByManagersRecord = true
-                }
-                byId[id] = kept
+            let probe = await firebaseBackend.probeOrganizationUser(userId: id, organizationId: organizationId)
+            let read: LaunchStartupPolicy.RosterUserDocumentRead
+            switch probe {
+            case .present:
+                read = .present
             case .confirmedMissing:
-                byId.removeValue(forKey: id)
-                print("🔥🔥🔥 DEBUG: ROSTER_CONFIRMED_GONE \(id)")
+                read = .confirmedMissing
+            case .permissionDenied:
+                read = .permissionDenied
             case .unconfirmed:
-                print("🔥🔥🔥 DEBUG: ROSTER_KEPT \(byId[id]?.email ?? id) — this fetch missed them and their document was not confirmed gone")
+                read = .unconfirmed
+            }
+            switch LaunchStartupPolicy.rosterAbsenceDecision(read) {
+            case .keep:
+                if case .present(let user) = probe {
+                    var kept = user
+                    if byId[id]?.placedByManagersRecord == true {
+                        kept.placedByManagersRecord = true
+                    }
+                    byId[id] = kept
+                } else {
+                    print("🔥🔥🔥 DEBUG: ROSTER_KEPT \(byId[id]?.email ?? id) — this fetch missed them and their document was not confirmed gone")
+                }
+            case .drop:
+                byId.removeValue(forKey: id)
+                if read == .permissionDenied {
+                    // Local only. A denied read does not write organizationId on the user document.
+                    RosterRetention.tombstone([id], organizationId: organizationId)
+                    print("🔥🔥🔥 DEBUG: ROSTER_DROPPED \(id) — user document read was denied")
+                } else {
+                    print("🔥🔥🔥 DEBUG: ROSTER_CONFIRMED_GONE \(id)")
+                }
             }
         }
         return collapseRosterByEmail(Array(byId.values))
@@ -569,7 +602,9 @@ class UserStore: ObservableObject {
     func clearOnSignOut() {
         currentUserListener?.remove()
         currentUserListener = nil
+        currentUserListenerTarget = nil
         organizationUsers = []
+        organizationUserEmailClaims = nil
         currentUser = nil
         roleTestingPreset = nil
         errorMessage = nil
@@ -577,7 +612,13 @@ class UserStore: ObservableObject {
 
     private func startCurrentUserListener(userId: String) {
         guard let firebaseBackend else { return }
+        let target = "user:\(userId)"
+        guard LaunchStartupPolicy.shouldAttachListener(
+            activeTarget: currentUserListenerTarget,
+            requestedTarget: target
+        ) else { return }
         currentUserListener?.remove()
+        currentUserListenerTarget = target
         currentUserListener = firebaseBackend.observeCurrentUserDocument(userId: userId) { [weak self] user in
             guard let self, let user else { return }
             Task { @MainActor in
@@ -741,13 +782,14 @@ class UserStore: ObservableObject {
     /// - Manager accounts can access when at least one active operative is directly assigned to them.
     func canAccessOperativeTimesheets() -> Bool {
         guard let user = displayUser else { return false }
-        guard user.permissions.manager || user.permissions.adminAccess || user.role == .admin || user.isSuperAdmin else {
+        let role = Self.staffAccountRole(for: user)
+        guard CanonicalBusinessEngine.canReviewUserTimesheets(role) == true else {
             return false
         }
         let hasAnyActiveOperative = organizationUsers.contains { orgUser in
             orgUser.permissions.operativeMode && orgUser.isActive
         }
-        if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+        if CanonicalBusinessEngine.seesEveryUserTimesheet(role) == true {
             return hasAnyActiveOperative || isHomeProfileLoading
         }
         return organizationUsers.contains { orgUser in
@@ -788,7 +830,11 @@ class UserStore: ObservableObject {
         updated.utrNumber = (trimmedUTR?.isEmpty == false) ? trimmedUTR : nil
 
         do {
-            try await firebaseBackend.saveUser(updated)
+            try await firebaseBackend.patchOwnUserBillingFields(
+                userId: userId,
+                vatNumber: updated.vatNumber,
+                utrNumber: updated.utrNumber
+            )
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
                 cu = updated
@@ -809,7 +855,7 @@ class UserStore: ObservableObject {
         updated.timesheetsEnabled = enabled
 
         do {
-            try await firebaseBackend.saveUser(updated)
+            try await firebaseBackend.patchOwnUserTimesheetsEnabled(userId: userId, enabled: enabled)
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
                 cu = updated
@@ -920,6 +966,23 @@ class UserStore: ObservableObject {
             isAdmin: user.permissions.adminAccess || user.role == .admin,
             isManager: user.permissions.manager || user.role == .manager,
             isOperativeMode: user.permissions.operativeMode || user.role == .operative
+        )
+    }
+
+    /// Audience for `visibleNotificationPreferenceKeys`. Hide/show stays in the script.
+    /// Operatives-on is `canViewOperatives` (super admin stays true). Clients is staff.
+    /// Materials is catalogue management: an operative Materials toggle is list access, not this flag.
+    func notificationPreferenceAudience() -> CanonicalBusinessEngine.CanonicalNotificationPreferenceAudience? {
+        guard let user = displayUser else { return nil }
+        return CanonicalBusinessEngine.CanonicalNotificationPreferenceAudience(
+            role: Self.staffAccountRole(for: user),
+            catalogue: CanonicalBusinessEngine.CanonicalWorkCatalogueToggles(
+                projects: user.permissions.projects,
+                smallWorks: user.permissions.smallWorks
+            ),
+            canManagePeople: canViewOperatives(),
+            canManageClients: !isOperativeMode(),
+            canManageMaterials: canManageMaterialCatalogue()
         )
     }
 
@@ -1114,34 +1177,6 @@ class UserStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: No current user ID available")
             errorMessage = "Unable to identify current user. Please sign in again."
             return false
-        }
-        
-        // Check for duplicate email in the organization BEFORE attempting to create.
-        // Use server source so we don't treat a deleted user as still existing due to cache.
-        print("🔥🔥🔥 DEBUG: Checking for duplicate email: \(email) in organization: \(organizationId)")
-        do {
-            let db = Firestore.firestore()
-            let duplicateCheck = try await db.collection("users")
-                .whereField("email", isEqualTo: email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))
-                .whereField("organizationId", isEqualTo: organizationId)
-                .getDocuments(source: .server)
-            
-            if !duplicateCheck.documents.isEmpty {
-                print("🔥🔥🔥 DEBUG: ❌ DUPLICATE EMAIL DETECTED: \(email) already exists in this organization")
-                for doc in duplicateCheck.documents {
-                    let data = doc.data()
-                    let existingEmail = data["email"] as? String ?? ""
-                    let existingFirstName = data["firstName"] as? String ?? ""
-                    let existingSurname = data["surname"] as? String ?? ""
-                    print("🔥🔥🔥 DEBUG: Found existing user: \(doc.documentID) - \(existingFirstName) \(existingSurname) (\(existingEmail))")
-                }
-                errorMessage = "A user with the email address '\(email)' already exists in this organization. Each email address can only be used once per organization."
-                return false
-            }
-            print("🔥🔥🔥 DEBUG: ✅ No duplicate email found - email is available")
-        } catch {
-            print("🔥🔥🔥 DEBUG: ⚠️ Error checking for duplicate email: \(error.localizedDescription)")
-            // Continue anyway - the createUserInvitation will also check
         }
         
         // CRITICAL: Before creating a user, ensure the current user has admin permissions
@@ -1695,11 +1730,6 @@ class UserStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: identity patch skipped for \(id): \(error.localizedDescription)")
                 }
             }
-            do {
-                try await firebaseBackend.saveUser(updated)
-            } catch {
-                print("🔥🔥🔥 DEBUG: identity patch stuck; full profile save failed: \(error.localizedDescription)")
-            }
             if emailChanged {
                 try await firebaseBackend.reconcileUserEmailIndex(
                     organizationId: orgId,
@@ -1816,12 +1846,18 @@ class UserStore: ObservableObject {
                         // Skills catalogue is retired — never persist the flag as enabled.
                         var sanitized = permissions
                         sanitized.skills = false
+                        let isSelfSave = Auth.auth().currentUser?.uid == userId
+                        if isSelfSave {
+                            sanitized.adminAccess = previousPermissions.adminAccess
+                        }
                         // `sanitized.qualifications` is UI access only for the org catalogue.
                         // This method must not load/save organisations/.../qualifications or
                         // rewrite operative.qualifications when that flag changes.
                         updatedUser.permissions = sanitized
                         // Role follows Change user type. A toggle save must not invent a different role.
-                        if let role {
+                        // A self save must not send role or admin privilege fields.
+                        let previousRole = updatedUser.role
+                        if let role, !isSelfSave {
                             updatedUser.role = role
                         }
                         let staffMaterialsAlwaysOn = updatedUser.isSuperAdmin
@@ -1833,7 +1869,13 @@ class UserStore: ObservableObject {
                             updatedUser.permissions.siteAudit = true
                         }
 
-                        try await firebaseBackend.saveUser(updatedUser)
+                        try await firebaseBackend.patchChangedUserPermissions(
+                            userId: userId,
+                            previous: previousPermissions,
+                            updated: updatedUser.permissions,
+                            previousRole: previousRole,
+                            nextRole: isSelfSave ? nil : role
+                        )
                          organizationUsers[index] = updatedUser
 
                          if let holidayStore,
@@ -1868,7 +1910,7 @@ class UserStore: ObservableObject {
                  }
              }
 
-    /// Persists annual leave entitlement on `users/{userId}`. Admins use full `saveUser`; managers with operative management use a narrow patch allowed by Firestore rules.
+    /// Persists annual leave entitlement on `users/{userId}` as a field-limited patch. The write does not include organizationId.
     func updateUserAnnualLeaveEntitlement(
         userId: String,
         daysPerYear: Double,
@@ -1899,23 +1941,20 @@ class UserStore: ObservableObject {
         }
 
         do {
-            if hasAdminAccess() {
-                try await firebaseBackend.saveUser(updated)
-            } else if isActingManagerOperativeManagementOnly(),
-                      updated.permissions.operativeMode || updated.role == .operative {
-                try await firebaseBackend.updateAnnualLeaveEntitlement(
-                    userId: userId,
-                    daysPerYear: clampedDays,
-                    startMonth: sm,
-                    endMonth: em,
-                    carriesOver: carriesOver,
-                    yearAllowance: yearAllowance,
-                    yearAllowanceKey: yearAllowanceKey,
-                    writeYearAllowance: writeYearAllowance
-                )
-            } else {
-                return false
-            }
+            let canPatchLeave = hasAdminAccess()
+                || (isActingManagerOperativeManagementOnly()
+                    && (updated.permissions.operativeMode || updated.role == .operative))
+            guard canPatchLeave else { return false }
+            try await firebaseBackend.updateAnnualLeaveEntitlement(
+                userId: userId,
+                daysPerYear: clampedDays,
+                startMonth: sm,
+                endMonth: em,
+                carriesOver: carriesOver,
+                yearAllowance: yearAllowance,
+                yearAllowanceKey: yearAllowanceKey,
+                writeYearAllowance: writeYearAllowance
+            )
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
                 cu.annualLeaveDaysPerYear = clampedDays
@@ -1936,7 +1975,7 @@ class UserStore: ObservableObject {
         }
     }
 
-    /// Persists `annualLeaveEnabled` on `users/{userId}`. Admins use full `saveUser`; managers with operative management use a narrow patch allowed by Firestore rules.
+    /// Persists `annualLeaveEnabled` on `users/{userId}` as a field-limited patch. The write does not include organizationId.
     func updateUserAnnualLeaveEnabled(userId: String, enabled: Bool) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
@@ -1949,14 +1988,11 @@ class UserStore: ObservableObject {
         updated.annualLeaveEnabled = enabled
 
         do {
-            if hasAdminAccess() {
-                try await firebaseBackend.saveUser(updated)
-            } else if isActingManagerOperativeManagementOnly(),
-                      updated.permissions.operativeMode || updated.role == .operative {
-                try await firebaseBackend.updateAnnualLeaveEnabled(userId: userId, enabled: enabled)
-            } else {
-                return false
-            }
+            let canPatchLeave = hasAdminAccess()
+                || (isActingManagerOperativeManagementOnly()
+                    && (updated.permissions.operativeMode || updated.role == .operative))
+            guard canPatchLeave else { return false }
+            try await firebaseBackend.updateAnnualLeaveEnabled(userId: userId, enabled: enabled)
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
                 cu.annualLeaveEnabled = enabled
@@ -1995,7 +2031,14 @@ class UserStore: ObservableObject {
 
         do {
             if hasAdminAccess() {
-                try await firebaseBackend.saveUser(updated)
+                let previousTimesheets = organizationUsers[index].timesheetsEnabled
+                try await firebaseBackend.updateUserEmploymentType(
+                    userId: userId,
+                    employmentType: updated.employmentType,
+                    transitionFrom: updated.employmentTypeTransitionFrom,
+                    effectiveAt: updated.employmentTypeEffectiveAt,
+                    timesheetsEnabled: updated.timesheetsEnabled == previousTimesheets ? nil : updated.timesheetsEnabled
+                )
             } else if isActingManagerOperativeManagementOnly(),
                       updated.permissions.operativeMode || updated.role == .operative {
                 try await firebaseBackend.updateUserEmploymentType(

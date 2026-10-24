@@ -148,6 +148,10 @@ struct WeeklyReportView: View {
                 .onAppear {
                     print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_FORM")
                     // Logo loads on Generate / idle — not on open (Simulator jetsam).
+                    if firebaseBackend.noteScheduleNeedsFullHistory() {
+                        bookingStore.loadData()
+                        managerScheduleStore.loadData(force: true)
+                    }
                 }
         }
     }
@@ -1758,10 +1762,7 @@ struct WeeklyReportView: View {
     }
 
     private func csvEscape(_ input: String) -> String {
-        if input.contains(",") || input.contains("\"") || input.contains("\n") {
-            return "\"\(input.replacingOccurrences(of: "\"", with: "\"\""))\""
-        }
-        return input
+        ExportTextEscaping.csvField(input)
     }
 
     private func clashTypeLabel(_ type: Warning.WarningType) -> String {

@@ -9,6 +9,7 @@ import SwiftUI
 
 struct AddUserView: View {
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @Environment(\.dismiss) private var dismiss
 
     enum AddUserMode {
@@ -506,7 +507,7 @@ struct AddUserView: View {
                             .accessibilityIdentifier("addUser.eG250")
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                             .keyboardType(.decimalPad)
-                        Text(invitedAccountType == .manager ? "Optional for managers. Leave blank if not needed." : "Stored on the operative profile when their account is linked.")
+                        Text(invitedAccountType == .manager ? "Optional for managers. Leave blank if not needed." : "Stored on their user account.")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
@@ -975,22 +976,7 @@ struct AddUserView: View {
                     }
 
                     if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
-                        let months = AnnualLeavePolicy.shortMonthSymbols()
-                        HStack {
-                            Text("Annual leave:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text("\(parseAnnualLeaveDaysForInvite()) days / year")
-                                    .fontWeight(.medium)
-                                Text("\(months[annualLeaveStartMonth - 1]) → \(months[annualLeaveEndMonth - 1])")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(annualLeaveCarriesOver ? "Carries over" : "No carry over")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
+                        annualLeaveReviewRow
                     }
                 }
                 .padding()
@@ -1000,20 +986,8 @@ struct AddUserView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Permissions summary")
                         .font(.headline)
-                    
-                    LazyVGrid(columns: [
-                        GridItem(.flexible()),
-                        GridItem(.flexible())
-                    ], spacing: 8) {
-                        ForEach(permissionItems, id: \.title) { item in
-                            HStack {
-                                Image(systemName: item.isEnabled ? "checkmark.circle.fill" : "xmark.circle")
-                                    .foregroundColor(item.isEnabled ? .green : .red)
-                                Text(item.title)
-                                    .font(.caption)
-                            }
-                        }
-                    }
+
+                    permissionsAccessColumns
                 }
                 .padding()
                 .background(Color(.systemGray6))
@@ -1135,6 +1109,32 @@ struct AddUserView: View {
         }
     }
     
+    /// Review reads the allowance toggle. The days field stays at the company default when the toggle is off, so this must not call `parseAnnualLeaveDaysForInvite()` in that case.
+    @ViewBuilder
+    private var annualLeaveReviewRow: some View {
+        HStack(alignment: .top) {
+            Text("Annual leave:")
+                .foregroundColor(.secondary)
+            Spacer()
+            if annualLeaveEnabledInvite {
+                let months = AnnualLeavePolicy.shortMonthSymbols()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(parseAnnualLeaveDaysForInvite()) days / year")
+                        .fontWeight(.medium)
+                    Text("\(months[annualLeaveStartMonth - 1]) → \(months[annualLeaveEndMonth - 1])")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(annualLeaveCarriesOver ? "Carries over" : "No carry over")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                Text("Off")
+                    .fontWeight(.medium)
+            }
+        }
+    }
+
     private var permissionItems: [(title: String, isEnabled: Bool)] {
         [
             ("Admin Access", permissions.adminAccess),
@@ -1151,6 +1151,54 @@ struct AddUserView: View {
             ("Sub Contractors", permissions.subContractors),
             ("Site Audit", permissions.siteAudit)
         ]
+    }
+
+    /// Same flags as `permissionItems`. Allowed and denied are split for the review layout only.
+    private var permissionsAccessColumns: some View {
+        let allowed = permissionItems.filter(\.isEnabled)
+        let denied = permissionItems.filter { !$0.isEnabled }
+        return HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Can Access")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(allowed, id: \.title) { item in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .accessibilityHidden(true)
+                        Text(item.title)
+                            .font(.caption)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel("Can access \(item.title)")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .trailing, spacing: 8) {
+                Text("Can't Access")
+                    .font(.subheadline.weight(.semibold))
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                ForEach(denied, id: \.title) { item in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(item.title)
+                            .font(.caption)
+                            .multilineTextAlignment(.trailing)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                            .accessibilityHidden(true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .accessibilityLabel("Cannot access \(item.title)")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
     }
     
     private func createUser() {
@@ -1173,6 +1221,39 @@ struct AddUserView: View {
         errorMessage = nil
         
         Task {
+            guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+                await MainActor.run {
+                    isCreating = false
+                    errorMessage = "Organization not loaded. Please wait a moment and try again."
+                }
+                return
+            }
+            do {
+                let claimInput = try await firebaseBackend.inviteEmailClaimInput(
+                    email: email,
+                    organizationId: organizationId
+                )
+                guard let blocked = CanonicalBusinessEngine.inviteEmailHasLiveClaim(claimInput) else {
+                    await MainActor.run {
+                        isCreating = false
+                        errorMessage = "Could not check whether this email is already in the organisation. Try again."
+                    }
+                    return
+                }
+                if blocked {
+                    await MainActor.run {
+                        isCreating = false
+                        errorMessage = "A user with the email address '\(email)' already exists in this organization. Each email address can only be used once per organization."
+                    }
+                    return
+                }
+            } catch {
+                await MainActor.run {
+                    isCreating = false
+                    errorMessage = "Could not check whether this email is already in the organisation. Try again."
+                }
+                return
+            }
             let parsedDayRate = parseDayRate(from: selectedDayRateTextForReview)
             let needsTrade = mode == .managerAddingOperative || permissions.operativeMode || permissions.manager
             let tCustom: String? = {
@@ -1181,7 +1262,6 @@ struct AddUserView: View {
                 return t.isEmpty ? nil : t
             }()
             let managerIds = hasNoLineManager ? [] : Array(selectedLineManagerUserIds)
-            let passAnnualLeaveInvite = true
             let success = await userStore.inviteUser(
                 firstName: firstName,
                 surname: surname,
@@ -1196,13 +1276,13 @@ struct AddUserView: View {
                 invitedManagerDayRate: permissions.manager ? parsedDayRate : nil,
                 invitedTradeTypePreset: needsTrade ? tradePresetRaw : nil,
                 invitedTradeTypeCustom: needsTrade ? tCustom : nil,
-                annualLeaveDaysPerYear: passAnnualLeaveInvite ? parseAnnualLeaveDaysForInvite() : nil,
-                annualLeaveYearStartMonth: passAnnualLeaveInvite ? annualLeaveStartMonth : nil,
-                annualLeaveYearEndMonth: passAnnualLeaveInvite ? annualLeaveEndMonth : nil,
-                annualLeaveCarriesOver: passAnnualLeaveInvite ? annualLeaveCarriesOver : nil,
-                annualLeaveEnabled: passAnnualLeaveInvite ? annualLeaveEnabledInvite : nil,
-                annualLeaveYearAllowance: passAnnualLeaveInvite ? inviteRemainingOverride?.annualLeaveYearAllowance : nil,
-                annualLeaveYearAllowanceKey: passAnnualLeaveInvite ? inviteRemainingOverride?.annualLeaveYearAllowanceKey : nil,
+                annualLeaveDaysPerYear: parseAnnualLeaveDaysForInvite(),
+                annualLeaveYearStartMonth: annualLeaveStartMonth,
+                annualLeaveYearEndMonth: annualLeaveEndMonth,
+                annualLeaveCarriesOver: annualLeaveCarriesOver,
+                annualLeaveEnabled: annualLeaveEnabledInvite,
+                annualLeaveYearAllowance: inviteRemainingOverride?.annualLeaveYearAllowance,
+                annualLeaveYearAllowanceKey: inviteRemainingOverride?.annualLeaveYearAllowanceKey,
                 timesheetsEnabled: AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType),
                 vatNumber: vatNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : vatNumber.trimmingCharacters(in: .whitespacesAndNewlines),
                 utrNumber: utrNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : utrNumber.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1333,4 +1413,5 @@ struct PermissionToggle: View {
 #Preview {
     AddUserView()
         .environmentObject(UserStore())
+        .environmentObject(FirebaseBackend())
 }

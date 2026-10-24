@@ -89,7 +89,7 @@ enum MaterialRequestEmailBuilder {
             guard !isQuote else { return "" }
             let requested = context.requestedDate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !requested.isEmpty else { return "" }
-            return "Required delivery date: \(requested)\n"
+            return "Required delivery: \(requested)\n"
         }()
 
         return """
@@ -126,18 +126,11 @@ enum MaterialRequestEmailBuilder {
     }
 
     static func quoteSubject(jobNumber: String, company: String) -> String {
-        "Quote request — \(jobNumber) — \(company)"
+        ExportTextEscaping.sanitizeEmailSubject("Quote request — \(jobNumber) — \(company)")
     }
 
     static func orderSubject(jobNumber: String, company: String) -> String {
-        "Material order request — \(jobNumber) — \(company)"
-    }
-
-    static func formattedDeliveryDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_GB")
-        formatter.dateFormat = "EEE d MMM yyyy"
-        return formatter.string(from: date)
+        ExportTextEscaping.sanitizeEmailSubject("Material order request — \(jobNumber) — \(company)")
     }
 
     // MARK: - Rendering
@@ -198,8 +191,8 @@ enum MaterialRequestEmailBuilder {
         if trimmed.isEmpty {
             return "Once the quote is ready, please can you confirm lead times. Please note, this is only a quote request."
         }
-        let tel = trimmed.replacingOccurrences(of: " ", with: "")
-        return "Once the quote is ready, please can you confirm lead times. Please note, this is only a quote request. <a href=\"tel:\(escapeHTML(tel))\" style=\"color:#0ea5e9;text-decoration:none;font-weight:600;\">\(escapeHTML(trimmed))</a>"
+        let telHref = telephoneHref(trimmed)
+        return "Once the quote is ready, please can you confirm lead times. Please note, this is only a quote request. <a href=\"\(telHref)\" style=\"color:#0ea5e9;text-decoration:none;font-weight:600;\">\(escapeHTML(trimmed))</a>"
     }
 
     private static func orderIntroFollowUp(phone: String?) -> String {
@@ -207,17 +200,17 @@ enum MaterialRequestEmailBuilder {
         if trimmed.isEmpty {
             return "Please confirm any long lead times before processing this order."
         }
-        let tel = trimmed.replacingOccurrences(of: " ", with: "")
-        return "Please confirm any long lead times before processing this order — <a href=\"tel:\(escapeHTML(tel))\" style=\"color:#0ea5e9;text-decoration:none;font-weight:600;\">\(escapeHTML(trimmed))</a>"
+        let telHref = telephoneHref(trimmed)
+        return "Please confirm any long lead times before processing this order — <a href=\"\(telHref)\" style=\"color:#0ea5e9;text-decoration:none;font-weight:600;\">\(escapeHTML(trimmed))</a>"
     }
 
     private static func contactPhoneHTML(phone: String?) -> String {
         let trimmed = phone?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else { return "" }
-        let tel = trimmed.replacingOccurrences(of: " ", with: "")
+        let telHref = telephoneHref(trimmed)
         return """
         <td style="font-size:13.5px;color:#475569;padding-right:14px;">
-          <a href="tel:\(escapeHTML(tel))" style="color:#0b1220;text-decoration:none;font-weight:600;">📞&nbsp;\(escapeHTML(trimmed))</a>
+          <a href="\(telHref)" style="color:#0b1220;text-decoration:none;font-weight:600;">📞&nbsp;\(escapeHTML(trimmed))</a>
         </td>
         """
     }
@@ -229,7 +222,7 @@ enum MaterialRequestEmailBuilder {
         }
         return """
         <td align="right" style="vertical-align:middle;width:120px;">
-          <img src="\(escapeHTML(trimmed))" alt="Company logo" width="96" height="40" style="display:block;max-width:96px;max-height:40px;width:auto;height:auto;margin-left:auto;border:0;outline:none;" />
+          <img src="\(ExportTextEscaping.escapeHTMLAttributeURL(trimmed))" alt="Company logo" width="96" height="40" style="display:block;max-width:96px;max-height:40px;width:auto;height:auto;margin-left:auto;border:0;outline:none;" />
         </td>
         """
     }
@@ -260,7 +253,7 @@ enum MaterialRequestEmailBuilder {
         guard !requested.isEmpty else { return "" }
         return """
         <tr><td colspan="2" style="border-top:1px solid #e3e8ef;padding:12px 18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-          <span style="display:inline-block;font-size:11px;font-weight:700;letter-spacing:.08em;color:#7c8aa0;text-transform:uppercase;">Required delivery date:&nbsp;</span>
+          <span style="display:inline-block;font-size:11px;font-weight:700;letter-spacing:.08em;color:#7c8aa0;text-transform:uppercase;">Required delivery:&nbsp;</span>
           <span style="font-size:14px;font-weight:700;color:#0b1220;">\(escapeHTML(requested))</span>
         </td></tr>
         """
@@ -311,11 +304,14 @@ enum MaterialRequestEmailBuilder {
     }
 
     private static func escapeHTML(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
+        ExportTextEscaping.escapeHTML(value)
+    }
+
+    /// Percent-encode the phone for the tel URL, then HTML-escape the whole attribute value.
+    private static func telephoneHref(_ trimmedPhone: String) -> String {
+        let compact = trimmedPhone.replacingOccurrences(of: " ", with: "")
+        let token = ExportTextEscaping.percentEncodeURLToken(compact, extraAllowed: "+().*-")
+        return ExportTextEscaping.escapeHTMLAttributeURL("tel:\(token)")
     }
 
     private static let quoteTemplate = quoteTemplateHTML

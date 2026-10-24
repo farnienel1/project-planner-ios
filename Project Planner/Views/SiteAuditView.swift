@@ -1040,6 +1040,7 @@ struct SiteAuditCreateFlowView: View {
 
             var savedItems: [SiteAuditItem] = []
             var uploadFailures = 0
+            var uploadFailureDetail: String?
             let uploadCount = drafts.filter { draft in
                 guard draft.image != nil else { return false }
                 if isEditing,
@@ -1073,12 +1074,14 @@ struct SiteAuditCreateFlowView: View {
                             remoteURL = try await firebaseBackend.uploadSiteAuditImage(
                                 image,
                                 auditId: auditId,
-                                organizationId: orgId,
-                                imageName: "site_audit_item_\(draft.id.uuidString)"
+                                organizationId: orgId
                             )
                         } catch {
                             uploadFailures += 1
                             remoteURL = priorURL
+                            if uploadFailureDetail == nil {
+                                uploadFailureDetail = error.localizedDescription
+                            }
                         }
                     }
                 } else {
@@ -1140,7 +1143,8 @@ struct SiteAuditCreateFlowView: View {
                         submitSuccessPDFURL = pdfURL
                         showingSubmitSuccess = true
                         if uploadFailures > 0 {
-                            errorMessage = "Saved successfully. \(uploadFailures) photo\(uploadFailures == 1 ? "" : "s") could not be uploaded to cloud storage, but they are included in this PDF."
+                            let detail = uploadFailureDetail.map { " \($0)" } ?? ""
+                            errorMessage = "Saved successfully. \(uploadFailures) photo\(uploadFailures == 1 ? "" : "s") could not be uploaded to cloud storage, but they are included in this PDF.\(detail)"
                         } else {
                             errorMessage = nil
                         }

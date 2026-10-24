@@ -125,13 +125,18 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         let fileName = persisted?.name ?? originalFileName ?? localFileURL?.lastPathComponent
         if let fileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
-            uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
-                fileURL,
-                organizationId: orgId,
-                projectId: project.id,
-                category: "toolboxTalks",
-                fileName: fileName ?? fileURL.lastPathComponent
-            )
+            do {
+                uploadedURL = try await firebaseBackend.uploadHealthSafetyFile(
+                    fileURL,
+                    organizationId: orgId,
+                    projectId: project.id,
+                    category: StorageUploadPolicy.healthSafetyTalksFolder,
+                    fileName: fileName ?? fileURL.lastPathComponent
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
         }
         if localFileURL != nil && uploadedURL == nil {
             errorMessage = "Couldn’t upload the toolbox talk file. Check your connection and try again."
@@ -310,13 +315,18 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         let fileName = persisted?.name ?? originalFileName ?? localFileURL?.lastPathComponent
         if let fileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
-            uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
-                fileURL,
-                organizationId: orgId,
-                projectId: project.id,
-                category: "rams",
-                fileName: fileName ?? fileURL.lastPathComponent
-            )
+            do {
+                uploadedURL = try await firebaseBackend.uploadHealthSafetyFile(
+                    fileURL,
+                    organizationId: orgId,
+                    projectId: project.id,
+                    category: "rams",
+                    fileName: fileName ?? fileURL.lastPathComponent
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
         }
         if localFileURL != nil && uploadedURL == nil {
             errorMessage = "Couldn’t upload the RAMS file. Check your connection and try again."
@@ -410,13 +420,18 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         let fileName = persisted?.name ?? originalFileName ?? localFileURL?.lastPathComponent
         if let fileURL,
            let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) {
-            uploadedURL = try? await firebaseBackend.uploadHealthSafetyFile(
-                fileURL,
-                organizationId: orgId,
-                projectId: project.id,
-                category: "otherDocuments",
-                fileName: fileName ?? fileURL.lastPathComponent
-            )
+            do {
+                uploadedURL = try await firebaseBackend.uploadHealthSafetyFile(
+                    fileURL,
+                    organizationId: orgId,
+                    projectId: project.id,
+                    category: StorageUploadPolicy.healthSafetyOtherFolder,
+                    fileName: fileName ?? fileURL.lastPathComponent
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
         }
         if localFileURL != nil && uploadedURL == nil {
             errorMessage = "Couldn’t upload the H&S document. Check your connection and try again."
@@ -2898,7 +2913,7 @@ private struct HSRamsUploadSheet: View {
 
                     HSUploadDropZone(
                         title: selectedFileName ?? "Upload RAMS document",
-                        subtitle: selectedFileName == nil ? "PDF or Word up to 25MB" : "Ready to publish",
+                        subtitle: selectedFileName == nil ? "PDF or Word up to 10 MB" : "Ready to publish",
                         isFilled: selectedFileName != nil
                     ) { showFileImporter = true }
 
@@ -2949,7 +2964,7 @@ private struct HSRamsUploadSheet: View {
                 .accessibilityIdentifier("hsRamsUpload.cancel") } }
             .fileImporter(
                 isPresented: $showFileImporter,
-                allowedContentTypes: [.pdf, .data],
+                allowedContentTypes: StorageUploadPolicy.workFileContentTypes,
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
@@ -2992,7 +3007,7 @@ private struct HSOtherDocumentUploadSheet: View {
 
                     HSUploadDropZone(
                         title: selectedFileName ?? "Upload document",
-                        subtitle: selectedFileName == nil ? "PDF, Word or image up to 25MB" : "Ready to save",
+                        subtitle: selectedFileName == nil ? "PDF, Word or image up to 10 MB" : "Ready to save",
                         isFilled: selectedFileName != nil
                     ) { showFileImporter = true }
 
@@ -3039,7 +3054,7 @@ private struct HSOtherDocumentUploadSheet: View {
                 .accessibilityIdentifier("hsOtherDocumentUpload.cancel") } }
             .fileImporter(
                 isPresented: $showFileImporter,
-                allowedContentTypes: [.pdf, .image, .data],
+                allowedContentTypes: StorageUploadPolicy.workFileContentTypes,
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {

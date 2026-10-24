@@ -9,7 +9,7 @@ import Combine
 // Disk cache lives in this file (not a separate source) so Xcode always compiles it
 // with WarningsService — avoids "Cannot find WarningsDiskCacheStore in scope".
 
-struct WarningsDiskCache: Codable {
+nonisolated struct WarningsDiskCache: Codable, Sendable {
     var organizationId: String
     var savedAt: Date
     var hasCompletedLiveDetection: Bool
@@ -33,8 +33,10 @@ struct WarningsDiskCache: Codable {
     )
 }
 
-enum WarningsDiskCacheStore {
+nonisolated enum WarningsDiskCacheStore {
     private static let activeOrgDefaultsKey = "warnings-live-cache-active-org"
+    /// Serial so a newer scan cannot be overwritten by an older encode still in flight.
+    private static let writeQueue = DispatchQueue(label: "farnie.warnings-live-cache", qos: .utility)
 
     static var activeOrganizationId: String? {
         get { UserDefaults.standard.string(forKey: activeOrgDefaultsKey) }
@@ -100,15 +102,22 @@ enum WarningsDiskCacheStore {
 
     static func save(_ cache: WarningsDiskCache) {
         guard !cache.organizationId.isEmpty else { return }
-        let url = fileURL(organizationId: cache.organizationId)
-        guard let data = try? JSONEncoder().encode(cache) else { return }
-        try? data.write(to: url, options: [.atomic])
+        // Record the org before the file write. A switch must not be overwritten
+        // when an older encode finishes, and the file name stays keyed by this id.
         activeOrganizationId = cache.organizationId
-        print("🔥🔥🔥 DEBUG: WarningsDiskCache saved org=\(cache.organizationId) active=\(cache.activeWarnings.count) completed=\(cache.hasCompletedLiveDetection)")
+        let organizationId = cache.organizationId
+        let activeCount = cache.activeWarnings.count
+        let completed = cache.hasCompletedLiveDetection
+        writeQueue.async {
+            let url = fileURL(organizationId: organizationId)
+            guard let data = try? JSONEncoder().encode(cache) else { return }
+            try? data.write(to: url, options: [.atomic])
+            print("🔥🔥🔥 DEBUG: WarningsDiskCache saved org=\(organizationId) active=\(activeCount) completed=\(completed)")
+        }
     }
 }
 
-private struct LegacyWarningsDiskCache: Codable {
+nonisolated private struct LegacyWarningsDiskCache: Codable {
     var savedAt: Date
     var hasCompletedLiveDetection: Bool
     var allGeneratedWarnings: [Warning]
@@ -119,22 +128,39 @@ private struct LegacyWarningsDiskCache: Codable {
     var lowCount: Int
 }
 
+struct WarningTotals: Equatable, Sendable {
+    var total = 0
+    var high = 0
+    var medium = 0
+    var low = 0
+}
+
 @MainActor
 class WarningsService: ObservableObject {
     /// Shared instance for Warnings sheet / weekly report (avoid duplicating state on Home).
     static let shared = WarningsService()
 
-    @Published private(set) var allGeneratedWarnings: [Warning] = []
-    @Published private(set) var activeWarnings: [Warning] = []
+    /// Not @Published. The open Warnings sheet reads these inside the same turn they are
+    /// stored; publishing each one made that read re-enter the setter and the main thread
+    /// never came back. One objectWillChange is scheduled after the values are stored.
+    private(set) var allGeneratedWarnings: [Warning] = []
+    private(set) var activeWarnings: [Warning] = []
     /// Period scans for Weekly Report only — never overwrite the live Home/Warnings list.
     @Published private(set) var periodGeneratedWarnings: [Warning] = []
     @Published private(set) var hasCompletedPeriodDetection = false
-    @Published private(set) var warningCount: Int = 0
-    @Published private(set) var highCount: Int = 0
-    @Published private(set) var mediumCount: Int = 0
-    @Published private(set) var lowCount: Int = 0
+    /// High, medium, low, and the total. One value, written once per live update.
+    private(set) var totals = WarningTotals()
+    var warningCount: Int { totals.total }
+    var highCount: Int { totals.high }
+    var mediumCount: Int { totals.medium }
+    var lowCount: Int { totals.low }
     /// True after at least one *live* scan has published (empty = all clear for that window).
-    @Published private(set) var hasCompletedLiveDetection = false
+    private(set) var hasCompletedLiveDetection = false
+    private var livePublishScheduled = false
+    /// True until the deferred objectWillChange for this live list has been sent.
+    var isLivePublishQueued: Bool { livePublishScheduled }
+    /// Runs on the turn after objectWillChange so a follow-up scan is not a second publish on this stack.
+    var onLivePublishFinished: (@MainActor () -> Void)?
 
     enum WarningListSource {
         case live
@@ -152,7 +178,8 @@ class WarningsService: ObservableObject {
         // keep the previous organisation's warnings on Home.
         if hydrateFromDisk, let organizationId = WarningsDiskCacheStore.activeOrganizationId, !organizationId.isEmpty {
             cacheOrganizationId = organizationId
-            applyDiskCache(WarningsDiskCacheStore.load(organizationId: organizationId))
+            // Sign-in must not put the last scan back on screen. That snapshot can still
+            // list the day after the payment run until live ranges have been read.
         }
     }
 
@@ -164,76 +191,104 @@ class WarningsService: ObservableObject {
         cancelInFlightUpdate()
         cacheOrganizationId = trimmed
         WarningResolutionStore.shared.adoptOrganization(trimmed)
-        applyDiskCache(WarningsDiskCacheStore.load(organizationId: trimmed))
+        clearPublishedWarnings()
         WarningsRefreshHelper.postWarningsCountDidChange()
         print("🔥🔥🔥 DEBUG: WarningsService adopted org=\(trimmed) active=\(activeWarnings.count)")
     }
 
-    private func applyDiskCache(_ cache: WarningsDiskCache) {
-        guard cache.organizationId == cacheOrganizationId,
-              cache.hasCompletedLiveDetection || !cache.activeWarnings.isEmpty else {
-            allGeneratedWarnings = []
-            activeWarnings = []
-            warningCount = 0
-            highCount = 0
-            mediumCount = 0
-            lowCount = 0
-            hasCompletedLiveDetection = false
-            return
-        }
-        allGeneratedWarnings = cache.allGeneratedWarnings
-        activeWarnings = uniqueActive(cache.activeWarnings)
-        refreshSeverityCounts()
-        hasCompletedLiveDetection = cache.hasCompletedLiveDetection
+    private func clearPublishedWarnings() {
+        allGeneratedWarnings = []
+        activeWarnings = []
+        totals = WarningTotals()
+        hasCompletedLiveDetection = false
+        scheduleLivePublish()
     }
 
-    private func persistLiveCacheToDisk() {
-        // Only the shared live service writes the Home/Warnings cache.
+    /// Drops schedule rows whose London day is outside the scan window. Qualification and
+    /// unverified rows have no day in that window and stay.
+    static func warningsInsideCoverageWindow(
+        _ warnings: [Warning],
+        start: Date,
+        end: Date,
+        unbookedEnd: Date,
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
+    ) -> [Warning] {
+        let startKey = CanonicalBusinessEngine.dayKey(for: start, calendar: calendar)
+        let endKey = CanonicalBusinessEngine.dayKey(for: end, calendar: calendar)
+        let unbookedEndKey = CanonicalBusinessEngine.dayKey(for: unbookedEnd, calendar: calendar)
+        return warnings.filter { warning in
+            guard warning.isCorePriorityWarning else { return true }
+            guard let date = warning.occurrenceDate ?? warning.clashDate else { return true }
+            let key = CanonicalBusinessEngine.dayKey(for: date, calendar: calendar)
+            let limit = warning.type == .unbookedLabour ? unbookedEndKey : endKey
+            return key >= startKey && key <= limit
+        }
+    }
+
+    /// Snapshot from the arrays already in hand. Reading `allGeneratedWarnings` again on the
+    /// publish turn calls `swift_beginAccess` and does not return, so the deferred
+    /// `objectWillChange` never runs and the sheet stays on "Scanning…".
+    private func persistLiveCacheToDisk(
+        organizationId: String?,
+        generated: [Warning],
+        active: [Warning],
+        completed: Bool
+    ) {
         guard self === WarningsService.shared else { return }
-        guard let cacheOrganizationId, !cacheOrganizationId.isEmpty else { return }
+        guard let organizationId, !organizationId.isEmpty else { return }
+        let counts = Self.totals(for: active)
         WarningsDiskCacheStore.save(
             WarningsDiskCache(
-                organizationId: cacheOrganizationId,
+                organizationId: organizationId,
                 savedAt: Date(),
-                hasCompletedLiveDetection: hasCompletedLiveDetection,
-                allGeneratedWarnings: allGeneratedWarnings,
-                activeWarnings: activeWarnings,
-                warningCount: warningCount,
-                highCount: highCount,
-                mediumCount: mediumCount,
-                lowCount: lowCount
+                hasCompletedLiveDetection: completed,
+                allGeneratedWarnings: generated,
+                activeWarnings: active,
+                warningCount: counts.total,
+                highCount: counts.high,
+                mediumCount: counts.medium,
+                lowCount: counts.low
             )
         )
     }
 
-    /// Dashboard / Home count every active warning, including qualifications.
-    private func refreshSeverityCounts() {
-        warningCount = activeWarnings.count
+    /// Store the live list and the one totals value, then tell SwiftUI on the next turn.
+    private func applyLiveWarnings(generated: [Warning], active: [Warning], completed: Bool) {
+        allGeneratedWarnings = generated
+        activeWarnings = active
+        totals = Self.totals(for: active)
+        hasCompletedLiveDetection = completed
+        scheduleLivePublish()
+    }
+
+    /// objectWillChange during the scan's turn re-entered the open Warnings body while
+    /// activeWarnings was still being stored. The next main-actor turn reads the stored values.
+    private func scheduleLivePublish() {
+        guard !livePublishScheduled else { return }
+        livePublishScheduled = true
+        Task { @MainActor in
+            self.livePublishScheduled = false
+            self.objectWillChange.send()
+            let finished = self.onLivePublishFinished
+            guard finished != nil else { return }
+            Task { @MainActor in
+                finished?()
+            }
+        }
+    }
+
+    private static func totals(for warnings: [Warning]) -> WarningTotals {
         var high = 0
         var medium = 0
         var low = 0
-        for warning in activeWarnings {
+        for warning in warnings {
             switch warning.severity {
             case .high: high += 1
             case .medium: medium += 1
             case .low: low += 1
             }
         }
-        highCount = high
-        mediumCount = medium
-        lowCount = low
-    }
-
-    func warningsSortedByDate() -> [Warning] {
-        activeWarnings.sorted { lhs, rhs in
-            let l = lhs.occurrenceDate ?? .distantPast
-            let r = rhs.occurrenceDate ?? .distantPast
-            if l != r { return l > r }
-            if lhs.isCorePriorityWarning != rhs.isCorePriorityWarning {
-                return lhs.isCorePriorityWarning
-            }
-            return severityRank(lhs.severity) > severityRank(rhs.severity)
-        }
+        return WarningTotals(total: warnings.count, high: high, medium: medium, low: low)
     }
 
     /// HIGH: operative booking clashes still active in range.
@@ -261,7 +316,7 @@ class WarningsService: ObservableObject {
         warningsInRange(range, types: [.unbookedLabour], activeOnly: true, source: source)
     }
 
-    /// LOW: material orders not placed by 16:00.
+    /// LOW: material orders not placed by the organisation cut-off.
     func materialsCutoffWarnings(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
         warningsInRange(range, types: [.materialsCutoff], activeOnly: true, source: source)
     }
@@ -301,6 +356,8 @@ class WarningsService: ObservableObject {
         materialOrderCutOffEnabled: Bool = true,
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
+        materialCutOffMinutes: Int = 0,
+        materialCutOffLabel: String = "",
         projectsWithTomorrowBookings: [Project] = [],
         materialItemsForTomorrow: [MaterialItem] = [],
         dismissedQualificationKeys: Set<String> = []
@@ -327,6 +384,8 @@ class WarningsService: ObservableObject {
                 materialOrderCutOffEnabled: materialOrderCutOffEnabled,
                 materialCutOffOnSaturday: materialCutOffOnSaturday,
                 materialCutOffOnSunday: materialCutOffOnSunday,
+                materialCutOffMinutes: materialCutOffMinutes,
+                materialCutOffLabel: materialCutOffLabel,
                 projectsWithTomorrowBookings: projectsWithTomorrowBookings,
                 materialItemsForTomorrow: materialItemsForTomorrow,
                 dismissedQualificationKeys: dismissedQualificationKeys,
@@ -352,6 +411,8 @@ class WarningsService: ObservableObject {
         materialOrderCutOffEnabled: Bool = true,
         materialCutOffOnSaturday: Bool = false,
         materialCutOffOnSunday: Bool = false,
+        materialCutOffMinutes: Int = 0,
+        materialCutOffLabel: String = "",
         projectsWithTomorrowBookings: [Project] = [],
         materialItemsForTomorrow: [MaterialItem] = [],
         dismissedQualificationKeys: Set<String> = [],
@@ -378,6 +439,8 @@ class WarningsService: ObservableObject {
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
+            materialCutOffMinutes: materialCutOffMinutes,
+            materialCutOffLabel: materialCutOffLabel,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
             materialItemsForTomorrow: materialItemsForTomorrow,
             dismissedQualificationKeys: dismissedQualificationKeys,
@@ -401,11 +464,14 @@ class WarningsService: ObservableObject {
         materialOrderCutOffEnabled: Bool,
         materialCutOffOnSaturday: Bool,
         materialCutOffOnSunday: Bool,
+        materialCutOffMinutes: Int,
+        materialCutOffLabel: String,
         projectsWithTomorrowBookings: [Project],
         materialItemsForTomorrow: [MaterialItem],
         dismissedQualificationKeys: Set<String>,
         publishToLiveCache: Bool
     ) async {
+        if Task.isCancelled { return }
         updateGeneration += 1
         let generation = updateGeneration
         let cal = CanonicalBusinessEngine.businessCalendar
@@ -459,6 +525,8 @@ class WarningsService: ObservableObject {
             materialOrderCutOffEnabled: materialOrderCutOffEnabled,
             materialCutOffOnSaturday: materialCutOffOnSaturday,
             materialCutOffOnSunday: materialCutOffOnSunday,
+            materialCutOffMinutes: materialCutOffMinutes,
+            materialCutOffLabel: materialCutOffLabel,
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
             materialItemsForTomorrow: materialItemsForTomorrow,
             dismissedQualificationKeys: dismissedQualificationKeys
@@ -474,24 +542,34 @@ class WarningsService: ObservableObject {
             WarningsComputation.generate(snapshot)
         }.value
         guard generation == updateGeneration else { return }
+        let generatedInWindow = Self.warningsInsideCoverageWindow(
+            generated,
+            start: coverageStart,
+            end: coverageEnd,
+            unbookedEnd: unbookedEnd
+        )
         if isLiveScan {
-            allGeneratedWarnings = generated
-            activeWarnings = uniqueActive(generated)
-            refreshSeverityCounts()
-            hasCompletedLiveDetection = true
-            persistLiveCacheToDisk()
-            print("🔥🔥🔥 DEBUG: WarningsService LIVE published active=\(activeWarnings.count) generated=\(generated.count)")
+            let active = uniqueActive(generatedInWindow)
+            let organizationId = cacheOrganizationId
+            NSLog("WARNINGS_PUBLISH active=%d generated=%d", active.count, generatedInWindow.count)
+            applyLiveWarnings(generated: generatedInWindow, active: active, completed: true)
+            persistLiveCacheToDisk(
+                organizationId: organizationId,
+                generated: generatedInWindow,
+                active: active,
+                completed: true
+            )
+            print("🔥🔥🔥 DEBUG: WarningsService LIVE published active=\(active.count) generated=\(generatedInWindow.count)")
         } else {
             // Period scan must not wipe Home/Warnings live cache on the shared instance.
-            periodGeneratedWarnings = generated
+            periodGeneratedWarnings = generatedInWindow
             hasCompletedPeriodDetection = true
             if self !== WarningsService.shared {
                 // Private Weekly Report export service — local only.
-                allGeneratedWarnings = generated
-                activeWarnings = uniqueActive(generated)
-                refreshSeverityCounts()
+                let active = uniqueActive(generatedInWindow)
+                applyLiveWarnings(generated: generatedInWindow, active: active, completed: hasCompletedLiveDetection)
             }
-            print("🔥🔥🔥 DEBUG: WarningsService PERIOD published count=\(generated.count) sharedLiveUntouched=\(self === WarningsService.shared) active=\(WarningsService.shared.activeWarnings.count)")
+            print("🔥🔥🔥 DEBUG: WarningsService PERIOD published count=\(generatedInWindow.count) sharedLiveUntouched=\(self === WarningsService.shared) active=\(WarningsService.shared.activeWarnings.count)")
         }
     }
 
@@ -499,9 +577,8 @@ class WarningsService: ObservableObject {
     func replaceWithPeriodWarnings(_ warnings: [Warning]) {
         periodGeneratedWarnings = warnings
         hasCompletedPeriodDetection = true
-        allGeneratedWarnings = warnings
-        activeWarnings = uniqueActive(warnings)
-        refreshSeverityCounts()
+        let active = uniqueActive(warnings)
+        applyLiveWarnings(generated: warnings, active: active, completed: hasCompletedLiveDetection)
     }
 
     func cancelInFlightUpdate() {
@@ -533,17 +610,19 @@ class WarningsService: ObservableObject {
     }
 
     private func refreshActiveFromGenerated() {
-        activeWarnings = uniqueActive(allGeneratedWarnings)
-        refreshSeverityCounts()
-        persistLiveCacheToDisk()
-    }
-
-    private func severityRank(_ severity: Warning.WarningSeverity) -> Int {
-        switch severity {
-        case .low: return 1
-        case .medium: return 2
-        case .high: return 3
-        }
+        let generated = allGeneratedWarnings
+        let organizationId = cacheOrganizationId
+        let completed = hasCompletedLiveDetection
+        let active = uniqueActive(generated)
+        activeWarnings = active
+        totals = Self.totals(for: active)
+        scheduleLivePublish()
+        persistLiveCacheToDisk(
+            organizationId: organizationId,
+            generated: generated,
+            active: active,
+            completed: completed
+        )
     }
 
 }

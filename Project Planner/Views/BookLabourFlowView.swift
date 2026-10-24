@@ -1595,7 +1595,9 @@ struct BookLabourFlowView: View {
                     await notificationService.notifyBookedUsers(
                         projectName: project.siteName,
                         bookedBy: bookedByName,
-                        recipients: [.init(operativeId: op.id, dates: [day])]
+                        recipients: [.init(operativeId: op.id, dates: [day])],
+                        projectId: project.id,
+                        catalogue: project.jobType == .smallWorks ? "smallWorks" : "projects"
                     )
                 } else {
                     if duplicateManagerBooking(
@@ -1816,21 +1818,12 @@ struct BookLabourFlowView: View {
         return existing.contains { OperativeBookingInterval.bookingsOverlap(probe, $0, policy: policy) }
     }
 
-    // MARK: - Candidate building (aligned with DailyOverviewView)
+    // MARK: - Candidate building
 
-    private var includeWeekendsForUnbookedLabour: Bool {
-        firebaseBackend.currentOrganization?.settings.warningDetection.includeWeekendsForUnbookedLabour == true
-    }
-
-    private var canBookLabourOnThisDay: Bool {
-        let weekday = calendar.component(.weekday, from: day)
-        if weekday >= 2 && weekday <= 6 { return true }
-        if !focusedUserIds.isEmpty { return true }
-        return includeWeekendsForUnbookedLabour
-    }
-
+    /// The same `unbookedLabourRowsOnDay` rows as the Daily Overview card.
     private func buildCandidates() -> [BookLabourCandidate] {
-        let choices = BookLabourCandidateSelection.choices(
+        let detection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
+        let rows = WarningsComputation.unbookedLabourRowsOnDay(
             day: day,
             users: userStore.organizationUsers,
             operatives: operativeStore.allOperatives,
@@ -1838,20 +1831,67 @@ struct BookLabourFlowView: View {
             managerBookings: managerScheduleStore.managerSiteBookings,
             holidays: holidayStore.bookings,
             policy: dayPayrollPolicy,
-            focusedIds: Set(focusedUserIds),
-            includeThisDay: canBookLabourOnThisDay,
-            calendar: calendar
+            includeWeekends: detection.includeWeekendsForUnbookedLabour,
+            excludedUserIds: detection.excludedUserIdsFromUnbookedWarnings
         )
-        return choices.compactMap { choice in
-            guard let user = userStore.organizationUsers.first(where: { $0.id == choice.userId }) else { return nil }
-            let linked = choice.operativeId.flatMap { id in
+        let focused = Set(focusedUserIds)
+        var listed: [(candidate: BookLabourCandidate, focused: Bool)] = []
+        var seen = Set<String>()
+        for row in rows {
+            let userId = row.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let personKey = row.personKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let user = user(forUnbookedRowUserId: userId, personKey: personKey) else { continue }
+            guard seen.insert(user.id).inserted else { continue }
+            let linked = UUID(uuidString: row.operativeId).flatMap { id in
                 operativeStore.allOperatives.first { $0.id == id }
             }
-            return BookLabourCandidate(
+            let operativeOnly = user.permissions.operativeMode
+                && !user.permissions.manager
+                && !user.permissions.adminAccess
+                && !user.isSuperAdmin
+                && user.role != .admin
+            let candidate = BookLabourCandidate(
                 user: user,
                 linkedOperative: linked,
-                usesOperativeProjectBookings: choice.usesOperativeProjectBookings
+                usesOperativeProjectBookings: operativeOnly
             )
+            listed.append((candidate, isFocused(user, operative: linked, personKey: personKey, userId: userId, focused: focused)))
+        }
+        return listed.sorted { lhs, rhs in
+            if lhs.focused != rhs.focused { return lhs.focused && !rhs.focused }
+            return lhs.candidate.displayName.localizedCaseInsensitiveCompare(rhs.candidate.displayName) == .orderedAscending
+        }.map(\.candidate)
+    }
+
+    private func user(forUnbookedRowUserId userId: String?, personKey: String) -> AppUser? {
+        let ids = [userId, personKey].compactMap { $0 }.filter { !$0.isEmpty }
+        for id in ids {
+            if let user = userStore.organizationUsers.first(where: { $0.id == id || $0.sameEmailUserIds.contains(id) }) {
+                return user
+            }
+        }
+        return nil
+    }
+
+    private func isFocused(
+        _ user: AppUser,
+        operative: Operative?,
+        personKey: String,
+        userId: String?,
+        focused: Set<String>
+    ) -> Bool {
+        if focused.contains(user.id) || focused.contains(personKey) { return true }
+        if let userId, focused.contains(userId) { return true }
+        if let operative, focused.contains(operative.id.uuidString) { return true }
+        let email = StaffEmailIdentity.emailKey(user.email)
+        guard !email.isEmpty, !focused.isEmpty else { return false }
+        if userStore.organizationUsers.contains(where: {
+            StaffEmailIdentity.emailKey($0.email) == email && focused.contains($0.id)
+        }) {
+            return true
+        }
+        return operativeStore.allOperatives.contains {
+            StaffEmailIdentity.emailKey($0.email) == email && focused.contains($0.id.uuidString)
         }
     }
 }

@@ -92,8 +92,17 @@ struct AccountDeactivatedView: View {
 
     @MainActor
     private func reloadOtherOrganisations() async {
-        isLoadingOrganisations = true
         let excluded = lastUsedOrganizationId
+        let known = firebaseBackend.knownOrganizationMembershipsBeforeScan().filter { membership in
+            guard !excluded.isEmpty else { return true }
+            return membership.id.compare(excluded, options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame
+        }
+        if !known.isEmpty {
+            otherOrganisations = known
+            isLoadingOrganisations = false
+        } else {
+            isLoadingOrganisations = true
+        }
         let all = await firebaseBackend.fetchOrganizationsForCurrentUser()
         otherOrganisations = all.filter { membership in
             guard !excluded.isEmpty else { return true }

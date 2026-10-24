@@ -22,68 +22,231 @@ var ProjectPlannerCanonical = (() => {
   var bundleEntry_exports = {};
   __export(bundleEntry_exports, {
     ANNUAL_LEAVE_ALLOWANCE_COPY: () => ANNUAL_LEAVE_ALLOWANCE_COPY,
+    ANONYMISED_DELETED_USER_NAME: () => ANONYMISED_DELETED_USER_NAME,
     CANONICAL_STANDARD_BREAK: () => CANONICAL_STANDARD_BREAK,
     CANONICAL_STANDARD_DAY: () => CANONICAL_STANDARD_DAY,
     DEFAULT_ANNUAL_LEAVE_DAYS: () => DEFAULT_ANNUAL_LEAVE_DAYS,
+    DEFAULT_MATERIAL_CUT_OFF: () => DEFAULT_MATERIAL_CUT_OFF,
+    DEFAULT_MATERIAL_DELIVERY_CLOCK: () => DEFAULT_MATERIAL_DELIVERY_CLOCK,
+    DEFAULT_MATERIAL_DELIVERY_HOUR: () => DEFAULT_MATERIAL_DELIVERY_HOUR,
+    DEFAULT_MATERIAL_DELIVERY_MINUTE: () => DEFAULT_MATERIAL_DELIVERY_MINUTE,
+    DEFAULT_MATERIAL_DELIVERY_MINUTES: () => DEFAULT_MATERIAL_DELIVERY_MINUTES,
     DEFAULT_PAYMENT_RUN_DATE_RANGES: () => DEFAULT_PAYMENT_RUN_DATE_RANGES,
+    DEFAULT_USER_NOTIFICATION_PREFERENCES: () => DEFAULT_USER_NOTIFICATION_PREFERENCES,
+    DEFAULT_WARNINGS_SORT_DIRECTION: () => DEFAULT_WARNINGS_SORT_DIRECTION,
     DEFAULT_WARNING_DETECTION: () => DEFAULT_WARNING_DETECTION,
+    DELETED_USER_DISPLAY_NAME: () => DELETED_USER_DISPLAY_NAME,
+    DEVICE_PUSH_NOTIFICATION_TYPES: () => DEVICE_PUSH_NOTIFICATION_TYPES,
+    IOS_SESSION_ORGANIZATION_STORAGE_KEY: () => IOS_SESSION_ORGANIZATION_STORAGE_KEY,
+    LEGACY_NOTIFICATION_PREFERENCE_ALIASES: () => LEGACY_NOTIFICATION_PREFERENCE_ALIASES,
     MIN_HALF_DAY_MINUTES: () => MIN_HALF_DAY_MINUTES,
+    NOTIFICATION_ICON_BADGE_CLEARS_ON_FOREGROUND: () => NOTIFICATION_ICON_BADGE_CLEARS_ON_FOREGROUND,
+    NOTIFICATION_PREFERENCE_KEYS: () => NOTIFICATION_PREFERENCE_KEYS,
+    PAYMENT_GRACE_MS: () => PAYMENT_GRACE_MS,
+    QUALIFICATION_CERTIFICATE_STORAGE_PATH: () => QUALIFICATION_CERTIFICATE_STORAGE_PATH,
+    QUALIFICATION_FILTER_ALL: () => QUALIFICATION_FILTER_ALL,
+    QUALIFICATION_FILTER_OTHER: () => QUALIFICATION_FILTER_OTHER,
+    QUALIFICATION_LIBRARY_SECTIONS: () => QUALIFICATION_LIBRARY_SECTIONS,
+    TIMESHEET_CLOSE_OF_PLAY_HOUR: () => TIMESHEET_CLOSE_OF_PLAY_HOUR,
+    TIMESHEET_CLOSE_OF_PLAY_MINUTE: () => TIMESHEET_CLOSE_OF_PLAY_MINUTE,
+    TIMESHEET_DEADLINE_DAYS_BEFORE_PAYMENT: () => TIMESHEET_DEADLINE_DAYS_BEFORE_PAYMENT,
+    TIMESHEET_DOCUMENT_PREFIX: () => TIMESHEET_DOCUMENT_PREFIX,
+    TIMESHEET_EXPORT_STORAGE_FOLDER: () => TIMESHEET_EXPORT_STORAGE_FOLDER,
+    TIMESHEET_INVOICE_EXPORT_LEFTOVER_MS: () => TIMESHEET_INVOICE_EXPORT_LEFTOVER_MS,
+    TIMESHEET_NOTIFY_DAYS_BEFORE_PAYMENT: () => TIMESHEET_NOTIFY_DAYS_BEFORE_PAYMENT,
+    TIMESHEET_NOTIFY_HOUR: () => TIMESHEET_NOTIFY_HOUR,
+    TIMESHEET_NOTIFY_MINUTE: () => TIMESHEET_NOTIFY_MINUTE,
+    TIMESHEET_SIGNED_AFTER_MS: () => TIMESHEET_SIGNED_AFTER_MS,
+    TIMESHEET_SUBMISSION_NOTICE_TITLE: () => TIMESHEET_SUBMISSION_NOTICE_TITLE,
+    TIMESHEET_SUBMISSION_NOTICE_TYPE: () => TIMESHEET_SUBMISSION_NOTICE_TYPE,
+    USER_DOCUMENT_FIELDS: () => USER_DOCUMENT_FIELDS,
+    USER_SELF_CREATE_AGE_FIELDS: () => USER_SELF_CREATE_AGE_FIELDS,
+    WEB_SESSION_ORGANIZATION_STORAGE_PREFIX: () => WEB_SESSION_ORGANIZATION_STORAGE_PREFIX,
+    accessProbeFromReadError: () => accessProbeFromReadError,
     accountKindFromFlags: () => accountKindFromFlags,
     annualLeaveBalance: () => annualLeaveBalance,
     applyEmploymentTypeChange: () => applyEmploymentTypeChange,
     applyRemainingOverride: () => applyRemainingOverride,
+    assignedQualificationWriteFields: () => assignedQualificationWriteFields,
     bookingBelongsToOrganization: () => bookingBelongsToOrganization,
     canEditWorkCatalogue: () => canEditWorkCatalogue,
     canManageVariationTracker: () => canManageVariationTracker,
+    canReviewUserTimesheets: () => canReviewUserTimesheets,
     canSeeVariations: () => canSeeVariations,
     canViewStaffWarnings: () => canViewStaffWarnings,
+    capitalizeTimesheetWeekday: () => capitalizeTimesheetWeekday,
     catalogueRecordFromItem: () => catalogueRecordFromItem,
+    chooseSessionOrganization: () => chooseSessionOrganization,
+    clampMonthDayInZone: () => clampMonthDayInZone,
+    clockMinutesFromDeliveryInstant: () => clockMinutesFromDeliveryInstant,
+    coalesceOrganizationName: () => coalesceOrganizationName,
+    compareInboxNotificationsByCreatedAt: () => compareInboxNotificationsByCreatedAt,
+    compareWarningDayKeys: () => compareWarningDayKeys,
     coverageWindow: () => coverageWindow,
     dayKeyInOrganizationZone: () => dayKeyInOrganizationZone,
+    defaultMaterialDeliveryDayKey: () => defaultMaterialDeliveryDayKey,
+    defaultMaterialDeliveryRequiredAt: () => defaultMaterialDeliveryRequiredAt,
+    defaultTimesheetSubmissionFromPaymentDay: () => defaultTimesheetSubmissionFromPaymentDay,
+    defaultTimesheetSubmissionFromPaymentWeekday: () => defaultTimesheetSubmissionFromPaymentWeekday,
+    devicePushNotificationTypes: () => devicePushNotificationTypes,
+    displayOrganizationName: () => displayOrganizationName,
+    dueTimesheetSubmissionNotices: () => dueTimesheetSubmissionNotices,
     employmentEffectiveLabel: () => employmentEffectiveLabel,
     employmentTypeOnDay: () => employmentTypeOnDay,
     formatClockMinutes: () => formatClockMinutes,
+    formatMaterialCutOffClock: () => formatMaterialCutOffClock,
+    formatMaterialDeliveryRequired: () => formatMaterialDeliveryRequired,
     halfDayWindows: () => halfDayWindows,
+    hasAccess: () => hasAccess,
     hasAnnualLeaveAllowance: () => hasAnnualLeaveAllowance,
+    inboxNotificationVisibleToUser: () => inboxNotificationVisibleToUser,
     intervalsOverlap: () => intervalsOverlap,
+    inviteEmailHasLiveClaim: () => inviteEmailHasLiveClaim,
+    inviteEmailOrgLookupConstraints: () => inviteEmailOrgLookupConstraints,
+    invitePlaceholderUserWriteFields: () => invitePlaceholderUserWriteFields,
+    inviteWritesOperativeProfile: () => inviteWritesOperativeProfile,
     invoicingPeriod: () => invoicingPeriod,
     invoicingToFirestore: () => invoicingToFirestore,
+    isAnonymisedDeletedProfile: () => isAnonymisedDeletedProfile,
     isBillableSelfEmployedDay: () => isBillableSelfEmployedDay,
+    isIdentifiablePendingLeftover: () => isIdentifiablePendingLeftover,
     isStaffAccount: () => isStaffAccount,
+    isTimesheetAwaitingSignOff: () => isTimesheetAwaitingSignOff,
+    isTimesheetExported: () => isTimesheetExported,
+    isTimesheetFullySigned: () => isTimesheetFullySigned,
+    isTimesheetManagerSigned: () => isTimesheetManagerSigned,
+    isTimesheetOperativeSigned: () => isTimesheetOperativeSigned,
     leaveCoverageRows: () => leaveCoverageRows,
     leaveSlotKind: () => leaveSlotKind,
     leaveYearBounds: () => leaveYearBounds,
+    listedCurrentLabourPeople: () => listedCurrentLabourPeople,
+    listedRosterUsers: () => listedRosterUsers,
+    matchesRosterSegment: () => matchesRosterSegment,
+    matchesUserRosterSegment: () => matchesUserRosterSegment,
+    materialCutOffClockMinutes: () => materialCutOffClockMinutes,
+    materialCutOffToFirestore: () => materialCutOffToFirestore,
+    materialDeliveryInstant: () => materialDeliveryInstant,
+    materialOrderIncludesDeliveryRequired: () => materialOrderIncludesDeliveryRequired,
     materialRecordMatches: () => materialRecordMatches,
     materialSearchScore: () => materialSearchScore,
     mergeMinuteIntervals: () => mergeMinuteIntervals,
+    mergeOperativeQualificationWrite: () => mergeOperativeQualificationWrite,
+    mergeQualificationCertificateUrls: () => mergeQualificationCertificateUrls,
+    missingStarterQualificationCodes: () => missingStarterQualificationCodes,
+    monthDayOffsetBefore: () => monthDayOffsetBefore,
+    monthDayOrdinal: () => monthDayOrdinal,
     namedSlotKind: () => namedSlotKind,
+    normalizeClaimedEmails: () => normalizeClaimedEmails,
     normalizeEmploymentType: () => normalizeEmploymentType,
     normalizeMaterialSearchText: () => normalizeMaterialSearchText,
+    normalizePaymentRunRange: () => normalizePaymentRunRange,
+    normalizeTimesheetWeekday: () => normalizeTimesheetWeekday,
+    notificationDeliversDevicePush: () => notificationDeliversDevicePush,
+    notificationDestination: () => notificationDestination,
+    notificationPreferenceAllowsDelivery: () => notificationPreferenceAllowsDelivery,
+    notificationPreferenceCopy: () => notificationPreferenceCopy,
+    notificationPreferenceIsVisible: () => notificationPreferenceIsVisible,
+    notificationPreferenceKeyForType: () => notificationPreferenceKeyForType,
+    orgAccessProbeFromReads: () => orgAccessProbeFromReads,
     organizationIdFromValue: () => organizationIdFromValue,
     organizationIdsMatch: () => organizationIdsMatch,
+    organizationNameToFirestore: () => organizationNameToFirestore,
+    organizationNameWriteFields: () => organizationNameWriteFields,
     organizationScopedKey: () => organizationScopedKey,
     paidHoursForNamedSlot: () => paidHoursForNamedSlot,
     parseClockMinutes: () => parseClockMinutes,
     parseInvoicing: () => parseInvoicing,
+    parseMaterialCutOff: () => parseMaterialCutOff,
+    parseOrganizationName: () => parseOrganizationName,
     parsePaymentRunDateRanges: () => parsePaymentRunDateRanges,
+    parsePaymentRunHistory: () => parsePaymentRunHistory,
+    parseTimesheetStatusFields: () => parseTimesheetStatusFields,
+    parseTimesheetSubmissionEntry: () => parseTimesheetSubmissionEntry,
+    parseTimesheetSubmissionList: () => parseTimesheetSubmissionList,
+    parseUserNotificationPreferences: () => parseUserNotificationPreferences,
     parseWarningDetection: () => parseWarningDetection,
+    parseWarningsSortDirection: () => parseWarningsSortDirection,
+    paymentDateAfterPeriodEnd: () => paymentDateAfterPeriodEnd,
+    paymentRunHistoryAfterChange: () => paymentRunHistoryAfterChange,
+    paymentRunHistoryToFirestore: () => paymentRunHistoryToFirestore,
+    paymentRunMonthDay: () => paymentRunMonthDay,
     paymentRunRangeToFirestore: () => paymentRunRangeToFirestore,
+    paymentRunShowsMonthCoverage: () => paymentRunShowsMonthCoverage,
+    pickTimesheetRowForPeriod: () => pickTimesheetRowForPeriod,
+    provisionalOrganizationId: () => provisionalOrganizationId,
+    qualificationCertificateStoragePath: () => qualificationCertificateStoragePath,
+    qualificationCertificateUrl: () => qualificationCertificateUrl,
     qualificationDismissKey: () => qualificationDismissKey,
     qualificationExpiryRows: () => qualificationExpiryRows,
+    qualificationLibraryFilterChips: () => qualificationLibraryFilterChips,
+    qualificationMatchesSection: () => qualificationMatchesSection,
+    qualificationRecordMatches: () => qualificationRecordMatches,
+    qualificationSearchRecordFromItem: () => qualificationSearchRecordFromItem,
+    qualificationSearchScore: () => qualificationSearchScore,
+    qualificationSectionChipLabel: () => qualificationSectionChipLabel,
     rankMaterialRecords: () => rankMaterialRecords,
+    rankQualificationRecords: () => rankQualificationRecords,
     receivesJobNotification: () => receivesJobNotification,
+    rememberedOrganizationSurvivesSignOut: () => rememberedOrganizationSurvivesSignOut,
+    removedQualificationCertificateIds: () => removedQualificationCertificateIds,
+    resolveInviteEmailClaim: () => resolveInviteEmailClaim,
+    resolveMaterialCutOffClock: () => resolveMaterialCutOffClock,
+    resolveTimesheetExportedAtMs: () => resolveTimesheetExportedAtMs,
+    resolveTimesheetPeriod: () => resolveTimesheetPeriod,
+    rosterPersonName: () => rosterPersonName,
+    rosterSegment: () => rosterSegment,
+    rosterStatusLabel: () => rosterStatusLabel,
     seesEveryJob: () => seesEveryJob,
+    seesEveryUserTimesheet: () => seesEveryUserTimesheet,
+    selectableTimesheetPaymentRunPeriods: () => selectableTimesheetPaymentRunPeriods,
+    sessionMembershipIds: () => sessionMembershipIds,
+    shouldClearRememberedOrganization: () => shouldClearRememberedOrganization,
     slotInterval: () => slotInterval,
     snapLeaveDays: () => snapLeaveDays,
+    sortWarningsByDate: () => sortWarningsByDate,
     standardBreakWindow: () => standardBreakWindow,
     standardDayCoverage: () => standardDayCoverage,
     standardDayWindow: () => standardDayWindow,
+    starterCollectionShouldSeed: () => starterCollectionShouldSeed,
     subtractMinuteIntervals: () => subtractMinuteIntervals,
+    timesheetBelongsToOrganization: () => timesheetBelongsToOrganization,
+    timesheetDocumentId: () => timesheetDocumentId,
+    timesheetExportStoragePath: () => timesheetExportStoragePath,
+    timesheetExportWriteFields: () => timesheetExportWriteFields,
+    timesheetListBucket: () => timesheetListBucket,
+    timesheetPaymentRunPeriodsFromWindow: () => timesheetPaymentRunPeriodsFromWindow,
+    timesheetPeriodContainsDay: () => timesheetPeriodContainsDay,
+    timesheetPeriodFromInvoicing: () => timesheetPeriodFromInvoicing,
+    timesheetPeriodKey: () => timesheetPeriodKey,
+    timesheetPeriodMatches: () => timesheetPeriodMatches,
+    timesheetPeriodWriteFields: () => timesheetPeriodWriteFields,
+    timesheetRequiresManagerCounterSign: () => timesheetRequiresManagerCounterSign,
+    timesheetSignOffWriteFields: () => timesheetSignOffWriteFields,
+    timesheetStatusWriteFields: () => timesheetStatusWriteFields,
+    timesheetStoredStartDayKey: () => timesheetStoredStartDayKey,
+    timesheetSubmissionAfterPaymentDayChange: () => timesheetSubmissionAfterPaymentDayChange,
+    timesheetSubmissionAfterPaymentWeekdayChange: () => timesheetSubmissionAfterPaymentWeekdayChange,
+    timesheetSubmissionNoticeCopy: () => timesheetSubmissionNoticeCopy,
+    timesheetSubmissionNoticeDedupKey: () => timesheetSubmissionNoticeDedupKey,
+    timesheetSubmissionToFirestore: () => timesheetSubmissionToFirestore,
+    timesheetTimestampMs: () => timesheetTimestampMs,
     tokenizeMaterialSearch: () => tokenizeMaterialSearch,
+    tokenizeQualificationSearch: () => tokenizeQualificationSearch,
     unbookedLabourRows: () => unbookedLabourRows,
+    unbookedLabourRowsOnDay: () => unbookedLabourRowsOnDay,
+    uniqueOrganizationIds: () => uniqueOrganizationIds,
+    unreadNotificationBadgeCount: () => unreadNotificationBadgeCount,
     unverifiedOperativeRows: () => unverifiedOperativeRows,
+    userCreateRequiresAgeConfirmation: () => userCreateRequiresAgeConfirmation,
+    userNotificationPreferenceFieldPatch: () => userNotificationPreferenceFieldPatch,
+    userNotificationPreferencesToFirestore: () => userNotificationPreferencesToFirestore,
+    userRosterSegment: () => userRosterSegment,
     validateInvoicingSettings: () => validateInvoicingSettings,
+    visibleNotificationPreferenceKeys: () => visibleNotificationPreferenceKeys,
+    warningDayKeyIsDated: () => warningDayKeyIsDated,
     warningDetectionToFirestore: () => warningDetectionToFirestore,
+    webSessionOrganizationStorageKey: () => webSessionOrganizationStorageKey,
+    weekdayOffsetBefore: () => weekdayOffsetBefore,
     withoutDismissedQualificationRows: () => withoutDismissedQualificationRows
   });
 
@@ -165,6 +328,9 @@ var ProjectPlannerCanonical = (() => {
     const [y, m, d] = key.split("-").map(Number);
     return midnightInZone(new Date(Date.UTC(y, m - 1, d, 12, 0, 0)), timeZone);
   }
+  function unixStartOfDayInZone(date, timeZone) {
+    return Math.floor(midnightInZone(date, timeZone).getTime() / 1e3);
+  }
 
   // lib/canonical/engine.ts
   var CANONICAL_TIME_ZONE = LONDON_TIME_ZONE;
@@ -178,15 +344,49 @@ var ProjectPlannerCanonical = (() => {
     const right = String(rhs ?? "").trim().toLowerCase();
     return left.length > 0 && left === right;
   }
+  function uniqueOrganizationIds(values = []) {
+    const ids = [];
+    for (const value of values) {
+      const organizationId = String(value || "").trim();
+      if (!organizationId) continue;
+      if (ids.some((existing) => organizationIdsMatch(existing, organizationId))) continue;
+      ids.push(organizationId);
+    }
+    return ids;
+  }
+  var WEB_SESSION_ORGANIZATION_STORAGE_PREFIX = "pp.webActiveOrg:";
+  var IOS_SESSION_ORGANIZATION_STORAGE_KEY = "cached_organizationId";
+  function webSessionOrganizationStorageKey(userId) {
+    const id = String(userId || "").trim();
+    return id ? `${WEB_SESSION_ORGANIZATION_STORAGE_PREFIX}${id}` : "";
+  }
+  function shouldClearRememberedOrganization(input) {
+    const previous = String(input.signedOutUserId || "").trim();
+    const next = String(input.nextUserId || "").trim();
+    return Boolean(previous && next && previous !== next);
+  }
+  function rememberedOrganizationSurvivesSignOut() {
+    return !shouldClearRememberedOrganization({ signedOutUserId: "same", nextUserId: "" });
+  }
+  function sessionMembershipIds(input) {
+    void input.discoveryIncomplete;
+    return uniqueOrganizationIds([
+      ...input.discoveredIds ?? [],
+      ...input.previousIds ?? [],
+      input.explicitOrganizationId,
+      input.rememberedOrganizationId,
+      input.documentOrganizationId
+    ]);
+  }
   function organizationIdFromValue(value) {
     if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (!trimmed) return "";
-      if (trimmed.includes("/")) {
-        const parts = trimmed.split("/").filter(Boolean);
+      const trimmed4 = value.trim();
+      if (!trimmed4) return "";
+      if (trimmed4.includes("/")) {
+        const parts = trimmed4.split("/").filter(Boolean);
         return parts[parts.length - 1] || "";
       }
-      return trimmed;
+      return trimmed4;
     }
     if (value && typeof value === "object" && "id" in value) {
       return organizationIdFromValue(value.id);
@@ -195,6 +395,63 @@ var ProjectPlannerCanonical = (() => {
   }
   function bookingBelongsToOrganization(bookingOrganizationId, currentOrganizationId) {
     return organizationIdsMatch(bookingOrganizationId, currentOrganizationId);
+  }
+  function provisionalOrganizationId(input) {
+    for (const value of [input.explicitOrganizationId, input.rememberedOrganizationId, input.documentOrganizationId]) {
+      const organizationId = String(value || "").trim();
+      if (organizationId) return organizationId;
+    }
+    return "";
+  }
+  function orgAccessProbeFromReads(input) {
+    const belongs = input.membershipRead === "active" || input.listed || input.isCreator;
+    if (input.unconfirmed || input.orgRead !== "loaded" || input.membershipRead === "failed") {
+      return belongs ? "allowed" : "unknown";
+    }
+    if (!belongs) return "denied";
+    return "allowed";
+  }
+  function accessProbeFromReadError(_error) {
+    return "unknown";
+  }
+  function chooseSessionOrganization(input) {
+    const documentOrganizationId = String(input.documentOrganizationId || "").trim();
+    const candidates = uniqueOrganizationIds([
+      input.explicitOrganizationId,
+      input.rememberedOrganizationId,
+      documentOrganizationId
+    ]);
+    const probeFor = (organizationId) => {
+      if (input.probes instanceof Map) {
+        for (const [key, probe] of input.probes) {
+          if (organizationIdsMatch(key, organizationId)) return probe;
+        }
+        return "unknown";
+      }
+      for (const [key, probe] of Object.entries(input.probes)) {
+        if (organizationIdsMatch(key, organizationId)) return probe;
+      }
+      return "unknown";
+    };
+    const rememberedOrganizationId = String(input.rememberedOrganizationId || "").trim();
+    const explicitOrganizationId = String(input.explicitOrganizationId || "").trim();
+    const persistFor = (organizationId) => {
+      if (!organizationId) return null;
+      const chosenIsDocument = organizationIdsMatch(organizationId, documentOrganizationId);
+      const chosenIsRemembered = organizationIdsMatch(organizationId, rememberedOrganizationId);
+      const chosenIsExplicit = organizationIdsMatch(organizationId, explicitOrganizationId);
+      if (chosenIsDocument && !chosenIsRemembered && !chosenIsExplicit) return null;
+      return organizationId;
+    };
+    for (const organizationId of candidates) {
+      const isDocument = organizationIdsMatch(organizationId, documentOrganizationId);
+      if (!isDocument && probeFor(organizationId) === "denied") continue;
+      return { organizationId, persistOrganizationId: persistFor(organizationId) };
+    }
+    return {
+      organizationId: documentOrganizationId,
+      persistOrganizationId: persistFor(documentOrganizationId)
+    };
   }
   function intervalsOverlap(a, b) {
     return a.start < b.end && b.start < a.end;
@@ -339,9 +596,9 @@ var ProjectPlannerCanonical = (() => {
     const delta = current <= isoWeekday ? isoWeekday - current : 7 - current + isoWeekday;
     return addDaysInZone(midnightInZone(reference, timeZone), delta, timeZone);
   }
-  function dayInMonth(monthAnchor, day, timeZone) {
-    const { y, m } = partsInZone(monthAnchor, timeZone);
-    const dim = daysInZoneMonth(monthAnchor, timeZone);
+  function dayInMonth(monthAnchor2, day, timeZone) {
+    const { y, m } = partsInZone(monthAnchor2, timeZone);
+    const dim = daysInZoneMonth(monthAnchor2, timeZone);
     const clamped = Math.min(Math.max(day, 1), dim);
     return dateFromDayKeyInZone(
       `${y}-${String(m).padStart(2, "0")}-${String(clamped).padStart(2, "0")}`,
@@ -352,8 +609,19 @@ var ProjectPlannerCanonical = (() => {
     const { y, m } = partsInZone(reference, timeZone);
     return midnightInZone(new Date(Date.UTC(y, m - 1 + offset, 1, 12, 0, 0)), timeZone);
   }
+  function paymentRunMonthDay(value) {
+    const n = Number(value);
+    return Number.isInteger(n) && n >= 1 && n <= 31 ? n : 0;
+  }
+  function normalizePaymentRunRange(row) {
+    if (!row) return null;
+    const startDay = paymentRunMonthDay(row.startDate) || paymentRunMonthDay(row.startDay);
+    const endDay = paymentRunMonthDay(row.endDate) || paymentRunMonthDay(row.endDay);
+    if (startDay <= 0 || endDay <= 0) return null;
+    return { startDay, endDay };
+  }
   function usableRanges(ranges) {
-    return (ranges ?? []).filter((range) => range.startDay > 0 && range.endDay > 0).slice(0, 2);
+    return (ranges ?? []).map((range) => normalizePaymentRunRange(range)).filter((range) => range != null).slice(0, 2);
   }
   function rangeContainsDay(range, dayOfMonth) {
     if (range.startDay <= range.endDay) {
@@ -363,24 +631,24 @@ var ProjectPlannerCanonical = (() => {
   }
   function boundsForRange(range, reference, timeZone) {
     const dayOfMonth = dayOfMonthInZone(reference, timeZone);
-    const monthAnchor = shiftMonth(reference, 0, timeZone);
+    const monthAnchor2 = shiftMonth(reference, 0, timeZone);
     if (range.startDay <= range.endDay) {
       return {
-        startDayKey: dayKeyInZone(dayInMonth(monthAnchor, range.startDay, timeZone), timeZone),
-        endDayKey: dayKeyInZone(dayInMonth(monthAnchor, range.endDay, timeZone), timeZone)
+        startDayKey: dayKeyInZone(dayInMonth(monthAnchor2, range.startDay, timeZone), timeZone),
+        endDayKey: dayKeyInZone(dayInMonth(monthAnchor2, range.endDay, timeZone), timeZone)
       };
     }
     if (dayOfMonth >= range.startDay) {
       const nextMonth = shiftMonth(reference, 1, timeZone);
       return {
-        startDayKey: dayKeyInZone(dayInMonth(monthAnchor, range.startDay, timeZone), timeZone),
+        startDayKey: dayKeyInZone(dayInMonth(monthAnchor2, range.startDay, timeZone), timeZone),
         endDayKey: dayKeyInZone(dayInMonth(nextMonth, range.endDay, timeZone), timeZone)
       };
     }
     const previousMonth = shiftMonth(reference, -1, timeZone);
     return {
       startDayKey: dayKeyInZone(dayInMonth(previousMonth, range.startDay, timeZone), timeZone),
-      endDayKey: dayKeyInZone(dayInMonth(monthAnchor, range.endDay, timeZone), timeZone)
+      endDayKey: dayKeyInZone(dayInMonth(monthAnchor2, range.endDay, timeZone), timeZone)
     };
   }
   function invoicingPeriod(input) {
@@ -440,8 +708,8 @@ var ProjectPlannerCanonical = (() => {
       case "PM":
         return windows.pm.end > windows.pm.start ? { ...windows.pm } : null;
       default: {
-        const start = parseClockMinutes(booking.workStart);
-        const end = parseClockMinutes(booking.workEnd);
+        const start = parseClockMinutes(booking.workStart ?? booking.workStartTime);
+        const end = parseClockMinutes(booking.workEnd ?? booking.workEndTime);
         if (start != null && end != null && end > start) return { start, end };
         return { ...windows.day };
       }
@@ -497,6 +765,77 @@ var ProjectPlannerCanonical = (() => {
     const user = String(userId || "").trim();
     return user ? `${kind}:${user}:${org}` : `${kind}:${org}`;
   }
+
+  // lib/canonical/userRosterSegment.ts
+  var ANONYMISED_DELETED_USER_NAME = "Deleted user";
+  function trimmed(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function normalizeEmail(value) {
+    return trimmed(value).toLowerCase();
+  }
+  function namesEqualDeletedUser(value) {
+    return value.toLowerCase() === ANONYMISED_DELETED_USER_NAME.toLowerCase();
+  }
+  function rosterPersonName(profile) {
+    const first = trimmed(profile.firstName);
+    const surname = trimmed(profile.surname) || trimmed(profile.lastName);
+    const combined = `${first} ${surname}`.trim();
+    if (combined) return combined;
+    return trimmed(profile.name) || trimmed(profile.displayName);
+  }
+  function rosterPhone(profile) {
+    return trimmed(profile.mobileNumber) || trimmed(profile.mobile) || trimmed(profile.phone);
+  }
+  function isAnonymisedDeletedProfile(profile) {
+    if (!profile) return false;
+    if (normalizeEmail(profile.email)) return false;
+    if (namesEqualDeletedUser(rosterPersonName(profile))) return true;
+    if (namesEqualDeletedUser(trimmed(profile.name))) return true;
+    if (namesEqualDeletedUser(trimmed(profile.displayName))) return true;
+    return false;
+  }
+  function rosterSegment(profile) {
+    if (isAnonymisedDeletedProfile(profile)) return "inactive";
+    if (profile.passwordSet === true) return profile.isActive === true ? "active" : "inactive";
+    return "pending";
+  }
+  function matchesRosterSegment(profile, segment) {
+    return rosterSegment(profile) === segment;
+  }
+  function rosterStatusLabel(profile) {
+    const segment = rosterSegment(profile);
+    if (segment === "active") return "Active";
+    if (segment === "inactive") return "Inactive";
+    return "Pending";
+  }
+  function normalizeClaimedEmails(claimedEmails) {
+    if (claimedEmails == null) return null;
+    return claimedEmails.map((email) => normalizeEmail(email)).filter(Boolean);
+  }
+  function isIdentifiablePendingLeftover(profile, claimedEmails) {
+    if (profile.passwordSet === true) return false;
+    if (isAnonymisedDeletedProfile(profile)) return false;
+    const email = normalizeEmail(profile.email);
+    const name = rosterPersonName(profile);
+    const phone = rosterPhone(profile);
+    const namedPerson = Boolean(name) && !namesEqualDeletedUser(name);
+    const identifiable = Boolean(email) || namedPerson || Boolean(phone);
+    if (!identifiable) return false;
+    if (!email) return true;
+    const claimed = normalizeClaimedEmails(claimedEmails);
+    if (claimed == null) return false;
+    return !claimed.includes(email);
+  }
+  function listedRosterUsers(users, claimedEmails) {
+    return users.filter((user) => !isIdentifiablePendingLeftover(user, claimedEmails));
+  }
+  function listedCurrentLabourPeople(people) {
+    return people.filter((person) => !isAnonymisedDeletedProfile(person));
+  }
+  var DELETED_USER_DISPLAY_NAME = ANONYMISED_DELETED_USER_NAME;
+  var userRosterSegment = rosterSegment;
+  var matchesUserRosterSegment = matchesRosterSegment;
 
   // lib/canonical/dayKeys.ts
   function zoneOrLondon(timeZone) {
@@ -597,6 +936,7 @@ var ProjectPlannerCanonical = (() => {
     const rows = [];
     for (const operative of input.operatives) {
       if (!operative.isActive) continue;
+      if (isAnonymisedDeletedProfile({ email: operative.email, name: operative.name })) continue;
       const operativeName = String(operative.name || "").trim() || operative.id;
       for (const expiry of operative.expiries) {
         const name = String(expiry.name || "").trim();
@@ -628,6 +968,7 @@ var ProjectPlannerCanonical = (() => {
     if (!todayKey) return [];
     const rows = [];
     for (const operative of input.operatives) {
+      if (isAnonymisedDeletedProfile({ email: operative.email, name: operative.name })) continue;
       const email = emailKey(operative.email);
       if (!email) continue;
       const person = input.people.find((candidate) => emailKey(candidate.email) === email && candidate.isOperativeMode);
@@ -684,12 +1025,14 @@ var ProjectPlannerCanonical = (() => {
   function asCoverageBooking(booking) {
     return {
       timeSlot: booking.timeSlot,
-      workStart: booking.workStart,
-      workEnd: booking.workEnd
+      workStart: booking.workStart ?? booking.workStartTime,
+      workEnd: booking.workEnd ?? booking.workEndTime
     };
   }
   function unbookedLabourRows(input) {
     const timeZone = zoneOf2(input.timeZone);
+    const people = listedCurrentLabourPeople(input.people);
+    const operatives = listedCurrentLabourPeople(input.operatives);
     const excluded = new Set((input.excludedUserIds || []).map((id) => String(id)));
     const dayPolicy = {
       standardDayStart: input.standardDayStart,
@@ -711,7 +1054,7 @@ var ProjectPlannerCanonical = (() => {
     }
     const operativesByEmail = /* @__PURE__ */ new Map();
     const operativeIdsByEmail = /* @__PURE__ */ new Map();
-    for (const operative of input.operatives) {
+    for (const operative of operatives) {
       const email = emailKey(operative.email);
       if (!email) continue;
       const ids = operativeIdsByEmail.get(email) || /* @__PURE__ */ new Set();
@@ -723,7 +1066,7 @@ var ProjectPlannerCanonical = (() => {
       }
     }
     const userIdsByEmail = /* @__PURE__ */ new Map();
-    for (const person of input.people) {
+    for (const person of people) {
       const email = emailKey(person.email);
       if (!email || !person.id) continue;
       const ids = userIdsByEmail.get(email) || /* @__PURE__ */ new Set();
@@ -731,17 +1074,18 @@ var ProjectPlannerCanonical = (() => {
       userIdsByEmail.set(email, ids);
     }
     const slotsFor = (email, operativeId, userId, dayKey) => {
-      const slots = [];
       const ids = /* @__PURE__ */ new Set();
       if (operativeId) ids.add(operativeId);
+      if (userId) ids.add(userId);
       const linked = operativeIdsByEmail.get(email);
       if (linked) for (const id of linked) ids.add(id);
-      for (const id of ids) slots.push(...operativeBookings.get(`${id}|${dayKey}`) || []);
-      const userIds = /* @__PURE__ */ new Set();
-      if (userId) userIds.add(userId);
       const linkedUsers = userIdsByEmail.get(email);
-      if (linkedUsers) for (const id of linkedUsers) userIds.add(id);
-      for (const id of userIds) slots.push(...managerBookings.get(`${id}|${dayKey}`) || []);
+      if (linkedUsers) for (const id of linkedUsers) ids.add(id);
+      const slots = [];
+      for (const id of ids) {
+        slots.push(...operativeBookings.get(`${id}|${dayKey}`) || []);
+        slots.push(...managerBookings.get(`${id}|${dayKey}`) || []);
+      }
       return slots;
     };
     const approvedHolidays = input.holidays.filter((holiday) => holiday.approved);
@@ -762,17 +1106,17 @@ var ProjectPlannerCanonical = (() => {
         return false;
       });
     };
-    const operativeUsers = dedupeFinishedPeople(input.people.filter(isOperativeModeOnly));
-    const managerUsers = dedupeFinishedPeople(input.people.filter(isManagerOrAdmin));
+    const operativeUsers = dedupeFinishedPeople(people.filter(isOperativeModeOnly));
+    const managerUsers = dedupeFinishedPeople(people.filter(isManagerOrAdmin));
     const managerAdminUserIds = new Set(
-      input.people.filter(isManagerOrAdmin).filter(hasFinishedSignup).map((person) => person.id)
+      people.filter(isManagerOrAdmin).filter(hasFinishedSignup).map((person) => person.id)
     );
     const operativeUserEmails = new Set(operativeUsers.map((person) => emailKey(person.email)).filter(Boolean));
     const verifiedUserForEmail = (email) => {
       if (!email) return void 0;
-      return preferFinishedAccount(input.people.filter((person) => emailKey(person.email) === email));
+      return preferFinishedAccount(people.filter((person) => emailKey(person.email) === email));
     };
-    const roster = input.operatives.filter((operative) => operative.isActive !== false && !operative.isPlaceholder);
+    const roster = operatives.filter((operative) => operative.isActive !== false && !operative.isPlaceholder);
     const rows = [];
     for (const dayKey of eachDayKey(input.startDayKey, input.endDayKey, timeZone)) {
       const iso = isoWeekdayInZone(dateFromDayKeyInZone(dayKey, timeZone), timeZone);
@@ -832,7 +1176,7 @@ var ProjectPlannerCanonical = (() => {
         const email = emailKey(operative.email);
         if (email && operativeUserEmails.has(email)) continue;
         const matched = email ? verifiedUserForEmail(email) : void 0;
-        if (!matched && email && input.people.some((person) => emailKey(person.email) === email)) continue;
+        if (!matched && email && people.some((person) => emailKey(person.email) === email)) continue;
         if (matched && managerAdminUserIds.has(matched.id)) continue;
         if (matched && excluded.has(matched.id)) continue;
         if (holidayCovers(dayKey, email, matched?.id, operative.id)) continue;
@@ -849,6 +1193,40 @@ var ProjectPlannerCanonical = (() => {
       if (a.dayKey !== b.dayKey) return a.dayKey < b.dayKey ? -1 : 1;
       return a.operativeName.localeCompare(b.operativeName, void 0, { sensitivity: "base" });
     });
+  }
+  function unbookedLabourRowsOnDay(input) {
+    return unbookedLabourRows({
+      ...input,
+      startDayKey: input.dayKey,
+      endDayKey: input.dayKey
+    });
+  }
+
+  // lib/canonical/warningSort.ts
+  var DEFAULT_WARNINGS_SORT_DIRECTION = "oldest";
+  var DATED_DAY_KEY = /^(\d{4})-(\d{2})-(\d{2})$/;
+  function parseWarningsSortDirection(value) {
+    return value === "newest" ? "newest" : DEFAULT_WARNINGS_SORT_DIRECTION;
+  }
+  function warningDayKeyIsDated(dayKey) {
+    return DATED_DAY_KEY.test(String(dayKey ?? "").trim());
+  }
+  function compareWarningDayKeys(a, b, direction = DEFAULT_WARNINGS_SORT_DIRECTION) {
+    const left = String(a ?? "").trim();
+    const right = String(b ?? "").trim();
+    const leftDated = warningDayKeyIsDated(left);
+    const rightDated = warningDayKeyIsDated(right);
+    if (leftDated !== rightDated) return leftDated ? -1 : 1;
+    if (!leftDated || left === right) return 0;
+    const ascending = left < right ? -1 : 1;
+    return parseWarningsSortDirection(direction) === "newest" ? -ascending : ascending;
+  }
+  function sortWarningsByDate(rows, direction = DEFAULT_WARNINGS_SORT_DIRECTION) {
+    const dir = parseWarningsSortDirection(direction);
+    return rows.map((row, index) => ({ row, index })).sort((left, right) => {
+      const byDate = compareWarningDayKeys(left.row.dayKey ?? "", right.row.dayKey ?? "", dir);
+      return byDate !== 0 ? byDate : left.index - right.index;
+    }).map((entry) => entry.row);
   }
 
   // lib/canonical/leaveCoverage.ts
@@ -887,6 +1265,7 @@ var ProjectPlannerCanonical = (() => {
     const peopleByUserId = /* @__PURE__ */ new Map();
     const peopleByOperativeId = /* @__PURE__ */ new Map();
     for (const person of input.people) {
+      if (isAnonymisedDeletedProfile({ name: person.name })) continue;
       const userId = String(person.userId || "").trim();
       if (userId && !peopleByUserId.has(userId)) peopleByUserId.set(userId, person);
       for (const operativeId of person.operativeIds || []) {
@@ -1023,6 +1402,13 @@ var ProjectPlannerCanonical = (() => {
   function canSeeVariations(role) {
     return isStaffAccount(role);
   }
+  function canReviewUserTimesheets(role) {
+    return isStaffAccount(role);
+  }
+  function seesEveryUserTimesheet(role) {
+    if (role.isOperativeMode) return false;
+    return role.isSuperAdmin || role.isAdmin;
+  }
   function canManageVariationTracker(role) {
     if (role.isOperativeMode) return false;
     return role.isSuperAdmin || role.isAdmin;
@@ -1048,7 +1434,757 @@ var ProjectPlannerCanonical = (() => {
     return line.includes(userId);
   }
 
+  // lib/canonical/timesheetSubmission.ts
+  var TIMESHEET_CLOSE_OF_PLAY_HOUR = 17;
+  var TIMESHEET_CLOSE_OF_PLAY_MINUTE = 0;
+  var TIMESHEET_NOTIFY_HOUR = 8;
+  var TIMESHEET_NOTIFY_MINUTE = 0;
+  var TIMESHEET_DEADLINE_DAYS_BEFORE_PAYMENT = 1;
+  var TIMESHEET_NOTIFY_DAYS_BEFORE_PAYMENT = 3;
+  var TIMESHEET_SUBMISSION_NOTICE_TITLE = "Timesheet submission reminder";
+  var TIMESHEET_SUBMISSION_NOTICE_TYPE = "timesheet_submission_reminder";
+  var TIMESHEET_SUBMISSION_WEEKDAYS = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday"
+  ];
+  var MONTH_CYCLE = 31;
+  var GRACE_DAYS_AFTER_PAYMENT = 7;
+  function pad2(value) {
+    return String(value).padStart(2, "0");
+  }
+  function clampHour(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.min(23, Math.round(n)));
+  }
+  function clampMinute(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.min(59, Math.round(n)));
+  }
+  function monthDayOrZero(value) {
+    const n = Number(value);
+    return Number.isInteger(n) && n >= 1 && n <= 31 ? n : 0;
+  }
+  function normalizeTimesheetWeekday(value, fallback = "friday") {
+    const raw = String(value || "").trim().toLowerCase();
+    return TIMESHEET_SUBMISSION_WEEKDAYS.includes(raw) ? raw : fallback;
+  }
+  function weekdayOffsetBefore(weekday, daysBefore) {
+    const current = normalizeTimesheetWeekday(weekday);
+    const index = TIMESHEET_SUBMISSION_WEEKDAYS.indexOf(current);
+    const shift = ((index - daysBefore) % 7 + 7) % 7;
+    return TIMESHEET_SUBMISSION_WEEKDAYS[shift];
+  }
+  function monthDayOffsetBefore(paymentDay, daysBefore) {
+    const day = monthDayOrZero(paymentDay);
+    if (day <= 0) return 0;
+    const offset = Math.max(0, Math.round(daysBefore));
+    return ((day - 1 - offset) % MONTH_CYCLE + MONTH_CYCLE) % MONTH_CYCLE + 1;
+  }
+  function monthDayOrdinal(day) {
+    const n = monthDayOrZero(day);
+    if (n <= 0) return "";
+    const mod100 = n % 100;
+    if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+    switch (n % 10) {
+      case 1:
+        return `${n}st`;
+      case 2:
+        return `${n}nd`;
+      case 3:
+        return `${n}rd`;
+      default:
+        return `${n}th`;
+    }
+  }
+  function capitalizeTimesheetWeekday(day) {
+    const name = normalizeTimesheetWeekday(day);
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  }
+  function emptyTimesheetSubmission() {
+    return {
+      timesheetDeadlineDay: 0,
+      timesheetDeadlineWeekday: "",
+      timesheetDeadlineHour: TIMESHEET_CLOSE_OF_PLAY_HOUR,
+      timesheetDeadlineMinute: TIMESHEET_CLOSE_OF_PLAY_MINUTE,
+      notifyDay: 0,
+      notifyWeekday: "",
+      notifyHour: TIMESHEET_NOTIFY_HOUR,
+      notifyMinute: TIMESHEET_NOTIFY_MINUTE,
+      notifyCustomised: false
+    };
+  }
+  function defaultTimesheetSubmissionFromPaymentDay(paymentDay) {
+    const day = monthDayOrZero(paymentDay);
+    if (day <= 0) return emptyTimesheetSubmission();
+    return {
+      timesheetDeadlineDay: monthDayOffsetBefore(day, TIMESHEET_DEADLINE_DAYS_BEFORE_PAYMENT),
+      timesheetDeadlineWeekday: "",
+      timesheetDeadlineHour: TIMESHEET_CLOSE_OF_PLAY_HOUR,
+      timesheetDeadlineMinute: TIMESHEET_CLOSE_OF_PLAY_MINUTE,
+      notifyDay: monthDayOffsetBefore(day, TIMESHEET_NOTIFY_DAYS_BEFORE_PAYMENT),
+      notifyWeekday: "",
+      notifyHour: TIMESHEET_NOTIFY_HOUR,
+      notifyMinute: TIMESHEET_NOTIFY_MINUTE,
+      notifyCustomised: false
+    };
+  }
+  function defaultTimesheetSubmissionFromPaymentWeekday(paymentWeekday) {
+    const pay = normalizeTimesheetWeekday(paymentWeekday);
+    return {
+      timesheetDeadlineDay: 0,
+      timesheetDeadlineWeekday: weekdayOffsetBefore(pay, TIMESHEET_DEADLINE_DAYS_BEFORE_PAYMENT),
+      timesheetDeadlineHour: TIMESHEET_CLOSE_OF_PLAY_HOUR,
+      timesheetDeadlineMinute: TIMESHEET_CLOSE_OF_PLAY_MINUTE,
+      notifyDay: 0,
+      notifyWeekday: weekdayOffsetBefore(pay, TIMESHEET_NOTIFY_DAYS_BEFORE_PAYMENT),
+      notifyHour: TIMESHEET_NOTIFY_HOUR,
+      notifyMinute: TIMESHEET_NOTIFY_MINUTE,
+      notifyCustomised: false
+    };
+  }
+  function timesheetSubmissionAfterPaymentDayChange(current, paymentDay) {
+    if (current?.notifyCustomised) {
+      return { ...current };
+    }
+    return defaultTimesheetSubmissionFromPaymentDay(paymentDay);
+  }
+  function timesheetSubmissionAfterPaymentWeekdayChange(current, paymentWeekday) {
+    if (current?.notifyCustomised) {
+      return { ...current };
+    }
+    return defaultTimesheetSubmissionFromPaymentWeekday(paymentWeekday);
+  }
+  function isCloseOfPlay(hour, minute) {
+    return hour === TIMESHEET_CLOSE_OF_PLAY_HOUR && minute === TIMESHEET_CLOSE_OF_PLAY_MINUTE;
+  }
+  function deadlinePhrase(dayLabel, hour, minute) {
+    if (isCloseOfPlay(hour, minute)) return `close of play on ${dayLabel}`;
+    return `${formatClockMinutes(hour * 60 + minute)} on ${dayLabel}`;
+  }
+  function timesheetSubmissionNoticeCopy(input) {
+    const hour = clampHour(input.deadlineHour, TIMESHEET_CLOSE_OF_PLAY_HOUR);
+    const minute = clampMinute(input.deadlineMinute, TIMESHEET_CLOSE_OF_PLAY_MINUTE);
+    if (input.mode === "recurring_timeframe") {
+      const deadlineWeekday = capitalizeTimesheetWeekday(input.deadlineWeekday || "thursday");
+      const paymentWeekday = capitalizeTimesheetWeekday(input.paymentWeekday || "friday");
+      const when = isCloseOfPlay(hour, minute) ? `close of play ${deadlineWeekday}` : `${formatClockMinutes(hour * 60 + minute)} ${deadlineWeekday}`;
+      return `Please issue timesheets for the previous payment run by ${when}, to be paid on ${paymentWeekday}.`;
+    }
+    const deadline = monthDayOrdinal(input.deadlineDay || 0);
+    const payment = monthDayOrdinal(input.paymentDay || 0);
+    if (!deadline || !payment) return "";
+    return `Timesheets need to be submitted by ${deadlinePhrase(`the ${deadline}`, hour, minute)} for payment on the ${payment}.`;
+  }
+  function asRecord(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return void 0;
+    return value;
+  }
+  function parseTimesheetSubmissionEntry(raw, fallback) {
+    const data = asRecord(raw);
+    if (!data) return { ...fallback };
+    const deadlineDay = monthDayOrZero(data.timesheetDeadlineDay);
+    const notifyDay = monthDayOrZero(data.notifyDay);
+    return {
+      timesheetDeadlineDay: deadlineDay || fallback.timesheetDeadlineDay,
+      timesheetDeadlineWeekday: data.timesheetDeadlineWeekday ? normalizeTimesheetWeekday(data.timesheetDeadlineWeekday, fallback.timesheetDeadlineWeekday || "thursday") : fallback.timesheetDeadlineWeekday,
+      timesheetDeadlineHour: clampHour(data.timesheetDeadlineHour, fallback.timesheetDeadlineHour),
+      timesheetDeadlineMinute: clampMinute(data.timesheetDeadlineMinute, fallback.timesheetDeadlineMinute),
+      notifyDay: notifyDay || fallback.notifyDay,
+      notifyWeekday: data.notifyWeekday ? normalizeTimesheetWeekday(data.notifyWeekday, fallback.notifyWeekday || "tuesday") : fallback.notifyWeekday,
+      notifyHour: clampHour(data.notifyHour, fallback.notifyHour),
+      notifyMinute: clampMinute(data.notifyMinute, fallback.notifyMinute),
+      notifyCustomised: data.notifyCustomised === true
+    };
+  }
+  function timesheetSubmissionToFirestore(entry) {
+    return {
+      timesheetDeadlineDay: entry.timesheetDeadlineDay,
+      timesheetDeadlineWeekday: entry.timesheetDeadlineWeekday,
+      timesheetDeadlineHour: entry.timesheetDeadlineHour,
+      timesheetDeadlineMinute: entry.timesheetDeadlineMinute,
+      notifyDay: entry.notifyDay,
+      notifyWeekday: entry.notifyWeekday,
+      notifyHour: entry.notifyHour,
+      notifyMinute: entry.notifyMinute,
+      notifyCustomised: entry.notifyCustomised === true
+    };
+  }
+  function parseTimesheetSubmissionList(input) {
+    const rawList = Array.isArray(input.timesheetSubmission) ? input.timesheetSubmission : [];
+    const rangeRows = Array.isArray(input.paymentRunDateRanges) ? input.paymentRunDateRanges : [];
+    if (input.paymentRunMode === "recurring_timeframe") {
+      const fallback = defaultTimesheetSubmissionFromPaymentWeekday(input.recurringPaymentDay || "friday");
+      const fromList = rawList[0] != null ? parseTimesheetSubmissionEntry(rawList[0], fallback) : null;
+      const fromRoot = input.invoicingRoot ? parseTimesheetSubmissionEntry(
+        {
+          timesheetDeadlineWeekday: input.invoicingRoot.timesheetDeadlineWeekday,
+          timesheetDeadlineHour: input.invoicingRoot.timesheetDeadlineHour,
+          timesheetDeadlineMinute: input.invoicingRoot.timesheetDeadlineMinute,
+          notifyWeekday: input.invoicingRoot.notifyWeekday,
+          notifyHour: input.invoicingRoot.notifyHour,
+          notifyMinute: input.invoicingRoot.notifyMinute,
+          notifyCustomised: input.invoicingRoot.notifyCustomised
+        },
+        fallback
+      ) : null;
+      const chosen = fromList && (asRecord(rawList[0])?.notifyWeekday || asRecord(rawList[0])?.timesheetDeadlineWeekday) ? fromList : fromRoot && (input.invoicingRoot?.notifyWeekday || input.invoicingRoot?.timesheetDeadlineWeekday) ? fromRoot : fromList ?? fromRoot ?? fallback;
+      return [{ ...chosen, timesheetDeadlineDay: 0, notifyDay: 0 }];
+    }
+    const paymentDays = input.paymentDates.map((value) => monthDayOrZero(value)).filter((day) => day > 0);
+    const count = Math.max(paymentDays.length, rawList.length, 2);
+    const rows = [];
+    for (let index = 0; index < count; index += 1) {
+      const paymentDay = paymentDays[index] || 0;
+      const fallback = defaultTimesheetSubmissionFromPaymentDay(paymentDay);
+      const fromList = rawList[index] != null ? parseTimesheetSubmissionEntry(rawList[index], fallback) : null;
+      const fromRange = rangeRows[index] != null ? parseTimesheetSubmissionEntry(rangeRows[index], fallback) : null;
+      rows.push(fromList ?? fromRange ?? fallback);
+    }
+    return rows;
+  }
+  function shiftYearMonth(year, month, offset) {
+    const date = new Date(Date.UTC(year, month - 1 + offset, 1, 12, 0, 0));
+    return { y: date.getUTCFullYear(), m: date.getUTCMonth() + 1 };
+  }
+  function monthAnchor(year, month, timeZone) {
+    return dateFromDayKeyInZone(`${year}-${pad2(month)}-01`, timeZone);
+  }
+  function clampMonthDayInZone(year, month, day, timeZone) {
+    const zone = zoneOrLondon(timeZone);
+    const dim = daysInZoneMonth(monthAnchor(year, month, zone), zone);
+    const clamped = Math.min(Math.max(monthDayOrZero(day) || 1, 1), dim);
+    return `${year}-${pad2(month)}-${pad2(clamped)}`;
+  }
+  function paymentDateAfterPeriodEnd(periodEndDayKey, paymentDays, timeZone) {
+    const zone = zoneOrLondon(timeZone);
+    const days = paymentDays.map((day) => monthDayOrZero(day)).filter((day) => day > 0);
+    if (!periodEndDayKey || days.length === 0) return null;
+    const periodEnd = dateFromDayKeyInZone(periodEndDayKey, zone);
+    const { y, m } = partsInZone(periodEnd, zone);
+    for (const day of days) {
+      const candidate = clampMonthDayInZone(y, m, day, zone);
+      if (candidate >= periodEndDayKey) return candidate;
+    }
+    const next = shiftYearMonth(y, m, 1);
+    return clampMonthDayInZone(next.y, next.m, days[0], zone);
+  }
+  function relatedMonthDayToPayment(paymentDayKey, relatedDay, timeZone) {
+    const payment = dateFromDayKeyInZone(paymentDayKey, timeZone);
+    const { y, m, d } = partsInZone(payment, timeZone);
+    const day = monthDayOrZero(relatedDay);
+    if (day <= 0) return paymentDayKey;
+    if (day <= d) return clampMonthDayInZone(y, m, day, timeZone);
+    const prev = shiftYearMonth(y, m, -1);
+    return clampMonthDayInZone(prev.y, prev.m, day, timeZone);
+  }
+  function weekdayOnOrBefore2(dayKey, weekday, timeZone) {
+    const target = TIMESHEET_SUBMISSION_WEEKDAYS.indexOf(normalizeTimesheetWeekday(weekday)) + 1;
+    let cursor = dateFromDayKeyInZone(dayKey, timeZone);
+    for (let step = 0; step < 7; step += 1) {
+      if (isoWeekdayInZone(cursor, timeZone) === target) return dayKeyInZone(cursor, timeZone);
+      cursor = addDaysInZone(cursor, -1, timeZone);
+    }
+    return dayKey;
+  }
+  function instantOnDay(dayKey, hour, minute, timeZone) {
+    const midnight = dateFromDayKeyInZone(dayKey, timeZone);
+    return new Date(midnight.getTime() + (hour * 60 + minute) * 6e4);
+  }
+  function resolveDateRangeInstants(paymentDayKey, settings, timeZone) {
+    const payment = dateFromDayKeyInZone(paymentDayKey, timeZone);
+    if (!settings.notifyCustomised) {
+      return {
+        deadlineDayKey: dayKeyInZone(addDaysInZone(payment, -TIMESHEET_DEADLINE_DAYS_BEFORE_PAYMENT, timeZone), timeZone),
+        notifyDayKey: dayKeyInZone(addDaysInZone(payment, -TIMESHEET_NOTIFY_DAYS_BEFORE_PAYMENT, timeZone), timeZone)
+      };
+    }
+    return {
+      deadlineDayKey: relatedMonthDayToPayment(paymentDayKey, settings.timesheetDeadlineDay, timeZone),
+      notifyDayKey: relatedMonthDayToPayment(paymentDayKey, settings.notifyDay, timeZone)
+    };
+  }
+  function resolveRecurringInstants(paymentDayKey, settings, timeZone) {
+    const deadlineWeekday = settings.timesheetDeadlineWeekday || weekdayOffsetBefore(settings.notifyWeekday || "friday", 2);
+    const notifyWeekday = settings.notifyWeekday || weekdayOffsetBefore(deadlineWeekday, 2);
+    return {
+      deadlineDayKey: weekdayOnOrBefore2(paymentDayKey, deadlineWeekday, timeZone),
+      notifyDayKey: weekdayOnOrBefore2(paymentDayKey, notifyWeekday, timeZone)
+    };
+  }
+  function timesheetSubmissionNoticeDedupKey(input) {
+    const scoped = organizationScopedKey("timesheetSubmission", input.organizationId, input.userId);
+    return `${scoped}|${input.runIndex}|${input.paymentDayKey}`;
+  }
+  function paymentNumbers(values) {
+    return (values ?? []).map((value) => monthDayOrZero(value)).filter((day) => day > 0);
+  }
+  function noticeFromInstants(input) {
+    const paymentDay = partsInZone(dateFromDayKeyInZone(input.paymentDayKey, input.timeZone), input.timeZone).d;
+    const deadlineDay = monthDayOrZero(input.settings.timesheetDeadlineDay) || partsInZone(dateFromDayKeyInZone(input.deadlineDayKey, input.timeZone), input.timeZone).d;
+    const message = timesheetSubmissionNoticeCopy({
+      mode: input.mode,
+      deadlineDay,
+      paymentDay,
+      deadlineWeekday: input.settings.timesheetDeadlineWeekday,
+      paymentWeekday: input.paymentWeekday,
+      deadlineHour: input.settings.timesheetDeadlineHour,
+      deadlineMinute: input.settings.timesheetDeadlineMinute
+    });
+    return {
+      runIndex: input.runIndex,
+      occurrenceKey: `${input.runIndex}:${input.paymentDayKey}`,
+      paymentDayKey: input.paymentDayKey,
+      deadlineDayKey: input.deadlineDayKey,
+      notifyDayKey: input.notifyDayKey,
+      notifyHour: input.settings.notifyHour,
+      notifyMinute: input.settings.notifyMinute,
+      deadlineHour: input.settings.timesheetDeadlineHour,
+      deadlineMinute: input.settings.timesheetDeadlineMinute,
+      title: TIMESHEET_SUBMISSION_NOTICE_TITLE,
+      message
+    };
+  }
+  function isDue(now, notifyAt, paymentDayKey, timeZone) {
+    if (now.getTime() < notifyAt.getTime()) return false;
+    const latest = addDaysInZone(dateFromDayKeyInZone(paymentDayKey, timeZone), GRACE_DAYS_AFTER_PAYMENT, timeZone);
+    return dayKeyInZone(now, timeZone) <= dayKeyInZone(latest, timeZone);
+  }
+  function dueTimesheetSubmissionNotices(input) {
+    const timeZone = zoneOrLondon(input.timeZone);
+    const now = new Date(input.referenceIso);
+    if (Number.isNaN(now.getTime())) return [];
+    const found = /* @__PURE__ */ new Map();
+    const consider = (notice, settings) => {
+      const notifyAt = instantOnDay(notice.notifyDayKey, settings.notifyHour, settings.notifyMinute, timeZone);
+      if (!isDue(now, notifyAt, notice.paymentDayKey, timeZone)) return;
+      found.set(notice.occurrenceKey, notice);
+    };
+    if (input.paymentRunMode === "recurring_timeframe") {
+      const settings = input.timesheetSubmission?.[0] ?? defaultTimesheetSubmissionFromPaymentWeekday(input.recurringPaymentDay || "friday");
+      const anchors = [
+        now,
+        addDaysInZone(now, -8, timeZone),
+        addDaysInZone(now, 8, timeZone)
+      ];
+      for (const anchor of anchors) {
+        const period = invoicingPeriod({
+          referenceIso: midnightInZone(anchor, timeZone).toISOString(),
+          timeZone,
+          paymentRunMode: "recurring_timeframe",
+          recurringRunStartDay: input.recurringRunStartDay || "monday",
+          recurringRunEndDay: input.recurringRunEndDay || "sunday"
+        });
+        const dayAfter = addDaysInZone(dateFromDayKeyInZone(period.endDayKey, timeZone), 1, timeZone);
+        const payIso = TIMESHEET_SUBMISSION_WEEKDAYS.indexOf(normalizeTimesheetWeekday(input.recurringPaymentDay || "friday")) + 1;
+        let pay = dayAfter;
+        for (let step = 0; step < 7; step += 1) {
+          if (isoWeekdayInZone(pay, timeZone) === payIso) break;
+          pay = addDaysInZone(pay, 1, timeZone);
+        }
+        const paymentDayKey = dayKeyInZone(pay, timeZone);
+        const instants = resolveRecurringInstants(paymentDayKey, settings, timeZone);
+        consider(
+          noticeFromInstants({
+            runIndex: 0,
+            paymentDayKey,
+            deadlineDayKey: instants.deadlineDayKey,
+            notifyDayKey: instants.notifyDayKey,
+            settings,
+            mode: "recurring_timeframe",
+            paymentWeekday: input.recurringPaymentDay || "friday",
+            timeZone
+          }),
+          settings
+        );
+      }
+      return [...found.values()];
+    }
+    const paymentDays = paymentNumbers(input.paymentDates);
+    const ranges = (input.paymentRunDateRanges ?? []).slice(0, 2);
+    const { y, m } = partsInZone(now, timeZone);
+    for (let monthOffset = -1; monthOffset <= 1; monthOffset += 1) {
+      const month = shiftYearMonth(y, m, monthOffset);
+      ranges.forEach((range, index) => {
+        const endDay = Number(range?.endDay) || 0;
+        if (endDay <= 0) return;
+        const paymentDay = paymentDays[index] || 0;
+        if (paymentDay <= 0) return;
+        const periodEnd = clampMonthDayInZone(month.y, month.m, endDay, timeZone);
+        const paymentDayKey = paymentDateAfterPeriodEnd(periodEnd, [paymentDay], timeZone);
+        if (!paymentDayKey) return;
+        const settings = input.timesheetSubmission?.[index] ?? defaultTimesheetSubmissionFromPaymentDay(paymentDay);
+        const instants = resolveDateRangeInstants(paymentDayKey, settings, timeZone);
+        consider(
+          noticeFromInstants({
+            runIndex: index,
+            paymentDayKey,
+            deadlineDayKey: instants.deadlineDayKey,
+            notifyDayKey: instants.notifyDayKey,
+            settings,
+            mode: "date_ranges",
+            timeZone
+          }),
+          settings
+        );
+      });
+    }
+    return [...found.values()];
+  }
+
+  // lib/canonical/timesheetPeriod.ts
+  var TIMESHEET_DOCUMENT_PREFIX = "timesheet_";
+  var TIMESHEET_EXPORT_STORAGE_FOLDER = "timesheetExports";
+  var TIMESHEET_SIGNED_AFTER_MS = Date.parse("2020-01-01T00:00:00.000Z");
+  var TIMESHEET_INVOICE_EXPORT_LEFTOVER_MS = 6e4;
+  function zoneOf3(timeZone) {
+    return String(timeZone || "").trim() || CANONICAL_TIME_ZONE;
+  }
+  function trimmed2(value) {
+    return String(value ?? "").trim();
+  }
+  function isDayKey(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(value);
+  }
+  function timesheetTimestampMs(value) {
+    if (value == null || value === "") return null;
+    if (value instanceof Date) {
+      const ms = value.getTime();
+      return Number.isNaN(ms) ? null : ms;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value < 1e12 ? Math.round(value * 1e3) : Math.round(value);
+    }
+    if (typeof value === "string") {
+      const ms = Date.parse(value);
+      return Number.isNaN(ms) ? null : ms;
+    }
+    if (typeof value === "object") {
+      const row = value;
+      if (typeof row.toDate === "function") {
+        try {
+          const date = row.toDate();
+          if (date instanceof Date && !Number.isNaN(date.getTime())) return date.getTime();
+        } catch {
+        }
+      }
+      const seconds = Number(row.seconds ?? row._seconds);
+      if (Number.isFinite(seconds)) return Math.round(seconds * 1e3);
+    }
+    return null;
+  }
+  function realSignatureMs(value) {
+    const ms = timesheetTimestampMs(value);
+    if (ms == null || ms <= TIMESHEET_SIGNED_AFTER_MS) return null;
+    return ms;
+  }
+  function timesheetDocumentId(userId, startDayKey, timeZone) {
+    const uid = trimmed2(userId);
+    if (!uid || !isDayKey(startDayKey)) return "";
+    const stamp = unixStartOfDayInZone(dateFromDayKeyInZone(startDayKey, zoneOf3(timeZone)), zoneOf3(timeZone));
+    return `${TIMESHEET_DOCUMENT_PREFIX}${uid}_${stamp}`;
+  }
+  function timesheetPeriodKey(period) {
+    return `${period.startDayKey}|${period.endDayKey}`;
+  }
+  function timesheetPeriodFromInvoicing(input) {
+    const timeZone = zoneOf3(input.timeZone);
+    const reference = dateFromDayKeyInZone(input.referenceDayKey, timeZone);
+    return invoicingPeriod({
+      referenceIso: reference.toISOString(),
+      timeZone,
+      paymentRunMode: input.paymentRunMode,
+      ranges: input.ranges,
+      recurringRunStartDay: input.recurringRunStartDay,
+      recurringRunEndDay: input.recurringRunEndDay
+    });
+  }
+  function timesheetPeriodContainsDay(period, dayKey) {
+    if (!isDayKey(period.startDayKey) || !isDayKey(period.endDayKey) || !isDayKey(dayKey)) return false;
+    return dayKey >= period.startDayKey && dayKey <= period.endDayKey;
+  }
+  function resolveTimesheetPeriod(input) {
+    const start = trimmed2(input.storedStartDayKey);
+    const end = trimmed2(input.storedEndDayKey);
+    if (isDayKey(start) && isDayKey(end)) return { startDayKey: start, endDayKey: end };
+    if (isDayKey(start) && start === input.currentPeriod.startDayKey) return { ...input.currentPeriod };
+    if (isDayKey(start)) return { startDayKey: start, endDayKey: start };
+    return { ...input.currentPeriod };
+  }
+  function timesheetPeriodMatches(stored, period) {
+    const start = trimmed2(stored.startDayKey);
+    const end = trimmed2(stored.endDayKey);
+    if (start !== period.startDayKey) return false;
+    if (isDayKey(end)) return end === period.endDayKey;
+    return true;
+  }
+  function timesheetBelongsToOrganization(storedOrganizationId, organizationId) {
+    return organizationIdsMatch(storedOrganizationId, organizationId);
+  }
+  function isTimesheetOperativeSigned(fields) {
+    if (fields.operativeSignedAtMs == null || fields.operativeSignedAtMs <= TIMESHEET_SIGNED_AFTER_MS) return false;
+    return Boolean(trimmed2(fields.operativeSignedByName) || trimmed2(fields.operativeSignatureImageBase64));
+  }
+  function timesheetRequiresManagerCounterSign(hasLineManager) {
+    return hasLineManager === true;
+  }
+  function isTimesheetManagerSigned(fields) {
+    return fields.managerSignedAtMs != null && fields.managerSignedAtMs > TIMESHEET_SIGNED_AFTER_MS;
+  }
+  function isTimesheetFullySigned(fields, hasLineManager) {
+    if (!isTimesheetOperativeSigned(fields)) return false;
+    if (timesheetRequiresManagerCounterSign(hasLineManager)) return isTimesheetManagerSigned(fields);
+    return true;
+  }
+  function isTimesheetAwaitingSignOff(fields, hasLineManager) {
+    return timesheetRequiresManagerCounterSign(hasLineManager) && isTimesheetOperativeSigned(fields) && !isTimesheetManagerSigned(fields);
+  }
+  function resolveTimesheetExportedAtMs(data) {
+    const exportedAt = realSignatureMs(data.exportedAt);
+    if (exportedAt == null) return null;
+    const invoiceGeneratedAt = timesheetTimestampMs(data.invoiceGeneratedAt);
+    if (invoiceGeneratedAt != null && Math.abs(exportedAt - invoiceGeneratedAt) <= TIMESHEET_INVOICE_EXPORT_LEFTOVER_MS) {
+      return null;
+    }
+    return exportedAt;
+  }
+  function isTimesheetExported(fields) {
+    return fields.exportedAtMs != null && fields.exportedAtMs > TIMESHEET_SIGNED_AFTER_MS;
+  }
+  function timesheetListBucket(fields, hasLineManager) {
+    if (isTimesheetExported(fields)) return "exported";
+    if (isTimesheetFullySigned(fields, hasLineManager)) return "signed";
+    if (isTimesheetAwaitingSignOff(fields, hasLineManager)) return "awaiting";
+    return "unsigned";
+  }
+  function parseTimesheetStatusFields(data) {
+    const row = data && typeof data === "object" ? data : {};
+    const managerSignedAtMs = realSignatureMs(row.managerSignedAt) ?? realSignatureMs(row.approvedAt);
+    return {
+      operativeSignedAtMs: realSignatureMs(row.operativeSignedAt),
+      operativeSignedByName: trimmed2(row.operativeSignedByName),
+      operativeSignatureImageBase64: trimmed2(row.operativeSignatureImageBase64),
+      managerSignedAtMs,
+      managerSignedByName: trimmed2(row.managerSignedByName) || trimmed2(row.approvedByName),
+      managerSignedByUserId: trimmed2(row.managerSignedByUserId),
+      managerSignatureImageBase64: trimmed2(row.managerSignatureImageBase64),
+      exportedAtMs: resolveTimesheetExportedAtMs(row)
+    };
+  }
+  function timesheetSignOffWriteFields(input) {
+    const signedAtMs = Number(input.signedAtMs);
+    const name = trimmed2(input.signedByName);
+    const signature = trimmed2(input.signatureImageBase64);
+    if (input.role === "operative") {
+      return {
+        operativeSignedAtMs: signedAtMs,
+        operativeSignedByName: name,
+        operativeSignatureImageBase64: signature
+      };
+    }
+    return {
+      managerSignedAtMs: signedAtMs,
+      managerSignedByName: name,
+      managerSignedByUserId: trimmed2(input.signedByUserId),
+      managerSignatureImageBase64: signature,
+      approvedAtMs: signedAtMs,
+      approvedByName: name
+    };
+  }
+  function timesheetExportWriteFields(exportedAtMs) {
+    return { exportedAtMs: Number(exportedAtMs) };
+  }
+  function timesheetPeriodWriteFields(input) {
+    return {
+      userId: trimmed2(input.userId),
+      weekStartKey: trimmed2(input.startDayKey),
+      weekEndKey: trimmed2(input.endDayKey)
+    };
+  }
+  function timesheetExportStoragePath(organizationId, fileName, stampSeconds) {
+    const org = trimmed2(organizationId);
+    const safe = trimmed2(fileName).replace(/\s+/g, "_");
+    const stamp = Math.max(0, Math.floor(Number(stampSeconds) || 0));
+    return `organizations/${org}/${TIMESHEET_EXPORT_STORAGE_FOLDER}/${stamp}_${safe}`;
+  }
+  function timesheetStatusWriteFields(fields) {
+    const managerMs = fields.managerSignedAtMs;
+    return {
+      operativeSignedAtMs: fields.operativeSignedAtMs,
+      operativeSignedByName: trimmed2(fields.operativeSignedByName),
+      operativeSignatureImageBase64: trimmed2(fields.operativeSignatureImageBase64),
+      managerSignedAtMs: managerMs,
+      managerSignedByName: trimmed2(fields.managerSignedByName),
+      managerSignedByUserId: trimmed2(fields.managerSignedByUserId),
+      managerSignatureImageBase64: trimmed2(fields.managerSignatureImageBase64),
+      approvedAtMs: managerMs,
+      approvedByName: trimmed2(fields.managerSignedByName),
+      exportedAtMs: fields.exportedAtMs
+    };
+  }
+  function pickTimesheetRowForPeriod(rows, period) {
+    if (rows.length === 0) return -1;
+    const exact = [];
+    const startOnly = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      if (trimmed2(row.startDayKey) !== period.startDayKey) continue;
+      const end = trimmed2(row.endDayKey);
+      if (isDayKey(end)) {
+        if (end === period.endDayKey) exact.push(index);
+        continue;
+      }
+      startOnly.push(index);
+    }
+    const withActivity = (indexes) => indexes.find((index) => rows[index]?.hasActivity === true);
+    return withActivity(exact) ?? exact[0] ?? withActivity(startOnly) ?? startOnly[0] ?? -1;
+  }
+  function paymentRunWindowFingerprint(window) {
+    if (String(window.paymentRunMode || "") === "recurring_timeframe") {
+      return `recurring:${trimmed2(window.recurringRunStartDay).toLowerCase() || "monday"}:${trimmed2(window.recurringRunEndDay).toLowerCase() || "sunday"}`;
+    }
+    const ranges = (window.ranges ?? []).map((row) => normalizePaymentRunRange(row)).filter((row) => row != null).map((row) => `${row.startDay}-${row.endDay}`);
+    return `dates:${ranges.join("|")}`;
+  }
+  function paymentRunHistoryAfterChange(input) {
+    const existing = [...input.existingHistory ?? []];
+    if (paymentRunWindowFingerprint(input.previous) === paymentRunWindowFingerprint(input.next)) {
+      return existing;
+    }
+    const snapshot = {
+      paymentRunMode: input.previous.paymentRunMode === "recurring_timeframe" ? "recurring_timeframe" : "date_ranges",
+      ranges: (input.previous.ranges ?? []).map((row) => normalizePaymentRunRange(row)).filter((row) => row != null),
+      recurringRunStartDay: trimmed2(input.previous.recurringRunStartDay) || "monday",
+      recurringRunEndDay: trimmed2(input.previous.recurringRunEndDay) || "sunday",
+      recordedAtDayKey: trimmed2(input.recordedAtDayKey)
+    };
+    const fingerprint = paymentRunWindowFingerprint(snapshot);
+    const rest = existing.filter((row) => paymentRunWindowFingerprint(row) !== fingerprint);
+    return [snapshot, ...rest].slice(0, 24);
+  }
+  function timesheetPaymentRunPeriodsFromWindow(input) {
+    const timeZone = zoneOf3(input.timeZone);
+    const lookback = Math.max(0, Math.min(Number(input.lookbackCount) || 0, 240));
+    const current = timesheetPeriodFromInvoicing(input);
+    const periods = input.includeCurrent === false ? [] : [current];
+    let cursor = current.startDayKey;
+    for (let step = 0; step < lookback; step += 1) {
+      const previousRef = addDaysInZone(dateFromDayKeyInZone(cursor, timeZone), -1, timeZone);
+      const previous = invoicingPeriod({
+        referenceIso: previousRef.toISOString(),
+        timeZone,
+        paymentRunMode: input.paymentRunMode,
+        ranges: input.ranges,
+        recurringRunStartDay: input.recurringRunStartDay,
+        recurringRunEndDay: input.recurringRunEndDay
+      });
+      if (previous.startDayKey === cursor) break;
+      periods.push(previous);
+      cursor = previous.startDayKey;
+    }
+    return periods;
+  }
+  function selectableTimesheetPaymentRunPeriods(input) {
+    const lookback = input.lookbackCount ?? 120;
+    const seen = /* @__PURE__ */ new Set();
+    const periods = [];
+    const add = (period, source) => {
+      if (!isDayKey(period.startDayKey) || !isDayKey(period.endDayKey)) return;
+      const key = timesheetPeriodKey(period);
+      if (seen.has(key)) return;
+      seen.add(key);
+      periods.push({ startDayKey: period.startDayKey, endDayKey: period.endDayKey, source });
+    };
+    for (const period of timesheetPaymentRunPeriodsFromWindow({
+      ...input.current,
+      referenceDayKey: input.referenceDayKey,
+      lookbackCount: lookback,
+      timeZone: input.timeZone
+    })) {
+      add(period, "current");
+    }
+    for (const window of input.historicalWindows ?? []) {
+      for (const period of timesheetPaymentRunPeriodsFromWindow({
+        paymentRunMode: window.paymentRunMode,
+        ranges: window.ranges,
+        recurringRunStartDay: window.recurringRunStartDay,
+        recurringRunEndDay: window.recurringRunEndDay,
+        referenceDayKey: input.referenceDayKey,
+        lookbackCount: lookback,
+        timeZone: input.timeZone
+      })) {
+        add(period, "historical");
+      }
+    }
+    for (const period of input.observedPeriods ?? []) {
+      add(period, "observed");
+    }
+    periods.sort((left, right) => {
+      if (left.startDayKey !== right.startDayKey) return right.startDayKey.localeCompare(left.startDayKey);
+      return right.endDayKey.localeCompare(left.endDayKey);
+    });
+    return periods;
+  }
+  function parsePaymentRunHistory(raw) {
+    if (!Array.isArray(raw)) return [];
+    const rows = [];
+    for (const entry of raw) {
+      if (!entry || typeof entry !== "object") continue;
+      const data = entry;
+      const mode = String(data.paymentRunMode || "") === "recurring_timeframe" ? "recurring_timeframe" : "date_ranges";
+      const rangeRows = Array.isArray(data.paymentRunDateRanges) ? data.paymentRunDateRanges : Array.isArray(data.ranges) ? data.ranges : [];
+      const ranges = rangeRows.map((row) => normalizePaymentRunRange(row || {})).filter((row) => row != null);
+      const recordedAtDayKey = trimmed2(data.recordedAtDayKey);
+      rows.push({
+        paymentRunMode: mode,
+        ranges,
+        recurringRunStartDay: trimmed2(data.recurringRunStartDay) || "monday",
+        recurringRunEndDay: trimmed2(data.recurringRunEndDay) || "sunday",
+        recordedAtDayKey: isDayKey(recordedAtDayKey) ? recordedAtDayKey : ""
+      });
+    }
+    return rows;
+  }
+  function paymentRunHistoryToFirestore(history) {
+    return history.map((window) => ({
+      paymentRunMode: window.paymentRunMode,
+      paymentRunDateRanges: (window.ranges ?? []).map((range) => {
+        const normalized = normalizePaymentRunRange(range) ?? { startDay: 0, endDay: 0 };
+        return {
+          startDay: normalized.startDay,
+          endDay: normalized.endDay,
+          startDate: normalized.startDay,
+          endDate: normalized.endDay
+        };
+      }),
+      recurringRunStartDay: window.recurringRunStartDay || "monday",
+      recurringRunEndDay: window.recurringRunEndDay || "sunday",
+      recordedAtDayKey: window.recordedAtDayKey
+    }));
+  }
+  function timesheetStoredStartDayKey(weekStart, timeZone) {
+    const ms = timesheetTimestampMs(weekStart);
+    if (ms == null) return "";
+    return dayKeyInZone(new Date(ms), zoneOf3(timeZone));
+  }
+
   // lib/canonical/organizationSettings.ts
+  function starterCollectionShouldSeed(existingDocumentCount) {
+    return existingDocumentCount === 0;
+  }
+  function missingStarterQualificationCodes(existingDocumentIds, libraryCodes) {
+    const have = new Set(existingDocumentIds.map((id) => String(id || "").trim()).filter(Boolean));
+    return libraryCodes.filter((code) => {
+      const id = String(code || "").trim();
+      return Boolean(id) && !have.has(id);
+    });
+  }
   var DEFAULT_WEEKEND = {
     allHoursAtMultiplierMode: false,
     allHoursMultiplier: 2,
@@ -1085,13 +2221,71 @@ var ProjectPlannerCanonical = (() => {
   };
   var DEFAULT_INVOICING = {
     paymentRunMode: "date_ranges",
-    paymentDateMode: "recurring_date",
+    paymentDateMode: "specific_dates",
     recurringRunStartDay: "monday",
     recurringRunEndDay: "sunday",
     recurringPaymentDay: "friday",
     paymentRunDateRanges: DEFAULT_PAYMENT_RUN_DATE_RANGES.map((range) => ({ ...range })),
     paymentDates: [],
-    noteToUsers: "If your timesheet displays 0 against your rate, then your day/hourly rate hasn't been set by your line manager"
+    noteToUsers: "If your timesheet displays 0 against your rate, then your day/hourly rate hasn't been set by your line manager",
+    timesheetSubmission: [],
+    paymentRunHistory: []
+  };
+  function parseOrganizationName(data) {
+    if (!data) return "";
+    const settings = asSettingsRecord(data.settings);
+    const candidates = [
+      data.name,
+      data.organizationName,
+      data.organisationName,
+      data.companyName,
+      settings?.name,
+      settings?.organizationName,
+      settings?.organisationName,
+      settings?.companyName
+    ];
+    for (const value of candidates) {
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return "";
+  }
+  function organizationNameToFirestore(name) {
+    const trimmed4 = String(name || "").trim();
+    return trimmed4 ? { name: trimmed4 } : {};
+  }
+  function organizationNameWriteFields(nextName, existingName) {
+    const next = String(nextName || "").trim();
+    if (next) return { name: next };
+    void existingName;
+    return {};
+  }
+  function coalesceOrganizationName(...candidates) {
+    for (const value of candidates) {
+      const trimmed4 = String(value || "").trim();
+      if (trimmed4) return trimmed4;
+    }
+    return "";
+  }
+  function displayOrganizationName(name, fallback = "Organisation") {
+    const trimmed4 = String(name || "").trim();
+    return trimmed4 || fallback;
+  }
+  function paymentRunShowsMonthCoverage(settings) {
+    return settings.paymentRunMode === "date_ranges";
+  }
+  function parsePaymentRunMode(value) {
+    return String(value || "").trim() === "recurring_timeframe" ? "recurring_timeframe" : "date_ranges";
+  }
+  function parsePaymentDateMode(value, paymentRunMode) {
+    if (paymentRunMode === "date_ranges") return "specific_dates";
+    return String(value || "").trim() === "specific_dates" ? "specific_dates" : "recurring_date";
+  }
+  var DEFAULT_MATERIAL_CUT_OFF = {
+    materialOrderCutOff: true,
+    materialCutOffHour: 16,
+    materialCutOffMinute: 0,
+    materialCutOffOnSaturday: false,
+    materialCutOffOnSunday: false
   };
   var MONTH_DAYS = 31;
   function asSettingsRecord(value) {
@@ -1113,11 +2307,8 @@ var ProjectPlannerCanonical = (() => {
       return DEFAULT_PAYMENT_RUN_DATE_RANGES.map((range) => ({ ...range }));
     }
     const ranges = raw.slice(0, 2).map((entry) => {
-      const row = entry || {};
-      return {
-        startDay: parseDayOfMonth(row.startDay ?? row.startDate),
-        endDay: parseDayOfMonth(row.endDay ?? row.endDate)
-      };
+      const normalized = normalizePaymentRunRange(entry || {});
+      return normalized ?? { startDay: 0, endDay: 0 };
     });
     while (ranges.length < 2) ranges.push({ startDay: 0, endDay: 0 });
     return ranges;
@@ -1181,10 +2372,23 @@ var ProjectPlannerCanonical = (() => {
     };
   }
   function parseInvoicing(data) {
-    if (!data) return { ...DEFAULT_INVOICING, paymentRunDateRanges: DEFAULT_PAYMENT_RUN_DATE_RANGES.map((range) => ({ ...range })) };
-    const paymentRunMode = data.paymentRunMode === "recurring_timeframe" ? "recurring_timeframe" : "date_ranges";
-    const paymentDateMode = data.paymentDateMode === "specific_dates" ? "specific_dates" : "recurring_date";
+    if (!data) {
+      return {
+        ...DEFAULT_INVOICING,
+        paymentRunDateRanges: DEFAULT_PAYMENT_RUN_DATE_RANGES.map((range) => ({ ...range }))
+      };
+    }
+    const paymentRunMode = parsePaymentRunMode(data.paymentRunMode);
+    const paymentDateMode = parsePaymentDateMode(data.paymentDateMode, paymentRunMode);
     const paymentDates = Array.isArray(data.paymentDates) ? data.paymentDates.map((d) => String(parseDayOfMonth(d) || Number(d) || "")).filter(Boolean) : [];
+    const timesheetSubmission = parseTimesheetSubmissionList({
+      paymentRunMode,
+      paymentDates,
+      recurringPaymentDay: String(data.recurringPaymentDay ?? DEFAULT_INVOICING.recurringPaymentDay),
+      timesheetSubmission: data.timesheetSubmission,
+      paymentRunDateRanges: data.paymentRunDateRanges,
+      invoicingRoot: data
+    });
     return {
       paymentRunMode,
       paymentDateMode,
@@ -1193,7 +2397,9 @@ var ProjectPlannerCanonical = (() => {
       recurringPaymentDay: String(data.recurringPaymentDay ?? DEFAULT_INVOICING.recurringPaymentDay),
       paymentRunDateRanges: parsePaymentRunDateRanges(data),
       paymentDates,
-      noteToUsers: String(data.noteToUsers ?? DEFAULT_INVOICING.noteToUsers)
+      noteToUsers: String(data.noteToUsers ?? DEFAULT_INVOICING.noteToUsers),
+      timesheetSubmission,
+      paymentRunHistory: parsePaymentRunHistory(data.paymentRunHistory)
     };
   }
   function capitalizeWeekday(day) {
@@ -1201,16 +2407,81 @@ var ProjectPlannerCanonical = (() => {
     return day.charAt(0).toUpperCase() + day.slice(1);
   }
   function invoicingToFirestore(settings) {
-    return {
+    const timesheetSubmission = settings.timesheetSubmission.map(timesheetSubmissionToFirestore);
+    const payload = {
       paymentRunMode: settings.paymentRunMode,
       paymentDateMode: settings.paymentDateMode,
-      paymentRunDateRanges: settings.paymentRunDateRanges.map(paymentRunRangeToFirestore),
+      paymentRunDateRanges: settings.paymentRunDateRanges.map((range, index) => {
+        const row = paymentRunRangeToFirestore(range);
+        const timesheet = timesheetSubmission[index];
+        return timesheet ? { ...row, ...timesheet } : row;
+      }),
       paymentDates: settings.paymentDates.map((d) => Number(d)),
       noteToUsers: settings.noteToUsers,
       recurringPaymentRunSummary: `In arrears: ${capitalizeWeekday(settings.recurringRunStartDay)} to ${capitalizeWeekday(settings.recurringRunEndDay)} (of the previous week)`,
       recurringRunStartDay: settings.recurringRunStartDay,
       recurringRunEndDay: settings.recurringRunEndDay,
-      recurringPaymentDay: settings.recurringPaymentDay
+      recurringPaymentDay: settings.recurringPaymentDay,
+      timesheetSubmission,
+      paymentRunHistory: paymentRunHistoryToFirestore(settings.paymentRunHistory ?? [])
+    };
+    if (settings.paymentRunMode === "recurring_timeframe" && timesheetSubmission[0]) {
+      const recurring = timesheetSubmission[0];
+      payload.timesheetDeadlineWeekday = recurring.timesheetDeadlineWeekday;
+      payload.timesheetDeadlineHour = recurring.timesheetDeadlineHour;
+      payload.timesheetDeadlineMinute = recurring.timesheetDeadlineMinute;
+      payload.notifyWeekday = recurring.notifyWeekday;
+      payload.notifyHour = recurring.notifyHour;
+      payload.notifyMinute = recurring.notifyMinute;
+      payload.notifyCustomised = recurring.notifyCustomised;
+    }
+    return payload;
+  }
+  function cutOffClockNumber(value, fallback, min, max) {
+    if (value == null || value === "") return fallback;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, Math.trunc(n)));
+  }
+  function parseMaterialCutOff(data) {
+    const raw = asSettingsRecord(data);
+    if (!raw) return { ...DEFAULT_MATERIAL_CUT_OFF };
+    return {
+      materialOrderCutOff: raw.materialOrderCutOff !== false,
+      materialCutOffHour: cutOffClockNumber(
+        raw.materialCutOffHour,
+        DEFAULT_MATERIAL_CUT_OFF.materialCutOffHour,
+        0,
+        23
+      ),
+      materialCutOffMinute: cutOffClockNumber(
+        raw.materialCutOffMinute,
+        DEFAULT_MATERIAL_CUT_OFF.materialCutOffMinute,
+        0,
+        59
+      ),
+      materialCutOffOnSaturday: raw.materialCutOffOnSaturday === true,
+      materialCutOffOnSunday: raw.materialCutOffOnSunday === true
+    };
+  }
+  function resolveMaterialCutOffClock(input = {}) {
+    const settings = asSettingsRecord(input.organizationSettings);
+    const fromOrg = asSettingsRecord(input.organizationMaterialCutOff) ?? (settings ? asSettingsRecord(settings.materialCutOff) : void 0);
+    return parseMaterialCutOff(fromOrg);
+  }
+  function materialCutOffClockMinutes(clock) {
+    return clock.materialCutOffHour * 60 + clock.materialCutOffMinute;
+  }
+  function formatMaterialCutOffClock(clock) {
+    return formatClockMinutes(materialCutOffClockMinutes(clock));
+  }
+  function materialCutOffToFirestore(prefs) {
+    return {
+      materialOrderCutOff: prefs.materialOrderCutOff,
+      materialCutOffHour: prefs.materialCutOffHour,
+      materialCutOffMinute: prefs.materialCutOffMinute,
+      materialCutOffOnSaturday: prefs.materialCutOffOnSaturday,
+      materialCutOffOnSunday: prefs.materialCutOffOnSunday
     };
   }
   function isValidDay(day) {
@@ -1290,6 +2561,55 @@ var ProjectPlannerCanonical = (() => {
   }
 
   // lib/canonical/userProfile.ts
+  var USER_DOCUMENT_FIELDS = [
+    "firstName",
+    "surname",
+    "email",
+    "mobileNumber",
+    "role",
+    "isActive",
+    "passwordSet",
+    "status",
+    "isSuperAdmin",
+    "organizationId",
+    "permissions",
+    "assignedManagerUserId",
+    "assignedManagerUserIds",
+    "hasNoLineManager",
+    "dayRate",
+    "hourlyRate",
+    "payBasis",
+    "tradeTypePreset",
+    "tradeTypeCustom",
+    "employmentType",
+    "employmentTypeTransitionFrom",
+    "employmentTypeEffectiveAt",
+    "annualLeaveEnabled",
+    "annualLeaveDaysPerYear",
+    "annualLeaveYearStartMonth",
+    "annualLeaveYearEndMonth",
+    "annualLeaveCarriesOver",
+    "annualLeaveYearAllowance",
+    "annualLeaveYearAllowanceKey",
+    "timesheetsEnabled",
+    "vatNumber",
+    "utrNumber",
+    "lastSeenAt",
+    "profilePhotoURL",
+    "pushTokens",
+    "pushTokenUpdatedAt",
+    "notificationPreferences"
+  ];
+  var USER_SELF_CREATE_AGE_FIELDS = [
+    "ageConfirmed",
+    "ageConfirmedAt",
+    "ageConfirmedYears"
+  ];
+  function userCreateRequiresAgeConfirmation(input) {
+    const creator = typeof input.creatorUserId === "string" ? input.creatorUserId.trim() : "";
+    const target = typeof input.targetUserId === "string" ? input.targetUserId.trim() : "";
+    return creator.length > 0 && creator === target;
+  }
   function normalizeEmploymentType(raw) {
     if (raw === "paye") return "paye";
     if (raw === "self_employed" || raw === "selfEmployed") return "self_employed";
@@ -1360,6 +2680,340 @@ var ProjectPlannerCanonical = (() => {
     return `${day} ${months[(month || 1) - 1]} ${year}`;
   }
 
+  // lib/canonical/notificationPreferences.ts
+  var NOTIFICATION_PREFERENCE_KEYS = [
+    "materialOrderCutOff",
+    "annualLeaveRequested",
+    "annualLeaveDecision",
+    "projectCreated",
+    "smallWorksCreated",
+    "bookingClashes",
+    "materialOrderPlaced",
+    "bookedOntoJob",
+    "operativeCreated",
+    "managerCreated",
+    "clientCreated",
+    "warningDismissed",
+    "tasksAssignedOrCompleted",
+    "toolboxTalkIssued",
+    "timesheetSignOff",
+    "qualificationExpiry",
+    "lineManagerPeerUpdates",
+    "timesheetSubmissionReminder"
+  ];
+  var DEFAULT_USER_NOTIFICATION_PREFERENCES = {
+    materialOrderCutOff: true,
+    annualLeaveRequested: true,
+    annualLeaveDecision: true,
+    projectCreated: true,
+    smallWorksCreated: true,
+    bookingClashes: true,
+    materialOrderPlaced: true,
+    bookedOntoJob: true,
+    operativeCreated: true,
+    managerCreated: true,
+    clientCreated: true,
+    warningDismissed: true,
+    tasksAssignedOrCompleted: true,
+    toolboxTalkIssued: true,
+    timesheetSignOff: true,
+    qualificationExpiry: true,
+    lineManagerPeerUpdates: true,
+    timesheetSubmissionReminder: true
+  };
+  var LEGACY_NOTIFICATION_PREFERENCE_ALIASES = {
+    bookingConflicts: "bookingClashes"
+  };
+  var TYPE_TO_PREFERENCE = {
+    material_order_cut_off: "materialOrderCutOff",
+    holiday_request_submitted: "annualLeaveRequested",
+    holiday_request_approved: "annualLeaveDecision",
+    holiday_request_declined: "annualLeaveDecision",
+    project_created: "projectCreated",
+    small_works_created: "smallWorksCreated",
+    booking_clash: "bookingClashes",
+    material_order_placed: "materialOrderPlaced",
+    material_order_created: "materialOrderPlaced",
+    booking_created: "bookedOntoJob",
+    booked_onto_job: "bookedOntoJob",
+    operative_created: "operativeCreated",
+    manager_created: "managerCreated",
+    client_created: "clientCreated",
+    warning_removed: "warningDismissed",
+    task_created: "tasksAssignedOrCompleted",
+    task_completed: "tasksAssignedOrCompleted",
+    deadline_assigned: "tasksAssignedOrCompleted",
+    deadline_reminder: "tasksAssignedOrCompleted",
+    deadline_due: "tasksAssignedOrCompleted",
+    toolbox_talk_issued: "toolboxTalkIssued",
+    hs_toolbox_reminder: "toolboxTalkIssued",
+    timesheet_pending_manager_signoff: "timesheetSignOff",
+    timesheet_signed_by_manager: "timesheetSignOff",
+    qualification_expiry: "qualificationExpiry",
+    line_manager_peer_update: "lineManagerPeerUpdates",
+    [TIMESHEET_SUBMISSION_NOTICE_TYPE]: "timesheetSubmissionReminder"
+  };
+  function trimmed3(value) {
+    return String(value ?? "").trim();
+  }
+  function asDayKey(value) {
+    const key = trimmed3(value);
+    return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : void 0;
+  }
+  function asCatalogue(value) {
+    if (value === "projects" || value === "smallWorks") return value;
+    return void 0;
+  }
+  function flagOn(raw) {
+    return raw !== false;
+  }
+  function parseUserNotificationPreferences(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    const prefs = { ...DEFAULT_USER_NOTIFICATION_PREFERENCES };
+    for (const [legacy, current] of Object.entries(LEGACY_NOTIFICATION_PREFERENCE_ALIASES)) {
+      if (!(current in source) && legacy in source) {
+        prefs[current] = flagOn(source[legacy]);
+      }
+    }
+    for (const key of NOTIFICATION_PREFERENCE_KEYS) {
+      if (key in source) prefs[key] = flagOn(source[key]);
+    }
+    return prefs;
+  }
+  function userNotificationPreferencesToFirestore(prefs) {
+    const out = {};
+    for (const key of NOTIFICATION_PREFERENCE_KEYS) {
+      out[key] = prefs[key] !== false;
+    }
+    return out;
+  }
+  function userNotificationPreferenceFieldPatch(prefs) {
+    const patch = {};
+    for (const key of NOTIFICATION_PREFERENCE_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(prefs, key)) {
+        patch[`notificationPreferences.${key}`] = prefs[key] !== false;
+      }
+    }
+    return patch;
+  }
+  function notificationPreferenceKeyForType(type) {
+    return TYPE_TO_PREFERENCE[trimmed3(type)] ?? null;
+  }
+  var PREFERENCE_LABELS = {
+    materialOrderCutOff: "Material order cut-off",
+    annualLeaveRequested: "Annual leave requested",
+    annualLeaveDecision: "Annual leave approved or declined",
+    projectCreated: "New project created",
+    smallWorksCreated: "New small works",
+    bookingClashes: "Booking clashes",
+    materialOrderPlaced: "New material order",
+    bookedOntoJob: "You've been booked",
+    operativeCreated: "New operative created",
+    managerCreated: "New manager created",
+    clientCreated: "New client created",
+    warningDismissed: "Warning dismissed",
+    tasksAssignedOrCompleted: "Tasks assigned or completed",
+    toolboxTalkIssued: "Toolbox talk issued",
+    timesheetSignOff: "Timesheet sign-off",
+    qualificationExpiry: "Qualification expiry",
+    lineManagerPeerUpdates: "Line manager peer updates",
+    timesheetSubmissionReminder: "Timesheet submission reminder"
+  };
+  function notificationPreferenceCopy(key, audience) {
+    const descriptions = {
+      materialOrderCutOff: "Daily reminder at the time set in organisation settings.",
+      annualLeaveRequested: "When someone you manage requests annual leave.",
+      annualLeaveDecision: "When your annual leave is approved or declined.",
+      projectCreated: "When a project is added.",
+      smallWorksCreated: "When new small works is added.",
+      bookingClashes: "When two bookings overlap.",
+      materialOrderPlaced: "When a material order is placed.",
+      bookedOntoJob: "When you are booked onto a job.",
+      operativeCreated: "When a new operative is added.",
+      managerCreated: "When a new manager is added.",
+      clientCreated: "When a new client is added.",
+      warningDismissed: "When someone dismisses a warning.",
+      tasksAssignedOrCompleted: "When a task is assigned to you or marked complete.",
+      toolboxTalkIssued: "When a toolbox talk is issued to you.",
+      timesheetSignOff: "When a timesheet needs your sign-off or has been signed.",
+      qualificationExpiry: "Reminders before qualifications expire.",
+      lineManagerPeerUpdates: "When another line manager actions a shared request.",
+      timesheetSubmissionReminder: "Reminder to submit before the payment-run deadline."
+    };
+    return { label: PREFERENCE_LABELS[key], description: descriptions[key] };
+  }
+  function notificationPreferenceIsVisible(key, audience) {
+    const role = audience.role;
+    const staff = isStaffAccount(role);
+    switch (key) {
+      case "projectCreated":
+        return canEditWorkCatalogue(role, "projects", audience.catalogue);
+      case "smallWorksCreated":
+        return canEditWorkCatalogue(role, "smallWorks", audience.catalogue);
+      case "annualLeaveRequested":
+      case "bookingClashes":
+      case "lineManagerPeerUpdates":
+      case "managerCreated":
+        return staff;
+      case "materialOrderPlaced":
+        return staff && audience.canManageMaterials !== false;
+      case "operativeCreated":
+        return staff && audience.canManagePeople !== false;
+      case "clientCreated":
+        return staff && audience.canManageClients !== false;
+      case "warningDismissed":
+        return canViewStaffWarnings(role);
+      case "timesheetSignOff":
+        return canReviewUserTimesheets(role);
+      default:
+        return true;
+    }
+  }
+  function visibleNotificationPreferenceKeys(audience) {
+    return NOTIFICATION_PREFERENCE_KEYS.filter((key) => notificationPreferenceIsVisible(key, audience));
+  }
+  function notificationPreferenceAllowsDelivery(prefs, type) {
+    const key = notificationPreferenceKeyForType(type);
+    if (!key) return true;
+    return prefs[key] !== false;
+  }
+  var DEVICE_PUSH_NOTIFICATION_TYPES = [
+    "booking_created",
+    "booked_onto_job",
+    "booking_clash",
+    "task_created",
+    "task_completed",
+    "deadline_assigned",
+    "holiday_request_submitted",
+    "holiday_request_approved",
+    "holiday_request_declined",
+    "timesheet_pending_manager_signoff",
+    "timesheet_signed_by_manager",
+    "toolbox_talk_issued",
+    "hs_toolbox_reminder",
+    "material_order_placed",
+    "material_order_created",
+    "variation",
+    "warning_removed",
+    "operative_created",
+    "manager_created",
+    "client_created",
+    "project_created",
+    "small_works_created",
+    TIMESHEET_SUBMISSION_NOTICE_TYPE
+  ];
+  var DEVICE_PUSH_TYPE_SET = new Set(DEVICE_PUSH_NOTIFICATION_TYPES);
+  var NOTIFICATION_ICON_BADGE_CLEARS_ON_FOREGROUND = true;
+  function devicePushNotificationTypes() {
+    return DEVICE_PUSH_NOTIFICATION_TYPES;
+  }
+  function notificationDeliversDevicePush(type) {
+    return DEVICE_PUSH_TYPE_SET.has(trimmed3(type));
+  }
+  function inboxNotificationVisibleToUser(row, userId) {
+    const uid = trimmed3(userId);
+    if (!uid || !row || typeof row !== "object") return false;
+    const owner = trimmed3(row.userId);
+    return !owner || owner === uid;
+  }
+  function compareInboxNotificationsByCreatedAt(left, right) {
+    return inboxCreatedAtMs(right) - inboxCreatedAtMs(left);
+  }
+  function inboxCreatedAtMs(row) {
+    const value = row?.createdAt;
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (value && typeof value === "object" && typeof value.getTime === "function") {
+      const ms = value.getTime();
+      return Number.isFinite(ms) ? ms : 0;
+    }
+    return 0;
+  }
+  function unreadNotificationBadgeCount(notifications, userId) {
+    const uid = trimmed3(userId);
+    if (!uid) return 0;
+    const rows = Array.isArray(notifications) ? notifications : [];
+    let count = 0;
+    for (const row of rows) {
+      if (!inboxNotificationVisibleToUser(row, uid)) continue;
+      if (row.isRead === true) continue;
+      count += 1;
+    }
+    return count;
+  }
+  function bookingDestination(role, relatedId, dayKey, catalogue) {
+    if (role === "operative") return { kind: "mySchedule", dayKey };
+    if (role === "manager" && relatedId) {
+      if (catalogue === "smallWorks") return { kind: "smallWorksScheduling", relatedId, dayKey };
+      if (catalogue === "projects") return { kind: "projectScheduling", relatedId, dayKey };
+    }
+    return { kind: "dailyOverviewDay", dayKey };
+  }
+  function notificationDestination(input) {
+    const type = trimmed3(input.type);
+    const relatedId = trimmed3(input.relatedId) || void 0;
+    const dayKey = asDayKey(input.dayKey) || asDayKey(relatedId);
+    const catalogue = asCatalogue(input.catalogue);
+    const role = input.role === "admin" || input.role === "operative" || input.role === "manager" ? input.role : "manager";
+    const userId = trimmed3(input.deepLinkUserId) || void 0;
+    switch (type) {
+      case "booking_created":
+      case "booked_onto_job":
+        return bookingDestination(role, relatedId, dayKey, catalogue);
+      case "booking_clash":
+        if (role === "admin") return { kind: "dailyOverviewDay", dayKey };
+        if (role === "manager" && relatedId && catalogue === "smallWorks") {
+          return { kind: "smallWorksScheduling", relatedId, dayKey };
+        }
+        if (role === "manager" && relatedId && catalogue === "projects") {
+          return { kind: "projectScheduling", relatedId, dayKey };
+        }
+        return { kind: "warnings", dayKey };
+      case "holiday_request_submitted":
+        return { kind: "annualLeavePending", relatedId };
+      case "holiday_request_approved":
+      case "holiday_request_declined":
+        return { kind: "annualLeave", relatedId };
+      case "project_created":
+        return relatedId ? { kind: "projectDetail", relatedId } : { kind: "projectsList" };
+      case "small_works_created":
+        return relatedId ? { kind: "smallWorksDetail", relatedId } : { kind: "smallWorksList" };
+      case "material_order_cut_off":
+        return { kind: "warnings" };
+      case "material_order_placed":
+      case "material_order_created":
+        return { kind: "materialOrders", relatedId };
+      case "operative_created":
+      case "manager_created":
+        return relatedId ? { kind: "userEdit", relatedId } : { kind: "manageUsers" };
+      case "client_created":
+        return { kind: "clients", relatedId };
+      case "warning_removed":
+      case "qualification_expiry":
+        return { kind: "warnings", relatedId, dayKey };
+      case "task_created":
+      case "task_completed":
+      case "deadline_assigned":
+      case "deadline_reminder":
+      case "deadline_due":
+        return { kind: "tasks", relatedId };
+      case "toolbox_talk_issued":
+      case "hs_toolbox_reminder":
+        return { kind: "healthSafety", relatedId };
+      case "timesheet_pending_manager_signoff":
+        return { kind: "timesheetTeamAwaiting", userId, dayKey };
+      case "timesheet_signed_by_manager":
+        return { kind: "timesheetMine", userId, dayKey };
+      case "line_manager_peer_update":
+        if (userId || dayKey) return { kind: "timesheetTeamSigned", userId, dayKey };
+        return { kind: "annualLeave" };
+      case TIMESHEET_SUBMISSION_NOTICE_TYPE:
+        return { kind: "timesheetMine", dayKey };
+      default:
+        return { kind: "notifications" };
+    }
+  }
+
   // lib/canonical/annualLeaveBalance.ts
   var DEFAULT_ANNUAL_LEAVE_DAYS = 25;
   var ANNUAL_LEAVE_ALLOWANCE_COPY = {
@@ -1384,7 +3038,7 @@ var ProjectPlannerCanonical = (() => {
     if (month < 1 || month > 12) return fallback;
     return month;
   }
-  function pad2(n) {
+  function pad22(n) {
     return n < 10 ? `0${n}` : String(n);
   }
   function lastDayOfMonth(year, month) {
@@ -1404,17 +3058,17 @@ var ProjectPlannerCanonical = (() => {
     const startMonth = clampMonth(input.startMonth, 1);
     const endMonth = clampMonth(input.endMonth, 12);
     if (!parsed) {
-      const startDayKey2 = `1970-${pad2(startMonth)}-01`;
+      const startDayKey2 = `1970-${pad22(startMonth)}-01`;
       const endDay2 = lastDayOfMonth(endMonth <= startMonth ? 1971 : 1970, endMonth);
-      const endDayKey2 = `${endMonth <= startMonth ? 1971 : 1970}-${pad2(endMonth)}-${pad2(endDay2)}`;
+      const endDayKey2 = `${endMonth <= startMonth ? 1971 : 1970}-${pad22(endMonth)}-${pad22(endDay2)}`;
       return { startDayKey: startDayKey2, endDayKey: endDayKey2, yearKey: startDayKey2 };
     }
     let year = parsed.year;
     if (parsed.month < startMonth) year -= 1;
-    const startDayKey = `${year}-${pad2(startMonth)}-01`;
+    const startDayKey = `${year}-${pad22(startMonth)}-01`;
     const endYear = endMonth <= startMonth ? year + 1 : year;
     const endDay = lastDayOfMonth(endYear, endMonth);
-    const endDayKey = `${endYear}-${pad2(endMonth)}-${pad2(endDay)}`;
+    const endDayKey = `${endYear}-${pad22(endMonth)}-${pad22(endDay)}`;
     return { startDayKey, endDayKey, yearKey: startDayKey };
   }
   function leaveUnits(slot) {
@@ -1647,6 +3301,444 @@ var ProjectPlannerCanonical = (() => {
       size: item.size,
       length: item.length
     };
+  }
+
+  // lib/canonical/qualificationSearch.ts
+  var QUALIFICATION_FILTER_ALL = "All";
+  var QUALIFICATION_FILTER_OTHER = "Other";
+  var QUALIFICATION_LIBRARY_SECTIONS = [
+    { section: "Electrical", chip: "Electrical" },
+    { section: "Gas", chip: "Gas" },
+    { section: "Air Conditioning, Refrigeration & F-Gas", chip: "Air Con & F-Gas" },
+    { section: "Site Management & Supervision", chip: "Site Management" },
+    { section: "Health, Safety & Environment", chip: "Health & Safety" },
+    { section: "Access & Working at Height", chip: "Access & Height" },
+    { section: "Plant, Lifting & Groundworks", chip: "Plant & Lifting" },
+    { section: "Plumbing & Heating", chip: "Plumbing" },
+    { section: "Mechanical & HVAC", chip: "Mechanical" },
+    { section: "Renewables & Low Carbon", chip: "Renewables" },
+    { section: "Fire & Security", chip: "Fire & Security" },
+    { section: "Data, Comms & Technology", chip: "Data & Comms" },
+    { section: "CSCS Site Cards (General)", chip: "CSCS" },
+    { section: "Professional Memberships", chip: "Professional" }
+  ];
+  var SECTION_CHIP = new Map(
+    QUALIFICATION_LIBRARY_SECTIONS.map((row) => [row.section, row.chip])
+  );
+  function normalizeQualificationSearchText(value) {
+    return String(value || "").toLowerCase().replace(/&/g, " ").replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function tokenizeQualificationSearch(value) {
+    return normalizeQualificationSearchText(value).split(" ").filter(Boolean);
+  }
+  function fieldTokens2(value) {
+    return tokenizeQualificationSearch(value);
+  }
+  function bestHit2(...hits) {
+    if (hits.includes("exact")) return "exact";
+    if (hits.includes("prefix")) return "prefix";
+    if (hits.includes("contains")) return "contains";
+    return null;
+  }
+  function tokenHit2(queryToken, hayTokens) {
+    if (!queryToken) return null;
+    for (const hay of hayTokens) {
+      if (hay === queryToken) return "exact";
+    }
+    if (queryToken.length >= 2) {
+      for (const hay of hayTokens) {
+        if (hay.startsWith(queryToken)) return "prefix";
+      }
+    }
+    if (queryToken.length >= 3) {
+      for (const hay of hayTokens) {
+        if (hay.includes(queryToken) || hay.length >= 3 && queryToken.startsWith(hay)) return "contains";
+      }
+    }
+    return null;
+  }
+  function recordFields2(record) {
+    return {
+      name: fieldTokens2(record.name),
+      code: fieldTokens2(record.code),
+      body: fieldTokens2(record.awardingBody),
+      extra: [
+        ...fieldTokens2(record.section),
+        ...fieldTokens2(record.subsection),
+        ...fieldTokens2(record.notes)
+      ]
+    };
+  }
+  function qualificationSearchScore(query, record) {
+    const tokens = tokenizeQualificationSearch(query);
+    if (tokens.length === 0) return 1;
+    const fields = recordFields2(record);
+    const all = [...fields.name, ...fields.code, ...fields.body, ...fields.extra];
+    let score = 0;
+    for (const token of tokens) {
+      const named = tokenHit2(token, fields.name);
+      const coded = tokenHit2(token, fields.code);
+      const body = tokenHit2(token, fields.body);
+      const extra = tokenHit2(token, fields.extra);
+      const hit = bestHit2(coded, named, body, extra, tokenHit2(token, all));
+      if (!hit) return 0;
+      if (hit === "exact") score += 40;
+      else if (hit === "prefix") score += 26;
+      else score += 12;
+      if (coded) score += 18;
+      if (named) score += 8;
+    }
+    const name = normalizeQualificationSearchText(record.name);
+    const joined = tokens.join(" ");
+    if (name.startsWith(joined)) score += 24;
+    else if (name.includes(joined)) score += 10;
+    if (name.length > 0) score += Math.max(0, 20 - Math.floor(name.length / 8));
+    return score;
+  }
+  function qualificationRecordMatches(query, record) {
+    return qualificationSearchScore(query, record) > 0;
+  }
+  function qualificationMatchesSection(record, section) {
+    const wanted = String(section || "").trim();
+    if (!wanted || wanted === QUALIFICATION_FILTER_ALL) return true;
+    const value = String(record.section || "").trim();
+    if (wanted === QUALIFICATION_FILTER_OTHER) return value.length === 0;
+    return value === wanted;
+  }
+  function qualificationSectionChipLabel(section) {
+    if (section === QUALIFICATION_FILTER_ALL || section === QUALIFICATION_FILTER_OTHER) return section;
+    return SECTION_CHIP.get(section) || section;
+  }
+  function qualificationLibraryFilterChips(records) {
+    const counts = /* @__PURE__ */ new Map();
+    let other = 0;
+    for (const record of records) {
+      const section = String(record.section || "").trim();
+      if (!section) {
+        other += 1;
+        continue;
+      }
+      counts.set(section, (counts.get(section) || 0) + 1);
+    }
+    const chips = [
+      { key: QUALIFICATION_FILTER_ALL, label: QUALIFICATION_FILTER_ALL, count: records.length }
+    ];
+    for (const row of QUALIFICATION_LIBRARY_SECTIONS) {
+      const count = counts.get(row.section) || 0;
+      if (count === 0) continue;
+      chips.push({ key: row.section, label: row.chip, count });
+      counts.delete(row.section);
+    }
+    for (const [section, count] of [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      chips.push({ key: section, label: section, count });
+    }
+    if (other > 0) {
+      chips.push({ key: QUALIFICATION_FILTER_OTHER, label: QUALIFICATION_FILTER_OTHER, count: other });
+    }
+    return chips;
+  }
+  function rankQualificationRecords(query, records, limit, section) {
+    const tokens = tokenizeQualificationSearch(query);
+    const hits = [];
+    for (let index = 0; index < records.length; index += 1) {
+      if (!qualificationMatchesSection(records[index], section)) continue;
+      const score = tokens.length === 0 ? 1 : qualificationSearchScore(query, records[index]);
+      if (score > 0) hits.push({ index, score });
+    }
+    if (tokens.length > 0) {
+      hits.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        const left = normalizeQualificationSearchText(records[a.index]?.name);
+        const right = normalizeQualificationSearchText(records[b.index]?.name);
+        return left.localeCompare(right);
+      });
+    }
+    const cap = Number(limit);
+    if (Number.isFinite(cap) && cap > 0) return hits.slice(0, cap);
+    return hits;
+  }
+  function qualificationSearchRecordFromItem(item) {
+    return {
+      name: item.name,
+      code: item.code,
+      awardingBody: item.awardingBody,
+      section: item.section,
+      subsection: item.subsection,
+      notes: item.notes
+    };
+  }
+
+  // lib/canonical/operativeQualifications.ts
+  var QUALIFICATION_CERTIFICATE_STORAGE_PATH = "organizations/{orgId}/operatives/{operativeId}/qualifications/{qualificationId}/certificates/{file}";
+  function isoFromUnknown(value) {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+    if (typeof value === "string" && value.trim()) {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+    return void 0;
+  }
+  function trimId(value) {
+    return String(value || "").trim();
+  }
+  function assignedQualificationWriteFields(row) {
+    if (!row) return null;
+    const id = trimId(row.id);
+    const name = String(row.name || "").trim();
+    if (!id || !name) return null;
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const createdAtIso = isoFromUnknown(row.createdAtIso) || isoFromUnknown(row.createdAt) || now;
+    const updatedAtIso = isoFromUnknown(row.updatedAtIso) || isoFromUnknown(row.updatedAt) || createdAtIso;
+    const endDateIso = isoFromUnknown(row.endDateIso) || isoFromUnknown(row.endDate);
+    const write = {
+      id,
+      name,
+      hasEndDate: row.hasEndDate === true,
+      createdAtIso,
+      updatedAtIso
+    };
+    if (endDateIso) write.endDateIso = endDateIso;
+    return write;
+  }
+  function qualificationCertificateUrl(urls, qualificationId) {
+    if (!urls) return void 0;
+    const id = trimId(qualificationId);
+    if (!id) return void 0;
+    const direct = urls[id];
+    if (typeof direct === "string" && direct.trim()) return direct;
+    const target = id.toLowerCase();
+    for (const [key, value] of Object.entries(urls)) {
+      if (key.toLowerCase() === target && typeof value === "string" && value.trim()) return value;
+    }
+    return void 0;
+  }
+  function mergeQualificationCertificateUrls(existing, uploaded, removedIds) {
+    const next = {};
+    for (const [key, value] of Object.entries(existing || {})) {
+      if (typeof value === "string" && value.trim()) next[key] = value;
+    }
+    for (const [key, value] of Object.entries(uploaded || {})) {
+      if (typeof value === "string" && value.trim()) next[key] = value;
+    }
+    for (const id of removedIds || []) {
+      const target = trimId(id).toLowerCase();
+      if (!target) continue;
+      for (const key of Object.keys(next)) {
+        if (key.toLowerCase() === target) delete next[key];
+      }
+    }
+    return next;
+  }
+  function removedQualificationCertificateIds(previousUrls, nextUrls, assignedIds) {
+    const removed = [];
+    for (const id of assignedIds) {
+      const key = trimId(id);
+      if (!key) continue;
+      if (qualificationCertificateUrl(previousUrls, key) && !qualificationCertificateUrl(nextUrls, key)) {
+        removed.push(key);
+      }
+    }
+    return removed;
+  }
+  function mergeExpiryDates(previous, next, nextAssignmentIds) {
+    const expiry = {};
+    for (const [key, value] of Object.entries(previous || {})) {
+      const iso = isoFromUnknown(value);
+      if (iso) expiry[key] = iso;
+    }
+    for (const id of nextAssignmentIds) {
+      const target = id.toLowerCase();
+      for (const key of Object.keys(expiry)) {
+        if (key.toLowerCase() === target) delete expiry[key];
+      }
+    }
+    for (const [key, value] of Object.entries(next || {})) {
+      const iso = isoFromUnknown(value);
+      if (iso) expiry[key] = iso;
+    }
+    return expiry;
+  }
+  function mergeOperativeQualificationWrite(input) {
+    const byId = /* @__PURE__ */ new Map();
+    for (const row of input.previous?.qualifications || []) {
+      const write = assignedQualificationWriteFields(row);
+      if (write) byId.set(write.id, write);
+    }
+    const nextAssignmentIds = [];
+    for (const row of input.next.qualifications || []) {
+      const write = assignedQualificationWriteFields(row);
+      if (!write) continue;
+      byId.set(write.id, write);
+      nextAssignmentIds.push(write.id);
+    }
+    return {
+      qualifications: Array.from(byId.values()),
+      qualificationExpiryDates: mergeExpiryDates(
+        input.previous?.qualificationExpiryDates,
+        input.next.qualificationExpiryDates,
+        nextAssignmentIds
+      ),
+      qualificationCertificateURLs: mergeQualificationCertificateUrls(
+        input.previous?.qualificationCertificateURLs,
+        input.next.qualificationCertificateURLs,
+        input.next.removedCertificateIds
+      )
+    };
+  }
+  function qualificationCertificateStoragePath(input) {
+    const organizationId = trimId(input.organizationId);
+    const operativeId = trimId(input.operativeId);
+    const qualificationId = trimId(input.qualificationId);
+    const fileName = trimId(input.fileName);
+    if (!organizationId || !operativeId || !qualificationId || !fileName) return null;
+    return `organizations/${organizationId}/operatives/${operativeId}/qualifications/${qualificationId}/certificates/${fileName}`;
+  }
+
+  // lib/canonical/materialDelivery.ts
+  var DEFAULT_MATERIAL_DELIVERY_HOUR = 8;
+  var DEFAULT_MATERIAL_DELIVERY_MINUTE = 0;
+  var DEFAULT_MATERIAL_DELIVERY_CLOCK = "08:00";
+  var DEFAULT_MATERIAL_DELIVERY_MINUTES = DEFAULT_MATERIAL_DELIVERY_HOUR * 60 + DEFAULT_MATERIAL_DELIVERY_MINUTE;
+  function materialOrderIncludesDeliveryRequired(requestType) {
+    return String(requestType || "").trim().toLowerCase() === "order";
+  }
+  function defaultMaterialDeliveryDayKey(referenceIso, timeZone) {
+    const zone = zoneOrLondon(timeZone);
+    const now = new Date(referenceIso);
+    if (Number.isNaN(now.getTime())) {
+      return dayKeyInZone(/* @__PURE__ */ new Date(), zone);
+    }
+    const weekday = isoWeekdayInZone(now, zone);
+    const daysAhead = weekday === 6 ? 2 : 1;
+    return dayKeyInZone(addDaysInZone(now, daysAhead, zone), zone);
+  }
+  function materialDeliveryInstant(dayKey, clockMinutes, timeZone) {
+    const zone = zoneOrLondon(timeZone);
+    const midnight = dateFromDayKeyInZone(dayKey, zone);
+    const clamped = Math.max(0, Math.min(Math.round(clockMinutes), 24 * 60));
+    return new Date(midnight.getTime() + clamped * 6e4);
+  }
+  function defaultMaterialDeliveryRequiredAt(referenceIso, timeZone) {
+    return materialDeliveryInstant(
+      defaultMaterialDeliveryDayKey(referenceIso, timeZone),
+      DEFAULT_MATERIAL_DELIVERY_MINUTES,
+      timeZone
+    );
+  }
+  function clockMinutesFromDeliveryInstant(at, timeZone) {
+    const zone = zoneOrLondon(timeZone);
+    const parts = partsInZone(at, zone);
+    return parts.h * 60 + parts.min;
+  }
+  function formatMaterialDeliveryRequired(at, timeZone) {
+    const zone = zoneOrLondon(timeZone);
+    const day = new Intl.DateTimeFormat("en-GB", {
+      timeZone: zone,
+      weekday: "long",
+      day: "numeric",
+      month: "long"
+    }).format(at);
+    return `${day} at ${formatClockMinutes(clockMinutesFromDeliveryInstant(at, zone))}`;
+  }
+
+  // lib/canonical/billingAccess.ts
+  var PAYMENT_GRACE_MS = 7 * 24 * 60 * 60 * 1e3;
+  var LIVE_STATUSES = /* @__PURE__ */ new Set(["trialing", "active"]);
+  function timestampMs(value) {
+    if (value == null || value === "") return null;
+    if (typeof value === "object" && typeof value.getTime === "function") {
+      const ms = value.getTime();
+      return Number.isFinite(ms) ? ms : null;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value < 1e12 ? Math.round(value * 1e3) : Math.round(value);
+    }
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    if (typeof value === "object") {
+      const record = value;
+      if (typeof record.toDate === "function") {
+        try {
+          const parsed = record.toDate();
+          const ms = timestampMs(parsed);
+          if (ms != null) return ms;
+        } catch {
+        }
+      }
+      const seconds = typeof record.seconds === "number" ? record.seconds : record._seconds;
+      if (typeof seconds === "number" && Number.isFinite(seconds)) return Math.round(seconds * 1e3);
+    }
+    return null;
+  }
+  function hasAccess(billing, now = Date.now()) {
+    if (!billing) return true;
+    if (billing.status === "none" || billing.status === "pending") return true;
+    if (typeof billing.status === "string" && LIVE_STATUSES.has(billing.status)) return true;
+    if (billing.status === "past_due") {
+      if (!billing.lastPaymentFailedAt) return true;
+      const failedAt = timestampMs(billing.lastPaymentFailedAt);
+      if (failedAt == null) return false;
+      return now - failedAt < PAYMENT_GRACE_MS;
+    }
+    return false;
+  }
+
+  // lib/canonical/inviteEmailClaim.ts
+  function normalizeEmail2(value) {
+    return typeof value === "string" ? value.trim().toLowerCase() : "";
+  }
+  function trimmedId(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function pointedOwnsInviteEmail(pointed, inviteEmail) {
+    if (!pointed) return false;
+    if (isAnonymisedDeletedProfile(pointed)) return false;
+    return normalizeEmail2(pointed.email) === inviteEmail;
+  }
+  function resolveInviteEmailClaim(input) {
+    const inviteEmail = normalizeEmail2(input.inviteEmail);
+    if (!inviteEmail) return { action: "allow" };
+    const pointer = input.emailPointer;
+    const pointedUser = pointer?.pointedUser ?? null;
+    const livePointer = pointer != null && pointer.exists === true && pointedOwnsInviteEmail(pointedUser, inviteEmail);
+    if (livePointer) return { action: "block" };
+    const claimedEmails = pointer == null ? null : [];
+    let reuseUserId = "";
+    for (const user of input.existingUsers ?? []) {
+      if (isAnonymisedDeletedProfile(user)) continue;
+      if (normalizeEmail2(user.email) !== inviteEmail) continue;
+      if (user.passwordSet === true) return { action: "block" };
+      if (!isIdentifiablePendingLeftover(user, claimedEmails)) return { action: "block" };
+      const id = trimmedId(user.userId);
+      if (id && !reuseUserId) reuseUserId = id;
+    }
+    if (!reuseUserId && pointer?.exists === true && !pointedUser) {
+      const pointedId = trimmedId(pointer.pointedUserId);
+      if (pointedId) reuseUserId = pointedId;
+    }
+    return reuseUserId ? { action: "allow", reuseUserId } : { action: "allow" };
+  }
+  function inviteEmailHasLiveClaim(input) {
+    return resolveInviteEmailClaim(input).action === "block";
+  }
+  function inviteEmailOrgLookupConstraints(organizationId, email) {
+    return {
+      organizationId: typeof organizationId === "string" ? organizationId.trim() : "",
+      email: normalizeEmail2(email)
+    };
+  }
+  function invitePlaceholderUserWriteFields() {
+    return {
+      passwordSet: false,
+      isActive: true,
+      isSuperAdmin: false,
+      policyAccepted: false
+    };
+  }
+  function inviteWritesOperativeProfile() {
+    return false;
   }
   return __toCommonJS(bundleEntry_exports);
 })();

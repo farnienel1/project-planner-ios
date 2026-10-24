@@ -182,14 +182,12 @@ enum PlannerStoreWiring {
 
         print("🔥🔥🔥 DEBUG: ✅ Org data bootstrap requests finished")
 
-        // Do NOT load the full notifications collection here. Large orgs (100–200+ docs)
-        // plus a live listener jetsam the Simulator on launch. Notifications load on demand
-        // from NotificationsView; unread badge warms after a long idle delay.
+        // Inbox listener only (newest 150 notification docs). Not a company-data refresh.
+        // A few seconds after Home's critical loads so the bell updates without the user refreshing.
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 35_000_000_000)
-            print("🔥🔥🔥 DEBUG: Warming unread notification badge (post-quiet)…")
-            await notificationService.warmUnreadBadgeIfNeeded()
-            print("🔥🔥🔥 DEBUG: Unread badge warm finished")
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            print("🔥🔥🔥 DEBUG: Starting notification inbox listener…")
+            notificationService.startInboxListenerIfNeeded()
         }
     }
 }
@@ -234,6 +232,10 @@ struct ProjectPlannerRootView: View {
     private var authenticatedShell: some View {
         if userStore.isDeactivatedForLastUsedOrganization {
             AccountDeactivatedView()
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+        } else if firebaseBackend.currentOrganization?.subscriptionHasAccess == false {
+            SubscriptionLapsedView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
         } else if let currentUser = userStore.currentUser, !currentUser.policyAccepted {
@@ -339,6 +341,9 @@ struct ProjectPlannerRootView: View {
                 Task {
                     await firebaseBackend.registerPushToken(token)
                 }
+            }
+            appDelegate.foregroundNotificationHandler = { isRemote, type in
+                notificationService.foregroundPresentationOptions(isRemote: isRemote, type: type)
             }
 
             appSettings.setupObservers()

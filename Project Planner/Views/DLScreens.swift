@@ -1034,7 +1034,7 @@ struct DLEditDeadlineScreen: View {
         }
         .fileImporter(
             isPresented: $showingFilePicker,
-            allowedContentTypes: [.item, .pdf, .image, .data],
+            allowedContentTypes: StorageUploadPolicy.workFileContentTypes,
             allowsMultipleSelection: false
         ) { result in
             if case .success(let urls) = result, let url = urls.first, let persisted = HSImportedFile.persist(url) {

@@ -9,29 +9,32 @@ import SwiftUI
 
 struct ChangePasswordView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @Environment(\.presentationMode) var presentationMode
+    @Environment(\.dismiss) private var dismiss
     
     @State private var currentPassword = ""
     @State private var newPassword = ""
     @State private var confirmPassword = ""
     @State private var showingSuccessMessage = false
+
+    private var isDirty: Bool {
+        !currentPassword.isEmpty || !newPassword.isEmpty || !confirmPassword.isEmpty
+    }
     
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    SettingsHubChrome.sectionTitle("Change Password")
+                    SettingsHubChrome.sectionTitle("Change password", sentenceCase: true)
                     SettingsHubChrome.card {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Enter your current password and choose a new one.")
                                 .font(.system(size: 13))
                                 .foregroundStyle(ProjectWorksRevampColors.muted)
                                 .padding(.top, 12)
-                            labeledSecure("Current Password", title: "Enter your current password", text: $currentPassword)
+                            labeledSecure("Current password", title: "Enter your current password", text: $currentPassword)
                             Divider().overlay(ProjectWorksRevampColors.border)
-                            labeledSecure("New Password", title: "Enter your new password", text: $newPassword)
+                            labeledSecure("New password", title: "Enter your new password", text: $newPassword)
                             Divider().overlay(ProjectWorksRevampColors.border)
-                            labeledSecure("Confirm New Password", title: "Confirm your new password", text: $confirmPassword)
+                            labeledSecure("Confirm new password", title: "Confirm your new password", text: $confirmPassword)
                         }
                         .padding(.bottom, 12)
                     }
@@ -52,41 +55,21 @@ struct ChangePasswordView: View {
                             .padding(.bottom, 8)
                     }
 
-                    Button(action: changePassword) {
-                        HStack {
-                            if firebaseBackend.isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
-                            }
-                            Text("Change Password")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.white)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(ProjectWorksRevampColors.blue)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-                    .accessibilityIdentifier("changePassword.changePassword")
-                    .buttonStyle(.plain)
-                    .disabled(firebaseBackend.isLoading || !isFormValid)
-                    .opacity(isFormValid ? 1.0 : 0.6)
-                    .padding(.top, 8)
                 }
                 .padding(16)
             }
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .navigationTitle("Sign-in & password")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                        .accessibilityIdentifier("changePassword.cancel")
+            .safeAreaInset(edge: .bottom) {
+                SettingsStickySaveBar(title: "Save", isDirty: isDirty, isSaving: firebaseBackend.isLoading) {
+                    changePassword()
                 }
             }
-        }
+            .settingsUnsavedLeave(isDirty: isDirty) {
+                clearForm()
+                dismiss()
+            }
     }
 
     private func labeledSecure(_ label: String, title: String, text: Binding<String>) -> some View {
@@ -107,6 +90,7 @@ struct ChangePasswordView: View {
     }
     
     private func changePassword() {
+        guard isFormValid else { return }
         Task {
             do {
                 try await firebaseBackend.changePassword(
@@ -116,7 +100,7 @@ struct ChangePasswordView: View {
                 showingSuccessMessage = true
                 clearForm()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    presentationMode.wrappedValue.dismiss()
+                    dismiss()
                 }
             } catch {
                 // Error is handled by firebaseBackend.errorMessage

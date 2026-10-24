@@ -104,7 +104,7 @@ struct OperativeProfileView: View {
         }
     }
 
-    private var qualificationRows: [(id: UUID, title: String, detail: String?, certificateURL: URL?)] {
+    private var qualificationRows: [(id: String, title: String, detail: String?, certificateURL: URL?)] {
         guard let operative = linkedOperative else { return [] }
         let sorted = operative.qualifications.sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -120,8 +120,10 @@ struct OperativeProfileView: View {
             } else {
                 detail = nil
             }
-            let certString = operative.qualificationCertificateURLs[qualification.id]?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let certString = CanonicalBusinessEngine.qualificationCertificateUrl(
+                urls: operative.qualificationCertificateURLs,
+                qualificationId: qualification.id
+            )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let certURL = certString.isEmpty ? nil : URL(string: certString)
             return (qualification.id, qualification.name, detail, certURL)
         }

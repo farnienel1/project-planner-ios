@@ -27,6 +27,9 @@ struct WarningsComputationInput: @unchecked Sendable {
     let materialOrderCutOffEnabled: Bool
     let materialCutOffOnSaturday: Bool
     let materialCutOffOnSunday: Bool
+    /// Minutes since midnight from `materialCutOffClockMinutes`. Empty label means the script did not answer.
+    var materialCutOffMinutes: Int = 0
+    var materialCutOffLabel: String = ""
     let projectsWithTomorrowBookings: [Project]
     /// Material lines dated for tomorrow (loaded when computing warnings).
     let materialItemsForTomorrow: [MaterialItem]
@@ -36,7 +39,7 @@ struct WarningsComputationInput: @unchecked Sendable {
 struct WarningsComputationSnapshot: Sendable {
     struct OperativeSnapshot: Sendable {
         struct QualificationExpirySnapshot: Sendable {
-            let qualificationId: UUID
+            let qualificationId: String
             let qualificationName: String
             let expiryDate: Date
         }
@@ -165,6 +168,8 @@ struct WarningsComputationSnapshot: Sendable {
     let materialOrderCutOffEnabled: Bool
     let materialCutOffOnSaturday: Bool
     let materialCutOffOnSunday: Bool
+    var materialCutOffMinutes: Int = 0
+    var materialCutOffLabel: String = ""
     let projectsWithTomorrowBookingIds: [UUID]
     let materialItemsForTomorrow: [MaterialItemSnapshot]
     /// Document ids from `organizations/{orgId}/dismissedWarnings`.
@@ -181,7 +186,7 @@ enum WarningsComputation {
         let cal = CanonicalBusinessEngine.businessCalendar
 
         let operatives: [WarningsComputationSnapshot.OperativeSnapshot] = input.operatives.map { operative in
-            let qualificationNames: [UUID: String] = operative.qualifications.reduce(into: [:]) { acc, q in
+            let qualificationNames: [String: String] = operative.qualifications.reduce(into: [:]) { acc, q in
                 acc[q.id] = q.name
             }
             var qualificationExpiries: [WarningsComputationSnapshot.OperativeSnapshot.QualificationExpirySnapshot] = []
@@ -358,6 +363,8 @@ enum WarningsComputation {
             materialOrderCutOffEnabled: input.materialOrderCutOffEnabled,
             materialCutOffOnSaturday: input.materialCutOffOnSaturday,
             materialCutOffOnSunday: input.materialCutOffOnSunday,
+            materialCutOffMinutes: input.materialCutOffMinutes,
+            materialCutOffLabel: input.materialCutOffLabel,
             projectsWithTomorrowBookingIds: input.projectsWithTomorrowBookings.map(\.id),
             materialItemsForTomorrow: materialItemsForTomorrow,
             dismissedQualificationKeys: input.dismissedQualificationKeys
@@ -548,8 +555,10 @@ enum WarningsComputation {
             generated.append(contentsOf: rows)
         }
 
-        let hour = cal.component(.hour, from: now)
-        if input.materialOrderCutOffEnabled, hour >= 16 {
+        let nowMinutes = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+        if input.materialOrderCutOffEnabled,
+           !input.materialCutOffLabel.isEmpty,
+           nowMinutes >= input.materialCutOffMinutes {
             let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
             let tomorrowWeekday = cal.component(.weekday, from: tomorrow)
             if tomorrowWeekday == 7 && !input.materialCutOffOnSaturday {
@@ -558,6 +567,7 @@ enum WarningsComputation {
             if tomorrowWeekday == 1 && !input.materialCutOffOnSunday {
                 return generated
             }
+            let cutOffLabel = input.materialCutOffLabel
             for projectId in input.projectsWithTomorrowBookingIds {
                 guard let project = projectById[projectId] else { continue }
                 let tomorrowMaterials = input.materialItemsForTomorrow.filter {
@@ -573,9 +583,9 @@ enum WarningsComputation {
                 let notOrderedCount = tomorrowMaterials.filter { !$0.isOrdered }.count
                 let message: String
                 if tomorrowMaterials.isEmpty {
-                    message = "No materials have been ordered for \(project.jobNumber) tomorrow's work (cut-off 16:00)."
+                    message = "No materials have been ordered for \(project.jobNumber) tomorrow's work (cut-off \(cutOffLabel))."
                 } else {
-                    message = "Materials for \(project.jobNumber) were not fully ordered by 16:00 for tomorrow's work (\(notOrderedCount) line\(notOrderedCount == 1 ? "" : "s") still not ordered)."
+                    message = "Materials for \(project.jobNumber) were not fully ordered by \(cutOffLabel) for tomorrow's work (\(notOrderedCount) line\(notOrderedCount == 1 ? "" : "s") still not ordered)."
                 }
                 generated.append(Warning(
                     resolutionKey: "materials-\(project.id.uuidString)-\(tomorrow.timeIntervalSince1970)",
@@ -612,7 +622,7 @@ enum WarningsComputation {
         let operatives: [[String: Any]] = input.operatives.map { operative in
             let expiries: [[String: Any]] = operative.qualificationExpiries.map { expiry in
                 [
-                    "qualificationId": expiry.qualificationId.uuidString,
+                    "qualificationId": expiry.qualificationId,
                     "name": expiry.qualificationName,
                     "expiryIso": CanonicalBusinessEngine.isoString(from: expiry.expiryDate),
                 ]
@@ -620,6 +630,7 @@ enum WarningsComputation {
             return [
                 "id": operative.id.uuidString,
                 "isActive": operative.isActive,
+                "email": operative.emailLowercased,
                 "name": operative.name,
                 "expiries": expiries,
             ]
@@ -824,43 +835,26 @@ enum WarningsComputation {
         return (kept, expandedHolidays)
     }
 
-    /// The exclusion list names user ids. One email is one person, so every account
-    /// that shares an excluded email is excluded from the warning rows too.
-    nonisolated static func expandedExcludedUserIds(_ excluded: Set<String>, people: [[String: Any]]) -> [String] {
-        func text(_ value: Any?) -> String {
-            (value as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        var emailById: [String: String] = [:]
-        var idsByEmail: [String: [String]] = [:]
-        for person in people {
-            let id = text(person["id"])
-            let email = text(person["email"]).lowercased()
-            guard !id.isEmpty, !email.isEmpty else { continue }
-            emailById[id] = email
-            if idsByEmail[email]?.contains(id) != true {
-                idsByEmail[email, default: []].append(id)
-            }
-        }
-        var expanded = Set(excluded.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
-        for id in excluded {
-            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let email = emailById[trimmed], !email.isEmpty else { continue }
-            for alias in idsByEmail[email] ?? [] {
-                expanded.insert(alias)
-            }
-        }
-        return Array(expanded)
+    /// The web scan passes the stored ids only. The script skips a row when the account
+    /// it kept is in that list. Expanding the list to every alias hides a person the web app still shows.
+    nonisolated static func storedExcludedUserIds(_ excluded: Set<String>) -> [String] {
+        Array(Set(excluded.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }))
     }
 
     /// The script keeps the first finished account it sees for an email. Put the same
     /// account first on every phone: the finished, active account with the smaller id.
-    nonisolated static func orderedPeopleForUnbookedScript(_ people: [[String: Any]]) -> [[String: Any]] {
+    /// An excluded alias is not that account, so it does not hide the other finished account on the email.
+    nonisolated static func orderedPeopleForUnbookedScript(
+        _ people: [[String: Any]],
+        excludedUserIds: Set<String> = []
+    ) -> [[String: Any]] {
         func text(_ value: Any?) -> String {
             (value as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         }
         func finished(_ person: [String: Any]) -> Bool {
             (person["passwordSet"] as? Bool) == true && (person["isActive"] as? Bool) == true
         }
+        let excluded = Set(excludedUserIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
         var groups: [String: [[String: Any]]] = [:]
         for person in people {
             let email = text(person["email"]).lowercased()
@@ -870,7 +864,10 @@ enum WarningsComputation {
         var placed = Set<String>()
         var ordered: [[String: Any]] = []
         for email in groups.keys.sorted() {
-            let winner = groups[email]?.filter(finished).min { text($0["id"]) < text($1["id"]) }
+            let finishedAccounts = groups[email]?.filter(finished) ?? []
+            let visible = finishedAccounts.filter { !excluded.contains(text($0["id"])) }
+            let pool = visible.isEmpty ? finishedAccounts : visible
+            let winner = pool.min { text($0["id"]) < text($1["id"]) }
             if let winner {
                 ordered.append(winner)
                 placed.insert(text(winner["id"]))
@@ -880,6 +877,195 @@ enum WarningsComputation {
             ordered.append(person)
         }
         return ordered
+    }
+
+    /// Daily Overview and Book labour for one London day. Same people, bookings, and stored exclusion ids as the warning scan.
+    @MainActor
+    static func unbookedLabourRowsOnDay(
+        day: Date,
+        users: [AppUser],
+        operatives: [Operative],
+        operativeBookings: [Booking],
+        managerBookings: [ManagerSiteBooking],
+        holidays: [HolidayBooking],
+        policy: OrgPayrollTimePolicy,
+        includeWeekends: Bool,
+        excludedUserIds: [String]
+    ) -> [CanonicalUnbookedLabourRow] {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        let dayStart = calendar.startOfDay(for: day)
+        let dayKey = CanonicalBusinessEngine.dayKey(for: dayStart, calendar: calendar)
+        let excluded = Set(excludedUserIds)
+        var peopleRows: [[String: Any]] = []
+        for user in users {
+            let row: [String: Any] = [
+                "id": user.id,
+                "email": user.email.lowercased(),
+                "name": user.fullName.isEmpty ? user.email : user.fullName,
+                "isActive": user.isActive,
+                "passwordSet": user.passwordSet,
+                "isOperativeMode": user.permissions.operativeMode,
+                "isManager": user.permissions.manager,
+                "isAdmin": user.permissions.adminAccess || user.role == .admin,
+                "isSuperAdmin": user.isSuperAdmin,
+            ]
+            peopleRows.append(row)
+            for alias in user.sameEmailUserIds where !alias.isEmpty && alias != user.id {
+                var copy = row
+                copy["id"] = alias
+                peopleRows.append(copy)
+            }
+        }
+        let people = orderedPeopleForUnbookedScript(peopleRows, excludedUserIds: excluded)
+        let operativeRows: [[String: Any]] = operatives.map { operative in
+            let foldedName = operative.name.lowercased()
+            let foldedEmail = operative.email.lowercased()
+            return [
+                "id": operative.id.uuidString,
+                "email": operative.email.lowercased(),
+                "name": operative.name,
+                "isActive": operative.isActive,
+                "isPlaceholder": foldedName.contains("placeholder") || foldedEmail.contains("placeholder") || foldedName.contains("initial"),
+                "profileWeight": operative.qualifications.count
+                    + operative.qualificationCertificateURLs.count
+                    + operative.qualificationExpiryDates.count,
+            ]
+        }
+        var bookingRows: [[String: Any]] = []
+        for booking in operativeBookings where (booking.status == .confirmed || booking.status == .tentative) && calendar.isDate(booking.date, inSameDayAs: dayStart) {
+            bookingRows.append([
+                "personId": booking.operativeId.uuidString,
+                "dayKey": dayKey,
+                "kind": "operative",
+                "timeSlot": booking.timeSlot.rawValue,
+                "workStart": booking.workStartTime ?? "",
+                "workEnd": booking.workEndTime ?? "",
+            ])
+        }
+        for booking in managerBookings where calendar.isDate(booking.date, inSameDayAs: dayStart) {
+            bookingRows.append([
+                "personId": booking.userId,
+                "dayKey": dayKey,
+                "kind": "manager",
+                "timeSlot": booking.timeSlot.rawValue,
+                "workStart": booking.workStartTime ?? "",
+                "workEnd": booking.workEndTime ?? "",
+            ])
+        }
+        let holidayRows: [[String: Any]] = holidays.map { holiday in
+            let rawUserId = holiday.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedUserId: String? = {
+                guard let rawUserId, !rawUserId.isEmpty else { return nil }
+                if let user = users.first(where: { $0.id.caseInsensitiveCompare(rawUserId) == .orderedSame }) {
+                    return user.id
+                }
+                if rawUserId.contains("@"),
+                   let user = users.first(where: { $0.email.caseInsensitiveCompare(rawUserId) == .orderedSame }) {
+                    return user.id
+                }
+                return rawUserId
+            }()
+            return [
+                "userId": resolvedUserId ?? "",
+                "operativeId": holiday.operativeId?.uuidString ?? "",
+                "startDayKey": CanonicalBusinessEngine.dayKey(for: holiday.startDate, calendar: calendar),
+                "endDayKey": CanonicalBusinessEngine.dayKey(for: holiday.endDate, calendar: calendar),
+                "approved": holiday.status == .approved,
+            ]
+        }
+        let shared = shareCoverageAcrossEmail(
+            bookings: bookingRows,
+            holidays: holidayRows,
+            people: people,
+            operatives: operativeRows
+        )
+        let input = CanonicalUnbookedLabourDayInput(
+            timeZone: "Europe/London",
+            dayKey: dayKey,
+            includeWeekends: includeWeekends,
+            excludedUserIds: storedExcludedUserIds(excluded),
+            standardPaidHours: policy.standardPaidHours,
+            saturdayCountsAsHours: policy.saturday.resolvedCountsAsHours(fallback: policy.standardPaidHours),
+            sundayCountsAsHours: PayrollTimePolicyCatalog.resolvedSundaySettings(from: policy)
+                .resolvedCountsAsHours(fallback: policy.standardPaidHours),
+            standardDayStart: policy.standardDayStart,
+            standardDayEnd: policy.standardDayEnd,
+            breakWindowStart: policy.breakWindowStart,
+            breakWindowEnd: policy.breakWindowEnd,
+            people: people.compactMap(unbookedPerson),
+            operatives: operativeRows.compactMap(unbookedOperative),
+            bookings: shared.bookings.compactMap(unbookedBooking),
+            holidays: shared.holidays.compactMap(unbookedHoliday)
+        )
+        return CanonicalBusinessEngine.unbookedLabourRowsOnDay(input) ?? []
+    }
+
+    nonisolated private static func unbookedText(_ value: Any?) -> String {
+        (value as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func unbookedFlag(_ value: Any?) -> Bool {
+        if let flag = value as? Bool { return flag }
+        if let number = value as? NSNumber { return number.boolValue }
+        return false
+    }
+
+    nonisolated private static func unbookedPerson(_ row: [String: Any]) -> CanonicalUnbookedLabourPerson? {
+        let id = unbookedText(row["id"])
+        guard !id.isEmpty else { return nil }
+        return CanonicalUnbookedLabourPerson(
+            id: id,
+            email: unbookedText(row["email"]),
+            name: unbookedText(row["name"]),
+            isActive: unbookedFlag(row["isActive"]),
+            passwordSet: unbookedFlag(row["passwordSet"]),
+            isOperativeMode: unbookedFlag(row["isOperativeMode"]),
+            isManager: unbookedFlag(row["isManager"]),
+            isAdmin: unbookedFlag(row["isAdmin"]),
+            isSuperAdmin: unbookedFlag(row["isSuperAdmin"])
+        )
+    }
+
+    nonisolated private static func unbookedOperative(_ row: [String: Any]) -> CanonicalUnbookedLabourOperative? {
+        let id = unbookedText(row["id"])
+        guard !id.isEmpty else { return nil }
+        let weight = (row["profileWeight"] as? NSNumber)?.intValue ?? (row["profileWeight"] as? Int) ?? 0
+        return CanonicalUnbookedLabourOperative(
+            id: id,
+            email: unbookedText(row["email"]),
+            name: unbookedText(row["name"]),
+            isActive: unbookedFlag(row["isActive"]),
+            isPlaceholder: unbookedFlag(row["isPlaceholder"]),
+            profileWeight: weight
+        )
+    }
+
+    nonisolated private static func unbookedBooking(_ row: [String: Any]) -> CanonicalUnbookedLabourBooking? {
+        let personId = unbookedText(row["personId"])
+        let dayKey = unbookedText(row["dayKey"])
+        let kind = unbookedText(row["kind"])
+        guard !personId.isEmpty, !dayKey.isEmpty, !kind.isEmpty else { return nil }
+        return CanonicalUnbookedLabourBooking(
+            personId: personId,
+            dayKey: dayKey,
+            kind: kind,
+            timeSlot: unbookedText(row["timeSlot"]),
+            workStart: unbookedText(row["workStart"]),
+            workEnd: unbookedText(row["workEnd"])
+        )
+    }
+
+    nonisolated private static func unbookedHoliday(_ row: [String: Any]) -> CanonicalUnbookedLabourHoliday? {
+        let start = unbookedText(row["startDayKey"])
+        let end = unbookedText(row["endDayKey"])
+        guard !start.isEmpty, !end.isEmpty else { return nil }
+        return CanonicalUnbookedLabourHoliday(
+            userId: unbookedText(row["userId"]),
+            operativeId: unbookedText(row["operativeId"]),
+            startDayKey: start,
+            endDayKey: end,
+            approved: unbookedFlag(row["approved"])
+        )
     }
 
     nonisolated private static func unbookedRows(
@@ -930,7 +1116,8 @@ enum WarningsComputation {
                 peopleRows.append(copy)
             }
         }
-        let people: [[String: Any]] = orderedPeopleForUnbookedScript(peopleRows)
+        let excludedIds = input.warningDetection.excludedUserIdsFromUnbookedWarnings
+        let people: [[String: Any]] = orderedPeopleForUnbookedScript(peopleRows, excludedUserIds: excludedIds)
         let operatives: [[String: Any]] = input.operatives.map { operative in
             [
                 "id": operative.id.uuidString,
@@ -951,10 +1138,7 @@ enum WarningsComputation {
             ]
         }
         let shared = shareCoverageAcrossEmail(bookings: bookings, holidays: holidays, people: people, operatives: operatives)
-        let excluded = expandedExcludedUserIds(
-            input.warningDetection.excludedUserIdsFromUnbookedWarnings,
-            people: people
-        )
+        let excluded = storedExcludedUserIds(excludedIds)
         guard let rows = CanonicalBusinessEngine.objectRows(
             function: "unbookedLabourRows",
             payload: [
@@ -1060,13 +1244,7 @@ enum WarningsComputation {
             ))
         }
 
-        let peopleRows: [[String: Any]] = input.users.map { user in
-            ["id": user.id, "email": user.emailLowercased]
-        }
-        let excluded = expandedExcludedUserIds(
-            input.warningDetection.excludedUserIdsFromUnbookedWarnings,
-            people: peopleRows
-        )
+        let excluded = storedExcludedUserIds(input.warningDetection.excludedUserIdsFromUnbookedWarnings)
 
         var bookings: [CanonicalLeaveBooking] = []
         for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {

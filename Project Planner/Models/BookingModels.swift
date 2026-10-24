@@ -93,6 +93,21 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
     case overtime = "Overtime"
     case customHours = "CUSTOM_HOURS"
 
+    /// Web and iOS have stored the same day as `FULL DAY` and `FULL_DAY`. Both load.
+    static func fromStored(_ raw: String) -> TimeSlot? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let direct = TimeSlot(rawValue: trimmed) { return direct }
+        switch CanonicalBusinessEngine.namedSlotKind(trimmed) {
+        case "FULL_DAY": return .fullDay
+        case "AM": return .morning
+        case "PM": return .afternoon
+        case "CUSTOM": return .customHours
+        case "EVENING": return .evening
+        case "OVERTIME": return .overtime
+        default: return nil
+        }
+    }
+
     /// Pickers that only use slot labels (excludes clock-based `customHours`).
     static var legacyPickerCases: [TimeSlot] {
         [.morning, .afternoon, .fullDay, .evening, .overtime]

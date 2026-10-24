@@ -78,6 +78,43 @@ service cloud.firestore {
            get(/databases/(default)/documents/organizations/$(organizationId)).data.creatorUserId == request.auth.uid;
   }
 
+  // Web org setup: user just created organizations/{id} and is writing their own users/{authUid} profile.
+  function isOrgBootstrapAdminProfileCreate(userId) {
+    return request.auth != null &&
+           request.auth.uid == userId &&
+           'organizationId' in request.resource.data &&
+           organizationExists(request.resource.data.organizationId) &&
+           exists(/databases/(default)/documents/organizations/$(request.resource.data.organizationId)) &&
+           'members' in get(/databases/(default)/documents/organizations/$(request.resource.data.organizationId)).data &&
+           get(/databases/(default)/documents/organizations/$(request.resource.data.organizationId)).data.members[request.auth.uid] == 'admin';
+  }
+
+  // Self-create only (request.auth.uid == userId). Admin/manager invite placeholders omit these.
+  function selfCreateHasAgeConfirmation() {
+    return request.resource.data.ageConfirmed == true &&
+           request.resource.data.ageConfirmedYears is number &&
+           request.resource.data.ageConfirmedAt is timestamp;
+  }
+
+  // Invite accept: organizations/{org}/userEmails/{email} still points at the UUID placeholder
+  // Add User wrote (not an Auth uid). The placeholder must be pending (passwordSet not true),
+  // in this org, and hold this same email — so a live member or the Deleted-user tombstone
+  // (email '', passwordSet true) never qualifies. Lets the invitee create users/{authUid}
+  // before the claim moves to authUid.
+  function inviteClaimIsPendingPlaceholder(organizationId, emailKey) {
+    return exists(/databases/(default)/documents/organizations/$(organizationId)/userEmails/$(emailKey)) &&
+           get(/databases/(default)/documents/organizations/$(organizationId)/userEmails/$(emailKey)).data.userId is string &&
+           exists(/databases/(default)/documents/users/$(get(/databases/(default)/documents/organizations/$(organizationId)/userEmails/$(emailKey)).data.userId)) &&
+           get(/databases/(default)/documents/users/$(get(/databases/(default)/documents/organizations/$(organizationId)/userEmails/$(emailKey)).data.userId)).data.passwordSet != true &&
+           get(/databases/(default)/documents/users/$(get(/databases/(default)/documents/organizations/$(organizationId)/userEmails/$(emailKey)).data.userId)).data.email is string &&
+           get(/databases/(default)/documents/users/$(get(/databases/(default)/documents/organizations/$(organizationId)/userEmails/$(emailKey)).data.userId)).data.email.lower() == emailKey &&
+           'organizationId' in get(/databases/(default)/documents/users/$(get(/databases/(default)/documents/organizations/$(organizationId)/userEmails/$(emailKey)).data.userId)).data &&
+           userDocOrganizationMatches(
+             get(/databases/(default)/documents/users/$(get(/databases/(default)/documents/organizations/$(organizationId)/userEmails/$(emailKey)).data.userId)).data,
+             organizationId
+           );
+  }
+
   // For subcollections under organizations/{organizationId}/… only (parent get is not the resource being read).
   function belongsToOrganization(organizationId) {
     return request.auth != null && (
@@ -88,7 +125,12 @@ service cloud.firestore {
   }
 
   function canAccessOrganization(organizationId) {
-    return belongsToOrganization(organizationId);
+    return isPlatformOwner() || belongsToOrganization(organizationId);
+  }
+
+  function billingUnchanged() {
+    return (!('billing' in resource.data) && !('billing' in request.resource.data))
+      || request.resource.data.billing == resource.data.billing;
   }
   
   // Treat missing or blank addedByUserId like legacy rows (see canDeleteOwnMaterial / canClaimLegacyOwnMaterial).
@@ -188,10 +230,39 @@ service cloud.firestore {
   }
 
   function isOrganizationMaterialManager(organizationId) {
-    return request.auth != null && 
+    return request.auth != null &&
            exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
-           userOrgIdMatchesPath(organizationId) &&
+           canAccessOrganization(organizationId) &&
            materialManagerLikeUser(get(/databases/(default)/documents/users/$(request.auth.uid)).data);
+  }
+
+  function isOperativeLikeUser(userData) {
+    return ('operativeMode' in userData && truthyBool(userData.operativeMode)) ||
+           ('role' in userData && userData.role == 'operative');
+  }
+
+  // Staff who can open Send (not operatives). Membership is enough — do not
+  // require users/{uid}.organizationId to be this company (multi-org / stale
+  // primary org used to fail the send-history write after the email went out).
+  function canWriteMaterialSendRecord(organizationId) {
+    return request.auth != null &&
+           exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+           canAccessOrganization(organizationId) &&
+           !isOperativeLikeUser(get(/databases/(default)/documents/users/$(request.auth.uid)).data);
+  }
+
+  function isStaffMaterialStatusWrite(organizationId) {
+    return canWriteMaterialSendRecord(organizationId) &&
+           request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'lastSentAt', 'lastSentRequestType', 'updatedAt']);
+  }
+
+  // Admin of org by members map (works before users/{uid} profile exists — web org bootstrap).
+  function isOrgAdminViaMembersMap(organizationId) {
+    return request.auth != null &&
+           exists(/databases/(default)/documents/organizations/$(organizationId)) &&
+           'members' in get(/databases/(default)/documents/organizations/$(organizationId)).data &&
+           get(/databases/(default)/documents/organizations/$(organizationId)).data.members[request.auth.uid] == 'admin';
   }
   
   // Helper function to check if current user is super admin or has admin access
@@ -200,15 +271,89 @@ service cloud.firestore {
   // WHO CAN CREATE USERS:
   // ✅ Super Admin (isSuperAdmin == true)
   // ✅ Admins (adminAccess == true OR role == 'admin')
-  // ❌ Managers (manager == true) - CANNOT create users
-  // ❌ Operatives (operativeMode == true) - CANNOT create users
-  // 
-  // This ensures only super admins and admins can create other users.
-  // Managers and operatives can only create their own accounts (self-creation via website signup).
+  // ✅ Managers with operatives permission — operative accounts only (operativeMode == true)
+  // ❌ Managers without operatives permission — cannot create users
+  // ❌ Operatives (operativeMode == true) — CANNOT create users
+  //
+  // Managers and operatives can create their own accounts during website signup (self-creation path).
+  function isManagerWithOperativesAccess() {
+    return request.auth != null &&
+           exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+           !('operativeMode' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+             truthyBool(get(/databases/(default)/documents/users/$(request.auth.uid)).data.operativeMode)) &&
+           ('manager' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+             truthyBool(get(/databases/(default)/documents/users/$(request.auth.uid)).data.manager)) &&
+           ('operatives' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+             truthyBool(get(/databases/(default)/documents/users/$(request.auth.uid)).data.operatives));
+  }
+
+  function managerCanCreateOperativeUser() {
+    return isManagerWithOperativesAccess() &&
+           'organizationId' in request.resource.data &&
+           'organizationId' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+           orgIdsMatch(
+             get(/databases/(default)/documents/users/$(request.auth.uid)).data.organizationId,
+             request.resource.data.organizationId
+           ) &&
+           (
+             ('operativeMode' in request.resource.data && truthyBool(request.resource.data.operativeMode)) ||
+             ('role' in request.resource.data && request.resource.data.role == 'operative')
+           ) &&
+           !('adminAccess' in request.resource.data && truthyBool(request.resource.data.adminAccess)) &&
+           !('isSuperAdmin' in request.resource.data && truthyBool(request.resource.data.isSuperAdmin));
+  }
+
   function isAdminOrSuperAdmin() {
     return request.auth != null && 
            exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
            adminLikeUser(get(/databases/(default)/documents/users/$(request.auth.uid)).data);
+  }
+
+  // App owner only (Project Planner), never an organisation admin.
+  function isPlatformOwner() {
+    return request.auth != null && (
+      (request.auth.token.email is string &&
+       request.auth.token.email.lower() == 'info@projectplanner.us') ||
+      (exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+       'email' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+       get(/databases/(default)/documents/users/$(request.auth.uid)).data.email is string &&
+       get(/databases/(default)/documents/users/$(request.auth.uid)).data.email.lower() == 'info@projectplanner.us')
+    );
+  }
+
+  // Variations: every admin and manager in the org. Never an operative.
+  // Do not look up the job's assigned-manager list here — that extra get() made
+  // every variation read/write slow and denied managers who can already see the job.
+  function variationCallerIsOperative() {
+    return exists(/databases/(default)/documents/users/$(request.auth.uid)) && (
+      (
+        'operativeMode' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+        truthyBool(get(/databases/(default)/documents/users/$(request.auth.uid)).data.operativeMode)
+      ) ||
+      (
+        'permissions' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+        get(/databases/(default)/documents/users/$(request.auth.uid)).data.permissions is map &&
+        'operativeMode' in get(/databases/(default)/documents/users/$(request.auth.uid)).data.permissions &&
+        truthyBool(get(/databases/(default)/documents/users/$(request.auth.uid)).data.permissions.operativeMode)
+      ) ||
+      (
+        'role' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+        get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'operative'
+      )
+    );
+  }
+
+  function canAdminVariations(organizationId) {
+    return isOrganizationAdmin(organizationId) ||
+      isOrgAdminViaMembersMap(organizationId) ||
+      isPlatformOwner();
+  }
+
+  function canAccessVariationsStaff(organizationId) {
+    return canAdminVariations(organizationId) || (
+      isOrganizationMaterialManager(organizationId) &&
+      !variationCallerIsOperative()
+    );
   }
 
   // Managers with operative-management access may edit limited operative profile fields on users docs.
@@ -235,7 +380,10 @@ service cloud.firestore {
            ) &&
            request.resource.data.diff(resource.data).changedKeys().hasOnly([
              'assignedManagerUserId',
+             'assignedManagerUserIds',
              'dayRate',
+             'hourlyRate',
+             'payBasis',
              'annualLeaveEnabled',
              'annualLeaveDaysPerYear',
              'annualLeaveYearStartMonth',
@@ -248,17 +396,49 @@ service cloud.firestore {
            ]);
   }
 
-  // Emergency fallback: allow patching only operative profile metadata fields.
-  function canPatchOperativeProfileMetadataOnly() {
-    return request.auth != null &&
-           request.resource.data.diff(resource.data).changedKeys().hasOnly([
-             'assignedManagerUserId',
-             'dayRate',
-             'employmentType',
-             'employmentTypeTransitionFrom',
-             'employmentTypeEffectiveAt',
-             'updatedAt'
-           ]);
+  function flagOn(data, key) {
+    return data != null && key in data && truthyBool(data[key]);
+  }
+
+  function alreadyPrivilegedAdmin(data) {
+    return flagOn(data, 'isSuperAdmin') ||
+           flagOn(data, 'adminAccess') ||
+           ('role' in data && data.role == 'admin') ||
+           ('permissions' in data && data.permissions is map && flagOn(data.permissions, 'adminAccess'));
+  }
+
+  // Self-update may repair missing top-level admin flags on an existing admin.
+  // It must not let an operative set adminAccess, isSuperAdmin, role, or organizationId.
+  function userSelfUpdateKeepsPrivileges() {
+    return resource != null &&
+           (!('organizationId' in request.resource.data) ||
+            ('organizationId' in resource.data &&
+             orgIdsMatch(request.resource.data.organizationId, resource.data.organizationId))) &&
+           (!('role' in request.resource.data) ||
+            ('role' in resource.data && request.resource.data.role == resource.data.role) ||
+            (alreadyPrivilegedAdmin(resource.data) && request.resource.data.role == 'admin')) &&
+           (!flagOn(request.resource.data, 'adminAccess') || alreadyPrivilegedAdmin(resource.data)) &&
+           (!flagOn(request.resource.data, 'isSuperAdmin') || flagOn(resource.data, 'isSuperAdmin')) &&
+           (
+             !('permissions' in request.resource.data) ||
+             !(request.resource.data.permissions is map) ||
+             !flagOn(request.resource.data.permissions, 'adminAccess') ||
+             alreadyPrivilegedAdmin(resource.data)
+           );
+  }
+
+  function canReadUserDocument(userId) {
+    return request.auth != null && (
+      isPlatformOwner() ||
+      request.auth.uid == userId ||
+      (resource != null &&
+       resource.data.email is string &&
+       request.auth.token.email is string &&
+       resource.data.email.lower() == request.auth.token.email.lower()) ||
+      (resource != null &&
+       'organizationId' in resource.data &&
+       canAccessOrganization(resource.data.organizationId))
+    );
   }
   
   // Helper function to validate organizationId exists
@@ -267,11 +447,51 @@ service cloud.firestore {
   }
   
   match /databases/{database}/documents {
-    // Invitations - allow public read for verification (before user is authenticated)
+    // Invitees open /setup-password?token=<id> before they have an account, so get-by-id
+    // stays public. List/create/delete are the inviting org's admin or manager, or the
+    // platform owner — not any signed-in user. Update also allows the invitee to mark
+    // isUsed after they set a password (same field lock as accountConfirmations).
     match /invitations/{invitationId} {
-      allow read: if true;
-      allow write: if request.auth != null;
-      allow update: if request.auth != null;
+      function invitationOrgId() {
+        return request.method == 'create'
+          ? request.resource.data.organizationId
+          : resource.data.organizationId;
+      }
+
+      function canAdministerInvitation() {
+        return invitationOrgId() is string &&
+          invitationOrgId().size() > 0 && (
+            isPlatformOwner() ||
+            isOrganizationAdmin(invitationOrgId()) ||
+            isOrgAdminViaMembersMap(invitationOrgId()) ||
+            (isManagerWithOperativesAccess() && canAccessOrganization(invitationOrgId()))
+          );
+      }
+
+      function canMarkInvitationUsed() {
+        return request.auth != null &&
+          resource.data.isUsed != true &&
+          request.resource.data.isUsed == true &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['isUsed', 'usedAt']) &&
+          resource.data.email is string &&
+          request.auth.token.email is string &&
+          resource.data.email.lower() == request.auth.token.email.lower();
+      }
+
+      allow get: if true;
+      allow list, create, delete: if canAdministerInvitation();
+      allow update: if canAdministerInvitation() || canMarkInvitationUsed();
+    }
+
+    // Founder confirm-account email tokens. Get-by-id is public so the emailed link can mark the token used.
+    match /accountConfirmations/{token} {
+      allow get: if true;
+      allow list: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if resource.data.isUsed != true
+                    && request.resource.data.isUsed == true
+                    && request.resource.data.diff(resource.data).changedKeys().hasOnly(['isUsed', 'usedAt']);
+      allow delete: if false;
     }
     
     // Users collection - with better validation
@@ -282,12 +502,13 @@ service cloud.firestore {
     // Add user presets; pending holiday *requests* are deleted client-side when switching onto the
     // self-book path. Approved bookings are never deleted by that transition.
     match /users/{userId} {
-      allow read: if request.auth != null;
-      allow list: if request.auth != null;
+      allow get: if canReadUserDocument(userId);
+      allow list: if canReadUserDocument(userId);
       
       // Allow create if:
       // 1. User is creating themselves (by email match - for signup flow), OR
       // 2. Current user is super admin or has admin access (for admin user creation)
+      // 3. Web org bootstrap: org creator writes users/{authUid} right after creating organizations/{id}
       // 
       // IMPORTANT: We check self-creation FIRST because:
       // - During signup, users create their own account via the website
@@ -300,42 +521,55 @@ service cloud.firestore {
       allow create: if request.auth != null && (
         // Path 1: Self-creation (user creating their own account)
         // Email matches, and either no claim for this email in org or claim already points to this user (prevents duplicate accounts)
-        (request.resource.data.email == request.auth.token.email &&
-         (exists(/databases/(default)/documents/organizations/$(request.resource.data.organizationId)/userEmails/$(request.resource.data.email)) == false ||
-          get(/databases/(default)/documents/organizations/$(request.resource.data.organizationId)/userEmails/$(request.resource.data.email)).data.userId == request.auth.uid)) ||
+        (request.auth.uid == userId &&
+         request.resource.data.email is string &&
+         request.auth.token.email is string &&
+         request.resource.data.email.lower() == request.auth.token.email.lower() &&
+         'organizationId' in request.resource.data &&
+         (exists(/databases/(default)/documents/organizations/$(request.resource.data.organizationId)/userEmails/$(request.resource.data.email.lower())) == false ||
+          get(/databases/(default)/documents/organizations/$(request.resource.data.organizationId)/userEmails/$(request.resource.data.email.lower())).data.userId == request.auth.uid ||
+          // Invite accept: claim still points at this invite's pending placeholder (moved to authUid afterwards).
+          inviteClaimIsPendingPlaceholder(request.resource.data.organizationId, request.resource.data.email.lower())) &&
+         selfCreateHasAgeConfirmation()) ||
         // Path 2: Admin creation (admin/super admin creating other users e.g. invite)
         (exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
          (('isSuperAdmin' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
            get(/databases/(default)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true) ||
           ('adminAccess' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
            get(/databases/(default)/documents/users/$(request.auth.uid)).data.adminAccess == true) ||
+          ('permissions' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+           get(/databases/(default)/documents/users/$(request.auth.uid)).data.permissions is map &&
+           'adminAccess' in get(/databases/(default)/documents/users/$(request.auth.uid)).data.permissions &&
+           get(/databases/(default)/documents/users/$(request.auth.uid)).data.permissions.adminAccess == true) ||
           ('role' in get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
-           get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin')))
+           get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'))) ||
+        // Path 3: Web org setup bootstrap (org exists, caller is admin in members map, writing own profile)
+        (isOrgBootstrapAdminProfileCreate(userId) && selfCreateHasAgeConfirmation()) ||
+        // Path 4: Manager with operatives permission inviting a new operative
+        managerCanCreateOperativeUser() ||
+        // Path 5: Platform owner creating their own non-tenant profile
+        (isPlatformOwner() && request.auth.uid == userId)
       );
       
       // Allow update if:
-      // 1. User updating themselves (always allow - they can update their own document including organizationId), OR
+      // 1. User updating themselves without escalating admin / role / organizationId, OR
       // 2. Admin/Super Admin updating other users (for user management)
-      allow update: if request.auth != null && (
-        // User updating themselves - always allow (most permissive - can update anything including organizationId)
-        request.auth.uid == userId ||
-        // User updating themselves by email match
-        (resource.data.email == request.auth.token.email && 
-         request.resource.data.email == request.auth.token.email) ||
-        // Admin/Super Admin updating other users
+      allow update: if isPlatformOwner() || (request.auth != null && (
+        (request.auth.uid == userId && userSelfUpdateKeepsPrivileges()) ||
+        (resource.data.email is string &&
+         request.auth.token.email is string &&
+         resource.data.email.lower() == request.auth.token.email.lower() &&
+         request.resource.data.email is string &&
+         request.resource.data.email.lower() == request.auth.token.email.lower() &&
+         userSelfUpdateKeepsPrivileges()) ||
         isAdminOrSuperAdmin() ||
-        canManagerUpdateOperativeProfile(userId) ||
-        canPatchOperativeProfileMetadataOnly()
+        canManagerUpdateOperativeProfile(userId)
       ) && (
-        // If user is updating themselves, allow any update (including organizationId)
-        // If admin is updating others, validate organizationId changes
         request.auth.uid == userId ||
-        canPatchOperativeProfileMetadataOnly() ||
         !('organizationId' in request.resource.data) ||
         (('organizationId' in resource.data && orgIdsMatch(request.resource.data.organizationId, resource.data.organizationId)) ||
-         // Allow setting organizationId if organization exists (for manual linking)
          (organizationExists(request.resource.data.organizationId) && isAdminOrSuperAdmin()))
-      );
+      ));
       
       // Allow delete if:
       // 1) User deleting themselves by uid, OR
@@ -343,6 +577,7 @@ service cloud.firestore {
       // 3) Super Admin deleting any non-creator user in their organization, OR
       // 4) Admin (non-super) deleting non-admin/non-super users in their organization.
       allow delete: if request.auth != null && (
+        isPlatformOwner() ||
         request.auth.uid == userId ||
         (request.auth.token.email != null && resource.data.email == request.auth.token.email) ||
         (
@@ -369,19 +604,19 @@ service cloud.firestore {
           )
         )
       );
-      
-      match /orgMemberships/{orgId} {
-        allow read: if request.auth != null && (
-          request.auth.uid == userId ||
-          isAdminOrSuperAdmin()
-        );
+
+      // Multi-org memberships (web Change organisation + cross-org invites)
+      match /orgMemberships/{membershipOrgId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
         allow create, update: if request.auth != null && (
           request.auth.uid == userId ||
-          isAdminOrSuperAdmin()
+          isOrgAdminViaMembersMap(membershipOrgId) ||
+          isOrganizationAdmin(membershipOrgId)
         );
         allow delete: if request.auth != null && (
           request.auth.uid == userId ||
-          isAdminOrSuperAdmin()
+          isOrgAdminViaMembersMap(membershipOrgId) ||
+          isOrganizationAdmin(membershipOrgId)
         );
       }
     }
@@ -390,18 +625,30 @@ service cloud.firestore {
     match /organizations/{organizationId} {
       // One user per email per org (must stay above the catch-all so writes are not widened by {collection}/**)
       match /userEmails/{emailKey} {
-        allow read: if request.auth != null;
-        allow create, update: if request.auth != null && (
-          isAdminOrSuperAdmin() ||
-          request.resource.data.userId == request.auth.uid
+        // Invitee may read the claim for their own email after they create Auth.
+        // That id is the pending placeholder, not request.auth.uid. List of this
+        // collection stays closed: emailKey == token email is only true for one doc.
+        allow read: if request.auth != null && (
+          canAccessOrganization(organizationId) ||
+          (resource != null && resource.data.userId == request.auth.uid) ||
+          (request.auth.token.email is string &&
+           emailKey == request.auth.token.email.lower())
         );
-        allow delete: if request.auth != null && isAdminOrSuperAdmin();
+        allow create, update: if request.auth != null && (
+          isPlatformOwner() ||
+          isAdminOrSuperAdmin() ||
+          isOrgAdminViaMembersMap(organizationId) ||
+          request.resource.data.userId == request.auth.uid ||
+          (isManagerWithOperativesAccess() && userOrgIdMatchesPath(organizationId))
+        );
+        allow delete: if request.auth != null && (isPlatformOwner() || isAdminOrSuperAdmin() || isOrgAdminViaMembersMap(organizationId));
       }
       
       // Org root document: must not call get(organizations/{organizationId}) inside the rule (same doc → circular deny).
       // Use resource.data.members for membership; userOrgIdMatchesPath for users/{uid}.organizationId.
       // creatorUserId covers legacy orgs that predate a reliable members map.
       allow read: if request.auth != null && (
+        isPlatformOwner() ||
         userOrgIdMatchesPath(organizationId) ||
         (resource != null && 'members' in resource.data && resource.data.members[request.auth.uid] != null) ||
         (resource != null && 'creatorUserId' in resource.data && resource.data.creatorUserId == request.auth.uid)
@@ -409,15 +656,17 @@ service cloud.firestore {
       
       allow list: if request.auth != null;
       
+      // Signed-in bootstrap (first setup or leftover Auth with no users/{uid}): any
+      // authenticated user may create an organisation if they list themselves as admin.
+      // Do not require an existing profile. Path 3 on users/{uid} then writes that profile.
       allow create: if request.auth != null && 
                      request.resource.data.members[request.auth.uid] == 'admin';
       
-      allow update: if isAdminOrSuperAdmin() ||
+      allow update: if (isPlatformOwner() ||
                      isOrganizationAdmin(organizationId) ||
-                     (request.auth != null &&
-                      'members' in request.resource.data &&
-                      request.resource.data.members[request.auth.uid] != null &&
-                      organizationExists(organizationId));
+                     isOrgAdminViaMembersMap(organizationId) ||
+                     isOrgCreatorViaParentGet(organizationId))
+                     && billingUnchanged();
       
       allow delete: if false;
       
@@ -476,9 +725,40 @@ service cloud.firestore {
       }
       
       // Job types and other org settings (only jobTypes doc is used today). Org members need to sync job types when creating work.
+      // Variation log / item docs live here as the iOS fallback. Operatives must not read them.
       match /settings/{settingId} {
-        allow read: if canAccessOrganization(organizationId);
-        allow write: if canAccessOrganization(organizationId);
+        function isVariationSettingsDoc() {
+          return settingId.matches('^variations_.*') || settingId.matches('^variationItem_.*');
+        }
+        function isTimesheetSettingsDoc() {
+          return settingId.matches('^timesheet_.*');
+        }
+        // Doc id is timesheet_{userId}_{unix} (userId may itself contain underscores).
+        // Prefer stored userId; fall back to id prefix timesheet_{auth.uid}_.
+        // matches() is whole-string — the .* is required.
+        function isOwnTimesheetSettings() {
+          return request.auth != null && (
+            (resource != null && 'userId' in resource.data && resource.data.userId == request.auth.uid) ||
+            (request.method == 'create' &&
+             'userId' in request.resource.data &&
+             request.resource.data.userId == request.auth.uid) ||
+            settingId.matches('^timesheet_' + request.auth.uid + '_.*')
+          );
+        }
+        function canWriteTimesheetSettings() {
+          return isOwnTimesheetSettings() ||
+            isOrganizationAdmin(organizationId) ||
+            isOrgAdminViaMembersMap(organizationId) ||
+            isOrganizationMaterialManager(organizationId) ||
+            isPlatformOwner();
+        }
+        allow read: if canAccessOrganization(organizationId) &&
+          (!isVariationSettingsDoc() || canAccessVariationsStaff(organizationId));
+        allow write: if canAccessOrganization(organizationId) && (
+          isTimesheetSettingsDoc()
+            ? canWriteTimesheetSettings()
+            : (!isVariationSettingsDoc() || canAccessVariationsStaff(organizationId))
+        );
       }
       
       match /tasks/{taskId} {
@@ -494,9 +774,23 @@ service cloud.firestore {
       }
       
       match /notifications/{notificationId} {
-        allow read: if canAccessOrganization(organizationId);
-        allow create, update: if canAccessOrganization(organizationId);
-        allow delete: if isOrganizationAdmin(organizationId);
+        function isOwnNotification() {
+          return resource != null &&
+            'userId' in resource.data &&
+            resource.data.userId == request.auth.uid;
+        }
+        function canAdminNotifications() {
+          return isOrganizationAdmin(organizationId) ||
+            isOrgAdminViaMembersMap(organizationId) ||
+            isPlatformOwner();
+        }
+        // Inbox queries userId == signed-in user. Fan-out create stays org-member.
+        allow read: if canAccessOrganization(organizationId) &&
+          (isOwnNotification() || canAdminNotifications());
+        allow create: if canAccessOrganization(organizationId);
+        allow update: if canAccessOrganization(organizationId) &&
+          (isOwnNotification() || canAdminNotifications());
+        allow delete: if canAdminNotifications();
       }
 
       match /materials/{materialId} {
@@ -504,7 +798,8 @@ service cloud.firestore {
         allow create: if isOrganizationMaterialManager(organizationId) || canCreateOwnMaterial(organizationId);
         allow update: if isOrganizationMaterialManager(organizationId) ||
           canUpdateOwnMaterial(organizationId) ||
-          isOnlyClaimingLegacyOwnMaterial(organizationId);
+          isOnlyClaimingLegacyOwnMaterial(organizationId) ||
+          isStaffMaterialStatusWrite(organizationId);
         allow delete: if isOrganizationMaterialManager(organizationId) || canDeleteOwnMaterial(organizationId);
       }
 
@@ -517,7 +812,7 @@ service cloud.firestore {
         allow read: if belongsToOrganization(organizationId) &&
           exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
           canReadMaterialSendHistory(get(/databases/(default)/documents/users/$(request.auth.uid)).data);
-        allow create: if isOrganizationMaterialManager(organizationId);
+        allow create: if canWriteMaterialSendRecord(organizationId);
         allow update, delete: if isOrganizationAdmin(organizationId);
       }
 
@@ -545,12 +840,25 @@ service cloud.firestore {
       }
       
       match /holidayBookings/{bookingId} {
-        // Temporary: allow any signed-in user to use holiday flow while broader org ACL is stabilized.
-        allow read, create, update, delete: if request.auth != null;
+        allow read, create, update: if canAccessOrganization(organizationId);
+        allow delete: if canAccessOrganization(organizationId) && (
+          isPlatformOwner() ||
+          isOrganizationAdmin(organizationId) ||
+          isOrgAdminViaMembersMap(organizationId) ||
+          isOrganizationMaterialManager(organizationId) ||
+          ('userId' in resource.data && resource.data.userId == request.auth.uid) ||
+          ('operativeId' in resource.data && resource.data.operativeId == request.auth.uid)
+        );
       }
 
       match /operativeProfiles/{userId} {
         allow read, create, update, delete: if canAccessOrganization(organizationId);
+      }
+
+      match /operativeDayRateHistory/{entryId} {
+        allow read: if canAccessOrganization(organizationId);
+        allow create, update: if canAccessOrganization(organizationId);
+        allow delete: if isOrganizationAdmin(organizationId);
       }
 
       match /siteAudits/{auditId} {
@@ -564,8 +872,7 @@ service cloud.firestore {
         allow delete: if isOrganizationAdmin(organizationId);
       }
 
-      // Expired qualification warnings the organisation has chosen to hide.
-      // Members may read and record a dismissal. Only an org admin may delete one.
+      // Dismissed warnings (expired qualifications). Document id is the canonical dismiss key.
       match /dismissedWarnings/{dismissKey} {
         allow read, create, update: if canAccessOrganization(organizationId);
         allow delete: if isOrganizationAdmin(organizationId);
@@ -577,28 +884,180 @@ service cloud.firestore {
           (request.auth.uid == layoutUserId || isOrganizationAdmin(organizationId));
       }
 
-      // Deploy this match. Until it is live, iOS also writes
-      // settings/variations_{parentId} and settings/variationItem_{id}
-      // (covered by settings/{settingId}). Auth-open like holidayBookings so
-      // collection writes succeed even when org ACL is still settling.
+      // Variations are not covered by the read-only catch-all below.
+      // Admins and managers read and write every job. Operatives never do.
+      // Hard delete is denied; rows are soft-deleted.
       match /variations/{variationId} {
-        allow read, create, update, delete: if request.auth != null;
+        allow read: if resource.data.parentId is string &&
+          canAccessVariationsStaff(organizationId);
+        allow create: if request.resource.data.parentId is string &&
+          request.resource.data.isDeleted == false &&
+          canAccessVariationsStaff(organizationId);
+        allow update: if resource.data.parentId is string &&
+          request.resource.data.parentId == resource.data.parentId &&
+          canAccessVariationsStaff(organizationId);
+        allow delete: if false;
       }
 
       match /variationTrackers/{parentId} {
-        allow read, create, update, delete: if request.auth != null;
+        allow read: if canAccessVariationsStaff(organizationId);
+        allow create, update: if canAdminVariations(organizationId);
+        allow delete: if false;
       }
 
       // Unknown subcollections: allow org-scoped read fallback only.
       // Keep writes explicit per known subcollection rules above.
       match /{collection}/{document=**} {
-        allow read: if canAccessOrganization(organizationId);
+        allow read: if canAccessOrganization(organizationId) &&
+          collection != 'variations' &&
+          collection != 'variationTrackers' &&
+          collection != 'notifications';
       }
     }
 
-    match /platformConfig/{docId} {
+    // Shared product ideas board — every signed-in organisation can read and submit.
+    // The owner console (info@projectplanner.us) can hide, merge, and write private notes.
+    match /productFeedback/{suggestionId} {
       allow read: if request.auth != null;
-      allow write: if isAdminOrSuperAdmin();
+      allow create: if request.auth != null &&
+        request.resource.data.authorUserId == request.auth.uid &&
+        (!('hidden' in request.resource.data) || request.resource.data.hidden != true);
+      allow update: if isPlatformOwner() || (
+        request.auth != null &&
+        resource.data.authorUserId == request.auth.uid &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['title', 'details', 'category', 'updatedAt', 'voteCount', 'commentCount'])
+      ) || (
+        request.auth != null &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['voteCount', 'commentCount', 'updatedAt'])
+      );
+      allow delete: if isPlatformOwner();
+
+      match /private/{docId} {
+        allow read: if isPlatformOwner();
+        allow write: if isPlatformOwner();
+      }
+    }
+
+    match /productFeedbackVotes/{voteId} {
+      allow read: if isPlatformOwner() ||
+        (request.auth != null && resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        voteId == request.resource.data.suggestionId + '_' + request.auth.uid;
+      allow delete: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow update: if false;
+    }
+
+    match /productFeedbackFollows/{followId} {
+      allow read: if isPlatformOwner() ||
+        (request.auth != null && resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        followId == request.resource.data.suggestionId + '_' + request.auth.uid;
+      allow delete: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow update: if false;
+    }
+
+    match /productFeedbackComments/{commentId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.authorUserId == request.auth.uid;
+      allow update: if isPlatformOwner() || (
+        request.auth != null && resource.data.authorUserId == request.auth.uid
+      );
+      allow delete: if isPlatformOwner() || (
+        request.auth != null && resource.data.authorUserId == request.auth.uid
+      );
+    }
+
+    match /productFeedbackHistory/{historyId} {
+      allow read: if isPlatformOwner();
+      allow write: if isPlatformOwner();
+    }
+
+    match /productEvents/{eventId} {
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow read: if isPlatformOwner();
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /productSessions/{sessionId} {
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow read: if isPlatformOwner() || (request.auth != null && resource.data.userId == request.auth.uid);
+      allow delete: if false;
+    }
+
+    match /adminAuditLog/{id} {
+      allow read: if isPlatformOwner();
+      allow create: if isPlatformOwner();
+      allow update, delete: if false;
+    }
+
+    match /supportRequests/{id} {
+      allow read: if isPlatformOwner() ||
+        (request.auth != null && resource.data.requestedByUid == request.auth.uid);
+      allow create: if request.auth != null &&
+        request.resource.data.requestedByUid == request.auth.uid &&
+        request.resource.data.status == 'open';
+      allow update: if isPlatformOwner();
+      allow delete: if false;
+    }
+
+    match /stripeEvents/{id} {
+      allow read, write: if false;
+    }
+
+    match /publicStats/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /analyticsDaily/{id} {
+      allow read: if isPlatformOwner();
+      allow write: if false;
+    }
+
+    match /analyticsMonthly/{id} {
+      allow read: if isPlatformOwner();
+      allow write: if false;
+    }
+
+    match /analyticsTotals/{id} {
+      allow read: if isPlatformOwner();
+      allow write: if false;
+    }
+
+    match /ownerAlerts/{id} {
+      allow read: if isPlatformOwner();
+      allow write: if false;
+    }
+
+    match /adminJobs/{id} {
+      allow read: if isPlatformOwner();
+      allow write: if false;
+    }
+
+    match /deletedOrganisations/{id} {
+      allow read: if isPlatformOwner();
+      allow write: if false;
+    }
+
+    match /platformConfig/{id} {
+      allow read: if request.auth != null;
+      allow write: if isPlatformOwner();
+    }
+
+    // Interest registrations are created only by the website Admin API. Clients cannot write this collection.
+    match /interestRegistrations/{id} {
+      allow create: if false;
+      allow read, update, delete: if isPlatformOwner();
+    }
+
+    // Marketing suppression list. Admin API only — no client reads or writes.
+    // There is no root catch-all; this match is explicit so the collection is never world-readable.
+    match /emailSuppressions/{email} {
+      allow read, write: if false;
     }
   }
 }

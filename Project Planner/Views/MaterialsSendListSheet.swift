@@ -36,8 +36,8 @@ struct MaterialsSendListSheet: View {
     @State private var sendConfirmation: SendConfirmationState?
     @State private var expandedWholesalerIds: Set<UUID> = []
     @State private var sendAsPlainText = false
-    @State private var orderAwaitingDeliveryDate: [UUID]?
-    @State private var requiredDeliveryDate = Date()
+    @State private var requiredDeliveryAt: Date?
+    @State private var sendErrorMessage: String?
 
     struct ResendDialogState: Identifiable {
         let id = UUID()
@@ -62,6 +62,7 @@ struct MaterialsSendListSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         projectCard
+                        MaterialRequiredDeliveryEditor(deliveryAt: $requiredDeliveryAt)
                         wholesalerSection
                         oneOffSection
                     }
@@ -98,18 +99,14 @@ struct MaterialsSendListSheet: View {
                     onCancel: { resendDialog = nil }
                 )
             }
-            .sheet(isPresented: Binding(
-                get: { orderAwaitingDeliveryDate != nil },
-                set: { if !$0 { orderAwaitingDeliveryDate = nil } }
+            .alert("Could not send", isPresented: Binding(
+                get: { sendErrorMessage != nil },
+                set: { if !$0 { sendErrorMessage = nil } }
             )) {
-                MaterialRequiredDeliveryDateSheet(date: $requiredDeliveryDate) {
-                    let ids = orderAwaitingDeliveryDate ?? []
-                    let date = requiredDeliveryDate
-                    orderAwaitingDeliveryDate = nil
-                    proceedSend(type: .order, materialIds: ids, requiredDeliveryDate: date)
-                } onCancel: {
-                    orderAwaitingDeliveryDate = nil
-                }
+                Button("OK", role: .cancel) { sendErrorMessage = nil }
+                    .accessibilityIdentifier("materialsSendList.sendErrorOk")
+            } message: {
+                Text(sendErrorMessage ?? "")
             }
             .sheet(item: $sendConfirmation) { conf in
                 MaterialsSendConfirmationView(
@@ -390,9 +387,11 @@ struct MaterialsSendListSheet: View {
                     .font(.system(size: 11))
                     .foregroundStyle(MaterialsOrderingTheme.muted)
                 Spacer()
-                Text("Cut-off 16:00")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MaterialsOrderingTheme.primary)
+                if let cutOffLabel {
+                    Text(cutOffLabel)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MaterialsOrderingTheme.primary)
+                }
             }
             HStack(spacing: 8) {
                 Button { beginSend(type: .quote) } label: {
@@ -420,6 +419,16 @@ struct MaterialsSendListSheet: View {
 
     private var recipientCount: Int {
         selectedContactIds.count + oneOffRecipients.count
+    }
+
+    private var cutOffLabel: String? {
+        guard let clock = OrgMaterialCutOff.resolve(
+            stored: firebaseBackend.currentOrganization?.settings.materialCutOff,
+            organizationLoaded: firebaseBackend.currentOrganization != nil
+        ), let label = CanonicalBusinessEngine.formatMaterialCutOffClock(clock) else {
+            return nil
+        }
+        return "Cut-off \(label)"
     }
 
     private func loadWholesalers() async {
@@ -460,15 +469,15 @@ struct MaterialsSendListSheet: View {
     private func queueSend(type: MaterialOrderRequest.RequestType, materialIds: [UUID]) {
         resendDialog = nil
         guard !materialIds.isEmpty else { return }
-        if type == .order {
-            requiredDeliveryDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-            orderAwaitingDeliveryDate = materialIds
-            return
-        }
-        proceedSend(type: type, materialIds: materialIds, requiredDeliveryDate: nil)
+        proceedSend(type: type, materialIds: materialIds)
     }
 
-    private func proceedSend(type: MaterialOrderRequest.RequestType, materialIds: [UUID], requiredDeliveryDate: Date? = nil) {
+    private func orderDeliveryInstant(for type: MaterialOrderRequest.RequestType) -> Date? {
+        guard CanonicalBusinessEngine.materialOrderIncludesDeliveryRequired(type.rawValue) == true else { return nil }
+        return requiredDeliveryAt
+    }
+
+    private func proceedSend(type: MaterialOrderRequest.RequestType, materialIds: [UUID]) {
         resendDialog = nil
         guard !materialIds.isEmpty else { return }
         isSending = true
@@ -501,7 +510,7 @@ struct MaterialsSendListSheet: View {
             senderCompany: orgName,
             companyLogoURL: firebaseBackend.currentOrganization?.companyLogoURL,
             sendAsPlainText: sendAsPlainText,
-            requiredDeliveryDate: type == .order ? requiredDeliveryDate : nil
+            requiredDeliveryDate: orderDeliveryInstant(for: type)
         )
         let recipientSnapshots = buildRecipientSnapshots(for: contacts)
         let calendar = Calendar.current
@@ -516,6 +525,7 @@ struct MaterialsSendListSheet: View {
             projectId: project.id,
             requestType: type,
             materialsDate: dayForHistory,
+            deliveryRequiredAt: orderDeliveryInstant(for: type),
             sentBy: userName,
             recipients: recipientSnapshots,
             lines: items.map(\.sendLineSnapshot)
@@ -559,7 +569,10 @@ struct MaterialsSendListSheet: View {
                     )
                 }
             } catch {
-                await MainActor.run { isSending = false }
+                await MainActor.run {
+                    isSending = false
+                    sendErrorMessage = MaterialOfflineService.sendFailureMessage(error)
+                }
             }
         }
     }
@@ -578,43 +591,78 @@ struct MaterialsSendListSheet: View {
     }
 }
 
-private struct MaterialRequiredDeliveryDateSheet: View {
-    @Binding var date: Date
-    let onConfirm: () -> Void
-    let onCancel: () -> Void
+struct MaterialRequiredDeliveryEditor: View {
+    @Binding var deliveryAt: Date?
+    var showsCard: Bool = true
+
+    private var londonCalendar: Calendar { CanonicalBusinessEngine.businessCalendar }
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Choose the date these materials must arrive on site. The wholesaler email includes this date.")
-                    .font(.subheadline)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("What day and time is the material delivery required")
+                .font(.system(size: 13, weight: .medium))
+            Text("Used on orders only. Quotes ask the wholesaler to confirm availability and time.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            if deliveryAt != nil {
+                DatePicker("Day", selection: dayBinding, displayedComponents: .date)
+                    .accessibilityIdentifier("materialRequiredDeliveryDate.requiredDeliveryDate")
+                DatePicker("Time", selection: timeBinding, displayedComponents: .hourAndMinute)
+                    .accessibilityIdentifier("materialRequiredDeliveryDate.requiredDeliveryTime")
+                if let deliveryAt,
+                   let label = CanonicalBusinessEngine.formatMaterialDeliveryRequired(deliveryAt) {
+                    Text(label)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Required delivery time is unavailable.")
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                DatePicker(
-                    "Required delivery date",
-                    selection: $date,
-                    in: Calendar.current.startOfDay(for: Date())...,
-                    displayedComponents: .date
-                )
-                .accessibilityIdentifier("materialRequiredDeliveryDate.requiredDeliveryDate")
-                .datePickerStyle(.graphical)
-                Spacer(minLength: 0)
-            }
-            .padding(20)
-            .navigationTitle("Confirm delivery date")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                        .accessibilityIdentifier("materialRequiredDeliveryDate.cancel")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Send order", action: onConfirm)
-                        .accessibilityIdentifier("materialRequiredDeliveryDate.sendOrder")
-                        .fontWeight(.semibold)
-                }
             }
         }
-        .presentationDetents([.medium, .large])
+        .padding(showsCard ? 12 : 0)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(showsCard ? MaterialsOrderingTheme.cardBackground : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: CGFloat(showsCard ? 12 : 0)))
+        .environment(\.calendar, londonCalendar)
+        .environment(\.timeZone, londonCalendar.timeZone)
+        .onAppear(perform: fillDefaultIfEmpty)
+    }
+
+    private func fillDefaultIfEmpty() {
+        guard deliveryAt == nil else { return }
+        deliveryAt = CanonicalBusinessEngine.defaultMaterialDeliveryRequiredAt(now: Date())
+    }
+
+    private var dayBinding: Binding<Date> {
+        Binding(
+            get: { deliveryAt ?? Date(timeIntervalSince1970: 0) },
+            set: { picked in
+                guard let current = deliveryAt,
+                      let dayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(picked),
+                      let minutes = CanonicalBusinessEngine.clockMinutesFromDeliveryInstant(current),
+                      let next = CanonicalBusinessEngine.materialDeliveryInstant(dayKey: dayKey, clockMinutes: minutes) else {
+                    return
+                }
+                deliveryAt = next
+            }
+        )
+    }
+
+    private var timeBinding: Binding<Date> {
+        Binding(
+            get: { deliveryAt ?? Date(timeIntervalSince1970: 0) },
+            set: { picked in
+                guard let current = deliveryAt,
+                      let dayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(current),
+                      let minutes = CanonicalBusinessEngine.clockMinutesFromDeliveryInstant(picked),
+                      let next = CanonicalBusinessEngine.materialDeliveryInstant(dayKey: dayKey, clockMinutes: minutes) else {
+                    return
+                }
+                deliveryAt = next
+            }
+        )
     }
 }
 

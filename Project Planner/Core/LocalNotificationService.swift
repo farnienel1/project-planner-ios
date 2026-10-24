@@ -11,7 +11,7 @@ import UserNotifications
 @MainActor
 class LocalNotificationService {
     static let shared = LocalNotificationService()
-    static let dailyMaterialCutoffIdentifierPrefix = "daily-material-order-cutoff"
+    nonisolated static let dailyMaterialCutoffIdentifierPrefix = "daily-material-order-cutoff"
     static let qualificationExpiryIdentifierPrefix = "qual-exp-v2-"
 
     private var lastMaterialCutoffScheduleKey: String?
@@ -121,6 +121,9 @@ class LocalNotificationService {
         case .variationNumbersUpdated:
             content.title = "Variation numbers updated"
             content.body = details.isEmpty ? "Variation numbers were updated." : details
+        case .timesheetSubmissionReminder:
+            content.title = "Timesheet submission reminder"
+            content.body = details.isEmpty ? "Please submit your timesheet before the payment deadline." : details
         }
         
         // Set sound
@@ -183,7 +186,7 @@ class LocalNotificationService {
         let center = UNUserNotificationCenter.current()
         let pending = await center.pendingNotificationRequests()
         let ids = Set(
-            materialCutOffWeekdayIdentifiers()
+            MaterialCutOffReminderPlan.identifiersToClear()
             + pending.map(\.identifier).filter { id in
                 let lower = id.lowercased()
                 return id.hasPrefix(Self.dailyMaterialCutoffIdentifierPrefix)
@@ -195,10 +198,10 @@ class LocalNotificationService {
     }
 
     func scheduleDailyMaterialCutOffReminder(
-        hour: Int = 16,
-        minute: Int = 0,
-        includeSaturday: Bool = false,
-        includeSunday: Bool = false
+        hour: Int,
+        minute: Int,
+        includeSaturday: Bool,
+        includeSunday: Bool
     ) async {
         let scheduleKey = "\(hour):\(minute):\(includeSaturday):\(includeSunday)"
         if lastMaterialCutoffScheduleKey == scheduleKey {
@@ -219,45 +222,60 @@ class LocalNotificationService {
         content.body = "Material order cut off"
         content.sound = .default
 
-        let weekdays = materialReminderWeekdays(includeSaturday: includeSaturday, includeSunday: includeSunday)
-        for weekday in weekdays {
-            var components = DateComponents()
-            components.weekday = weekday
-            components.hour = hour
-            components.minute = minute
-            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+        let plan = MaterialCutOffReminderPlan.replacement(
+            hour: hour,
+            minute: minute,
+            includeSaturday: includeSaturday,
+            includeSunday: includeSunday
+        )
+        for slot in plan.slots {
+            let trigger = UNCalendarNotificationTrigger(dateMatching: slot.components, repeats: true)
             let request = UNNotificationRequest(
-                identifier: materialCutOffIdentifier(for: weekday),
+                identifier: slot.identifier,
                 content: content,
                 trigger: trigger
             )
             do {
                 try await center.add(request)
             } catch {
-                print("🔥🔥🔥 DEBUG: Error scheduling daily material cut off reminder (weekday \(weekday)): \(error)")
+                print("🔥🔥🔥 DEBUG: Error scheduling daily material cut off reminder (\(slot.identifier)): \(error)")
             }
         }
         lastMaterialCutoffScheduleKey = scheduleKey
-        print("✅ Material cut off reminders scheduled for \(weekdays.count) day(s) at \(hour):\(String(format: "%02d", minute))")
+        print("✅ Material cut off reminders scheduled for \(plan.slots.count) day(s) at \(hour):\(String(format: "%02d", minute))")
     }
 
     func removeDailyMaterialCutOffReminder() {
         Task { await removeAllMaterialCutOffReminders() }
     }
 
-    private func materialReminderWeekdays(includeSaturday: Bool, includeSunday: Bool) -> [Int] {
-        var weekdays: [Int] = [2, 3, 4, 5, 6] // Mon-Fri
-        if includeSaturday { weekdays.append(7) }
-        if includeSunday { weekdays.append(1) }
-        return weekdays
-    }
-
-    private func materialCutOffIdentifier(for weekday: Int) -> String {
-        "\(Self.dailyMaterialCutoffIdentifierPrefix)-\(weekday)"
-    }
-
-    private func materialCutOffWeekdayIdentifiers() -> [String] {
-        (1...7).map(materialCutOffIdentifier(for:))
+    func removeTimesheetSubmissionReminders() async {
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        let delivered = await center.deliveredNotifications()
+        let ids = (pending.map(\.identifier) + delivered.map(\.request.identifier)).filter { identifier in
+            if identifier.hasPrefix("timesheet-submission-") { return true }
+            return false
+        }
+        var timesheetIds = Set(ids)
+        for note in delivered {
+            let info = note.request.content.userInfo
+            let type = (info[NotificationDeepLink.typeKey] as? String) ?? (info["type"] as? String)
+            if type == AppNotification.NotificationType.timesheetSubmissionReminder.rawValue {
+                timesheetIds.insert(note.request.identifier)
+            }
+        }
+        for request in pending {
+            let info = request.content.userInfo
+            let type = (info[NotificationDeepLink.typeKey] as? String) ?? (info["type"] as? String)
+            if type == AppNotification.NotificationType.timesheetSubmissionReminder.rawValue {
+                timesheetIds.insert(request.identifier)
+            }
+        }
+        guard !timesheetIds.isEmpty else { return }
+        let list = Array(timesheetIds)
+        center.removePendingNotificationRequests(withIdentifiers: list)
+        center.removeDeliveredNotifications(withIdentifiers: list)
     }
 
     /// Clears all pending one-shot qualification expiry reminders (3m / 1m / 1w / 1d) before rescheduling.
@@ -294,6 +312,50 @@ class LocalNotificationService {
         } catch {
             print("🔥🔥🔥 DEBUG: Error scheduling qualification expiry notification \(identifier): \(error.localizedDescription)")
         }
+    }
+}
+
+/// Pending cut-off requests. A new clock clears every weekday identifier, then writes only the current hour and minute.
+enum MaterialCutOffReminderPlan {
+    struct Slot: Equatable {
+        var identifier: String
+        var components: DateComponents
+    }
+
+    struct Replacement: Equatable {
+        var identifiersToClear: [String]
+        var slots: [Slot]
+    }
+
+    nonisolated static func identifier(for weekday: Int) -> String {
+        "\(LocalNotificationService.dailyMaterialCutoffIdentifierPrefix)-\(weekday)"
+    }
+
+    static func identifiersToClear() -> [String] {
+        (1...7).map(identifier(for:))
+    }
+
+    static func weekdays(includeSaturday: Bool, includeSunday: Bool) -> [Int] {
+        var weekdays = [2, 3, 4, 5, 6]
+        if includeSaturday { weekdays.append(7) }
+        if includeSunday { weekdays.append(1) }
+        return weekdays
+    }
+
+    static func replacement(
+        hour: Int,
+        minute: Int,
+        includeSaturday: Bool,
+        includeSunday: Bool
+    ) -> Replacement {
+        let slots = weekdays(includeSaturday: includeSaturday, includeSunday: includeSunday).map { weekday in
+            var components = DateComponents()
+            components.weekday = weekday
+            components.hour = hour
+            components.minute = minute
+            return Slot(identifier: identifier(for: weekday), components: components)
+        }
+        return Replacement(identifiersToClear: identifiersToClear(), slots: slots)
     }
 }
 

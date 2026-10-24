@@ -74,6 +74,7 @@ class BookingStore: ObservableObject {
     }
     
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
+        guard LaunchStartupPolicy.shouldRewireStore(isSameInstance: self.firebaseBackend === firebaseBackend) else { return }
         print("🔥🔥🔥 DEBUG: BookingStore.setFirebaseBackend called - Firebase backend connected!")
         self.firebaseBackend = firebaseBackend
     }
@@ -116,11 +117,12 @@ class BookingStore: ObservableObject {
                 }
             }
             do {
-                if bookings.isEmpty {
-                    let cached = (try? await persistenceService.loadBookingData()) ?? []
-                    if !cached.isEmpty {
-                        bookings = cached
-                        print("🔥🔥🔥 DEBUG: BOOKINGS_RESTORED \(cached.count) from disk before fetch")
+                firebaseBackend?.prepareLaunchScheduleQueryIfNeeded()
+                if bookings.isEmpty, firebaseBackend?.isAuthenticated != true {
+                    let visible = bookingsInsideLaunchWindow(try? await persistenceService.loadBookingData())
+                    if !visible.isEmpty {
+                        bookings = visible
+                        print("🔥🔥🔥 DEBUG: BOOKINGS_RESTORED \(visible.count) from disk before fetch")
                     }
                 }
                 // Try to load from Firebase first if authenticated
@@ -129,16 +131,21 @@ class BookingStore: ObservableObject {
                    let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                     
                     print("🔥🔥🔥 DEBUG: Loading bookings from Firebase for organization: \(organizationId)")
+                    firebaseBackend.prepareLaunchScheduleQueryIfNeeded()
+                    let queryStart = firebaseBackend.scheduleBookingQueryStart()
                     
-                    // Load bookings from Firebase
-                    let firebaseBookings = try await firebaseBackend.loadBookings(organizationId: organizationId)
+                    // Launch reads from the warning window / current week forward, not the whole archive.
+                    let firebaseBookings = try await firebaseBackend.loadBookings(
+                        organizationId: organizationId,
+                        startingOn: queryStart
+                    )
                     if firebaseBackend.suppressStaleOrganizationCache {
                         self.bookings = firebaseBookings
                         self.smartCache?.cacheBookings(firebaseBookings)
                     } else if firebaseBookings.isEmpty && !self.bookings.isEmpty {
                         print("🔥🔥🔥 DEBUG: Remote returned 0 bookings, preserving \(self.bookings.count) in-memory bookings")
                     } else if firebaseBookings.isEmpty {
-                        let cached = (try? await persistenceService.loadBookingData()) ?? []
+                        let cached = self.bookingsInsideLaunchWindow(try? await persistenceService.loadBookingData())
                         if !cached.isEmpty {
                             self.bookings = cached
                             print("🔥🔥🔥 DEBUG: Remote returned 0 bookings, restored \(cached.count) from disk")
@@ -148,9 +155,12 @@ class BookingStore: ObservableObject {
                     } else {
                         self.bookings = firebaseBookings
                         self.smartCache?.cacheBookings(firebaseBookings)
-                        Task { try? await persistenceService.saveBookingData(bookings: firebaseBookings) }
+                        // A windowed launch must not replace the on-disk archive with only recent rows.
+                        if queryStart == nil {
+                            Task { try? await persistenceService.saveBookingData(bookings: firebaseBookings) }
+                        }
                     }
-                    self.startLiveUpdates(organizationId: organizationId)
+                    self.startLiveUpdates(organizationId: organizationId, startingOn: queryStart)
                     
                     print("🔥🔥🔥 DEBUG: Loaded \(firebaseBookings.count) bookings from Firebase")
                     
@@ -160,7 +170,7 @@ class BookingStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: Firebase backend: \(firebaseBackend != nil)")
                     print("🔥🔥🔥 DEBUG: Authenticated: \(firebaseBackend?.isAuthenticated ?? false)")
                     print("🔥🔥🔥 DEBUG: Organization: \(firebaseBackend?.currentOrganization?.name ?? "nil")")
-                    let bookings = try await persistenceService.loadBookingData()
+                    let bookings = self.bookingsInsideLaunchWindow(try? await persistenceService.loadBookingData())
                     if !bookings.isEmpty || self.bookings.isEmpty {
                         self.bookings = bookings
                     }
@@ -174,13 +184,10 @@ class BookingStore: ObservableObject {
                     self.bookings = []
                 } else {
                 // Fallback to local cache when Firebase denies/ fails so operative visibility does not fully disappear.
-                do {
-                    let cached = try await self.persistenceService.loadBookingData()
+                let cached = self.bookingsInsideLaunchWindow(try? await self.persistenceService.loadBookingData())
+                if !cached.isEmpty {
                     self.bookings = cached
                     print("🔥🔥🔥 DEBUG: Loaded \(cached.count) cached bookings after Firebase error")
-                } catch {
-                    print("🔥🔥🔥 DEBUG: Local bookings fallback failed: \(error.localizedDescription)")
-                    // Keep previous in-memory bookings if any; do not forcibly clear.
                 }
                 }
             }
@@ -544,21 +551,41 @@ class BookingStore: ObservableObject {
         errorMessage = nil
     }
 
-    func startLiveUpdates(organizationId: String) {
-        firebaseBackend?.listenBookings(organizationId: organizationId) { [weak self] remote, fromCache in
+    private func bookingsInsideLaunchWindow(_ bookings: [Booking]?) -> [Booking] {
+        let lowerBound = firebaseBackend?.scheduleBookingQueryStart()
+        return (bookings ?? []).filter {
+            LaunchStartupPolicy.launchBookingIncludes(date: $0.date, lowerBound: lowerBound)
+        }
+    }
+
+    func startLiveUpdates(organizationId: String, startingOn start: Date? = nil) {
+        firebaseBackend?.listenBookings(organizationId: organizationId, startingOn: start) { [weak self] remote, fromCache in
             guard let self else { return }
+            guard WarningsBookingScanScheduler.acceptsListener(
+                listenerOrganizationId: organizationId,
+                currentOrganizationId: self.firebaseBackend?.currentOrganization?.firestoreDocumentId,
+                sessionOrganizationId: self.firebaseBackend?.sessionOrganizationId
+            ) else {
+                return
+            }
             self.applyRemoteBookings(remote, fromCache: fromCache)
         }
     }
 
     /// A cache snapshot or a short server result must not delete bookings that are already on screen.
+    /// Rows older than the launch window are not kept from a previous full archive.
     private func applyRemoteBookings(_ remote: [Booking], fromCache: Bool) {
-        if remote.isEmpty && !bookings.isEmpty {
-            print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT \(bookings.count) — refused an empty update fromCache=\(fromCache)")
+        let lowerBound = firebaseBackend?.scheduleBookingQueryStart()
+        let existing = bookings.filter {
+            LaunchStartupPolicy.launchBookingIncludes(date: $0.date, lowerBound: lowerBound)
+        }
+        if remote.isEmpty && !existing.isEmpty {
+            bookings = existing
+            print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT \(existing.count) — refused an empty update fromCache=\(fromCache)")
             return
         }
-        if remote.count < bookings.count {
-            var byId = Dictionary(uniqueKeysWithValues: bookings.map { ($0.id, $0) })
+        if remote.count < existing.count {
+            var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
             for booking in remote {
                 byId[booking.id] = booking
             }
@@ -570,7 +597,7 @@ class BookingStore: ObservableObject {
             return
         }
         let incoming = remote.sorted { $0.id.uuidString < $1.id.uuidString }
-        let current = bookings.sorted { $0.id.uuidString < $1.id.uuidString }
+        let current = existing.sorted { $0.id.uuidString < $1.id.uuidString }
         if incoming.count == current.count {
             let same = zip(incoming, current).allSatisfy { lhs, rhs in
                 lhs.id == rhs.id && lhs.updatedAt == rhs.updatedAt && lhs.status == rhs.status
@@ -578,7 +605,12 @@ class BookingStore: ObservableObject {
                     && lhs.workEndTime == rhs.workEndTime && lhs.projectId == rhs.projectId
                     && lhs.operativeId == rhs.operativeId
             }
-            if same { return }
+            if same {
+                if bookings.count != existing.count {
+                    bookings = existing
+                }
+                return
+            }
         }
         bookings = remote
         smartCache?.cacheBookings(remote)

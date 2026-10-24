@@ -81,6 +81,16 @@ class AppSettingsStore: ObservableObject {
                 await self?.syncMyScheduleOptionsFromOrganization()
             }
         }
+
+        NotificationCenter.default.addObserver(
+            forName: .organizationMaterialCutOffDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.applyOrganizationMaterialCutOff()
+            }
+        }
     }
     
     deinit {
@@ -195,22 +205,14 @@ class AppSettingsStore: ObservableObject {
         await saveSettingsLocallyOnly()
     }
     
-    func updateNotifications(_ notificationSettings: NotificationSettings) async {
+    /// Keeps the full local map. Firestore receives only `changedKeys`, each as its own dotted field.
+    func updateNotifications(_ notificationSettings: NotificationSettings, changedKeys: [String: Bool]) async {
         settings.notifications = notificationSettings
-        if let backend = firebaseBackend {
-            let cutOff = OrgMaterialCutOff.fromNotification(notificationSettings)
+        if let backend = firebaseBackend, let userId = backend.currentUser?.uid, !changedKeys.isEmpty {
             do {
-                try await backend.updateOrganizationMaterialCutOff(cutOff)
-                settings.notifications = cutOff.applied(to: settings.notifications)
+                try await backend.saveUserNotificationPreferenceKeys(changedKeys, userId: userId)
             } catch {
-                errorMessage = "Failed to save material cut-off: \(error.localizedDescription)"
-            }
-            if let userId = backend.currentUser?.uid {
-                do {
-                    try await backend.saveUserNotificationPreferences(settings.notifications, userId: userId)
-                } catch {
-                    errorMessage = "Failed to sync notification preferences: \(error.localizedDescription)"
-                }
+                errorMessage = "Failed to sync notification preferences: \(error.localizedDescription)"
             }
         }
         await saveSettingsLocallyOnly()

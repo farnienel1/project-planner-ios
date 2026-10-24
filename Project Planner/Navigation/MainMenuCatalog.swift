@@ -29,9 +29,17 @@ enum WorkCatalogueDeepLink {
     static var pendingProjectId: UUID?
     static var pendingIsSmallWorks = false
 
-    static func set(projectId: UUID, isSmallWorks: Bool) {
+    static var pendingDayKey: String?
+    static var pendingSection: String?
+    static var pendingEditUserId: String?
+    /// The job the list just opened, so the detail can apply the day or H&S section.
+    static var focusProjectId: UUID?
+
+    static func set(projectId: UUID, isSmallWorks: Bool, dayKey: String? = nil, section: String? = nil) {
         pendingProjectId = projectId
         pendingIsSmallWorks = isSmallWorks
+        pendingDayKey = dayKey
+        pendingSection = section
     }
 
     static func peek(isSmallWorks: Bool) -> Bool {
@@ -39,8 +47,8 @@ enum WorkCatalogueDeepLink {
     }
 
     static func take(isSmallWorks: Bool) -> UUID? {
-        guard pendingIsSmallWorks == isSmallWorks else { return nil }
-        let id = pendingProjectId
+        guard pendingIsSmallWorks == isSmallWorks, let id = pendingProjectId else { return nil }
+        focusProjectId = id
         pendingProjectId = nil
         pendingIsSmallWorks = false
         return id
@@ -67,6 +75,7 @@ enum MainMenuSurfaceRoute: String, CaseIterable {
     case mySchedule
     case dailyOverview
     case warnings
+    case notifications
 }
 
 enum MainMenuShellSection: String, CaseIterable, Identifiable {

@@ -36,6 +36,7 @@ private enum FirebaseStartup {
 
     @discardableResult
     static func configureIfNeeded() -> Bool {
+        PlannerAppCheckProviderFactory.installIfNeeded()
         if FirebaseApp.app() != nil { return true }
         for name in googleServicePlistNames {
             if let path = Bundle.main.path(forResource: name, ofType: "plist"),
@@ -61,6 +62,7 @@ private enum FirebaseStartup {
 /// never arrives: white launch screen, then the system kills the app.
 nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     var onPushToken: ((String) -> Void)?
+    var foregroundNotificationHandler: ((Bool, String?) -> UNNotificationPresentationOptions)?
     private var firebaseAuthStateHandle: AuthStateDidChangeListenerHandle?
 
     /// Runs before `didFinishLaunching` — configures Firebase before Messaging / Auth swizzler touches the default app (fixes I-COR000003 noise and bad first-frame auth).
@@ -99,7 +101,21 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound, .badge, .list])
+        let info = notification.request.content.userInfo
+        let type = (info[NotificationDeepLink.typeKey] as? String) ?? (info["type"] as? String)
+        let isRemote = notification.request.trigger is UNPushNotificationTrigger
+        if type == AppNotification.NotificationType.timesheetSubmissionReminder.rawValue {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .timesheetSubmissionNoticeFired, object: nil)
+            }
+        }
+        let handler = foregroundNotificationHandler
+        DispatchQueue.main.async {
+            let options = MainActor.assumeIsolated {
+                handler?(isRemote, type) ?? (isRemote ? [] : [.banner, .sound, .list])
+            }
+            completionHandler(options)
+        }
     }
 
     nonisolated func userNotificationCenter(
@@ -108,7 +124,11 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let info = NotificationUserInfoBox(response.notification.request.content.userInfo)
+        let type = response.notification.request.content.userInfo[NotificationDeepLink.typeKey] as? String
         DispatchQueue.main.async {
+            if type == AppNotification.NotificationType.timesheetSubmissionReminder.rawValue {
+                NotificationCenter.default.post(name: .timesheetSubmissionNoticeFired, object: nil)
+            }
             NotificationCenter.default.post(
                 name: .openNotificationDeepLink,
                 object: nil,
@@ -138,18 +158,19 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         completionHandler(.newData)
     }
 
+    /// Does not prompt. The signed-in shell asks when status is still not determined.
+    /// A request from launch is easy to drop, and the Settings toggle is not this status.
     nonisolated private func requestRemoteNotificationRegistration(application: UIApplication) {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
-            if let error {
-                print("🔥🔥🔥 DEBUG: Push permission request failed: \(error.localizedDescription)")
-                return
-            }
-            guard granted else {
-                print("🔥🔥🔥 DEBUG: Push permission not granted")
-                return
-            }
-            DispatchQueue.main.async {
-                application.registerForRemoteNotifications()
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                DispatchQueue.main.async {
+                    application.registerForRemoteNotifications()
+                }
+            case .notDetermined, .denied:
+                break
+            @unknown default:
+                break
             }
         }
     }
@@ -194,10 +215,16 @@ enum LaunchWindowReveal {
 
     @MainActor
     static func revealIfNeeded() {
+        revealIfNeeded(attempt: 0)
+    }
+
+    /// The first layout turn can run before the window has a root controller.
+    /// Latching then left a white screen until the process was killed.
+    @MainActor
+    private static func revealIfNeeded(attempt: Int) {
         guard !didReveal else { return }
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        guard !scenes.isEmpty else { return }
-        didReveal = true
+        var revealed = false
         for scene in scenes {
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_WINDOWS total=\(scene.windows.count)")
             for window in scene.windows {
@@ -211,6 +238,15 @@ enum LaunchWindowReveal {
             if !host.isKeyWindow {
                 host.makeKey()
             }
+            revealed = true
+        }
+        if revealed {
+            didReveal = true
+            return
+        }
+        guard attempt < 8 else { return }
+        DispatchQueue.main.async {
+            revealIfNeeded(attempt: attempt + 1)
         }
     }
 }

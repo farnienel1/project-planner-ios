@@ -281,7 +281,11 @@ struct ProjectDetailView: View {
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
         .onAppear {
+            applyCatalogueDeepLinkFocus()
             geocodeAddress()
+            if firebaseBackend.noteScheduleNeedsFullHistory() {
+                managerScheduleStore.loadData(force: true)
+            }
             loadWeekBookings(force: true)
             loadWeekViewPreference()
             Task {
@@ -830,6 +834,21 @@ struct ProjectDetailView: View {
             schedulingDualActions
             schedulingWeekOverviewSection
         }
+    }
+
+    private func applyCatalogueDeepLinkFocus() {
+        guard WorkCatalogueDeepLink.focusProjectId == project.id else { return }
+        if let key = WorkCatalogueDeepLink.pendingDayKey,
+           let date = CanonicalBusinessEngine.date(fromDayKey: key) {
+            selectedWeek = date
+            expandedSchedulingDayKeys = [Calendar.current.startOfDay(for: date).timeIntervalSince1970]
+        }
+        if WorkCatalogueDeepLink.pendingSection == "healthSafety" {
+            openedManageTile = .healthSafety
+        }
+        WorkCatalogueDeepLink.focusProjectId = nil
+        WorkCatalogueDeepLink.pendingDayKey = nil
+        WorkCatalogueDeepLink.pendingSection = nil
     }
 
     private func ensureTodaySchedulingDayExpanded() {
@@ -1574,7 +1593,9 @@ struct ProjectDetailView: View {
             await notificationService.notifyBookedUsers(
                 projectName: project.siteName,
                 bookedBy: bookedByName,
-                recipients: [.init(operativeId: operative.id, dates: [request.day])]
+                recipients: [.init(operativeId: operative.id, dates: [request.day])],
+                projectId: project.id,
+                catalogue: project.jobType == .smallWorks ? "smallWorks" : "projects"
             )
         case .managerSiteBookings(let userId, let locationType):
             let booking = ManagerSiteBooking(
@@ -2964,16 +2985,20 @@ private struct ProjectVisibilitySettingsView: View {
     }
     
     private func filteredUsers(base: [AppUser]) -> [AppUser] {
-        base.filter { user in
+        let listed = CanonicalBusinessEngine.listedRosterUsers(
+            base,
+            claimedEmails: userStore.organizationUserEmailClaims
+        ) ?? []
+        return listed.filter { user in
             switch filterMode {
             case .all:
                 return true
             case .active:
-                return user.passwordSet && user.isActive
+                return CanonicalBusinessEngine.rosterSegment(user) == UserRosterSegment.active.canonicalSegment
             case .inactive:
-                return user.passwordSet && !user.isActive
+                return CanonicalBusinessEngine.rosterSegment(user) == UserRosterSegment.inactive.canonicalSegment
             case .pending:
-                return !user.passwordSet
+                return CanonicalBusinessEngine.rosterSegment(user) == UserRosterSegment.pending.canonicalSegment
             }
         }
         .filter { user in
@@ -3866,7 +3891,7 @@ private struct AddProjectTaskView: View {
             }
             .fileImporter(
                 isPresented: $showingFilePicker,
-                allowedContentTypes: [UTType.item, UTType.image, UTType.pdf, UTType.text, UTType.data],
+                allowedContentTypes: StorageUploadPolicy.workFileContentTypes,
                 allowsMultipleSelection: false
             ) { result in
                 handleFileSelection(result)
@@ -4522,9 +4547,15 @@ private struct AddProjectTaskView: View {
             let didStartAccessing = url.startAccessingSecurityScopedResource()
             defer { if didStartAccessing { url.stopAccessingSecurityScopedResource() } }
             
-            // Check file size (10MB limit)
             if let fileSize = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64,
-               fileSize > 10 * 1024 * 1024 {
+               let message = StorageUploadPolicy.refusal(
+                family: .workFile,
+                fileExtension: url.pathExtension,
+                contentType: nil,
+                byteCount: Int(fileSize)
+               ) {
+                errorMessage = message
+                showingError = true
                 return
             }
             
@@ -4595,29 +4626,21 @@ private struct AddProjectTaskView: View {
                     completedItemIds: []
                 )
                 
-                // Upload images first if any
-                var imageURLs: [String] = []
-                if !selectedImages.isEmpty {
-                    isUploadingImages = true
-                    let totalImages = selectedImages.count
-                    for (index, image) in selectedImages.enumerated() {
-                        if let url = await uploadImageForTask(image, taskId: task.id) {
-                            imageURLs.append(url)
-                        }
-                        uploadProgress = Double(index + 1) / Double(totalImages) * 0.5
-                    }
-                    isUploadingImages = false
-                    task.attachedImageURLs = imageURLs
-                }
-                
-                // Upload file if any (to Firebase Storage under this task's ID so it's accessible to users with task access)
-                if let selectedFile = selectedFile {
-                    if let url = await uploadFileForTask(selectedFile, taskId: task.id) {
-                        task.attachedFileURL = url
-                    }
-                }
-                
                 do {
+                    var imageURLs: [String] = []
+                    if !selectedImages.isEmpty {
+                        isUploadingImages = true
+                        let totalImages = selectedImages.count
+                        for (index, image) in selectedImages.enumerated() {
+                            imageURLs.append(try await uploadImageForTask(image, taskId: task.id))
+                            uploadProgress = Double(index + 1) / Double(totalImages) * 0.5
+                        }
+                        isUploadingImages = false
+                        task.attachedImageURLs = imageURLs
+                    }
+                    if let selectedFile = selectedFile {
+                        task.attachedFileURL = try await uploadFileForTask(selectedFile, taskId: task.id)
+                    }
                     try await taskStore.addTask(task)
                     
                     // Send notification for task creation
@@ -4636,6 +4659,7 @@ private struct AddProjectTaskView: View {
                 } catch {
                     await MainActor.run {
                         isSaving = false
+                        isUploadingImages = false
                         errorMessage = error.localizedDescription
                         showingError = true
                     }
@@ -4643,34 +4667,19 @@ private struct AddProjectTaskView: View {
             }
     }
     
-    private func uploadImageForTask(_ image: UIImage, taskId: UUID) async -> String? {
+    private func uploadImageForTask(_ image: UIImage, taskId: UUID) async throws -> String {
         guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            return nil
+            throw NSError(domain: "ProjectDetail", code: 400, userInfo: [NSLocalizedDescriptionKey: "No organization loaded."])
         }
-        
-        do {
-            let imageName = "task_image_\(UUID().uuidString)"
-            let url = try await firebaseBackend.uploadTaskImage(image, taskId: taskId, organizationId: organizationId, imageName: imageName)
-            return url
-        } catch {
-            print("🔥🔥🔥 DEBUG: Error uploading task image: \(error.localizedDescription)")
-            return nil
-        }
+        return try await firebaseBackend.uploadTaskImage(image, taskId: taskId, organizationId: organizationId)
     }
     
-    private func uploadFileForTask(_ fileURL: URL, taskId: UUID) async -> String? {
+    private func uploadFileForTask(_ fileURL: URL, taskId: UUID) async throws -> String {
         guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            return nil
+            throw NSError(domain: "ProjectDetail", code: 400, userInfo: [NSLocalizedDescriptionKey: "No organization loaded."])
         }
-        
-        do {
-            let fileName = fileURL.lastPathComponent
-            let url = try await firebaseBackend.uploadTaskFile(fileURL, taskId: taskId, organizationId: organizationId, fileName: fileName)
-            return url
-        } catch {
-            print("🔥🔥🔥 DEBUG: Error uploading task file: \(error.localizedDescription)")
-            return nil
-        }
+        let fileName = fileURL.lastPathComponent
+        return try await firebaseBackend.uploadTaskFile(fileURL, taskId: taskId, organizationId: organizationId, fileName: fileName)
     }
     
     private func uploadImage(_ image: UIImage) async -> String? {
@@ -5143,7 +5152,7 @@ struct TaskCompletionPopupView: View {
             }
             .fileImporter(
                 isPresented: $showingFilePicker,
-                allowedContentTypes: [.item, .data],
+                allowedContentTypes: StorageUploadPolicy.workFileContentTypes,
                 allowsMultipleSelection: true
             ) { result in
                 handleFileSelection(result)
@@ -5430,6 +5439,16 @@ struct TaskCompletionPopupView: View {
                 // Copy to temp so we can read when uploading (file importer URLs are security-scoped)
                 let didStart = url.startAccessingSecurityScopedResource()
                 defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+                if let fileSize = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64,
+                   let message = StorageUploadPolicy.refusal(
+                    family: .workFile,
+                    fileExtension: url.pathExtension,
+                    contentType: nil,
+                    byteCount: Int(fileSize)
+                   ) {
+                    validationMessage = message
+                    continue
+                }
                 let tempDir = FileManager.default.temporaryDirectory
                 let tempURL = tempDir.appendingPathComponent(UUID().uuidString + "_" + url.lastPathComponent)
                 do {
@@ -5457,19 +5476,22 @@ struct TaskCompletionPopupView: View {
             var fileURLs: [String] = displayTask.completionFiles
             let totalUploads = max(selectedImages.count + selectedFiles.count, 1)
             
-            for captured in selectedImages {
-                let stamped = addTimestampWatermark(to: captured.image, at: captured.capturedAt)
-                if let url = await uploadImage(stamped) {
-                    imageURLs.append(url)
+            do {
+                for captured in selectedImages {
+                    let stamped = addTimestampWatermark(to: captured.image, at: captured.capturedAt)
+                    imageURLs.append(try await uploadImage(stamped))
+                    uploadProgress += 1.0 / Double(totalUploads)
                 }
-                uploadProgress += 1.0 / Double(totalUploads)
-            }
-            
-            for file in selectedFiles {
-                if let url = await uploadFile(file) {
-                    fileURLs.append(url)
+                for file in selectedFiles {
+                    fileURLs.append(try await uploadFile(file))
+                    uploadProgress += 1.0 / Double(totalUploads)
                 }
-                uploadProgress += 1.0 / Double(totalUploads)
+            } catch {
+                await MainActor.run {
+                    isUploading = false
+                    validationMessage = error.localizedDescription
+                }
+                return
             }
             
             uploadProgress = 1.0
@@ -5507,34 +5529,23 @@ struct TaskCompletionPopupView: View {
         }
     }
     
-    private func uploadImage(_ image: UIImage) async -> String? {
+    private func uploadImage(_ image: UIImage) async throws -> String {
         guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            return nil
+            throw NSError(domain: "ProjectDetail", code: 400, userInfo: [NSLocalizedDescriptionKey: "No organization loaded."])
         }
-        
-        do {
-            let imageName = "completion_image_\(UUID().uuidString)"
-            let url = try await firebaseBackend.uploadTaskImage(image, taskId: task.id, organizationId: organizationId, imageName: imageName)
-            return url
-        } catch {
-            print("🔥🔥🔥 DEBUG: Error uploading completion image: \(error.localizedDescription)")
-            return nil
-        }
+        return try await firebaseBackend.uploadTaskImage(image, taskId: task.id, organizationId: organizationId)
     }
     
-    private func uploadFile(_ file: URL) async -> String? {
+    private func uploadFile(_ file: URL) async throws -> String {
         guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            return nil
+            throw NSError(domain: "ProjectDetail", code: 400, userInfo: [NSLocalizedDescriptionKey: "No organization loaded."])
         }
-        
-        do {
-            let fileName = file.lastPathComponent
-            let url = try await firebaseBackend.uploadTaskFile(file, taskId: task.id, organizationId: organizationId, fileName: fileName)
-            return url
-        } catch {
-            print("🔥🔥🔥 DEBUG: Error uploading completion file: \(error.localizedDescription)")
-            return nil
-        }
+        return try await firebaseBackend.uploadTaskFile(
+            file,
+            taskId: task.id,
+            organizationId: organizationId,
+            fileName: file.lastPathComponent
+        )
     }
     
     private func addTimestampWatermark(to image: UIImage, at date: Date) -> UIImage {

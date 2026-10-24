@@ -90,6 +90,7 @@ class OperativeStore: ObservableObject {
     }
     
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
+        guard LaunchStartupPolicy.shouldRewireStore(isSameInstance: self.firebaseBackend === firebaseBackend) else { return }
         print("🔥🔥🔥 DEBUG: ProjectStore.setFirebaseBackend called - Firebase backend connected!")
         self.firebaseBackend = firebaseBackend
     }
@@ -455,6 +456,17 @@ class OperativeStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: ========== ADD OPERATIVE END ==========")
     }
     
+    /// Qualification save already wrote Firestore. Keep this operative in memory without a second full rewrite.
+    func replaceOperativeInMemory(_ operative: Operative) {
+        if let index = operatives.firstIndex(where: { $0.id == operative.id }) {
+            operatives[index] = operative
+        } else {
+            operatives.append(operative)
+        }
+        smartCache?.cacheOperatives(operatives)
+        NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
+    }
+
     func updateOperative(_ operative: Operative) async {
         if let index = operatives.firstIndex(where: { $0.id == operative.id }) {
             operatives[index] = operative

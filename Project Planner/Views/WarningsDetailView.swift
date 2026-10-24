@@ -60,6 +60,9 @@ struct WarningsDetailView: View {
     let taskStore: ProjectTaskStore
 
     @State private var filterChip: WarningsFilterChip = .all
+    /// Loaded before the first list render. Nil only when the script did not answer.
+    @State private var sortDirection: String?
+    @State private var sortDirectionUserId: String
     @State private var openDayDate: IdentifiableDay?
     @State private var presentedFullScreen: WarningsFullScreenCover?
     @State private var warningPendingDismiss: Warning?
@@ -73,6 +76,57 @@ struct WarningsDetailView: View {
 
     private var canBookLabourFromWarning: Bool {
         userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true
+    }
+
+    init(
+        warningsService: WarningsService,
+        projectStore: ProjectStore,
+        userStore: UserStore,
+        operativeStore: OperativeStore,
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        firebaseBackend: FirebaseBackend,
+        appSettings: AppSettingsStore,
+        holidayStore: HolidayStore,
+        notificationService: NotificationService,
+        subcontractorStore: SubcontractorStore,
+        taskStore: ProjectTaskStore
+    ) {
+        self.warningsService = warningsService
+        self.projectStore = projectStore
+        self.userStore = userStore
+        self.operativeStore = operativeStore
+        self.bookingStore = bookingStore
+        self.managerScheduleStore = managerScheduleStore
+        self.firebaseBackend = firebaseBackend
+        self.appSettings = appSettings
+        self.holidayStore = holidayStore
+        self.notificationService = notificationService
+        self.subcontractorStore = subcontractorStore
+        self.taskStore = taskStore
+        let userId = Self.signedInUserId(userStore: userStore)
+        _sortDirection = State(initialValue: WarningsSortPreference.direction(userId: userId))
+        _sortDirectionUserId = State(initialValue: userId)
+    }
+
+    private var signedInUserId: String {
+        Self.signedInUserId(userStore: userStore)
+    }
+
+    /// Auth uid for this device session. The profile id is the same account when auth is not ready yet.
+    private static func signedInUserId(userStore: UserStore) -> String {
+        let authId = LocalLayoutPreferences.signedInUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !authId.isEmpty { return authId }
+        return userStore.currentUser?.id.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    /// This user's saved direction. A different signed-in user does not reuse the previous choice.
+    private var activeSortDirection: String? {
+        let userId = signedInUserId
+        if userId == sortDirectionUserId {
+            return sortDirection
+        }
+        return WarningsSortPreference.direction(userId: userId)
     }
 
     var body: some View {
@@ -344,6 +398,7 @@ struct WarningsDetailView: View {
                     lowCount: warningsService.lowCount
                 )
                 WarningsFilterChipsRow(selected: $filterChip, counts: filterCounts)
+                warningsSortControl
                 ForEach(filteredWarnings) { warning in
                     warningCard(warning)
                 }
@@ -355,33 +410,185 @@ struct WarningsDetailView: View {
     }
 
     private var filterCounts: [WarningsFilterChip: Int] {
-        let all = warningsService.activeWarnings
+        var clashes = 0
+        var unbooked = 0
+        var annualLeave = 0
+        var materials = 0
+        var qualifications = 0
+        for warning in warningsService.activeWarnings {
+            switch warning.type {
+            case .operativeBookingClash, .managerLocationClash: clashes += 1
+            case .unbookedLabour: unbooked += 1
+            case .annualLeave: annualLeave += 1
+            case .materialsCutoff: materials += 1
+            case .qualificationExpiry, .operativeNotVerified: qualifications += 1
+            }
+        }
         return [
-            .all: all.count,
-            .clashes: all.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }.count,
-            .unbooked: all.filter { $0.type == .unbookedLabour }.count,
-            .annualLeave: all.filter { $0.type == .annualLeave }.count,
-            .materials: all.filter { $0.type == .materialsCutoff }.count,
-            .qualifications: all.filter { $0.type == .qualificationExpiry || $0.type == .operativeNotVerified }.count
+            .all: warningsService.activeWarnings.count,
+            .clashes: clashes,
+            .unbooked: unbooked,
+            .annualLeave: annualLeave,
+            .materials: materials,
+            .qualifications: qualifications
         ]
+    }
+
+    private var warningsSortControl: some View {
+        HStack(spacing: 6) {
+            Text("Sort")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(WarningsUI.textMuted)
+            sortDirectionButton(title: "Oldest", direction: "oldest")
+            sortDirectionButton(title: "Newest", direction: "newest")
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Sort warnings by date")
+    }
+
+    private func sortDirectionButton(title: String, direction: String) -> some View {
+        let isOn = activeSortDirection == direction
+        return Button {
+            chooseSortDirection(direction)
+        } label: {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(isOn ? Color.white : Color(red: 0.420, green: 0.447, blue: 0.502))
+                .padding(.horizontal, 13)
+                .padding(.vertical, 6)
+                .background(isOn ? Color(red: 0.110, green: 0.110, blue: 0.118) : Color.white)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color.black.opacity(0.10), lineWidth: isOn ? 0 : 0.5)
+                )
+        }
+        .accessibilityIdentifier("warnings.sort.\(direction)")
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+
+    private func chooseSortDirection(_ raw: String) {
+        let userId = signedInUserId
+        guard let saved = WarningsSortPreference.save(userId: userId, direction: raw) else { return }
+        sortDirectionUserId = userId
+        sortDirection = saved
     }
 
     private var filteredWarnings: [Warning] {
         var seen = Set<String>()
-        let sorted = warningsService.warningsSortedByDate().filter { seen.insert($0.resolutionKey).inserted }
+        let unique = warningsService.activeWarnings.filter { seen.insert($0.resolutionKey).inserted }
+        let scoped: [Warning]
         switch filterChip {
-        case .all: return sorted
+        case .all: scoped = unique
         case .clashes:
-            return sorted.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }
+            scoped = unique.filter { $0.type == .operativeBookingClash || $0.type == .managerLocationClash }
         case .unbooked:
-            return sorted.filter { $0.type == .unbookedLabour }
+            scoped = unique.filter { $0.type == .unbookedLabour }
         case .annualLeave:
-            return sorted.filter { $0.type == .annualLeave }
+            scoped = unique.filter { $0.type == .annualLeave }
         case .materials:
-            return sorted.filter { $0.type == .materialsCutoff }
+            scoped = unique.filter { $0.type == .materialsCutoff }
         case .qualifications:
-            return sorted.filter { $0.type == .qualificationExpiry || $0.type == .operativeNotVerified }
+            scoped = unique.filter { $0.type == .qualificationExpiry || $0.type == .operativeNotVerified }
         }
+        return warningsOrderedByCoverageDay(groupUnbookedLabourByDay(scoped))
+    }
+
+    /// Coverage day for the shared sort. Blank rows (unverified operatives) stay undated.
+    private func coverageDayKey(for warning: Warning) -> String {
+        if let expiry = warning.qualificationExpiry?.expiryDayKey.trimmingCharacters(in: .whitespacesAndNewlines),
+           !expiry.isEmpty {
+            return expiry
+        }
+        guard let date = warning.occurrenceDate ?? warning.unbookedLabour?.date else { return "" }
+        return CanonicalBusinessEngine.dayKey(for: date)
+    }
+
+    /// Reorders the cards already on screen. A nil script result leaves that order unchanged.
+    private func warningsOrderedByCoverageDay(_ warnings: [Warning]) -> [Warning] {
+        guard let direction = activeSortDirection else { return warnings }
+        let rows = warnings.map { warning in
+            CanonicalWarningDateRow(id: warning.resolutionKey, dayKey: coverageDayKey(for: warning))
+        }
+        guard let sorted = CanonicalBusinessEngine.sortWarningsByDate(rows, direction: direction) else {
+            return warnings
+        }
+        var indexById: [String: Int] = [:]
+        for (index, warning) in warnings.enumerated() where indexById[warning.resolutionKey] == nil {
+            indexById[warning.resolutionKey] = index
+        }
+        var ordered: [Warning] = []
+        var seen = Set<String>()
+        for row in sorted {
+            guard seen.insert(row.id).inserted, let index = indexById[row.id] else { continue }
+            ordered.append(warnings[index])
+        }
+        if ordered.count < warnings.count {
+            for warning in warnings where seen.insert(warning.resolutionKey).inserted {
+                ordered.append(warning)
+            }
+        }
+        return ordered
+    }
+
+    /// One card per day, with every unbooked person on that day in the list.
+    /// The hero and the Unbooked chip still count people, not cards.
+    private func groupUnbookedLabourByDay(_ warnings: [Warning]) -> [Warning] {
+        var grouped: [Warning] = []
+        var indexByDay: [String: Int] = [:]
+        for warning in warnings {
+            guard warning.type == .unbookedLabour,
+                  let day = warning.occurrenceDate ?? warning.unbookedLabour?.date else {
+                grouped.append(warning)
+                continue
+            }
+            let key = londonDayKey(day)
+            if let index = indexByDay[key] {
+                grouped[index] = mergeUnbooked(grouped[index], warning)
+            } else {
+                indexByDay[key] = grouped.count
+                grouped.append(warning)
+            }
+        }
+        return grouped
+    }
+
+    private func mergeUnbooked(_ existing: Warning, _ incoming: Warning) -> Warning {
+        var merged = existing
+        var names = existing.unbookedLabour?.names ?? []
+        var keys = existing.unbookedLabour?.personKeys ?? []
+        let incomingNames = incoming.unbookedLabour?.names ?? []
+        let incomingKeys = incoming.unbookedLabour?.personKeys ?? []
+        for (offset, name) in incomingNames.enumerated() {
+            let personKey = offset < incomingKeys.count ? incomingKeys[offset] : ""
+            if !personKey.isEmpty, keys.contains(personKey) { continue }
+            names.append(name)
+            keys.append(personKey)
+        }
+        while keys.count < names.count { keys.append("") }
+        let pairs = zip(names, keys).sorted {
+            unbookedPersonSortName($0.0).localizedCaseInsensitiveCompare(unbookedPersonSortName($1.0)) == .orderedAscending
+        }
+        let date = existing.unbookedLabour?.date ?? incoming.unbookedLabour?.date ?? existing.occurrenceDate ?? Date()
+        merged.unbookedLabour = Warning.UnbookedLabourWarningDetails(
+            date: date,
+            names: pairs.map(\.0),
+            personKeys: pairs.map(\.1).filter { !$0.isEmpty }
+        )
+        return merged
+    }
+
+    private func unbookedPersonSortName(_ line: String) -> String {
+        guard let range = line.range(of: " (missing") else { return line }
+        return String(line[..<range.lowerBound])
+    }
+
+    private func londonDayKey(_ date: Date) -> String {
+        let parts = CanonicalBusinessEngine.businessCalendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
     @ViewBuilder
@@ -890,10 +1097,27 @@ struct WarningsDetailView: View {
         let removedBy = userStore.currentUser?.fullName
             ?? userStore.currentUser?.email
             ?? "An admin"
-        warningsService.dismissWarning(warning)
+        for item in warningsToDismiss(warning) {
+            warningsService.dismissWarning(item)
+        }
         Task {
             await notificationService.notifyWarningRemoved(warning: warning, removedBy: removedBy)
         }
+    }
+
+    /// A grouped unbooked card lists every person on that day, so dismiss clears each of those rows.
+    private func warningsToDismiss(_ warning: Warning) -> [Warning] {
+        guard warning.type == .unbookedLabour,
+              let day = warning.occurrenceDate ?? warning.unbookedLabour?.date else {
+            return [warning]
+        }
+        let key = londonDayKey(day)
+        let matches = warningsService.activeWarnings.filter { other in
+            guard other.type == .unbookedLabour,
+                  let otherDay = other.occurrenceDate ?? other.unbookedLabour?.date else { return false }
+            return londonDayKey(otherDay) == key
+        }
+        return matches.isEmpty ? [warning] : matches
     }
 
     private func removeClashEntry(_ warning: Warning, entry: Warning.ClashTimelineEntry) {
@@ -965,8 +1189,9 @@ struct WarningsDetailView: View {
         if did {
             let detection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
             let invoicing = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
-            let start = detection.coverageStart(from: Date(), invoicing: invoicing)
-            let end = detection.coverageEnd(from: Date(), invoicing: invoicing)
+            let bounds = CanonicalBusinessEngine.warningBounds(detection: detection, invoicing: invoicing)
+            let start = bounds.start
+            let end = bounds.end
             let formatter = DateFormatter()
             formatter.dateFormat = "d MMM"
             let mode = detection.clashLookaheadMode.displayName

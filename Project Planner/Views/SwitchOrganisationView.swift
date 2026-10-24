@@ -31,7 +31,7 @@ struct SwitchOrganisationView: View {
                 introCard
                     .padding(.top, 8)
 
-                if isLoading {
+                if isLoading && memberships.isEmpty {
                     ProgressView("Loading organisations…")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 28)
@@ -59,7 +59,11 @@ struct SwitchOrganisationView: View {
         .navigationTitle("Switch organisation")
         .navigationBarTitleDisplayMode(.inline)
         .appChromeNavigationBarSurface()
+        .onAppear {
+            paintKnownCompanies()
+        }
         .task {
+            paintKnownCompanies()
             await reloadMemberships()
         }
         .refreshable {
@@ -134,20 +138,21 @@ struct SwitchOrganisationView: View {
     }
 
     private func membershipRow(_ membership: OrgMembershipSummary) -> some View {
-        let isActive = membership.id == activeOrgId
+        let isCurrent = membership.id == activeOrgId
         let isBusy = isSwitching && switchingOrgId == membership.id
+        let canEnter = membership.isActive && membership.subscriptionHasAccess
         return Button {
-            guard !isActive, !isSwitching else { return }
+            guard !isCurrent, !isSwitching, canEnter else { return }
             Task { await switchToOrganisation(membership) }
         } label: {
             HStack(spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(isActive ? ProjectWorksRevampColors.blue.opacity(0.14) : ProjectWorksRevampColors.jobTypePillBg)
+                        .fill(isCurrent ? ProjectWorksRevampColors.blue.opacity(0.14) : ProjectWorksRevampColors.jobTypePillBg)
                         .frame(width: 36, height: 36)
                     Image(systemName: "building.2.fill")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(isActive ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.jobTypePillInk)
+                        .foregroundStyle(isCurrent ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.jobTypePillInk)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(membership.name)
@@ -173,12 +178,18 @@ struct SwitchOrganisationView: View {
                     }
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
+                    if !membership.subscriptionHasAccess {
+                        Text(SubscriptionLapsedCopy.phrase)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 8)
                 if isBusy {
                     ProgressView()
                         .controlSize(.small)
-                } else if isActive {
+                } else if isCurrent {
                     Text("Active")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(ProjectWorksRevampColors.blue)
@@ -186,6 +197,8 @@ struct SwitchOrganisationView: View {
                         .padding(.vertical, 4)
                         .background(ProjectWorksRevampColors.blue.opacity(0.12))
                         .clipShape(Capsule())
+                } else if !membership.subscriptionHasAccess {
+                    EmptyView()
                 } else if !membership.isActive {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 13, weight: .semibold))
@@ -202,27 +215,38 @@ struct SwitchOrganisationView: View {
         }
         .accessibilityIdentifier("switchOrganisation.building2Fill")
         .buttonStyle(.plain)
-        .disabled(isActive || isSwitching || !membership.isActive)
+        .disabled(isCurrent || isSwitching || !canEnter)
     }
 
     @MainActor
     private func filteredMemberships() async -> [OrgMembershipSummary] {
-        let all = await firebaseBackend.fetchOrganizationsForCurrentUser()
-        guard let excluded = excludedOrganizationId?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !excluded.isEmpty else {
-            return all
-        }
-        return all.filter {
-            $0.id.compare(excluded, options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame
-        }
+        excluding(await firebaseBackend.fetchOrganizationsForCurrentUser())
+    }
+
+    @MainActor
+    private func paintKnownCompanies() {
+        let known = excluding(firebaseBackend.knownOrganizationMembershipsBeforeScan())
+        guard !known.isEmpty else { return }
+        memberships = known
+        isLoading = false
     }
 
     @MainActor
     private func reloadMemberships() async {
-        isLoading = true
         errorMessage = nil
+        if memberships.isEmpty { isLoading = true }
         memberships = await filteredMemberships()
         isLoading = false
+    }
+
+    private func excluding(_ rows: [OrgMembershipSummary]) -> [OrgMembershipSummary] {
+        guard let excluded = excludedOrganizationId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !excluded.isEmpty else {
+            return rows
+        }
+        return rows.filter {
+            $0.id.compare(excluded, options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame
+        }
     }
 
     @MainActor

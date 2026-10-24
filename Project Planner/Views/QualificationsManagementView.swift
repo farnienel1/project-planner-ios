@@ -139,19 +139,11 @@ struct QualificationsManagementView: View {
             }
             .padding()
         } else {
-            List {
-                ForEach(operativeStore.qualifications.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) { qualification in
-                    Button {
-                        qualificationToEdit = qualification
-                    } label: {
-                        QualificationRowView(qualification: qualification)
-                    }
-                    .accessibilityIdentifier("qualificationsManagement.row.\(qualification.id)")
-                    .buttonStyle(.plain)
-                }
-                .onDelete(perform: deleteQualifications)
-            }
-            .listStyle(.plain)
+            QualificationLibraryBrowser(
+                items: operativeStore.qualifications,
+                activeId: qualificationToEdit?.id,
+                onSelect: { qualificationToEdit = $0 }
+            )
         }
     }
 
@@ -178,18 +170,6 @@ struct QualificationsManagementView: View {
                 systemImage: "person.crop.circle.badge.questionmark",
                 description: Text(myProfileError ?? "Could not find a staff profile for your account. Ask an admin to check your email matches your operative record.")
             )
-        }
-    }
-
-    private func deleteQualifications(offsets: IndexSet) {
-        let sorted = operativeStore.qualifications.sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
-        for index in offsets {
-            let qualification = sorted[index]
-            Task {
-                await operativeStore.deleteQualification(qualification)
-            }
         }
     }
 
@@ -220,26 +200,6 @@ struct QualificationsManagementView: View {
         return operativeStore.allOperatives.first {
             $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == e
         }
-    }
-}
-
-struct QualificationRowView: View {
-    let qualification: Qualification
-
-    var body: some View {
-        HStack {
-            Text(qualification.name)
-                .font(.headline)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
-                .multilineTextAlignment(.leading)
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
     }
 }
 
@@ -359,6 +319,17 @@ struct EditOrganisationQualificationView: View {
                 TextField("Name", text: $qualificationName)
                     .accessibilityIdentifier("editOrganisationQualification.name")
                     .textInputAutocapitalization(.words)
+                let detail = [qualification.section, qualification.awardingBody, qualification.code]
+                    .compactMap { value -> String? in
+                        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        return trimmed.isEmpty ? nil : trimmed
+                    }
+                    .joined(separator: " · ")
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {

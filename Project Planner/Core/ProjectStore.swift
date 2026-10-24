@@ -109,6 +109,7 @@ class ProjectStore: ObservableObject {
     }
     
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
+        guard LaunchStartupPolicy.shouldRewireStore(isSameInstance: self.firebaseBackend === firebaseBackend) else { return }
         print("🔥🔥🔥 DEBUG: ProjectStore.setFirebaseBackend called - Firebase backend connected!")
         self.firebaseBackend = firebaseBackend
     }

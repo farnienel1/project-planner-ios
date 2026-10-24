@@ -375,13 +375,6 @@ extension FirebaseBackend {
         guard let userId = currentUser?.uid else {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
-        if data.count > 20 * 1024 * 1024 {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 413,
-                userInfo: [NSLocalizedDescriptionKey: "That file is too large. Evidence must be 20 MB or smaller."]
-            )
-        }
         let orgId = normalizedOrganizationId(
             await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
                 ?? organizationId
@@ -398,28 +391,28 @@ extension FirebaseBackend {
         } catch {
             print("⚠️ [Variations] upload ensureUserDocumentLinked: \(error.localizedDescription)")
         }
-        let ext = (fileName as NSString).pathExtension.isEmpty ? "bin" : (fileName as NSString).pathExtension
-        let safeName = fileName
-            .replacingOccurrences(of: " ", with: "_")
-            .replacingOccurrences(of: "/", with: "_")
-        let timestamp = Int(Date().timeIntervalSince1970)
+        let prepared = try StorageUploadPolicy.prepareFileData(
+            data,
+            originalFileName: fileName,
+            declaredContentType: contentType,
+            family: .variationEvidence,
+            uid: userId,
+            unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow()
+        )
         let folderId = parentId.isEmpty ? variationId : parentId
-        // Canonical variations path may be missing from Storage rules. H&S / tasks / site
-        // audit prefixes already accept authenticated org uploads in this app.
+        // Health-and-safety evidence prefix first, then the variations object path.
         let paths = [
-            "organizations/\(orgId)/healthSafety/\(folderId)/variationEvidence/\(userId)_\(timestamp)_\(safeName)",
-            "organizations/\(orgId)/tasks/\(folderId)/files/\(userId)_\(timestamp)_\(safeName)",
-            "organizations/\(orgId)/siteAudits/\(folderId)/images/\(userId)_\(timestamp)_\(safeName)",
-            "organizations/\(orgId)/variations/\(variationId)/\(evidenceId).\(ext.lowercased())"
+            "organizations/\(orgId)/healthSafety/\(folderId)/variationEvidence/\(prepared.objectName)",
+            "organizations/\(orgId)/variations/\(variationId)/\(prepared.objectName)"
         ]
         var lastError: Error?
-        let contentTypes = contentType == "application/octet-stream"
-            ? [contentType]
-            : [contentType, "application/octet-stream"]
+        let contentTypes = prepared.contentType == "application/octet-stream"
+            ? [prepared.contentType]
+            : [prepared.contentType, "application/octet-stream"]
         for type in contentTypes {
             for path in paths {
                 do {
-                    let result = try await putVariationEvidenceData(data, path: path, contentType: type)
+                    let result = try await putVariationEvidenceData(prepared.data, path: path, contentType: type)
                     print("✅ [Variations] Evidence uploaded to \(path)")
                     return result
                 } catch {
@@ -548,33 +541,24 @@ nonisolated private final class VariationListenerBag: NSObject, ListenerRegistra
 }
 
 enum VariationEvidenceProcessor {
-    static let maxBytes = 20 * 1024 * 1024
+    static let maxBytes = StorageUploadPolicy.variationMaxBytes
 
-    /// Any non-empty file under the size cap. Photos, videos, PDFs, and other documents.
     static func isAllowed(fileName: String, contentType: String, byteCount: Int) -> Bool {
-        guard byteCount > 0, byteCount <= maxBytes else { return false }
-        let name = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !name.contains("/"), !name.contains("\\"), name != ".", name != ".." else { return false }
-        _ = contentType
-        return true
+        StorageUploadPolicy.refusal(
+            family: .variationEvidence,
+            fileExtension: (fileName as NSString).pathExtension,
+            contentType: contentType,
+            byteCount: byteCount
+        ) == nil
     }
 
     static func preparedImageData(_ image: UIImage) -> Data? {
-        let resized = resized(image, maxPixelDimension: 2000)
-        return resized.jpegData(compressionQuality: 0.7)
-    }
-
-    private static func resized(_ image: UIImage, maxPixelDimension: CGFloat) -> UIImage {
-        let width = image.size.width
-        let height = image.size.height
-        let longest = max(width, height)
-        guard longest > maxPixelDimension, longest > 0 else { return image }
-        let scale = maxPixelDimension / longest
-        let newSize = CGSize(width: width * scale, height: height * scale)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        return UIGraphicsImageRenderer(size: newSize, format: format).image { _ in
-            image.draw(in: CGRect(origin: .zero, size: newSize))
-        }
+        try? StorageUploadPolicy.jpegDataFittingUploadLimit(
+            image,
+            maxBytes: maxBytes,
+            initialQuality: 0.7,
+            encodeFailedMessage: "Failed to process image",
+            oversizedMessage: "That file is too large. Evidence must be 20 MB or smaller."
+        )
     }
 }

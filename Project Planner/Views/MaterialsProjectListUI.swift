@@ -163,6 +163,7 @@ struct MaterialsLineCard: View {
 
 struct MaterialsDraftSendBanner: View {
     let draftCount: Int
+    var cutOffLabel: String?
     let onTap: () -> Void
 
     var body: some View {
@@ -173,9 +174,11 @@ struct MaterialsDraftSendBanner: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Draft ready to send")
                         .font(.system(size: 12, weight: .medium))
-                    Text("Cut-off 16:00 today")
-                        .font(.system(size: 10))
-                        .opacity(0.85)
+                    if let cutOffLabel {
+                        Text(cutOffLabel)
+                            .font(.system(size: 10))
+                            .opacity(0.85)
+                    }
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -514,6 +517,12 @@ struct MaterialsOrderHistorySheet: View {
                             .foregroundStyle(MaterialsOrderingTheme.muted)
                             .lineLimit(isExpanded ? nil : 2)
                             .multilineTextAlignment(.leading)
+                        if let required = record.requiredDeliverySummary {
+                            Text(required)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(MaterialsOrderingTheme.ink)
+                                .multilineTextAlignment(.leading)
+                        }
                         if !isExpanded, !record.lines.isEmpty {
                             Text(record.lines.map(\.name).joined(separator: " · "))
                                 .font(.system(size: 12))

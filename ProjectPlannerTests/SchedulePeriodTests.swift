@@ -114,7 +114,7 @@ final class SchedulePeriodTests: XCTestCase {
     }
 
     func testCompletedPayRunIsThePreviousHalfMonth() {
-        let calendar = LogicFixtures.utc
+        let calendar = CanonicalBusinessEngine.businessCalendar
         var settings = OrganizationInvoicingSettings.default
         settings.paymentRunMode = .dateRanges
         settings.paymentRunDateRanges = [

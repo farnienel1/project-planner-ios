@@ -512,8 +512,12 @@ struct ScheduleOperativeView: View {
     }
 
     private var selectableOperatives: [Operative] {
-        let active = operativeStore.activeOperatives
-        return active.isEmpty ? operativeStore.allOperatives : active
+        let current = ScheduleBookablePersonBuilder.operativesForScheduling(
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
+        let active = current.filter(\.isActive)
+        return active.isEmpty ? current : active
     }
     
     private func applyPrefillFromEditingBooking(_ booking: Booking) {
@@ -1645,7 +1649,9 @@ struct ScheduleOperativeView: View {
                 await notificationService.notifyBookedUsers(
                     projectName: project.siteName,
                     bookedBy: loggedInUserName,
-                    recipients: bookedRecipients
+                    recipients: bookedRecipients,
+                    projectId: project.id,
+                    catalogue: project.jobType == .smallWorks ? "smallWorks" : "projects"
                 )
             }
             

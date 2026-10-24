@@ -3,6 +3,68 @@ import XCTest
 
 @MainActor
 final class OrgSettingsCanonicalTests: XCTestCase {
+    func testEmptyOrganizationNameIsMissingAndRoundTrips() throws {
+        let missing = try XCTUnwrap(CanonicalBusinessEngine.parseOrganizationName([:]))
+        XCTAssertEqual(missing, "")
+        let blank = try XCTUnwrap(CanonicalBusinessEngine.parseOrganizationName(["name": "   "]))
+        XCTAssertEqual(blank, "")
+        XCTAssertEqual(CanonicalBusinessEngine.displayOrganizationName(""), "Organisation")
+        XCTAssertEqual(CanonicalBusinessEngine.displayOrganizationName("  "), "Organisation")
+
+        let written = try XCTUnwrap(CanonicalBusinessEngine.organizationNameToFirestore("  Acme  "))
+        XCTAssertEqual(written.count, 1)
+        XCTAssertEqual(written["name"] as? String, "Acme")
+        let again = try XCTUnwrap(CanonicalBusinessEngine.parseOrganizationName(written))
+        XCTAssertEqual(again, "Acme")
+
+        let blankFirestore = try XCTUnwrap(CanonicalBusinessEngine.organizationNameToFirestore(""))
+        XCTAssertTrue(blankFirestore.isEmpty)
+        XCTAssertNil(blankFirestore["name"])
+        let blankWrite = try XCTUnwrap(
+            CanonicalBusinessEngine.organizationNameWriteFields("   ", existingName: "Raccord MEP")
+        )
+        XCTAssertTrue(blankWrite.isEmpty)
+        XCTAssertNil(blankWrite["name"])
+        let renamed = try XCTUnwrap(
+            CanonicalBusinessEngine.organizationNameWriteFields("  Acme  ", existingName: "Raccord MEP")
+        )
+        XCTAssertEqual(renamed.count, 1)
+        XCTAssertEqual(renamed["name"] as? String, "Acme")
+        XCTAssertEqual(
+            CanonicalBusinessEngine.coalesceOrganizationName(["", "  ", "Raccord MEP"]),
+            "Raccord MEP"
+        )
+        XCTAssertEqual(CanonicalBusinessEngine.coalesceOrganizationName(["", ""]), "")
+    }
+
+    func testDateRangeLeftoverRecurringDateShowsMonthStrip() throws {
+        let leftover = try XCTUnwrap(CanonicalBusinessEngine.parseInvoicing([
+            "paymentRunMode": "date_ranges",
+            "paymentDateMode": "recurring_date",
+            "paymentDates": [20, 5],
+            "paymentRunDateRanges": [
+                ["startDate": 1, "endDate": 15],
+                ["startDate": 16, "endDate": 31],
+            ],
+        ]))
+        XCTAssertEqual(leftover.paymentRunMode, "date_ranges")
+        XCTAssertEqual(leftover.paymentDateMode, "specific_dates")
+        let leftoverCoverage = try XCTUnwrap(CanonicalBusinessEngine.paymentRunShowsMonthCoverage(leftover))
+        XCTAssertTrue(leftoverCoverage)
+
+        let recurring = try XCTUnwrap(CanonicalBusinessEngine.parseInvoicing([
+            "paymentRunMode": "recurring_timeframe",
+            "paymentDateMode": "recurring_date",
+            "recurringRunStartDay": "monday",
+            "recurringRunEndDay": "sunday",
+            "recurringPaymentDay": "friday",
+        ]))
+        XCTAssertEqual(recurring.paymentRunMode, "recurring_timeframe")
+        XCTAssertEqual(recurring.paymentDateMode, "recurring_date")
+        let recurringCoverage = try XCTUnwrap(CanonicalBusinessEngine.paymentRunShowsMonthCoverage(recurring))
+        XCTAssertFalse(recurringCoverage)
+    }
+
     func testPaymentRunWriteKeepsCustomSplitAndBothDayFields() throws {
         var settings = OrganizationInvoicingSettings.default
         settings.paymentRunMode = .dateRanges
@@ -42,6 +104,66 @@ final class OrgSettingsCanonicalTests: XCTestCase {
         let missing = try XCTUnwrap(CanonicalBusinessEngine.parseInvoicing([:]))
         XCTAssertEqual(missing.paymentRunDateRanges.map(\.startDay), [1, 16])
         XCTAssertEqual(missing.paymentRunDateRanges.map(\.endDay), [15, 31])
+    }
+
+    func testPaymentRunStripFollowsParsedRangesAndTheSaveGate() throws {
+        let covered = try XCTUnwrap(CanonicalBusinessEngine.parseInvoicing([
+            "paymentRunMode": "date_ranges",
+            "paymentDateMode": "specific_dates",
+            "paymentRunDateRanges": [
+                ["startDay": 1, "endDay": 15, "startDate": 1, "endDate": 15],
+                ["startDay": 16, "endDay": 31, "startDate": 16, "endDate": 31],
+            ],
+            "paymentDates": [18, 28],
+        ]))
+        let coveredDays = PaymentRunMonthCoverage.days(in: covered.paymentRunDateRanges)
+        XCTAssertEqual(coveredDays.filter { $0.state == .run1 }.map(\.day), Array(1...15))
+        XCTAssertEqual(coveredDays.filter { $0.state == .run2 }.map(\.day), Array(16...31))
+        XCTAssertEqual(PaymentRunMonthCoverage.legend(for: coveredDays), .coveredOnce)
+        XCTAssertEqual(PaymentRunMonthCoverage.legend(for: coveredDays).text, "✓ Every day covered once")
+        XCTAssertNil(CanonicalBusinessEngine.validateInvoicingSettings(covered))
+
+        let overlap = try XCTUnwrap(CanonicalBusinessEngine.parseInvoicing([
+            "paymentRunMode": "date_ranges",
+            "paymentDateMode": "specific_dates",
+            "paymentRunDateRanges": [
+                ["startDay": 1, "endDay": 20],
+                ["startDay": 16, "endDay": 31],
+            ],
+            "paymentDates": [18, 28],
+        ]))
+        let overlapDays = PaymentRunMonthCoverage.days(in: overlap.paymentRunDateRanges)
+        XCTAssertEqual(overlapDays.filter { $0.state == .overlap }.map(\.day), Array(16...20))
+        XCTAssertEqual(
+            PaymentRunMonthCoverage.legend(for: overlapDays).text,
+            "5 days in both runs"
+        )
+        XCTAssertNotNil(CanonicalBusinessEngine.validateInvoicingSettings(overlap))
+
+        let gap = try XCTUnwrap(CanonicalBusinessEngine.parseInvoicing([
+            "paymentRunMode": "date_ranges",
+            "paymentDateMode": "specific_dates",
+            "paymentRunDateRanges": [
+                ["startDay": 1, "endDay": 10],
+                ["startDay": 16, "endDay": 31],
+            ],
+            "paymentDates": [18, 28],
+        ]))
+        let gapDays = PaymentRunMonthCoverage.days(in: gap.paymentRunDateRanges)
+        XCTAssertEqual(gapDays.filter { $0.state == .gap }.map(\.day), Array(11...15))
+        XCTAssertEqual(PaymentRunMonthCoverage.legend(for: gapDays).text, "5 days not covered")
+        XCTAssertNotNil(CanonicalBusinessEngine.validateInvoicingSettings(gap))
+
+        let wrapped = try XCTUnwrap(CanonicalBusinessEngine.normalizePaymentRunRange(startDay: 27, endDay: 11))
+        XCTAssertEqual(wrapped.startDay, 27)
+        XCTAssertEqual(wrapped.endDay, 11)
+        let wrappedDays = PaymentRunMonthCoverage.days(in: [
+            wrapped,
+            CanonicalBusinessEngine.CanonicalPaymentRunRange(startDay: 12, endDay: 26),
+        ])
+        XCTAssertTrue(wrappedDays.filter { $0.state == .run1 }.isEmpty)
+        XCTAssertEqual(wrappedDays.filter { $0.state == .gap }.map(\.day), Array(1...11) + Array(27...31))
+        XCTAssertEqual(wrappedDays.filter { $0.state == .run2 }.map(\.day), Array(12...26))
     }
 
     func testOverlappingPaymentRunsAreRefused() {

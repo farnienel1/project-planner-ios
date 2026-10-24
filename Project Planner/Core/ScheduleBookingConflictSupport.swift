@@ -22,12 +22,38 @@ struct ScheduleBookablePerson: Identifiable, Hashable {
 }
 
 enum ScheduleBookablePersonBuilder {
+    /// Operative catalogue plus Operatives-list user documents that have no matching operative.
+    /// `listedCurrentLabourPeople` already drops an anonymised deleted profile. `passwordSet` is not required.
+    /// This does not write `operativeProfiles`.
+    @MainActor
+    static func operativesForScheduling(
+        operatives sourceOperatives: [Operative],
+        users sourceUsers: [AppUser]
+    ) -> [Operative] {
+        let operatives = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceOperatives) ?? sourceOperatives
+        let users = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceUsers) ?? sourceUsers
+        var rows = operatives
+        var seenEmails = Set(operatives.map { emailKey($0.email) }.filter { !$0.isEmpty })
+        var seenIds = Set(operatives.map(\.id))
+        for user in users where user.isActive && user.appearsOnOperativesList {
+            let email = emailKey(user.email)
+            if !email.isEmpty, seenEmails.contains(email) { continue }
+            guard let id = UUID(uuidString: user.id), seenIds.insert(id).inserted else { continue }
+            rows.append(operativeRecord(from: user, id: id))
+            if !email.isEmpty { seenEmails.insert(email) }
+        }
+        return rows
+    }
+
+    @MainActor
     static func build(
-        operatives: [Operative],
-        users: [AppUser],
+        operatives sourceOperatives: [Operative],
+        users sourceUsers: [AppUser],
         projectId: UUID,
         bookings: [Booking]
     ) -> [ScheduleBookablePerson] {
+        let operatives = operativesForScheduling(operatives: sourceOperatives, users: sourceUsers)
+        let users = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceUsers) ?? sourceUsers
         var rows: [ScheduleBookablePerson] = []
         var seenEmails = Set<String>()
 
@@ -56,7 +82,8 @@ enum ScheduleBookablePersonBuilder {
         let activeOps = operatives.filter(\.isActive)
         for op in activeOps.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) {
             let email = op.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            let user = users.first { $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email }
+            let user = users.first { emailKey($0.email) == email && !email.isEmpty }
+                ?? users.first { $0.id == op.id.uuidString }
             let role: String = {
                 guard let user else { return "Operative" }
                 if user.permissions.adminAccess || user.isSuperAdmin { return "Admin" }
@@ -78,6 +105,29 @@ enum ScheduleBookablePersonBuilder {
         }
 
         return rows
+    }
+
+    private static func emailKey(_ value: String) -> String {
+        value.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    @MainActor
+    private static func operativeRecord(from user: AppUser, id: UUID) -> Operative {
+        Operative(
+            id: id,
+            firstName: user.firstName,
+            lastName: user.surname,
+            email: user.email,
+            phone: user.mobileNumber,
+            startDate: user.createdAt,
+            isActive: user.isActive,
+            hourlyRate: user.hourlyRate,
+            dayRate: user.dayRate,
+            tradeTypePreset: user.tradeTypePreset,
+            tradeTypeCustom: user.tradeTypeCustom,
+            createdAt: user.createdAt,
+            updatedAt: user.createdAt
+        )
     }
 }
 

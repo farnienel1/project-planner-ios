@@ -67,6 +67,10 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
     var payrollTimePolicyEffectiveFrom: Date?
     /// Queued future working-hours change (replaces any prior pending schedule on save).
     var payrollTimePolicyScheduled: OrgPayrollTimePolicyScheduledChange?
+    /// JSON text of `organizations/{id}.billing`, or nil when that nested map is absent.
+    var billingJSON: String?
+    /// True after an organisation document has been read. A stub company is still unresolved.
+    var billingResolved: Bool
 
     init(
         id: UUID = UUID(),
@@ -84,7 +88,9 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         creatorUserId: String? = nil,
         payrollTimePolicyPrior: OrgPayrollTimePolicy? = nil,
         payrollTimePolicyEffectiveFrom: Date? = nil,
-        payrollTimePolicyScheduled: OrgPayrollTimePolicyScheduledChange? = nil
+        payrollTimePolicyScheduled: OrgPayrollTimePolicyScheduledChange? = nil,
+        billingJSON: String? = nil,
+        billingResolved: Bool = false
     ) {
         self.id = id
         if let fid = firestoreDocumentId, !fid.isEmpty {
@@ -108,12 +114,15 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         self.payrollTimePolicyPrior = payrollTimePolicyPrior
         self.payrollTimePolicyEffectiveFrom = payrollTimePolicyEffectiveFrom
         self.payrollTimePolicyScheduled = payrollTimePolicyScheduled
+        self.billingJSON = billingJSON
+        self.billingResolved = billingResolved
     }
 
     enum CodingKeys: String, CodingKey {
         case id, firestoreDocumentId, name, settings, officeAddressLine1, officeCity, officePostcode
         case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, documentAbbreviation, createdAt, updatedAt, creatorUserId
         case payrollTimePolicyPrior, payrollTimePolicyEffectiveFrom, payrollTimePolicyScheduled
+        case billingJSON, billingResolved
     }
 
     init(from decoder: Decoder) throws {
@@ -136,6 +145,8 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         payrollTimePolicyPrior = try c.decodeIfPresent(OrgPayrollTimePolicy.self, forKey: .payrollTimePolicyPrior)
         payrollTimePolicyEffectiveFrom = try c.decodeIfPresent(Date.self, forKey: .payrollTimePolicyEffectiveFrom)
         payrollTimePolicyScheduled = try c.decodeIfPresent(OrgPayrollTimePolicyScheduledChange.self, forKey: .payrollTimePolicyScheduled)
+        billingJSON = try c.decodeIfPresent(String.self, forKey: .billingJSON)
+        billingResolved = try c.decodeIfPresent(Bool.self, forKey: .billingResolved) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -158,20 +169,29 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(payrollTimePolicyPrior, forKey: .payrollTimePolicyPrior)
         try c.encodeIfPresent(payrollTimePolicyEffectiveFrom, forKey: .payrollTimePolicyEffectiveFrom)
         try c.encodeIfPresent(payrollTimePolicyScheduled, forKey: .payrollTimePolicyScheduled)
+        try c.encodeIfPresent(billingJSON, forKey: .billingJSON)
+        try c.encode(billingResolved, forKey: .billingResolved)
+    }
+
+    /// Script result for this company's nested billing map. A missing map stays open. A script failure stays open.
+    var subscriptionHasAccess: Bool {
+        CanonicalBusinessEngine.hasAccess(billing: OrganizationBillingMap.dictionary(json: billingJSON)) ?? true
     }
 
     /// Maps an `organizations/{id}` Firestore document without exposing abbreviation plumbing at call sites.
+    /// `fallbackName` is unused. An empty script result is a missing name; a nil script result stays empty.
     nonisolated static func make(
         fromFirestoreId orgId: String,
         data: [String: Any],
         settings: OrganizationSettings,
         fallbackName: String = "Organisation"
     ) -> Organization {
-        let resolvedName = (data["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return Organization(
+        _ = fallbackName
+        let name = CanonicalBusinessEngine.parseOrganizationName(nameParsePayload(from: data)) ?? ""
+        let organization = Organization(
             id: UUID(uuidString: orgId) ?? UUID(),
             firestoreDocumentId: orgId,
-            name: (resolvedName?.isEmpty == false) ? resolvedName! : fallbackName,
+            name: name,
             settings: settings,
             officeAddressLine1: data["officeAddressLine1"] as? String,
             officeCity: data["officeCity"] as? String,
@@ -181,7 +201,32 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
             defaultLongitude: data["defaultLongitude"] as? Double,
             companyLogoURL: data["companyLogoURL"] as? String,
             documentAbbreviation: OrganizationDocumentAbbreviation.normalized(data["documentAbbreviation"] as? String),
-            creatorUserId: data["creatorUserId"] as? String
+            creatorUserId: data["creatorUserId"] as? String,
+            billingJSON: OrganizationBillingMap.storedJSON(from: data),
+            billingResolved: true
         )
+        return organization
+    }
+
+    /// String fields `parseOrganizationName` reads. Firestore timestamps are left out so the script can run.
+    nonisolated static func nameParsePayload(from data: [String: Any]) -> [String: Any] {
+        var payload: [String: Any] = [:]
+        for key in ["name", "organizationName", "organisationName", "companyName"] {
+            if let value = data[key] as? String {
+                payload[key] = value
+            }
+        }
+        if let settings = data["settings"] as? [String: Any] {
+            var nested: [String: Any] = [:]
+            for key in ["name", "organizationName", "organisationName", "companyName"] {
+                if let value = settings[key] as? String {
+                    nested[key] = value
+                }
+            }
+            if !nested.isEmpty {
+                payload["settings"] = nested
+            }
+        }
+        return payload
     }
 }

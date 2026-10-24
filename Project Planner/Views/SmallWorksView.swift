@@ -103,6 +103,15 @@ struct SmallWorksView: View {
                 if selectedStatus == .inactive || selectedStatus == nil {
                     selectedStatus = .active
                 }
+                openPendingCatalogueJob()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .pushWorkCatalogueDetail)) { note in
+                let isSmallWorks = note.userInfo?["isSmallWorks"] as? Bool ?? false
+                guard isSmallWorks else { return }
+                openPendingCatalogueJob()
+            }
+            .onChange(of: projectStore.projects.count) { _, _ in
+                openPendingCatalogueJob()
             }
             .task {
                 await refreshDeadlineAssignedProjectIds()
@@ -136,6 +145,15 @@ struct SmallWorksView: View {
             return true
         }
         return false
+    }
+
+    private func openPendingCatalogueJob() {
+        guard WorkCatalogueDeepLink.peek(isSmallWorks: true),
+              let projectId = WorkCatalogueDeepLink.pendingProjectId,
+              let project = projectStore.projects.first(where: { $0.id == projectId }) else { return }
+        guard WorkCatalogueDeepLink.take(isSmallWorks: true) != nil else { return }
+        navigationPath = NavigationPath()
+        navigationPath.append(project)
     }
 
     private var isWaitingForVisibilityData: Bool {

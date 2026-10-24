@@ -35,6 +35,7 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case variationAdded = "variation_added"
         case variationFromTracker = "variation_from_tracker"
         case variationNumbersUpdated = "variation_numbers_updated"
+        case timesheetSubmissionReminder = "timesheet_submission_reminder"
     }
     
     let id: UUID
@@ -50,6 +51,10 @@ struct AppNotification: Identifiable, Codable, Hashable {
     /// Optional deep-link payload used by notifications that open a specific timesheet review.
     var deepLinkUserId: String?
     var deepLinkWeekStart: Date?
+    /// `YYYY-MM-DD` for destinations that open a day. Optional.
+    var dayKey: String?
+    /// `projects` or `smallWorks` when the row names a job catalogue. Optional.
+    var catalogue: String?
     
     init(
         id: UUID = UUID(),
@@ -63,7 +68,9 @@ struct AppNotification: Identifiable, Codable, Hashable {
         createdAt: Date = Date(),
         requiresPermission: String? = nil,
         deepLinkUserId: String? = nil,
-        deepLinkWeekStart: Date? = nil
+        deepLinkWeekStart: Date? = nil,
+        dayKey: String? = nil,
+        catalogue: String? = nil
     ) {
         self.id = id
         self.organizationId = organizationId
@@ -77,6 +84,20 @@ struct AppNotification: Identifiable, Codable, Hashable {
         self.requiresPermission = requiresPermission
         self.deepLinkUserId = deepLinkUserId
         self.deepLinkWeekStart = deepLinkWeekStart
+        self.dayKey = dayKey
+        self.catalogue = catalogue
+    }
+
+    /// `YYYY-MM-DD` stored on the row, or the same shape in `relatedId` when that field is the payment day.
+    static func inboxDayKey(storedDayKey: String?, relatedId: String?) -> String? {
+        if let storedDayKey, isInboxDayKey(storedDayKey) { return storedDayKey }
+        if let relatedId, isInboxDayKey(relatedId) { return relatedId }
+        let trimmed = storedDayKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func isInboxDayKey(_ value: String) -> Bool {
+        value.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
     }
 }
 

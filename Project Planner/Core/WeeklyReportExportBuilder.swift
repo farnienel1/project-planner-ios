@@ -110,7 +110,7 @@ enum WeeklyReportExportBuilder {
         )
     }
 
-    private static func worksheetXML(rows: [[String]]) -> String {
+    static func worksheetXML(rows: [[String]]) -> String {
         var xml = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -120,7 +120,7 @@ enum WeeklyReportExportBuilder {
             xml += "<row r=\"\(rowIndex + 1)\">"
             for (colIndex, value) in row.enumerated() {
                 let cellRef = columnName(colIndex + 1) + "\(rowIndex + 1)"
-                let escaped = escapeXML(value)
+                let escaped = ExportTextEscaping.escapeHTML(ExportTextEscaping.spreadsheetFormulaPrefix(value))
                 if value.isEmpty {
                     xml += "<c r=\"\(cellRef)\"/>"
                 } else {
@@ -145,14 +145,6 @@ enum WeeklyReportExportBuilder {
             n = (n - 1) / 26
         }
         return name
-    }
-
-    private static func escapeXML(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
     // MARK: - PDF

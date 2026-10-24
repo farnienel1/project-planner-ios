@@ -12,54 +12,10 @@ struct NotificationsView: View {
     @EnvironmentObject var userStore: UserStore
     @Environment(\.dismiss) private var dismiss
 
-    @State private var filterOption: FilterOption = .newest
-    @State private var showingFilterOptions = false
-
-    enum FilterOption: String, CaseIterable {
-        case newest = "Newest"
-        case oldest = "Oldest"
-        case date = "Date"
-
-        var displayName: String { rawValue }
-    }
-
-    var filteredNotifications: [AppNotification] {
-        let sorted: [AppNotification]
-        switch filterOption {
-        case .newest:
-            sorted = notificationService.notifications.sorted { $0.createdAt > $1.createdAt }
-        case .oldest:
-            sorted = notificationService.notifications.sorted { $0.createdAt < $1.createdAt }
-        case .date:
-            let grouped = Dictionary(grouping: notificationService.notifications) { notification in
-                Calendar.current.startOfDay(for: notification.createdAt)
-            }
-            sorted = grouped.values.flatMap { $0 }.sorted { $0.createdAt > $1.createdAt }
-        }
-        return Array(sorted.prefix(150))
-    }
-
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                HStack {
-                    Text(filterOption.displayName)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                    Spacer()
-                    Button {
-                        showingFilterOptions = true
-                    } label: {
-                        Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
-                    }
-                        .accessibilityIdentifier("notifications.filter")
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-
-                if filteredNotifications.isEmpty {
+                if notificationService.notifications.isEmpty {
                     ScrollView {
                         VStack(spacing: 16) {
                             Image(systemName: "bell.slash")
@@ -81,7 +37,7 @@ struct NotificationsView: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 10) {
-                            ForEach(filteredNotifications) { notification in
+                            ForEach(notificationService.notifications) { notification in
                                 Button {
                                     open(notification)
                                 } label: {
@@ -109,26 +65,16 @@ struct NotificationsView: View {
                         .accessibilityIdentifier("notifications.done")
                 }
             }
-            .confirmationDialog("Filter Notifications", isPresented: $showingFilterOptions, titleVisibility: .visible) {
-                ForEach(FilterOption.allCases, id: \.self) { option in
-                    Button(option.displayName) { filterOption = option }
-                        .accessibilityIdentifier("notifications.row.\(option)")
-                }
-                Button("Cancel", role: .cancel) {}
-                    .accessibilityIdentifier("notifications.cancel")
-            }
             .task {
                 // Inbox is intentionally not loaded on app launch (jetsam risk). Load here on demand.
+                // Opening the centre does not mark rows read. The in-app number stays until a row is opened.
                 await notificationService.loadNotifications()
-                await notificationService.markAllAsRead()
-            }
-            .onDisappear {
-                notificationService.prepareInboxPresentation()
             }
         }
     }
 
     private func open(_ notification: AppNotification) {
+        Task { await notificationService.markAsRead(notification) }
         dismiss()
         let info = NotificationDeepLink.userInfo(for: notification)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -220,6 +166,7 @@ struct NotificationRowView: View {
         case .timesheetSignedByManager: return "checkmark.seal.fill"
         case .lineManagerPeerUpdate: return "person.2.fill"
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return "plus.rectangle.on.folder"
+        case .timesheetSubmissionReminder: return "clock.badge.exclamationmark"
         }
     }
 
@@ -247,6 +194,7 @@ struct NotificationRowView: View {
         case .timesheetSignedByManager: return ProjectWorksRevampColors.activeGreen
         case .lineManagerPeerUpdate: return ProjectWorksRevampColors.blue
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return ProjectWorksRevampColors.upcomingAmber
+        case .timesheetSubmissionReminder: return ProjectWorksRevampColors.upcomingAmber
         }
     }
 }

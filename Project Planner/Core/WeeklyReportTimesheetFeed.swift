@@ -153,12 +153,13 @@ struct WeeklyReportTimesheetFeed {
                         relatedUsers: users
                     )
                     if working.weeklyReportOverride != nil {
-                        TimesheetDraftStore.save(working, userId: user.id, weekStart: period.start)
+                        TimesheetDraftStore.save(working, userId: user.id, weekStart: period.start, weekEnd: period.end)
                         if let orgId {
                             await TimesheetDraftStore.saveToCloud(
                                 working,
                                 userId: user.id,
                                 weekStart: period.start,
+                                weekEnd: period.end,
                                 firebaseBackend: firebaseBackend,
                                 organizationId: orgId
                             )

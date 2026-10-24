@@ -89,8 +89,7 @@ final class SiteAuditOfflineStore: ObservableObject {
                         remoteURL = try await firebaseBackend.uploadSiteAuditImage(
                             image,
                             auditId: record.audit.id,
-                            organizationId: record.organizationId,
-                            imageName: "site_audit_item_\(item.id.uuidString)"
+                            organizationId: record.organizationId
                         )
                     }
                     items.append(SiteAuditItem(
