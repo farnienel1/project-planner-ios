@@ -26,3 +26,19 @@ firebase-debug.log
 firestore-debug.log
 ui-debug.log
 *-debug.log
+
+# Secrets
+.env
+.env.*
+*.env
+Config/Smtp.local.xcconfig
+*.pem
+serviceAccount*.json
+*-firebase-adminsdk-*.json
+*.p8
+*.p12
+*.mobileprovision
+
+# Local clutter
+.DS_Store
+e107/
