@@ -4,7 +4,7 @@ Test the Project Planner iOS app safely and quickly.
 
 ## Safety
 
-- Use only the test organisation, the Firebase Emulator, and the accounts in `.cursor/test-accounts.local.md`.
+- Use only the test organisation, the Firebase Emulator, and test accounts from the project's seed or fixture files.
 - Prefix created data with `TEST-` (example: a project named `TEST-Kitchen refit`).
 - Never touch production data, billing, signing, TestFlight, or the App Store.
 
@@ -24,20 +24,17 @@ enum UITestSeed { static let projectName = "TEST-Kitchen refit" }
 
 ## How to run checks
 
-Prefer XCUITest and unit tests (`test_sim` or `xcodebuild test`). Live Simulator tapping is only for exploring a new feature or reproducing a bug.
+Prefer unit tests and XCUITest. Live Simulator tapping is only for exploring a new feature or reproducing a bug.
 
-When driving the Simulator with XcodeBuildMCP:
-
-- Read the screen with `snapshot_ui` and tap by `elementRef`. Screenshots are evidence only.
-- UI taps need the `ui-automation` workflow in `.xcodebuildmcp/config.yaml` and `XCODEBUILDMCP_ENABLED_WORKFLOWS`. Reload the MCP server after that config changes.
+- Unit tests run from the `ProjectPlannerTests` scheme (`xcodebuild test -scheme ProjectPlannerTests`). The `Project Planner` app scheme does not include them.
+- Snapshot references in `FixedSampleScreenSnapshotTests` were recorded on iPhone 16e, iOS 26.2. A run on another simulator fails on device differences, not real changes.
+- Security-rules tests are `npm run test:rules` and `npm run test:tenant`. They need Node 24.12 or later and Java for the Firestore emulator.
 - Local walks launch `Project Planner` with `-uiTesting -autoLoginRole admin -seedDemoData`. That stays on seeded TEST data and skips the live Firebase session.
-- Set session defaults (project, scheme, simulator) once per session.
 - Skip clean builds and reinstalls unless a step needs them.
 - Use one simulator unless the test needs two users.
 - Tap by accessibility identifier first, then by label. Use coordinates only when neither is available.
 
 ## Records
 
-- Keep `app-tests/PROGRESS.md` updated.
-- Start a fresh chat after each module.
-- Write `app-tests/REPORT.md` in the format from `CURSOR_FULL_APP_TEST_GUIDE.md`.
+- Security-rules results go in `app-tests/REPORT.md`.
+- Report what was run, on which simulator and OS, and what was not checked.
