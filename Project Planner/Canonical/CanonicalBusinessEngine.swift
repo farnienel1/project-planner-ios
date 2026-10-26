@@ -920,6 +920,11 @@ nonisolated enum CanonicalBusinessEngine {
         )])
     }
 
+    /// Every stored id that names the same person as `operativeId`. Nil when the script did not answer.
+    static func bookingIdsForPerson(_ operativeId: String, _ input: CanonicalBookingPersonInput) -> [String]? {
+        decode([String].self, function: "bookingIdsForPerson", arguments: [operativeId, input])
+    }
+
     /// One grouping key per person (`account:…`, `operative:…` or `id:…`), so a re-added person's bookings under an
     /// old and a new id land together. Nil when the script did not answer.
     static func bookingPersonKey(_ operativeId: String, _ input: CanonicalBookingPersonInput) -> String? {

@@ -431,6 +431,16 @@ func labourBookingIds(for user: AppUser, operatives: [Operative]) -> Set<UUID> {
     return Set(ids.map { Booking.internalOperativeId(for: $0) })
 }
 
+/// Every in-app id that names the same person as `operativeId`, from the rulebook's `bookingIdsForPerson` (web's
+/// Book Labour and schedule checks call it too). Only `operativeId` itself when the script does not answer.
+func labourBookingIds(sameAs operativeId: UUID, operatives: [Operative], users: [AppUser]) -> Set<UUID> {
+    let ids = CanonicalBusinessEngine.bookingIdsForPerson(
+        Booking.storedOperativeId(for: operativeId),
+        bookingPersonInput(operatives: operatives, users: users)
+    ) ?? []
+    return Set(ids.map { Booking.internalOperativeId(for: $0) }).union([operativeId])
+}
+
 enum TradeSkill: String, CaseIterable, Identifiable, Codable, Hashable {
     case secondFix = "2nd Fix"
     case accessControl = "Access Control"

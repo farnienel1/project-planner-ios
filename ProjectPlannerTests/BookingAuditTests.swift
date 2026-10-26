@@ -234,4 +234,14 @@ final class BookingAuditTests: XCTestCase {
         XCTAssertTrue(ids.contains(UUID(uuidString: placeholderId)!))
         XCTAssertTrue(WorkAccess.signedInAccountIds(authUid: authUid, currentUser: user, organizationUsers: [user]).contains(placeholderId))
     }
+
+    func testPickingTheOldCatalogueRowFindsBookingsUnderTheNewUid() {
+        let ids = labourBookingIds(
+            sameAs: oldCatalogueId,
+            operatives: [LogicFixtures.operative(id: oldCatalogueId, email: email)],
+            users: [rehiredUser()]
+        )
+        XCTAssertEqual(ids, [oldCatalogueId, Booking.internalOperativeId(for: authUid), UUID(uuidString: placeholderId)!])
+        XCTAssertEqual(labourBookingIds(sameAs: UUID(uuidString: placeholderId)!, operatives: [], users: [rehiredUser()]).count, 2)
+    }
 }
