@@ -165,6 +165,23 @@ nonisolated struct CanonicalUnbookedLabourPerson: Codable, Equatable, Sendable {
     var isAdmin: Bool
     var isSuperAdmin: Bool
     var status: String? = nil
+    /// `users/{uid}.formerUserIds` (invite placeholder ids), from `parseFormerUserIds`. A booking under one counts.
+    var formerIds: [String]? = nil
+}
+
+/// The flags `labourBookingKind` reads (`LabourPerson` in the script).
+nonisolated struct CanonicalLabourKindPerson: Codable, Equatable, Sendable {
+    var isActive: Bool
+    var isOperativeMode: Bool
+    var isManager: Bool
+    var isAdmin: Bool
+    var isSuperAdmin: Bool
+}
+
+/// One person for `formerIdAliases`: the current id and the ids they had before.
+nonisolated struct CanonicalFormerIdPerson: Codable, Equatable, Sendable {
+    var id: String
+    var formerIds: [String]
 }
 
 /// One roster profile (`RosterOperative` in the script).
@@ -746,6 +763,39 @@ nonisolated enum CanonicalBusinessEngine {
     /// The same rows as `unbookedLabourRows` for one London day. Not a second person loop.
     static func unbookedLabourRowsOnDay(_ input: CanonicalUnbookedLabourDayInput) -> [CanonicalUnbookedLabourRow]? {
         decode([CanonicalUnbookedLabourRow].self, function: "unbookedLabourRowsOnDay", arguments: [input])
+    }
+
+    /// True when a booking with this stored status fills its day (confirmed, tentative, pending, completed).
+    /// Nil when the script did not answer.
+    static func bookingOccupiesDay(_ status: String) -> Bool? {
+        decode(Bool.self, function: "bookingOccupiesDay", arguments: [status])
+    }
+
+    /// `"operative"`, `"manager"`, or nil when the person is not bookable labour (inactive, or no role flags).
+    /// Nil also when the script did not answer.
+    static func labourBookingKind(_ person: CanonicalLabourKindPerson) -> String? {
+        guard let json = jsonFragment(person) else { return nil }
+        let kind = decodeExpression(String.self, "(ProjectPlannerCanonical.labourBookingKind(\(json)) || '')")
+        return kind?.isEmpty == false ? kind : nil
+    }
+
+    /// Former id → current id, so a booking stored under an invite placeholder names the person now.
+    static func formerIdAliases(_ people: [CanonicalFormerIdPerson]) -> [String: String]? {
+        decode([String: String].self, function: "formerIdAliases", arguments: [people])
+    }
+
+    /// `formerUserIds` from a users document: strings only, trimmed, unique. Nil when the script did not answer.
+    /// `raw` is the stored field as Firestore returned it.
+    static func parseFormerUserIds(_ raw: Any?) -> [String]? {
+        let payload: [String: Any] = ["formerUserIds": raw ?? NSNull()]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            // Not JSON (for example a Timestamp in the array): the script still drops anything that is not a string.
+            let strings = (raw as? [Any])?.compactMap { $0 as? String } ?? []
+            return decode([String].self, function: "parseFormerUserIds", arguments: [["formerUserIds": strings]])
+        }
+        return decodeExpression([String].self, "ProjectPlannerCanonical.parseFormerUserIds(\(json))")
     }
 
     /// `oldest` or `newest`. A missing or unrecognised value is `oldest`. Nil when the script did not answer.

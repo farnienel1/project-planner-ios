@@ -4160,6 +4160,11 @@ class FirebaseBackend: ObservableObject {
                 merged.removeValue(forKey: "vatNumber")
                 merged["updatedAt"] = Timestamp(date: Date())
                 merged["passwordSet"] = true
+                // Bookings made while the invite was pending still name the placeholder. Append-only, the shape of
+                // `inviteMigrationFormerIdWriteFields`, so `formerIdAliases` can find this person from those bookings.
+                // The placeholder's own former ids come along too, so a chain of invites stays linked.
+                let placeholderFormerIds = CanonicalBusinessEngine.parseFormerUserIds(merged["formerUserIds"]) ?? []
+                merged["formerUserIds"] = FieldValue.arrayUnion(placeholderFormerIds + [placeholder.documentID])
                 try await db.collection("users").document(authUid).setData(merged, merge: true)
                 await moveSensitiveProfile(fromPlaceholderId: placeholder.documentID, toUserId: authUid, legacyPlaceholder: legacyTaxIds)
                 let norm = rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4309,6 +4314,7 @@ class FirebaseBackend: ObservableObject {
         )
         parsed.documentName = data["name"] as? String ?? ""
         parsed.documentDisplayName = data["displayName"] as? String ?? ""
+        parsed.formerUserIds = CanonicalBusinessEngine.parseFormerUserIds(data["formerUserIds"]) ?? []
         return parsed
     }
     
@@ -7134,7 +7140,8 @@ class FirebaseBackend: ObservableObject {
         
         var bookingData: [String: Any] = [
             "id": booking.id.uuidString,
-            "operativeId": booking.operativeId.uuidString,
+            // A Firebase Auth uid stays a uid (web #189). Writing the in-app UUID would book nobody.
+            "operativeId": booking.storedOperativeId,
             "projectId": booking.projectId.uuidString,
             "date": Timestamp(date: booking.date),
             "timeSlot": booking.timeSlot.rawValue,
@@ -7244,8 +7251,9 @@ class FirebaseBackend: ObservableObject {
     func bookingFromFirestoreDocument(_ doc: QueryDocumentSnapshot) -> Booking? {
         let data = doc.data()
             
-            guard let operativeIdString = data["operativeId"] as? String,
-                  let operativeId = UUID(uuidString: operativeIdString),
+            // operativeId may be a Firebase Auth uid, not a UUID (web #189). Keep the booking and its stored id.
+            guard let operativeIdString = (data["operativeId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !operativeIdString.isEmpty,
                   let projectIdString = data["projectId"] as? String,
                   let projectId = UUID(uuidString: projectIdString),
                   let date = (data["date"] as? Timestamp)?.dateValue(),
@@ -7271,10 +7279,10 @@ class FirebaseBackend: ObservableObject {
             let bookingGroupId = data["bookingGroupId"] as? String
             let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-            
-            return Booking(
+
+            var booking = Booking(
                 id: id,
-                operativeId: operativeId,
+                operativeId: Booking.internalOperativeId(for: operativeIdString),
                 projectId: projectId,
                 date: date,
                 timeSlot: timeSlot,
@@ -7289,6 +7297,8 @@ class FirebaseBackend: ObservableObject {
                 createdAt: createdAt,
                 updatedAt: updatedAt
             )
+            booking.operativeKey = operativeIdString
+            return booking
     }
 
     func listenBookings(

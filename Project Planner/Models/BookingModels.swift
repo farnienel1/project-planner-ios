@@ -5,13 +5,18 @@
 //  Created by Assistant on 29/09/2025.
 //
 
+import CryptoKit
 import Foundation
 
 // MARK: - Booking Models
 
 struct Booking: Identifiable, Codable, Hashable {
     let id: UUID
+    /// In-app key for the booked person. A stored `operativeId` that is not a UUID (a Firebase Auth uid,
+    /// web #189) maps to a stable UUID from `internalOperativeId(for:)`; `operativeKey` keeps the stored text.
     var operativeId: UUID
+    /// The `operativeId` exactly as Firestore stores it. Nil on bookings made before this field existed.
+    var operativeKey: String?
     var projectId: UUID
     var date: Date
     var timeSlot: TimeSlot
@@ -60,6 +65,63 @@ struct Booking: Identifiable, Codable, Hashable {
         self.bookingGroupId = bookingGroupId
         self.createdAt = createdAt ?? Date()
         self.updatedAt = updatedAt ?? Date()
+    }
+
+    /// The `operativeId` written to Firestore: the stored text when known, else the person behind a
+    /// mapped id, else the UUID itself.
+    var storedOperativeId: String {
+        if let key = operativeKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty { return key }
+        return Self.storedOperativeId(for: operativeId)
+    }
+
+    /// The stored id behind an in-app operative key (a Firebase Auth uid mapped by `internalOperativeId(for:)`).
+    nonisolated static func storedOperativeId(for internalId: UUID) -> String {
+        OperativeKeyRegistry.shared.rawKey(for: internalId) ?? internalId.uuidString
+    }
+
+    /// In-app UUID for a stored `operativeId`. A UUID is used as is. Any other id (a Firebase Auth uid)
+    /// gets a stable name-based UUID, and the pair is remembered so saves write the original id back.
+    /// Bookings read from this phone's saved copy carry `operativeKey` but have not been through
+    /// `internalOperativeId(for:)` yet. Register their ids so warnings and names use the stored id before the server answers.
+    nonisolated static func registerStoredOperativeKeys(_ bookings: [Booking]) {
+        for booking in bookings {
+            guard let key = booking.operativeKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !key.isEmpty, UUID(uuidString: key) == nil else { continue }
+            OperativeKeyRegistry.shared.remember(raw: key, as: booking.operativeId)
+        }
+    }
+
+    nonisolated static func internalOperativeId(for raw: String) -> UUID {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let uuid = UUID(uuidString: trimmed) { return uuid }
+        let derived = OperativeKeyRegistry.derivedUUID(for: trimmed)
+        OperativeKeyRegistry.shared.remember(raw: trimmed, as: derived)
+        return derived
+    }
+}
+
+/// Maps the stable UUIDs made for non-UUID person ids back to those ids. In memory only: the mapping is
+/// deterministic, so every booking read or picker row that uses a mapped id has registered it first.
+nonisolated final class OperativeKeyRegistry: @unchecked Sendable {
+    static let shared = OperativeKeyRegistry()
+    private let lock = NSLock()
+    private var rawById: [UUID: String] = [:]
+
+    func remember(raw: String, as id: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        rawById[id] = raw
+    }
+
+    func rawKey(for id: UUID) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return rawById[id]
+    }
+
+    /// Version-5-shaped UUID from SHA-256 of a fixed prefix and the id. Same input, same UUID, on every device.
+    static func derivedUUID(for raw: String) -> UUID {
+        let b = Array(SHA256.hash(data: Data("pp.operative-key.\(raw)".utf8)).prefix(16))
+        return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], (b[6] & 0x0F) | 0x50, b[7],
+                           (b[8] & 0x3F) | 0x80, b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
     }
 }
 

@@ -778,7 +778,9 @@ class UserStore: ObservableObject {
     }
 
     /// Operative timesheets visibility:
-    /// - Admin/super-admin accounts can always access when operative users exist in the organization.
+    /// - Admin/super-admin accounts (`seesEveryUserTimesheet`) always have User Timesheets, even while the
+    ///   roster is loading or the company has no active operative. The roster must not turn an admin's hub
+    ///   into the operative one.
     /// - Manager accounts can access when at least one active operative is directly assigned to them.
     func canAccessOperativeTimesheets() -> Bool {
         guard let user = displayUser else { return false }
@@ -786,11 +788,8 @@ class UserStore: ObservableObject {
         guard CanonicalBusinessEngine.canReviewUserTimesheets(role) == true else {
             return false
         }
-        let hasAnyActiveOperative = organizationUsers.contains { orgUser in
-            orgUser.permissions.operativeMode && orgUser.isActive
-        }
         if CanonicalBusinessEngine.seesEveryUserTimesheet(role) == true {
-            return hasAnyActiveOperative || isHomeProfileLoading
+            return true
         }
         return organizationUsers.contains { orgUser in
             guard orgUser.permissions.operativeMode else { return false }

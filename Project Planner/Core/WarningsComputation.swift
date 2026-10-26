@@ -66,6 +66,8 @@ struct WarningsComputationSnapshot: Sendable {
         let isSuperAdmin: Bool
         let isAdminRole: Bool
         var sameEmailUserIds: [String] = []
+        /// `users/{uid}.formerUserIds`: invite placeholder ids this account replaced (web #189).
+        var formerUserIds: [String] = []
     }
 
     struct ProjectSnapshot: Sendable {
@@ -229,7 +231,8 @@ enum WarningsComputation {
                 hasAdminAccess: user.permissions.adminAccess,
                 isSuperAdmin: user.isSuperAdmin,
                 isAdminRole: user.role == .admin,
-                sameEmailUserIds: user.sameEmailUserIds
+                sameEmailUserIds: user.sameEmailUserIds,
+                formerUserIds: user.formerUserIds
             )
         }
 
@@ -249,7 +252,7 @@ enum WarningsComputation {
                 projectId: booking.projectId,
                 date: booking.date,
                 dayStart: cal.startOfDay(for: booking.date),
-                isActiveStatus: booking.status == .confirmed || booking.status == .tentative,
+                isActiveStatus: CanonicalBusinessEngine.bookingOccupiesDay(booking.status.rawValue) == true,
                 paidHours: booking.paidBookedHours(policy: input.payrollTimePolicy),
                 scheduleLabel: booking.scheduleLabel(policy: input.payrollTimePolicy),
                 clashInterval: OperativeBookingInterval.clashInterval(for: booking, policy: input.payrollTimePolicy),
@@ -908,6 +911,7 @@ enum WarningsComputation {
                 "isManager": user.permissions.manager,
                 "isAdmin": user.permissions.adminAccess || user.role == .admin,
                 "isSuperAdmin": user.isSuperAdmin,
+                "formerIds": user.formerUserIds,
             ]
             peopleRows.append(row)
             for alias in user.sameEmailUserIds where !alias.isEmpty && alias != user.id {
@@ -932,9 +936,9 @@ enum WarningsComputation {
             ]
         }
         var bookingRows: [[String: Any]] = []
-        for booking in operativeBookings where (booking.status == .confirmed || booking.status == .tentative) && calendar.isDate(booking.date, inSameDayAs: dayStart) {
+        for booking in operativeBookings where CanonicalBusinessEngine.bookingOccupiesDay(booking.status.rawValue) == true && calendar.isDate(booking.date, inSameDayAs: dayStart) {
             bookingRows.append([
-                "personId": booking.operativeId.uuidString,
+                "personId": Booking.storedOperativeId(for: booking.operativeId),
                 "dayKey": dayKey,
                 "kind": "operative",
                 "timeSlot": booking.timeSlot.rawValue,
@@ -1022,7 +1026,8 @@ enum WarningsComputation {
             isOperativeMode: unbookedFlag(row["isOperativeMode"]),
             isManager: unbookedFlag(row["isManager"]),
             isAdmin: unbookedFlag(row["isAdmin"]),
-            isSuperAdmin: unbookedFlag(row["isSuperAdmin"])
+            isSuperAdmin: unbookedFlag(row["isSuperAdmin"]),
+            formerIds: (row["formerIds"] as? [String]).flatMap { $0.isEmpty ? nil : $0 }
         )
     }
 
@@ -1078,7 +1083,7 @@ enum WarningsComputation {
         var bookings: [[String: Any]] = []
         for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= rowEnd {
             bookings.append([
-                "personId": booking.operativeId.uuidString,
+                "personId": Booking.storedOperativeId(for: booking.operativeId),
                 "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
                 "kind": "operative",
                 "timeSlot": booking.timeSlot,
@@ -1108,6 +1113,7 @@ enum WarningsComputation {
                 "isManager": user.isManager,
                 "isAdmin": user.hasAdminAccess || user.isAdminRole,
                 "isSuperAdmin": user.isSuperAdmin,
+                "formerIds": user.formerUserIds,
             ]
             peopleRows.append(row)
             for alias in user.sameEmailUserIds where !alias.isEmpty && alias != user.id {
@@ -1250,7 +1256,7 @@ enum WarningsComputation {
         for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
             bookings.append(CanonicalLeaveBooking(
                 id: booking.id.uuidString,
-                personId: booking.operativeId.uuidString,
+                personId: Booking.storedOperativeId(for: booking.operativeId),
                 kind: "operative",
                 dayKey: dayKeyString(booking.dayStart, calendar: calendar),
                 timeSlot: booking.timeSlot,

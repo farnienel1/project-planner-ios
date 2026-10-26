@@ -158,7 +158,8 @@ struct NotificationRowView: View {
         case .qualificationExpiry: return "checkmark.seal"
         case .materialOrderCutOff: return "shippingbox"
         case .materialAdded: return "shippingbox.fill"
-        case .toolboxTalkIssued: return "list.clipboard.fill"
+        case .toolboxTalkIssued, .hsToolboxReminder: return "list.clipboard.fill"
+        case .ideaStatus, .ideaShipped: return "lightbulb.fill"
         case .holidayRequestSubmitted: return "sun.max"
         case .holidayRequestApproved: return "sun.max.fill"
         case .holidayRequestDeclined: return "xmark.circle.fill"
@@ -186,7 +187,8 @@ struct NotificationRowView: View {
         case .qualificationExpiry: return ProjectWorksRevampColors.upcomingAmber
         case .materialOrderCutOff: return ProjectWorksRevampColors.upcomingAmber
         case .materialAdded: return ProjectWorksRevampColors.activeGreen
-        case .toolboxTalkIssued: return ProjectWorksRevampColors.blueLight
+        case .toolboxTalkIssued, .hsToolboxReminder: return ProjectWorksRevampColors.blueLight
+        case .ideaStatus, .ideaShipped: return ProjectWorksRevampColors.activeGreen
         case .holidayRequestSubmitted: return ProjectWorksRevampColors.upcomingAmber
         case .holidayRequestApproved: return ProjectWorksRevampColors.activeGreen
         case .holidayRequestDeclined: return ProjectWorksRevampColors.requiredPillFg
