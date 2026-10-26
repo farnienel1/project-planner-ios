@@ -235,6 +235,49 @@ nonisolated struct CanonicalUnbookedLabourDayInput: Codable, Equatable, Sendable
     var holidays: [CanonicalUnbookedLabourHoliday]
 }
 
+/// One stored booking as `parseBookingDocument` reads it (`CanonicalBooking` in the script).
+/// Ids are the stored strings, which may not be UUIDs (a Firebase user id, for example).
+nonisolated struct CanonicalParsedBooking: Codable, Equatable, Sendable {
+    let id: String
+    let operativeId: String
+    let projectId: String
+    let dateMs: Double
+    let timeSlot: String
+    let status: String
+    let bookedBy: String
+    let notes: String
+    let workStartTime: String?
+    let workEndTime: String?
+    let isBreakRemoved: Bool
+    let otMultiplierOverride: Double?
+    let bookingGroupId: String?
+    let createdAtMs: Double?
+    let updatedAtMs: Double?
+    let operativeIdIsUuid: Bool
+    let projectIdIsUuid: Bool
+}
+
+/// `parseBookingDocument` result: a booking plus the legacy spellings it repaired, or the reasons it refused.
+nonisolated struct CanonicalBookingParseResult: Codable, Equatable, Sendable {
+    let ok: Bool
+    let booking: CanonicalParsedBooking?
+    let repairs: [String]?
+    let errors: [String]?
+}
+
+/// One weekly-report pay line for `reportPayCell` / `reportPayTotal` (`ReportPayLineInput` in the script).
+nonisolated struct CanonicalReportPayLine: Codable, Equatable, Sendable {
+    var isPaye: Bool
+    var pay: Double?
+}
+
+/// What a weekly-report pay cell shows (`ReportPayCell` in the script). `label` is `PAYE` for a PAYE line.
+nonisolated struct CanonicalReportPayCell: Codable, Equatable, Sendable {
+    let pay: Double?
+    let label: String?
+    let countsTowardPayTotal: Bool
+}
+
 /// One warning row for `sortWarningsByDate`. `dayKey` is the coverage day (`YYYY-MM-DD`), or blank when the row has no day.
 nonisolated struct CanonicalWarningDateRow: Codable, Equatable, Sendable {
     var id: String
@@ -731,6 +774,27 @@ nonisolated enum CanonicalBusinessEngine {
         decode([CanonicalMinuteInterval].self, function: "subtractMinuteIntervals", arguments: [window, covered])
     }
 
+    // MARK: - Stored bookings
+
+    /// `parseBookingDocument` for each `(documentId, data)` pair, in order, in one script call.
+    /// `data` must be JSON: the caller turns a Firestore Timestamp into `{ seconds, nanoseconds }`.
+    /// Nil only when the script did not run; a refused document comes back with `ok == false`.
+    static func parseBookingDocuments(
+        _ documents: [(id: String, data: [String: Any])],
+        timeZone: String = "Europe/London"
+    ) -> [CanonicalBookingParseResult]? {
+        if documents.isEmpty { return [] }
+        let rows: [[String: Any]] = documents.map { ["id": $0.id, "data": $0.data] }
+        guard let rowsJSON = jsonObjectFragment(rows),
+              let options = jsonObjectFragment(["timeZone": timeZone]) else {
+            return nil
+        }
+        return decodeExpression(
+            [CanonicalBookingParseResult].self,
+            "(\(rowsJSON)).map(function (row) { return ProjectPlannerCanonical.parseBookingDocument(row.id, row.data, \(options)) })"
+        )
+    }
+
     // MARK: - Annual leave against bookings
 
     /// Leave-clash and half-day-cover rows for approved leave inside the window.
@@ -975,6 +1039,23 @@ nonisolated enum CanonicalBusinessEngine {
     /// `FULL_DAY`, `AM`, or `PM` for a leave record's slot.
     static func leaveSlotKind(_ timeSlot: String?) -> String {
         decode(String.self, function: "leaveSlotKind", arguments: [timeSlot]) ?? "FULL_DAY"
+    }
+
+    // MARK: - Weekly report pay
+
+    /// One pay line: a PAYE line shows `PAYE`, no figure, and is not totalled. Nil when the script did not run.
+    static func reportPayCell(_ line: CanonicalReportPayLine) -> CanonicalReportPayCell? {
+        decode(CanonicalReportPayCell.self, function: "reportPayCell", arguments: [line])
+    }
+
+    /// Pay total of the lines that count; PAYE lines add nothing. Nil when the script did not run.
+    static func reportPayTotal(_ lines: [CanonicalReportPayLine]) -> Double? {
+        decode(Double.self, function: "reportPayTotal", arguments: [lines])
+    }
+
+    /// A person's total row: `PAYE` when every line is PAYE, otherwise the total of the counted lines.
+    static func reportPersonPayCell(_ lines: [CanonicalReportPayLine]) -> CanonicalReportPayCell? {
+        decode(CanonicalReportPayCell.self, function: "reportPersonPayCell", arguments: [lines])
     }
 
     // MARK: - Dismissed warnings

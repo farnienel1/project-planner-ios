@@ -89,6 +89,8 @@ struct WarningsComputationSnapshot: Sendable {
         let timeSlot: String
         let workStart: String?
         let workEnd: String?
+        /// The stored `operativeId` (`Booking.operativeKey`): the id the shared coverage functions compare.
+        var personKey: String = ""
     }
 
     enum ManagerLocationKind: Sendable {
@@ -255,7 +257,8 @@ enum WarningsComputation {
                 clashInterval: OperativeBookingInterval.clashInterval(for: booking, policy: input.payrollTimePolicy),
                 timeSlot: booking.timeSlot.rawValue,
                 workStart: booking.workStartTime,
-                workEnd: booking.workEndTime
+                workEnd: booking.workEndTime,
+                personKey: booking.operativeKey
             )
         }
 
@@ -443,7 +446,17 @@ enum WarningsComputation {
         if input.warningDetection.detectClashes {
             for (_, dayBookings) in scheduleIndex.operativeBookingsByDayKey {
                 guard dayBookings.count > 1 else { continue }
-                guard let operative = operativesById[dayBookings[0].operativeId] else { continue }
+                // A booking stored under a users/{uid} id has no operative record; name it from the account.
+                guard let operative = operativesById[dayBookings[0].operativeId]
+                    ?? usersById[dayBookings[0].personKey].map({ user in
+                        WarningsComputationSnapshot.OperativeSnapshot(
+                            id: dayBookings[0].operativeId,
+                            name: user.displayName,
+                            emailLowercased: user.emailLowercased,
+                            isActive: user.isActive,
+                            qualificationExpiries: []
+                        )
+                    }) else { continue }
                 if managerAdminEmails.contains(operative.emailLowercased) { continue }
                 let clusters = overlappingClusters(dayBookings) { a, b in
                     guard let ia = a.clashInterval, let ib = b.clashInterval else { return false }
@@ -934,7 +947,7 @@ enum WarningsComputation {
         var bookingRows: [[String: Any]] = []
         for booking in operativeBookings where (booking.status == .confirmed || booking.status == .tentative) && calendar.isDate(booking.date, inSameDayAs: dayStart) {
             bookingRows.append([
-                "personId": booking.operativeId.uuidString,
+                "personId": booking.operativeKey,
                 "dayKey": dayKey,
                 "kind": "operative",
                 "timeSlot": booking.timeSlot.rawValue,
@@ -1078,7 +1091,7 @@ enum WarningsComputation {
         var bookings: [[String: Any]] = []
         for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= rowEnd {
             bookings.append([
-                "personId": booking.operativeId.uuidString,
+                "personId": booking.personKey,
                 "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
                 "kind": "operative",
                 "timeSlot": booking.timeSlot,
@@ -1250,7 +1263,7 @@ enum WarningsComputation {
         for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
             bookings.append(CanonicalLeaveBooking(
                 id: booking.id.uuidString,
-                personId: booking.operativeId.uuidString,
+                personId: booking.personKey,
                 kind: "operative",
                 dayKey: dayKeyString(booking.dayStart, calendar: calendar),
                 timeSlot: booking.timeSlot,
@@ -1755,8 +1768,16 @@ private struct WarningsScheduleIndex {
         }
 
         for booking in operativeBookings {
-            guard let op = operativesById[booking.operativeId],
-                  let userId = emailToUserId[op.emailLowercased] else { continue }
+            let userId: String
+            if let op = operativesById[booking.operativeId], let linked = emailToUserId[op.emailLowercased] {
+                userId = linked
+            } else if managerAdminUserIds.contains(booking.personKey) {
+                userId = booking.personKey
+            } else if let user = usersById[booking.personKey], let linked = emailToUserId[user.emailLowercased] {
+                userId = linked
+            } else {
+                continue
+            }
             let day = booking.dayStart
             let key = "\(userId)-\(day.timeIntervalSince1970)"
             map[key, default: []].append(

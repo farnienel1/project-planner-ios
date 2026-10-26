@@ -27,7 +27,20 @@ struct Booking: Identifiable, Codable, Hashable {
     var bookingGroupId: String?
     var createdAt: Date
     var updatedAt: Date
-    
+    /// Stored Firestore strings when they are not the UUIDs above. Web books a person who has no
+    /// operative record under their `users/{uid}` id, which is not a UUID; the UUID fields then hold
+    /// `StableBookingIdentity.uuid(for:)` and these keep the real id for coverage, lookups and saves.
+    var storedOperativeId: String? = nil
+    var storedProjectId: String? = nil
+    var documentId: String? = nil
+
+    /// The id written to `operativeId`.
+    var operativeKey: String { storedOperativeId ?? operativeId.uuidString }
+    /// The id written to `projectId`.
+    var projectKey: String { storedProjectId ?? projectId.uuidString }
+    /// The Firestore document id under `organizations/{orgId}/bookings`.
+    var documentKey: String { documentId ?? id.uuidString }
+
     init(
         id: UUID = UUID(),
         operativeId: UUID,

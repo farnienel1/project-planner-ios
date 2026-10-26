@@ -326,7 +326,8 @@ func rosterNameForLabourBooking(operativeId: UUID, operatives: [Operative], user
         let trimmed = operative.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
     }
-    if let user = users.first(where: { $0.id == operativeId.uuidString }) {
+    // A booking stored under a users/{uid} id carries that id's stable UUID (`StableBookingIdentity`).
+    if let user = users.first(where: { StableBookingIdentity.uuid(for: $0.id) == operativeId }) {
         let trimmed = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
         let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines)

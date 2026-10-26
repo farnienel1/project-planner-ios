@@ -98,7 +98,7 @@ enum OperativeBookingInterval {
             let end = intervals.map(\.1).max() ?? start
             let source = cluster.min(by: { $0.booking.createdAt < $1.booking.createdAt })?.booking ?? cluster[0].booking
             let endClock = end >= 24 * 60 ? end - 24 * 60 : end
-            let payable = Booking(
+            var payable = Booking(
                 id: source.id,
                 operativeId: source.operativeId,
                 projectId: source.projectId,
@@ -115,6 +115,9 @@ enum OperativeBookingInterval {
                 createdAt: source.createdAt,
                 updatedAt: source.updatedAt
             )
+            payable.storedOperativeId = source.storedOperativeId
+            payable.storedProjectId = source.storedProjectId
+            payable.documentId = source.documentId
             result.append(PayCluster(payable: payable))
         }
         return result

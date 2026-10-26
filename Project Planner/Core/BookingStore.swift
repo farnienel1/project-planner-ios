@@ -14,6 +14,11 @@ class BookingStore: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
     @Published var isOffline: Bool = false
+    /// The last server read failed. Coverage from this list is incomplete, so Warnings shows an error
+    /// instead of treating missing bookings as unbooked.
+    @Published private(set) var lastLoadFailed = false
+    /// The live listener reported an error since the last good server snapshot.
+    @Published private(set) var listenerFailed = false
     
     private let persistenceService: PersistenceService
     private var firebaseBackend: FirebaseBackend?
@@ -44,6 +49,16 @@ class BookingStore: ObservableObject {
             }
         }
         
+        NotificationCenter.default.addObserver(
+            forName: .bookingsListenerFailed,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.listenerFailed = true
+            }
+        }
+
         // Listen for offline sync trigger (when app comes back online)
         NotificationCenter.default.addObserver(
             forName: .syncOfflineChanges,
@@ -160,6 +175,7 @@ class BookingStore: ObservableObject {
                             Task { try? await persistenceService.saveBookingData(bookings: firebaseBookings) }
                         }
                     }
+                    self.lastLoadFailed = false
                     self.startLiveUpdates(organizationId: organizationId, startingOn: queryStart)
                     
                     print("🔥🔥🔥 DEBUG: Loaded \(firebaseBookings.count) bookings from Firebase")
@@ -179,7 +195,8 @@ class BookingStore: ObservableObject {
                 
             } catch {
                 self.errorMessage = error.localizedDescription
-                print("🔥🔥🔥 DEBUG: Error loading bookings: \(error.localizedDescription)")
+                self.lastLoadFailed = true
+                NSLog("BOOKINGS_LOAD_FAILED error=%@", error.localizedDescription)
                 if firebaseBackend?.suppressStaleOrganizationCache == true {
                     self.bookings = []
                 } else {
@@ -243,7 +260,7 @@ class BookingStore: ObservableObject {
         guard let orgId else { return }
 
         if smartCache?.isOnline == false {
-            OfflineOutboxStore.shared.enqueueDeleteBooking(booking.id, organizationId: orgId)
+            OfflineOutboxStore.shared.enqueueDeleteBooking(booking.id, documentId: booking.documentId, organizationId: orgId)
             return
         }
 
@@ -251,7 +268,7 @@ class BookingStore: ObservableObject {
             try await fb.deleteBooking(booking, organizationId: orgId)
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
-                OfflineOutboxStore.shared.enqueueDeleteBooking(booking.id, organizationId: orgId)
+                OfflineOutboxStore.shared.enqueueDeleteBooking(booking.id, documentId: booking.documentId, organizationId: orgId)
                 errorMessage = "Removed locally. Will sync when you're back online."
             } else {
                 errorMessage = error.localizedDescription
@@ -546,6 +563,8 @@ class BookingStore: ObservableObject {
 
     func discardInMemoryForOrganizationSwitch() {
         bookings = []
+        lastLoadFailed = false
+        listenerFailed = false
         isLoading = false
         pendingReloadAfterCurrentLoad = false
         errorMessage = nil
@@ -572,12 +591,27 @@ class BookingStore: ObservableObject {
         }
     }
 
-    /// A cache snapshot or a short server result must not delete bookings that are already on screen.
-    /// Rows older than the launch window are not kept from a previous full archive.
+    /// A cache snapshot must not delete bookings that are already on screen. A server snapshot is the
+    /// whole query result, so it replaces the list: a booking deleted or moved on the web leaves this
+    /// device too instead of being merged back in. Rows older than the launch window are not kept.
     private func applyRemoteBookings(_ remote: [Booking], fromCache: Bool) {
         let lowerBound = firebaseBackend?.scheduleBookingQueryStart()
         let existing = bookings.filter {
             LaunchStartupPolicy.launchBookingIncludes(date: $0.date, lowerBound: lowerBound)
+        }
+        if !fromCache {
+            listenerFailed = false
+            if BookingStore.sameBookings(remote, existing) {
+                if bookings.count != existing.count { bookings = existing }
+                return
+            }
+            if remote.count < existing.count {
+                NSLog("BOOKINGS_SERVER_REPLACED kept=%d removed=%d", remote.count, existing.count - remote.count)
+            }
+            bookings = remote
+            smartCache?.cacheBookings(remote)
+            ScheduleChangeNotifier.postBookingStoreDidChange()
+            return
         }
         if remote.isEmpty && !existing.isEmpty {
             bookings = existing
@@ -596,27 +630,30 @@ class BookingStore: ObservableObject {
             ScheduleChangeNotifier.postBookingStoreDidChange()
             return
         }
-        let incoming = remote.sorted { $0.id.uuidString < $1.id.uuidString }
-        let current = existing.sorted { $0.id.uuidString < $1.id.uuidString }
-        if incoming.count == current.count {
-            let same = zip(incoming, current).allSatisfy { lhs, rhs in
-                lhs.id == rhs.id && lhs.updatedAt == rhs.updatedAt && lhs.status == rhs.status
-                    && lhs.timeSlot == rhs.timeSlot && lhs.workStartTime == rhs.workStartTime
-                    && lhs.workEndTime == rhs.workEndTime && lhs.projectId == rhs.projectId
-                    && lhs.operativeId == rhs.operativeId
+        if BookingStore.sameBookings(remote, existing) {
+            if bookings.count != existing.count {
+                bookings = existing
             }
-            if same {
-                if bookings.count != existing.count {
-                    bookings = existing
-                }
-                return
-            }
+            return
         }
         bookings = remote
         smartCache?.cacheBookings(remote)
         ScheduleChangeNotifier.postBookingStoreDidChange()
     }
     
+    /// Same ids and the same stored fields, in any order.
+    static func sameBookings(_ lhs: [Booking], _ rhs: [Booking]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        let incoming = lhs.sorted { $0.id.uuidString < $1.id.uuidString }
+        let current = rhs.sorted { $0.id.uuidString < $1.id.uuidString }
+        return zip(incoming, current).allSatisfy { lhs, rhs in
+            lhs.id == rhs.id && lhs.updatedAt == rhs.updatedAt && lhs.status == rhs.status
+                && lhs.timeSlot == rhs.timeSlot && lhs.workStartTime == rhs.workStartTime
+                && lhs.workEndTime == rhs.workEndTime && lhs.projectId == rhs.projectId
+                && lhs.operativeId == rhs.operativeId && lhs.date == rhs.date
+        }
+    }
+
     func clearAllData() async {
         bookings.removeAll()
         await saveData()

@@ -281,7 +281,8 @@ enum WarningsRefreshHelper {
         if isWeeklyReportVisible { return false }
         if inputs.firebaseBackend.isBootstrappingOrgDataLoad { return false }
         if !inputs.firebaseBackend.hasBootstrappedOrgDataLoad { return false }
-        if inputs.bookingStore.isLoading || inputs.operativeStore.isLoading || inputs.projectStore.isLoading {
+        if inputs.bookingStore.isLoading || inputs.operativeStore.isLoading || inputs.projectStore.isLoading
+            || inputs.managerScheduleStore.isLoading || inputs.holidayStore.isLoading || inputs.userStore.isLoading {
             return false
         }
         if let quietUntil = inputs.firebaseBackend.launchQuietUntil, Date() < quietUntil {
@@ -335,6 +336,17 @@ enum WarningsRefreshHelper {
             print("🔥🔥🔥 DEBUG: Warnings refresh waiting for live payment runs")
             return
         }
+        // Missing bookings must never become unbooked warnings: skip the scan and say why.
+        if let reason = WarningsDataCompleteness.blockingReason(
+            bookingsLoadFailed: bookingStore.lastLoadFailed,
+            managerBookingsLoadFailed: managerScheduleStore.lastLoadFailed,
+            bookingDecode: firebaseBackend.lastBookingDecodeReport
+        ) {
+            NSLog("WARNINGS_SCAN_SKIPPED reason=%@", reason)
+            WarningsService.shared.setIncompleteDataMessage(reason)
+            return
+        }
+        WarningsService.shared.setIncompleteDataMessage(nil)
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
 
         // Honor Organisation Warnings detection horizon (days / working week / invoicing period).

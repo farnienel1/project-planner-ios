@@ -58,7 +58,7 @@ enum OfflineSyncCoordinator {
 
         case .deleteBooking:
             let payload = try decoder.decode(OfflineDeleteBookingPayload.self, from: entry.payload)
-            let deleteStub = Booking(
+            var deleteStub = Booking(
                 id: payload.bookingId,
                 operativeId: UUID(),
                 projectId: UUID(),
@@ -66,6 +66,7 @@ enum OfflineSyncCoordinator {
                 timeSlot: .fullDay,
                 bookedBy: ""
             )
+            deleteStub.documentId = payload.documentId
             try await firebaseBackend.deleteBooking(deleteStub, organizationId: entry.organizationId)
 
         case .saveManagerSiteBooking:

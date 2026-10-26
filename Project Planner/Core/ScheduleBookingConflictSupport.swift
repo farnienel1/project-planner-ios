@@ -111,8 +111,9 @@ enum ScheduleBookablePersonBuilder {
         value.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// An operative stand-in for a `users/{uid}` row. Also used where a booking is stored under that user id.
     @MainActor
-    private static func operativeRecord(from user: AppUser, id: UUID) -> Operative {
+    static func operativeRecord(from user: AppUser, id: UUID) -> Operative {
         Operative(
             id: id,
             firstName: user.firstName,

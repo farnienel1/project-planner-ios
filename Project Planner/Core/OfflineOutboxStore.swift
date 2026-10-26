@@ -16,6 +16,8 @@ struct OfflineSaveBookingPayload: Codable {
 
 struct OfflineDeleteBookingPayload: Codable {
     let bookingId: UUID
+    /// Firestore document id when it is not `bookingId.uuidString`.
+    var documentId: String? = nil
 }
 
 struct OfflineSaveManagerSiteBookingPayload: Codable {
@@ -138,8 +140,8 @@ final class OfflineOutboxStore: ObservableObject {
         )
     }
 
-    func enqueueDeleteBooking(_ bookingId: UUID, organizationId: String) {
-        guard let payload = try? encoder.encode(OfflineDeleteBookingPayload(bookingId: bookingId)) else { return }
+    func enqueueDeleteBooking(_ bookingId: UUID, documentId: String? = nil, organizationId: String) {
+        guard let payload = try? encoder.encode(OfflineDeleteBookingPayload(bookingId: bookingId, documentId: documentId)) else { return }
         removePending(forEntityId: bookingId.uuidString)
         enqueue(
             OfflineOutboxEntry(

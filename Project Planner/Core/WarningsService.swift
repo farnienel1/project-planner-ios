@@ -148,6 +148,14 @@ class WarningsService: ObservableObject {
     /// Period scans for Weekly Report only — never overwrite the live Home/Warnings list.
     @Published private(set) var periodGeneratedWarnings: [Warning] = []
     @Published private(set) var hasCompletedPeriodDetection = false
+    /// Set when the last scan was skipped because a booking read failed. The list on screen is then the
+    /// previous complete scan (or empty), never a scan of partial data.
+    @Published private(set) var incompleteDataMessage: String?
+
+    func setIncompleteDataMessage(_ message: String?) {
+        guard incompleteDataMessage != message else { return }
+        incompleteDataMessage = message
+    }
     /// High, medium, low, and the total. One value, written once per live update.
     private(set) var totals = WarningTotals()
     var warningCount: Int { totals.total }
