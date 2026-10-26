@@ -892,6 +892,34 @@ nonisolated enum CanonicalBusinessEngine {
         decode(CanonicalResolvedBookingPerson.self, function: "resolveBookingPerson", arguments: [operativeId, input])
     }
 
+    struct CanonicalRemovableBooking: Codable, Equatable, Sendable {
+        var id: String
+        var operativeId: String
+        var dateMs: Double
+    }
+
+    private struct CanonicalPersonDeleteInput: Codable, Sendable {
+        var bookings: [CanonicalRemovableBooking]
+        var operativeIds: [String]
+        var nowIso: String
+        var timeZone: String
+    }
+
+    /// Booking ids to remove when a person is deleted: theirs, dated today or later in the organisation zone.
+    /// Past bookings stay as history, and names are never matched. Nil when the script did not answer.
+    static func bookingsToRemoveOnOperativeDelete(
+        _ bookings: [CanonicalRemovableBooking],
+        operativeIds: [String],
+        now: Date
+    ) -> [String]? {
+        decode([String].self, function: "bookingsToRemoveOnOperativeDelete", arguments: [CanonicalPersonDeleteInput(
+            bookings: bookings,
+            operativeIds: operativeIds,
+            nowIso: ISO8601DateFormatter().string(from: now),
+            timeZone: businessCalendar.timeZone.identifier
+        )])
+    }
+
     /// One grouping key per person (`account:…`, `operative:…` or `id:…`), so a re-added person's bookings under an
     /// old and a new id land together. Nil when the script did not answer.
     static func bookingPersonKey(_ operativeId: String, _ input: CanonicalBookingPersonInput) -> String? {

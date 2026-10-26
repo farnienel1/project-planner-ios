@@ -204,17 +204,24 @@ enum WorkAccess {
         email: String?,
         firstName: String?,
         surname: String?,
-        operatives: [Operative]
+        operatives: [Operative],
+        users: [AppUser] = []
     ) -> Set<UUID> {
         let needle = normalizedEmail(email)
+        // Bookings under the accounts on this email, their former invite ids and their catalogue rows
+        // (`bookingIdsForAccount`), so a re-added person with no catalogue row still sees their own days.
+        var accountIds = Set<UUID>()
         if !needle.isEmpty {
+            for user in users where normalizedEmail(user.email) == needle {
+                accountIds.formUnion(labourBookingIds(for: user, operatives: operatives))
+            }
             let matches = Set(operatives.filter { normalizedEmail($0.email) == needle }.map(\.id))
-            if !matches.isEmpty { return matches }
+            if !matches.isEmpty { return matches.union(accountIds) }
         }
         if let one = signedInOperative(email: email, firstName: firstName, surname: surname, operatives: operatives) {
-            return [one.id]
+            return accountIds.union([one.id])
         }
-        return []
+        return accountIds
     }
 
     /// Auth uid plus every `users` document id for the same email.
@@ -240,6 +247,7 @@ enum WorkAccess {
             for alias in user.sameEmailUserIds { add(alias) }
         }
         for alias in currentUser?.sameEmailUserIds ?? [] { add(alias) }
+        for former in currentUser?.formerUserIds ?? [] { add(former) }
         return ids
     }
 

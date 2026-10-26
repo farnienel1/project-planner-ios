@@ -397,15 +397,15 @@ struct SmallWorksView: View {
         var works = smallWorksProjects
         
         if userStore.isOperativeMode() {
-            guard let operative = resolvedCurrentOperative,
-                  let currentUserId = userStore.currentUser?.id else {
+            guard let currentUser = userStore.currentUser else {
                 return []
             }
+            let currentUserId = currentUser.id
+            // Bookings under any id this person has had (`bookingIdsForAccount`), not only a catalogue row on their email.
+            var bookingIds = labourBookingIds(for: currentUser, operatives: operativeStore.allOperatives)
+            if let operative = resolvedCurrentOperative { bookingIds.insert(operative.id) }
             let assignedProjectIds = Set(bookingStore.bookings
-                .filter {
-                    $0.operativeId == operative.id &&
-                    ($0.status == .confirmed || $0.status == .tentative)
-                }
+                .filter { bookingIds.contains($0.operativeId) && $0.occupiesDay }
                 .map { $0.projectId })
             works = works.filter {
                 (assignedProjectIds.contains($0.id) || deadlineAssignedProjectIds.contains($0.id))

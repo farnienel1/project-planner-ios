@@ -791,12 +791,13 @@ struct ManagerScheduleContentView: View {
             email: user.email,
             firstName: user.firstName,
             surname: user.surname,
-            operatives: operativeStore.allOperatives
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers + [user]
         )
         guard !ids.isEmpty else { return [] }
         return bookingStore.bookings.filter {
             ids.contains($0.operativeId) &&
-            $0.status != .cancelled &&
+            $0.occupiesDay &&
             calendar.isDate($0.date, inSameDayAs: day)
         }
     }
@@ -2516,12 +2517,13 @@ struct OperativeScheduleContentView: View {
             email: user.email,
             firstName: user.firstName,
             surname: user.surname,
-            operatives: operativeStore.allOperatives
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers + [user]
         )
         guard !ids.isEmpty else { return [] }
         return bookingStore.bookings.filter { b in
             ids.contains(b.operativeId) &&
-            b.status != .cancelled &&
+            b.occupiesDay &&
             weekDates.contains { calendar.isDate(b.date, inSameDayAs: $0) }
         }
     }

@@ -194,4 +194,44 @@ final class BookingAuditTests: XCTestCase {
         XCTAssertTrue(person?.owns(LogicFixtures.booking(on: thursday, operativeId: UUID(uuidString: placeholderId)!)) ?? false)
         XCTAssertTrue(person?.owns(LogicFixtures.booking(on: thursday, operativeId: Booking.internalOperativeId(for: authUid))) ?? false)
     }
+
+    // MARK: - Deleting and placeholders
+
+    func testDeletingAPersonKeepsTheirPastBookings() {
+        let store = BookingStore()
+        let today = Date()
+        let lastWeek = Calendar.current.date(byAdding: .day, value: -7, to: today)!
+        let nextWeek = Calendar.current.date(byAdding: .day, value: 7, to: today)!
+        let uid = Booking.internalOperativeId(for: authUid)
+        let past = LogicFixtures.booking(on: lastWeek, operativeId: oldCatalogueId)
+        let future = LogicFixtures.booking(on: nextWeek, operativeId: oldCatalogueId)
+        let futureUnderUid = LogicFixtures.booking(on: nextWeek, operativeId: uid)
+        let someoneElse = LogicFixtures.booking(on: nextWeek, operativeId: UUID())
+        store.bookings = [past, future, futureUnderUid, someoneElse]
+        let removed = Set(store.bookingsToRemoveOnPersonDelete(personIds: [oldCatalogueId, uid], now: today).map(\.id))
+        XCTAssertEqual(removed, [future.id, futureUnderUid.id])
+    }
+
+    func testSetupPlaceholderBookingIsNotABooking() throws {
+        let parsed = try XCTUnwrap(CanonicalBusinessEngine.parseBookingDocuments([
+            document("INITIAL-PLACEHOLDER", [
+                "operativeId": oldCatalogueId.uuidString,
+                "projectId": UUID().uuidString,
+                "date": Timestamp(date: thursday),
+                "timeSlot": "morning",
+                "status": "tentative",
+            ]),
+        ]))
+        XCTAssertTrue(parsed.isEmpty)
+    }
+
+    func testMyScheduleSeesBookingsUnderUidAndFormerIdWithNoCatalogueRow() {
+        let user = rehiredUser()
+        let ids = WorkAccess.signedInOperativeIds(
+            email: user.email, firstName: user.firstName, surname: user.surname, operatives: [], users: [user]
+        )
+        XCTAssertTrue(ids.contains(Booking.internalOperativeId(for: authUid)))
+        XCTAssertTrue(ids.contains(UUID(uuidString: placeholderId)!))
+        XCTAssertTrue(WorkAccess.signedInAccountIds(authUid: authUid, currentUser: user, organizationUsers: [user]).contains(placeholderId))
+    }
 }

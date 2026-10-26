@@ -1448,7 +1448,12 @@ struct WeeklyReportView: View {
     }
 
     private func reportingUser(for userId: String) -> AppUser? {
-        guard let user = userStore.organizationUsers.first(where: { $0.id == userId }) else { return nil }
+        // A manager booking saved under an invite id the account later replaced (`formerIdAliases`) names that account.
+        let users = userStore.organizationUsers
+        let currentId = users.contains(where: { $0.id == userId }) ? userId : (CanonicalBusinessEngine.formerIdAliases(
+            users.map { CanonicalFormerIdPerson(id: $0.id, formerIds: $0.formerUserIds) }
+        )?[userId] ?? userId)
+        guard let user = users.first(where: { $0.id == currentId }) else { return nil }
         return StaffEmailIdentity.preferredUser(sharing: user.email, in: userStore.organizationUsers) ?? user
     }
 
