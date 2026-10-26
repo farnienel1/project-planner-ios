@@ -2505,6 +2505,94 @@ nonisolated enum CanonicalBusinessEngine {
         }
     }
 
+    // MARK: - File reports
+
+    /// Input for `fileReportWriteFields` (`FileReportInput` in the script).
+    struct CanonicalFileReportInput: Codable, Equatable, Sendable {
+        var organizationId: String
+        var storagePath: String
+        var surface: String
+        var parentId: String
+        var fileName: String
+        var reason: String
+        var details: String
+        var reportedByUserId: String
+    }
+
+    /// What `fileReportWriteFields` answered: the document fields, or the script's refusal code.
+    enum CanonicalFileReportWrite {
+        case fields([String: Any])
+        case refused(String)
+    }
+
+    /// `organizations/{orgId}/fileReports` document fields without `createdAt`, or the refusal.
+    /// Nil when the script did not answer.
+    static func fileReportWriteFields(_ input: CanonicalFileReportInput) -> CanonicalFileReportWrite? {
+        guard let json = jsonFragment(input),
+              let result = objectDictionary("ProjectPlannerCanonical.fileReportWriteFields(\(json))") else {
+            return nil
+        }
+        if result["ok"] as? Bool == true, let fields = result["fields"] as? [String: Any] {
+            return .fields(fields)
+        }
+        return .refused(result["error"] as? String ?? "")
+    }
+
+    static func fileReportCollectionPath(organizationId: String) -> String? {
+        decode(String.self, function: "fileReportCollectionPath", arguments: [organizationId])
+    }
+
+    /// Storage object path from a download URL, gs:// URL or bare path. Nil when it is not one.
+    static func fileReportStoragePath(_ fileRef: String?) -> String? {
+        decode(String.self, function: "fileReportStoragePath", arguments: [fileRef])
+    }
+
+    static func fileReportReasonCopy(_ reason: String) -> String? {
+        decode(String.self, function: "fileReportReasonCopy", arguments: [reason])
+    }
+
+    static func fileReportStatusCopy(_ status: String) -> String? {
+        decode(String.self, function: "fileReportStatusCopy", arguments: [status])
+    }
+
+    static func canReviewFileReports(_ role: CanonicalStaffAccountRole) -> Bool? {
+        decode(Bool.self, function: "canReviewFileReports", arguments: [role])
+    }
+
+    private struct CanonicalFileReportReviewInput: Codable {
+        var status: String
+        var reviewedByUserId: String
+    }
+
+    /// Review fields without `reviewedAt`. Nil for a status other than reviewed/removed or a blank reviewer.
+    static func fileReportReviewWriteFields(status: String, reviewedByUserId: String) -> [String: Any]? {
+        guard let json = jsonFragment(CanonicalFileReportReviewInput(status: status, reviewedByUserId: reviewedByUserId)) else {
+            return nil
+        }
+        return objectDictionary("ProjectPlannerCanonical.fileReportReviewWriteFields(\(json))")
+    }
+
+    /// Reason codes in script order. Nil when the script did not answer — do not invent a list.
+    static var fileReportReasons: [String]? {
+        constant("FILE_REPORT_REASONS", as: [String].self)
+    }
+
+    static var fileReportSurfaces: [String]? {
+        constant("FILE_REPORT_SURFACES", as: [String].self)
+    }
+
+    static var fileReportDetailsMax: Int? {
+        constant("FILE_REPORT_DETAILS_MAX", as: Int.self)
+    }
+
+    static var fileReportLinkLabel: String? {
+        constant("FILE_REPORT_LINK_LABEL", as: String.self)
+    }
+
+    static var fileReportSentCopy: String? {
+        constant("FILE_REPORT_SENT_COPY", as: String.self)
+    }
+
     // MARK: - Script surface
 
     /// Names the packed script exports.

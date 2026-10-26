@@ -52,6 +52,7 @@ struct HSRamsDocumentDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var preview: HSDocumentPreviewItem?
     @State private var shareURL: IdentifiableURL?
+    @State private var presentedReport: FileReportTarget?
 
     var body: some View {
         NavigationStack {
@@ -108,6 +109,7 @@ struct HSRamsDocumentDetailView: View {
                             }
                             .accessibilityIdentifier("hsRamsDocumentDetail.rams")
                             .buttonStyle(HSFilledButton(tone: .blue))
+                            .fileReportContextMenu(reportTarget, presented: $presentedReport)
 
                             Button {
                                 HSHaptic.tap()
@@ -147,6 +149,17 @@ struct HSRamsDocumentDetailView: View {
                     Button("Close") { dismiss() }
                         .accessibilityIdentifier("hsRamsDocumentDetail.close")
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    if document.storedFileURL != nil {
+                        Menu {
+                            FileReportMenuButton(target: reportTarget, presented: $presentedReport)
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .accessibilityLabel("More")
+                        .accessibilityIdentifier("hsRamsDocumentDetail.more")
+                    }
+                }
             }
             .sheet(item: $preview) { item in
                 InAppRemoteDocumentViewer(source: item.source, title: item.title, noun: item.noun)
@@ -154,7 +167,17 @@ struct HSRamsDocumentDetailView: View {
             .sheet(item: $shareURL) { item in
                 HSDocumentActivityView(activityItems: [item.url])
             }
+            .fileReportSheet($presentedReport)
         }
+    }
+
+    private var reportTarget: FileReportTarget {
+        FileReportTarget(
+            surface: "health_safety",
+            parentId: document.id,
+            fileRef: document.fileURL ?? "",
+            fileName: document.fileName ?? ""
+        )
     }
 
     private func detailRow(_ label: String, _ value: String) -> some View {
@@ -186,6 +209,7 @@ struct HSOtherDocumentDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var preview: HSDocumentPreviewItem?
     @State private var shareURL: IdentifiableURL?
+    @State private var presentedReport: FileReportTarget?
 
     var body: some View {
         NavigationStack {
@@ -238,6 +262,7 @@ struct HSOtherDocumentDetailView: View {
                             }
                             .accessibilityIdentifier("hsOtherDocumentDetail.document")
                             .buttonStyle(HSFilledButton(tone: .blue))
+                            .fileReportContextMenu(reportTarget, presented: $presentedReport)
 
                             Button {
                                 HSHaptic.tap()
@@ -262,6 +287,17 @@ struct HSOtherDocumentDetailView: View {
                     Button("Close") { dismiss() }
                         .accessibilityIdentifier("hsOtherDocumentDetail.close")
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    if document.storedFileURL != nil {
+                        Menu {
+                            FileReportMenuButton(target: reportTarget, presented: $presentedReport)
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .accessibilityLabel("More")
+                        .accessibilityIdentifier("hsOtherDocumentDetail.more")
+                    }
+                }
             }
             .sheet(item: $preview) { item in
                 InAppRemoteDocumentViewer(source: item.source, title: item.title, noun: item.noun)
@@ -269,7 +305,17 @@ struct HSOtherDocumentDetailView: View {
             .sheet(item: $shareURL) { item in
                 HSDocumentActivityView(activityItems: [item.url])
             }
+            .fileReportSheet($presentedReport)
         }
+    }
+
+    private var reportTarget: FileReportTarget {
+        FileReportTarget(
+            surface: "health_safety",
+            parentId: document.id,
+            fileRef: document.fileURL ?? "",
+            fileName: document.fileName ?? ""
+        )
     }
 
     private func detailRow(_ label: String, _ value: String) -> some View {

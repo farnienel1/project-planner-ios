@@ -8,8 +8,8 @@
 import Foundation
 
 enum CustomerLegalPack {
-    static let version = "1.0"
-    static let effectiveDate = "18 September 2026"
+    static let version = "1.1"
+    static let effectiveDate = "26 October 2026"
     static let entityName = "ProjectPlanner Systems Ltd"
     static let tradingName = "ProjectPlanner"
     static let supportEmail = "info@projectplanner.us"
@@ -125,6 +125,10 @@ enum CustomerLegalPack {
 
     19. Governing Law and Jurisdiction
     This Agreement is governed by the law of England and Wales. The courts of England and Wales have exclusive jurisdiction, subject to any mandatory rights or jurisdiction that cannot lawfully be excluded.
+
+    20. Content and Copyright
+    Authorised Users must only upload content they have the right to share. Anyone who believes content on the Platform infringes their copyright or other rights, or is unlawful, may use “Report a problem with this file” in the app or email info@projectplanner.us with the location of the file, the right concerned and their contact details. The Provider will review notices promptly and may remove or disable access to the content.
+    The Provider will suspend or terminate the accounts of users who repeatedly infringe the rights of others.
     """
 
     private static let dpaBody = """
@@ -207,6 +211,7 @@ enum CustomerLegalPack {
 
     6. Reporting
     Suspected security issues, abuse or unlawful use should be reported to info@projectplanner.us. Reports should include enough information for the Provider to investigate.
+    A file shown to other users can also be reported with “Report a problem with this file” in the app. Reports go to the Customer’s administrators for review.
     """
 
     private static let privacyBody = """

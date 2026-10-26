@@ -5878,6 +5878,7 @@ struct CompletedTaskDetailView: View {
     @EnvironmentObject var notificationService: NotificationService
 
     @State private var showingCarryOut = false
+    @State private var reportTarget: FileReportTarget?
     @State private var showingEditTask = false
 
     private var displayTask: ProjectTask {
@@ -6047,6 +6048,7 @@ struct CompletedTaskDetailView: View {
                     .environmentObject(firebaseBackend)
                 }
             }
+            .fileReportSheet($reportTarget)
         }
     }
 
@@ -6393,10 +6395,10 @@ struct CompletedTaskDetailView: View {
                     .padding(.leading, 4)
                     VStack(spacing: 0) {
                         if let fileURL = displayTask.attachedFileURL {
-                            attachmentRow(icon: "doc.fill", iconBg: CompleteTaskUXPalette.requiredBg, iconFg: CompleteTaskUXPalette.requiredFg, title: displayTask.attachedFileName ?? "File", subtitle: "Tap to open", url: fileURL, showDivider: !displayTask.attachedImageURLs.isEmpty)
+                            attachmentRow(icon: "doc.fill", iconBg: CompleteTaskUXPalette.requiredBg, iconFg: CompleteTaskUXPalette.requiredFg, title: displayTask.attachedFileName ?? "File", subtitle: "Tap to open", url: fileURL, reportFileName: displayTask.attachedFileName ?? "", showDivider: !displayTask.attachedImageURLs.isEmpty)
                         }
                         ForEach(Array(displayTask.attachedImageURLs.enumerated()), id: \.offset) { idx, url in
-                            attachmentRow(icon: "photo", iconBg: Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255), iconFg: CompleteTaskUXPalette.green, title: "Image \(idx + 1)", subtitle: "Tap to open", url: url, showDivider: idx < displayTask.attachedImageURLs.count - 1)
+                            attachmentRow(icon: "photo", iconBg: Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255), iconFg: CompleteTaskUXPalette.green, title: "Image \(idx + 1)", subtitle: "Tap to open", url: url, reportFileName: "", showDivider: idx < displayTask.attachedImageURLs.count - 1)
                         }
                     }
                     .padding(.horizontal, 14)
@@ -6408,7 +6410,7 @@ struct CompletedTaskDetailView: View {
         }
     }
 
-    private func attachmentRow(icon: String, iconBg: Color, iconFg: Color, title: String, subtitle: String, url: String, showDivider: Bool) -> some View {
+    private func attachmentRow(icon: String, iconBg: Color, iconFg: Color, title: String, subtitle: String, url: String, reportFileName: String, showDivider: Bool) -> some View {
         VStack(spacing: 0) {
             Button {
                 if let u = URL(string: url) { UIApplication.shared.open(u) }
@@ -6435,6 +6437,10 @@ struct CompletedTaskDetailView: View {
             }
             .accessibilityIdentifier("completedTaskDetail.arrowDownCircle")
             .buttonStyle(.plain)
+            .fileReportContextMenu(
+                FileReportTarget(surface: "task_attachment", parentId: displayTask.id.uuidString, fileRef: url, fileName: reportFileName),
+                presented: $reportTarget
+            )
             if showDivider { Divider().overlay(CompleteTaskUXPalette.border) }
         }
     }

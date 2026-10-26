@@ -1752,6 +1752,8 @@ struct SiteAuditDetailView: View {
     @State private var showShare = false
     @State private var isPreparingSharePDF = false
     @State private var showingEdit = false
+    @State private var reportTarget: FileReportTarget?
+    @State private var viewerReportTarget: FileReportTarget?
 
     init(audit: SiteAudit, project: Project? = nil, onAuditUpdated: (() -> Void)? = nil) {
         self.audit = audit
@@ -1868,11 +1870,30 @@ struct SiteAuditDetailView: View {
                         image.resizable().scaledToFit()
                     } placeholder: { ProgressView() }
                     .padding()
-                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { selectedImageURL = nil }
-                        .accessibilityIdentifier("siteAuditDetail.close") } }
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Menu {
+                                FileReportMenuButton(
+                                    target: photoReportTarget(selectedImageURL ?? ""),
+                                    presented: $viewerReportTarget
+                                )
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                            }
+                            .accessibilityLabel("More")
+                        }
+                        ToolbarItem(placement: .topBarTrailing) { Button("Close") { selectedImageURL = nil }
+                        .accessibilityIdentifier("siteAuditDetail.close") }
+                    }
+                    .fileReportSheet($viewerReportTarget)
                 }
             }
+            .fileReportSheet($reportTarget)
         }
+    }
+
+    private func photoReportTarget(_ url: String) -> FileReportTarget {
+        FileReportTarget(surface: "site_audit", parentId: displayAudit.id.uuidString, fileRef: url)
     }
 
     private var divider: some View {
@@ -1915,6 +1936,7 @@ struct SiteAuditDetailView: View {
                     }
                     .accessibilityIdentifier("siteAuditDetail.itemCard")
                     .buttonStyle(.plain)
+                    .fileReportContextMenu(photoReportTarget(url), presented: $reportTarget)
                 }
             }
             .padding(12)

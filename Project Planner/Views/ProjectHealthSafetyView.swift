@@ -1991,6 +1991,13 @@ private struct HSToolboxTalkDetailView: View {
     let onDownload: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var remotePreview: HSDocumentPreviewItem?
+    @State private var presentedReport: FileReportTarget?
+
+    /// Only an uploaded talk has a file someone else may have shared.
+    private var reportTarget: FileReportTarget? {
+        guard talk.isCustomUpload, let fileURL = talk.fileURL else { return nil }
+        return FileReportTarget(surface: "health_safety", parentId: talk.id, fileRef: fileURL)
+    }
 
     var body: some View {
         NavigationStack {
@@ -2072,6 +2079,11 @@ private struct HSToolboxTalkDetailView: View {
                         }
                         .accessibilityIdentifier("hsToolboxTalkDetail.toolboxTalk")
                         .buttonStyle(HSGhostButton(tint: HS.blue))
+                        .contextMenu {
+                            if let reportTarget {
+                                FileReportMenuButton(target: reportTarget, presented: $presentedReport)
+                            }
+                        }
                     }
                 }
                 .padding(16)
@@ -2084,10 +2096,22 @@ private struct HSToolboxTalkDetailView: View {
                     Button("Close") { dismiss() }
                         .accessibilityIdentifier("hsToolboxTalkDetail.close")
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    if let reportTarget {
+                        Menu {
+                            FileReportMenuButton(target: reportTarget, presented: $presentedReport)
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .accessibilityLabel("More")
+                        .accessibilityIdentifier("hsToolboxTalkDetail.more")
+                    }
+                }
             }
             .sheet(item: $remotePreview) { item in
                 InAppRemoteDocumentViewer(source: item.source, title: item.title, noun: item.noun)
             }
+            .fileReportSheet($presentedReport)
         }
     }
 }
@@ -2560,8 +2584,20 @@ private struct HSSignTalkView: View {
     @State private var signatureImageData: Data?
     @State private var documentPreview: HSDocumentPreviewItem?
     @State private var shareURL: IdentifiableURL?
+    @State private var presentedReport: FileReportTarget?
 
     private var canSubmit: Bool { readConfirmed && signatureImageData != nil }
+
+    /// The uploaded RAMS or talk file being signed against. Library talks are generated, not uploaded.
+    private var reportTarget: FileReportTarget? {
+        if let rams, let fileURL = rams.fileURL {
+            return FileReportTarget(surface: "health_safety", parentId: rams.id, fileRef: fileURL, fileName: rams.fileName ?? "")
+        }
+        if let talk, talk.isCustomUpload, let fileURL = talk.fileURL {
+            return FileReportTarget(surface: "health_safety", parentId: talk.id, fileRef: fileURL)
+        }
+        return nil
+    }
 
     var body: some View {
         NavigationStack {
@@ -2630,6 +2666,11 @@ private struct HSSignTalkView: View {
                     }
                     .accessibilityIdentifier("hsSignTalk.previewDownloadOriginalFile")
                     .buttonStyle(HSGhostButton(tint: HS.blue))
+                    .contextMenu {
+                        if let reportTarget {
+                            FileReportMenuButton(target: reportTarget, presented: $presentedReport)
+                        }
+                    }
 
                     Button {
                         HSHaptic.select()
@@ -2695,6 +2736,7 @@ private struct HSSignTalkView: View {
             .sheet(item: $shareURL) { item in
                 HSDocumentActivityView(activityItems: [item.url])
             }
+            .fileReportSheet($presentedReport)
         }
     }
 

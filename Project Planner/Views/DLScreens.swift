@@ -395,6 +395,7 @@ struct DLDeadlineDetailSheet: View {
     @State private var confirmComplete = false
     @State private var preview: HSDocumentPreviewItem?
     @State private var openAudit: SiteAudit?
+    @State private var reportTarget: FileReportTarget?
 
     private var live: DLDeadline { store.items.first(where: { $0.id == item.id }) ?? item }
 
@@ -492,6 +493,7 @@ struct DLDeadlineDetailSheet: View {
         .sheet(item: $openAudit) { audit in
             SiteAuditDetailView(audit: audit, project: project)
         }
+        .fileReportSheet($reportTarget)
     }
 
     // MARK: Progress
@@ -619,6 +621,15 @@ struct DLDeadlineDetailSheet: View {
                         }
                         .accessibilityIdentifier("dlDeadlineDetail.file")
                         .buttonStyle(HSPressStyle())
+                        .fileReportContextMenu(
+                            FileReportTarget(
+                                surface: "deadline",
+                                parentId: live.id.uuidString,
+                                fileRef: live.fileURL ?? "",
+                                fileName: live.fileName ?? ""
+                            ),
+                            presented: $reportTarget
+                        )
                     }
                     if hasFile && live.siteAuditId != nil {
                         HSDivider(inset: 62)
