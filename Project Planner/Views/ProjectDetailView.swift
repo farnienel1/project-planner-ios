@@ -6445,6 +6445,10 @@ struct CompletedTaskDetailView: View {
         }
     }
 
+    private func completionReportTarget(_ url: String) -> FileReportTarget {
+        FileReportTarget(surface: "task_attachment", parentId: displayTask.id.uuidString, fileRef: url)
+    }
+
     private var completionSummarySection: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionLabel("Completion")
@@ -6462,6 +6466,27 @@ struct CompletedTaskDetailView: View {
                     Text(notes)
                         .font(.system(size: 13))
                         .foregroundStyle(CompleteTaskUXPalette.ink)
+                }
+                if !displayTask.completionImages.isEmpty {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 8)], spacing: 8) {
+                        ForEach(Array(displayTask.completionImages.enumerated()), id: \.offset) { _, url in
+                            Button {
+                                if let u = URL(string: url) { UIApplication.shared.open(u) }
+                            } label: {
+                                TaskCompletionImageView(urlString: url)
+                                    .frame(height: 90)
+                                    .frame(maxWidth: .infinity)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            }
+                            .accessibilityIdentifier("completedTaskDetail.completionImage")
+                            .buttonStyle(.plain)
+                            .fileReportContextMenu(completionReportTarget(url), presented: $reportTarget)
+                        }
+                    }
+                }
+                ForEach(Array(displayTask.completionFiles.enumerated()), id: \.offset) { _, url in
+                    TaskCompletionFileRow(urlString: url)
+                        .fileReportContextMenu(completionReportTarget(url), presented: $reportTarget)
                 }
             }
             .padding(14)

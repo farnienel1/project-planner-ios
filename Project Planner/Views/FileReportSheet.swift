@@ -111,6 +111,7 @@ struct FileReportSheet: View {
                             }
                         }
                     }
+                    .tint(.primary)
                     .accessibilityAddTraits(reason == code ? .isSelected : [])
                 }
             } header: {
