@@ -70,9 +70,12 @@ struct DailyOverviewView: View {
         displayDate != nil
     }
     
+    /// Bookings that fill this day. `bookingOccupiesDay` decides the status (Completed counts; Cancelled does not),
+    /// so the project cards and every row below use the same list as web.
     private var dayBookings: [Booking] {
         bookingStore.bookings.filter { booking in
             Calendar.current.isDate(booking.date, inSameDayAs: overviewDate)
+                && CanonicalBusinessEngine.bookingOccupiesDay(booking.status.rawValue) == true
         }
     }
     
@@ -144,7 +147,7 @@ struct DailyOverviewView: View {
     private var onSitePeopleCount: Int {
         let cal = Calendar.current
         var keys = Set<String>()
-        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+        for b in dayBookings {
             keys.insert(overviewPersonKey(operativeId: b.operativeId))
         }
         for b in managerScheduleStore.managerSiteBookings {
@@ -191,7 +194,7 @@ struct DailyOverviewView: View {
     private var bookedPeopleCount: Int {
         let cal = Calendar.current
         var keys = Set<String>()
-        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+        for b in dayBookings {
             keys.insert(overviewPersonKey(operativeId: b.operativeId))
         }
         for b in managerScheduleStore.managerSiteBookings where cal.isDate(b.date, inSameDayAs: overviewDate) {
@@ -210,7 +213,7 @@ struct DailyOverviewView: View {
         let p = payrollTimePolicy
         let cal = Calendar.current
         var t = 0.0
-        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+        for b in dayBookings {
             t += b.paidBookedHours(policy: p)
         }
         for b in managerScheduleStore.managerSiteBookings {
@@ -228,7 +231,7 @@ struct DailyOverviewView: View {
         let p = payrollTimePolicy
         let cal = Calendar.current
         var t = 0.0
-        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+        for b in dayBookings {
             t += b.overtimeHoursBeyondPaidStandard(policy: p)
         }
         for b in managerScheduleStore.managerSiteBookings {
@@ -247,7 +250,7 @@ struct DailyOverviewView: View {
         let p = payrollTimePolicy
         let cal = Calendar.current
         var t = 0.0
-        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+        for b in dayBookings {
             let wall = b.paidBookedHours(policy: p)
             t += wall - b.overtimeHoursBeyondPaidStandard(policy: p)
         }
@@ -281,7 +284,11 @@ struct DailyOverviewView: View {
     }
 
     private func overviewPersonKey(operativeId: UUID) -> String {
-        let email = operativeStore.allOperatives.first { $0.id == operativeId }?.email
+        let email = emailForLabourBooking(
+            operativeId: operativeId,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
         return StaffEmailIdentity.personKey(email: email, fallbackId: "op:\(operativeId.uuidString)")
     }
 
@@ -1581,7 +1588,11 @@ struct ProjectBookingCard: View {
     private var cardPeopleCount: Int {
         var keys = Set<String>()
         for booking in sortedBookings {
-            let email = operativeStore.allOperatives.first { $0.id == booking.operativeId }?.email
+            let email = emailForLabourBooking(
+                operativeId: booking.operativeId,
+                operatives: operativeStore.allOperatives,
+                users: userStore.organizationUsers
+            )
             keys.insert(StaffEmailIdentity.personKey(email: email, fallbackId: "op:\(booking.operativeId.uuidString)"))
         }
         for booking in managerBookingsThisProjectDay {

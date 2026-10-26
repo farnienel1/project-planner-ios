@@ -461,6 +461,9 @@ struct AppUser: Identifiable, Codable, Hashable {
     var documentName: String = ""
     /// `users/{uid}.displayName` as stored. Roster classification passes it to the packed script. A user save does not write it.
     var documentDisplayName: String = ""
+    /// `users/{uid}.formerUserIds` from `parseFormerUserIds`: invite placeholder ids this account replaced.
+    /// Bookings stored under one still belong to this person. Append-only in Firestore; a user save does not write it.
+    var formerUserIds: [String] = []
     
     init(
         id: String,
@@ -586,7 +589,7 @@ extension AppUser {
         case annualLeaveEnabled, annualLeaveDaysPerYear, annualLeaveYearStartMonth, annualLeaveYearEndMonth
         case annualLeaveCarriesOver, annualLeaveYearAllowance, annualLeaveYearAllowanceKey
         case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
-        case documentName, documentDisplayName
+        case documentName, documentDisplayName, formerUserIds
     }
 
     init(from decoder: Decoder) throws {
@@ -632,6 +635,7 @@ extension AppUser {
         sameEmailUserIds = try container.decodeIfPresent([String].self, forKey: .sameEmailUserIds) ?? []
         documentName = try container.decodeIfPresent(String.self, forKey: .documentName) ?? ""
         documentDisplayName = try container.decodeIfPresent(String.self, forKey: .documentDisplayName) ?? ""
+        formerUserIds = try container.decodeIfPresent([String].self, forKey: .formerUserIds) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -676,6 +680,7 @@ extension AppUser {
         try container.encode(sameEmailUserIds, forKey: .sameEmailUserIds)
         try container.encode(documentName, forKey: .documentName)
         try container.encode(documentDisplayName, forKey: .documentDisplayName)
+        try container.encode(formerUserIds, forKey: .formerUserIds)
     }
 
     /// Operatives default on; self-employed managers/admins default on; PAYE managers/admins default off.

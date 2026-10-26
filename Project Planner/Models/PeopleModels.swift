@@ -321,18 +321,38 @@ extension Operative: Hashable {
 
 /// Name for a labour booking. Bookings store an operative id, not a user account.
 /// When that id is not on the roster, the row is leftover data, not a person called Operative.
+/// Shown for a booked person no catalogue row or account matches. The booking row is never hidden.
+let unknownLabourPersonName = "Unknown person"
+
+/// The account a labour booking names: its stored id, or the account that replaced that id (`formerIdAliases`).
+func accountForLabourBooking(operativeId: UUID, users: [AppUser]) -> AppUser? {
+    let storedId = Booking.storedOperativeId(for: operativeId)
+    let aliases = CanonicalBusinessEngine.formerIdAliases(
+        users.map { CanonicalFormerIdPerson(id: $0.id, formerIds: $0.formerUserIds) }
+    ) ?? [:]
+    let currentId = aliases[storedId] ?? storedId
+    return users.first(where: { $0.id == currentId })
+}
+
+/// Email for a labour booking: the catalogue row's, else the account's. Nil when neither matches.
+func emailForLabourBooking(operativeId: UUID, operatives: [Operative], users: [AppUser]) -> String? {
+    if let email = operatives.first(where: { $0.id == operativeId })?.email, !email.isEmpty { return email }
+    return accountForLabourBooking(operativeId: operativeId, users: users)?.email
+}
+
 func rosterNameForLabourBooking(operativeId: UUID, operatives: [Operative], users: [AppUser]) -> String {
     if let operative = operatives.first(where: { $0.id == operativeId }) {
         let trimmed = operative.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
     }
-    if let user = users.first(where: { $0.id == operativeId.uuidString }) {
+    // The stored id may be a Firebase Auth uid, or an invite placeholder id the account replaced (web #189).
+    if let user = accountForLabourBooking(operativeId: operativeId, users: users) {
         let trimmed = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
         let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines)
         if !email.isEmpty { return email }
     }
-    return "Not on the roster"
+    return unknownLabourPersonName
 }
 
 enum TradeSkill: String, CaseIterable, Identifiable, Codable, Hashable {
