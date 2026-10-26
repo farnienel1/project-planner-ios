@@ -115,16 +115,24 @@ struct SettingsProfileDetailView: View {
     @State private var pickedProfileImage: UIImage?
     @State private var isUploadingProfilePhoto = false
     @State private var profilePhotoUploadMessage: String?
-    @State private var vatNumberDraft = ""
-    @State private var utrNumberDraft = ""
-    @State private var baselineVat = ""
-    @State private var baselineUtr = ""
+    @State private var vatDraft = SensitiveFieldDraft()
+    @State private var utrDraft = SensitiveFieldDraft()
+    @State private var isLoadingBillingDetails = false
     @State private var isSavingBillingDetails = false
     @State private var billingSaveMessage: String?
     @Environment(\.dismiss) private var dismiss
 
     private var isDirty: Bool {
-        vatNumberDraft != baselineVat || utrNumberDraft != baselineUtr
+        vatDraft.isDirty || utrDraft.isDirty
+    }
+
+    private var billingColors: SensitiveFieldColors {
+        SensitiveFieldColors(
+            primary: ProjectWorksRevampColors.ink,
+            secondary: ProjectWorksRevampColors.muted,
+            accent: ProjectWorksRevampColors.blue,
+            destructive: ProjectWorksRevampColors.requiredPillFg
+        )
     }
 
     private var displayName: String {
@@ -150,8 +158,8 @@ struct SettingsProfileDetailView: View {
                 }
             }
             .settingsUnsavedLeave(isDirty: isDirty) {
-                vatNumberDraft = baselineVat
-                utrNumberDraft = baselineUtr
+                vatDraft.reset(saved: vatDraft.saved)
+                utrDraft.reset(saved: utrDraft.saved)
                 dismiss()
             }
             .modifier(SettingsProfileSheetsModifier(
@@ -169,13 +177,7 @@ struct SettingsProfileDetailView: View {
                     Task { await uploadPickedProfilePhoto(image) }
                 }
             ))
-            .onAppear(perform: syncBillingDraftsFromUser)
-            .onChange(of: userStore.currentUser?.vatNumber) { _, _ in
-                syncBillingDraftsFromUser()
-            }
-            .onChange(of: userStore.currentUser?.utrNumber) { _, _ in
-                syncBillingDraftsFromUser()
-            }
+            .task(id: userStore.currentUser?.id) { await loadBillingDetails() }
     }
 
     private var profileScroll: some View {
@@ -235,18 +237,27 @@ struct SettingsProfileDetailView: View {
                 SettingsHubChrome.sectionTitle("Billing details")
                 SettingsHubChrome.card {
                     VStack(alignment: .leading, spacing: 8) {
-                        TextField("VAT number (if registered)", text: $vatNumberDraft)
-                            .accessibilityIdentifier("settingsProfileDetail.vatNumberIfRegistered")
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
-                            .font(.system(size: 13, weight: .medium))
+                        if isLoadingBillingDetails {
+                            ProgressView()
+                                .padding(.vertical, 12)
+                        } else {
+                            SensitiveFieldEditor(
+                                label: "VAT number",
+                                placeholder: "VAT number (if registered)",
+                                draft: $vatDraft,
+                                colors: billingColors,
+                                accessibilityToken: "settingsProfileDetail.vatNumber"
+                            )
                             .padding(.top, 12)
-                        SettingsHubChrome.divider()
-                        TextField("UTR number", text: $utrNumberDraft)
-                            .accessibilityIdentifier("settingsProfileDetail.utrNumber")
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
-                            .font(.system(size: 13, weight: .medium))
+                            SettingsHubChrome.divider()
+                            SensitiveFieldEditor(
+                                label: "UTR number",
+                                placeholder: "UTR number",
+                                draft: $utrDraft,
+                                colors: billingColors,
+                                accessibilityToken: "settingsProfileDetail.utrNumber"
+                            )
+                        }
                         SettingsHubChrome.divider()
                         if let billingSaveMessage {
                             Text(billingSaveMessage)
@@ -256,7 +267,7 @@ struct SettingsProfileDetailView: View {
                         }
                     }
                 }
-                SettingsHubChrome.footer("VAT and UTR appear on generated invoices. UTR is recommended before you generate an invoice.")
+                SettingsHubChrome.footer("Only you and your company's admins can see these. Invoices include them only when you tick \"\(CanonicalBusinessEngine.sensitiveExportOptionLabel ?? "")\".")
 
                 if firebaseBackend.currentOrganization == nil {
                     SettingsHubChrome.card {
@@ -290,14 +301,14 @@ struct SettingsProfileDetailView: View {
         .padding(.vertical, 12)
     }
 
-    private func syncBillingDraftsFromUser() {
-        guard !isDirty, !isSavingBillingDetails else { return }
-        let vat = userStore.currentUser?.vatNumber ?? ""
-        let utr = userStore.currentUser?.utrNumber ?? ""
-        vatNumberDraft = vat
-        utrNumberDraft = utr
-        baselineVat = vat
-        baselineUtr = utr
+    private func loadBillingDetails() async {
+        guard let user = userStore.currentUser, !isDirty, !isSavingBillingDetails else { return }
+        isLoadingBillingDetails = true
+        let profile = await userStore.loadSensitiveProfile(for: user)
+        isLoadingBillingDetails = false
+        guard !isDirty else { return }
+        vatDraft.reset(saved: profile?.vatNumber ?? "")
+        utrDraft.reset(saved: profile?.utrNumber ?? "")
     }
 
     @ViewBuilder
@@ -337,20 +348,18 @@ struct SettingsProfileDetailView: View {
             isSavingBillingDetails = true
             billingSaveMessage = nil
         }
-        let vat = vatNumberDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let utr = utrNumberDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let vat = vatDraft.valueToSave
+        let utr = utrDraft.valueToSave
         let ok = await userStore.updateUserBillingProfile(
             userId: userId,
-            vatNumber: vat.isEmpty ? nil : vat,
-            utrNumber: utr.isEmpty ? nil : utr
+            vatNumber: vat,
+            utrNumber: utr
         )
         await MainActor.run {
             isSavingBillingDetails = false
             if ok {
-                baselineVat = vat
-                baselineUtr = utr
-                vatNumberDraft = vat
-                utrNumberDraft = utr
+                vatDraft.reset(saved: vat)
+                utrDraft.reset(saved: utr)
             }
             billingSaveMessage = ok ? "Billing details saved." : (userStore.errorMessage ?? "Could not save billing details.")
         }

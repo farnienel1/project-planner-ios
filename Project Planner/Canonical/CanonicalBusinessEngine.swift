@@ -2674,6 +2674,100 @@ nonisolated enum CanonicalBusinessEngine {
         constant("FILE_REPORT_SENT_COPY", as: String.self)
     }
 
+    // MARK: - Sensitive profile (UTR and VAT number)
+
+    struct CanonicalSensitiveProfile: Codable, Equatable, Sendable {
+        var utrNumber: String
+        var vatNumber: String
+        /// "private", "legacy", or "none".
+        var source: String
+    }
+
+    struct CanonicalSensitiveProfileWrite: Codable, Equatable, Sendable {
+        struct Fields: Codable, Equatable, Sendable {
+            var utrNumber: String
+            var vatNumber: String
+            var updatedByUserId: String
+        }
+        var ok: Bool
+        var fields: Fields?
+        var error: String?
+    }
+
+    private struct SensitiveViewerInput: Encodable {
+        var viewerRole: CanonicalStaffAccountRole
+        var viewerUserId: String
+        var subjectUserId: String
+    }
+
+    private struct SensitiveWriteInput: Encodable {
+        var utrNumber: String
+        var vatNumber: String
+        var updatedByUserId: String
+    }
+
+    private struct SensitiveExportInput: Encodable {
+        var requested: Bool
+        var canView: Bool
+    }
+
+    /// The person themselves, or an admin / super admin not in operative mode.
+    static func canViewSensitiveProfile(viewerRole: CanonicalStaffAccountRole, viewerUserId: String, subjectUserId: String) -> Bool {
+        let input = SensitiveViewerInput(viewerRole: viewerRole, viewerUserId: viewerUserId, subjectUserId: subjectUserId)
+        return decode(Bool.self, function: "canViewSensitiveProfile", arguments: [input]) ?? false
+    }
+
+    static func maskSensitiveValue(_ value: String?) -> String? {
+        decode(String.self, function: "maskSensitiveValue", arguments: [value ?? ""])
+    }
+
+    /// Only the string fields of each document are passed. A non-nil `privateDoc` means the private document exists.
+    static func resolveSensitiveProfile(privateDoc: [String: Any]?, legacyUser: [String: Any]?) -> CanonicalSensitiveProfile? {
+        func strings(_ doc: [String: Any]?) -> [String: Any]? {
+            guard let doc else { return nil }
+            var out: [String: Any] = [:]
+            for key in ["utrNumber", "vatNumber"] {
+                if let text = doc[key] as? String { out[key] = text }
+            }
+            return out
+        }
+        let privateJSON = strings(privateDoc).flatMap { jsonObjectFragment($0) } ?? "null"
+        let legacyJSON = strings(legacyUser).flatMap { jsonObjectFragment($0) } ?? "null"
+        return decodeExpression(
+            CanonicalSensitiveProfile.self,
+            "ProjectPlannerCanonical.resolveSensitiveProfile({ privateDoc: \(privateJSON), legacyUser: \(legacyJSON) })"
+        )
+    }
+
+    static func sensitiveProfileWriteFields(utrNumber: String?, vatNumber: String?, updatedByUserId: String) -> CanonicalSensitiveProfileWrite? {
+        let input = SensitiveWriteInput(utrNumber: utrNumber ?? "", vatNumber: vatNumber ?? "", updatedByUserId: updatedByUserId)
+        return decode(CanonicalSensitiveProfileWrite.self, function: "sensitiveProfileWriteFields", arguments: [input])
+    }
+
+    static func exportIncludesSensitiveFields(requested: Bool, canView: Bool) -> Bool {
+        decode(Bool.self, function: "exportIncludesSensitiveFields", arguments: [SensitiveExportInput(requested: requested, canView: canView)]) ?? false
+    }
+
+    static func sensitiveProfileDocPath(userId: String) -> String? {
+        decode(String.self, function: "sensitiveProfileDocPath", arguments: [userId])
+    }
+
+    static var sensitiveProfileDocId: String? {
+        constant("SENSITIVE_PROFILE_DOC_ID", as: String.self)
+    }
+
+    static var sensitiveHeldByAdminCopy: String? {
+        constant("SENSITIVE_HELD_BY_ADMIN_COPY", as: String.self)
+    }
+
+    static var sensitiveExportOptionLabel: String? {
+        constant("SENSITIVE_EXPORT_OPTION_LABEL", as: String.self)
+    }
+
+    static var sensitiveValueMax: Int? {
+        constant("SENSITIVE_VALUE_MAX", as: Int.self)
+    }
+
     // MARK: - Script surface
 
     /// Names the packed script exports.

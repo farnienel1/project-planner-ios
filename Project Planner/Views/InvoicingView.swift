@@ -1471,6 +1471,9 @@ private struct MyTimesheetView: View {
     @State private var showExpenseSheet = false
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var showInvoiceUTRWarning = false
+    /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
+    @State private var includeTaxIds = false
+    @State private var invoiceTaxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
     @State private var showInvoiceSuccess = false
     @State private var generatedInvoiceURL: URL?
     @State private var isGeneratingInvoice = false
@@ -1868,6 +1871,7 @@ private struct MyTimesheetView: View {
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    InvoiceTaxIdsOption(subject: currentUser, isOn: $includeTaxIds)
                     Button {
                         beginInvoiceGeneration(for: currentUser)
                     } label: {
@@ -2026,10 +2030,13 @@ private struct MyTimesheetView: View {
 
     private func beginInvoiceGeneration(for user: AppUser) {
         invoiceErrorMessage = nil
-        if user.trimmedUTRNumber == nil {
-            showInvoiceUTRWarning = true
-        } else {
-            Task { await runInvoiceGeneration() }
+        Task {
+            invoiceTaxIds = await InvoicePDFGenerationSupport.taxIdsForExport(subject: user, requested: includeTaxIds, userStore: userStore)
+            if InvoicePDFGenerationSupport.shouldWarnBlankUTR(requested: includeTaxIds, taxIds: invoiceTaxIds) {
+                showInvoiceUTRWarning = true
+            } else {
+                await runInvoiceGeneration()
+            }
         }
     }
 
@@ -2051,7 +2058,8 @@ private struct MyTimesheetView: View {
             operativeStore: operativeStore,
             projectStore: projectStore,
             managerScheduleStore: managerScheduleStore,
-            dayRateHistoryCollection: dayRateHistoryCollection
+            dayRateHistoryCollection: dayRateHistoryCollection,
+            taxIds: invoiceTaxIds
         )
 
         await MainActor.run {
@@ -2373,6 +2381,9 @@ private struct PreviousTimesheetsView: View {
     @State private var isLoading = false
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var showInvoiceUTRWarning = false
+    /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
+    @State private var includeTaxIds = false
+    @State private var invoiceTaxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
     @State private var showInvoiceSuccess = false
     @State private var generatedInvoiceURL: URL?
     @State private var isGeneratingInvoice = false
@@ -2445,6 +2456,7 @@ private struct PreviousTimesheetsView: View {
                         if run.isCompleted || (userStore.displayUser.map { TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: run.draft, user: $0) } ?? false),
                            let selectedPeriod,
                            let currentUser = userStore.displayUser {
+                            InvoiceTaxIdsOption(subject: currentUser, isOn: $includeTaxIds)
                             Button {
                                 beginInvoiceGeneration(for: currentUser, period: selectedPeriod)
                             } label: {
@@ -2507,10 +2519,13 @@ private struct PreviousTimesheetsView: View {
     private func beginInvoiceGeneration(for user: AppUser, period: InvoicePeriodOption) {
         invoiceErrorMessage = nil
         pendingInvoicePeriod = period
-        if user.trimmedUTRNumber == nil {
-            showInvoiceUTRWarning = true
-        } else {
-            Task { await runPendingInvoiceGeneration() }
+        Task {
+            invoiceTaxIds = await InvoicePDFGenerationSupport.taxIdsForExport(subject: user, requested: includeTaxIds, userStore: userStore)
+            if InvoicePDFGenerationSupport.shouldWarnBlankUTR(requested: includeTaxIds, taxIds: invoiceTaxIds) {
+                showInvoiceUTRWarning = true
+            } else {
+                await runPendingInvoiceGeneration()
+            }
         }
     }
 
@@ -2530,7 +2545,8 @@ private struct PreviousTimesheetsView: View {
             operativeStore: operativeStore,
             projectStore: projectStore,
             managerScheduleStore: managerScheduleStore,
-            dayRateHistoryCollection: dayRateHistoryCollection
+            dayRateHistoryCollection: dayRateHistoryCollection,
+            taxIds: invoiceTaxIds
         )
 
         if let pdfURL {
@@ -2759,6 +2775,8 @@ private struct OperativeTimesheetsView: View {
     @State private var selectedTab: ManagerTimesheetListTab = .awaiting
     @State private var refreshVersion = 0
     @State private var isExporting = false
+    /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
+    @State private var includeTaxIdsInExport = false
     @State private var exportMessage: String?
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var exportedHistory: [ExportedTimesheetHistoryRow] = []
@@ -3074,6 +3092,13 @@ private struct OperativeTimesheetsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                 if selectedTab == .signedOff && !filteredReports.isEmpty {
+                    // Admins only: managers cannot see other people's tax identifiers.
+                    if userStore.canViewSensitiveProfile(of: "") {
+                        SensitiveExportToggle(isOn: $includeTaxIdsInExport, accessibilityToken: "signedTimesheetsExport")
+                            .padding(14)
+                            .background(Color(.systemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
                     Button {
                         Task { await exportSignedTimesheets() }
                     } label: {
@@ -3348,6 +3373,16 @@ private struct OperativeTimesheetsView: View {
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
         let targets = filteredReports
+        var taxIdsByUserId: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
+        for target in targets {
+            if let ids = await InvoicePDFGenerationSupport.taxIdsForExport(
+                subject: target,
+                requested: includeTaxIdsInExport,
+                userStore: userStore
+            ) {
+                taxIdsByUserId[target.id] = ids
+            }
+        }
         let result = await TimesheetExportHelper.exportAndEmail(
             operatives: targets,
             week: week,
@@ -3364,7 +3399,8 @@ private struct OperativeTimesheetsView: View {
             organizationUsers: userStore.organizationUsers,
             recipientEmail: recipientEmail,
             recipientName: exporter.fullName.isEmpty ? exporter.email : exporter.fullName,
-            firebaseBackend: firebaseBackend
+            firebaseBackend: firebaseBackend,
+            taxIdsByUserId: taxIdsByUserId
         )
 
         guard result.emailSent else {
@@ -4833,6 +4869,23 @@ private struct ManagerTimesheetSignOffView: View {
     }
 }
 
+/// `SENSITIVE_EXPORT_OPTION_LABEL` toggle, shown only when `canViewSensitiveProfile` is true for this subject.
+private struct InvoiceTaxIdsOption: View {
+    @EnvironmentObject var userStore: UserStore
+    let subject: AppUser
+    @Binding var isOn: Bool
+    var token: String = "invoice"
+
+    var body: some View {
+        if userStore.canViewSensitiveProfile(of: subject.id) {
+            SensitiveExportToggle(isOn: $isOn, accessibilityToken: token)
+                .padding(14)
+                .background(Color(.systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+}
+
 private struct InvoiceUTRBlankWarningSheet: View {
     let onBack: () -> Void
     let onAccept: () -> Void
@@ -4908,6 +4961,23 @@ private struct InvoiceGeneratedSuccessSheet: View {
 }
 
 private enum InvoicePDFGenerationSupport {
+    /// UTR / VAT for one PDF, read only when `exportIncludesSensitiveFields` allows it. Nil leaves them off.
+    @MainActor
+    static func taxIdsForExport(
+        subject: AppUser,
+        requested: Bool,
+        userStore: UserStore
+    ) async -> CanonicalBusinessEngine.CanonicalSensitiveProfile? {
+        let canView = userStore.canViewSensitiveProfile(of: subject.id)
+        guard CanonicalBusinessEngine.exportIncludesSensitiveFields(requested: requested, canView: canView) else { return nil }
+        return await userStore.loadSensitiveProfile(for: subject)
+    }
+
+    /// The blank-UTR warning only applies when the export option is on.
+    static func shouldWarnBlankUTR(requested: Bool, taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?) -> Bool {
+        requested && (taxIds?.utrNumber ?? "").isEmpty
+    }
+
     @MainActor
     static func generatePDF(
         period: InvoicePeriodOption,
@@ -4918,7 +4988,8 @@ private enum InvoicePDFGenerationSupport {
         operativeStore: OperativeStore,
         projectStore: ProjectStore,
         managerScheduleStore: ManagerScheduleStore,
-        dayRateHistoryCollection: OperativeDayRateHistoryCollection
+        dayRateHistoryCollection: OperativeDayRateHistoryCollection,
+        taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
     ) -> URL? {
         guard let currentUser = userStore.displayUser else { return nil }
         let bookings = bookingStore.bookings
@@ -4958,8 +5029,8 @@ private enum InvoicePDFGenerationSupport {
             context: InvoicePDFBuilder.Context(
                 organizationName: orgName,
                 userName: userName,
-                vatNumber: currentUser.trimmedVATNumber,
-                utrNumber: currentUser.trimmedUTRNumber,
+                vatNumber: taxIds.flatMap { $0.vatNumber.isEmpty ? nil : $0.vatNumber },
+                utrNumber: taxIds.flatMap { $0.utrNumber.isEmpty ? nil : $0.utrNumber },
                 generatedAt: Date(),
                 periodTitle: period.title,
                 periodDateRange: period.dateRangeText,
@@ -5108,6 +5179,9 @@ private struct GenerateInvoiceView: View {
     @State private var errorMessage: String?
     @State private var generatedPDFURL: URL?
     @State private var showInvoiceUTRWarning = false
+    /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
+    @State private var includeTaxIds = false
+    @State private var invoiceTaxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
     @State private var showInvoiceSuccess = false
 
     private var periodOptions: [InvoicePeriodOption] {
@@ -5159,6 +5233,9 @@ private struct GenerateInvoiceView: View {
                     invoicePeriodPickerCard
                 }
 
+                if let subject = userStore.displayUser {
+                    InvoiceTaxIdsOption(subject: subject, isOn: $includeTaxIds)
+                }
                 Button {
                     beginInvoiceGeneration()
                 } label: {
@@ -5390,10 +5467,13 @@ private struct GenerateInvoiceView: View {
     private func beginInvoiceGeneration() {
         guard let user = userStore.displayUser else { return }
         errorMessage = nil
-        if user.trimmedUTRNumber == nil {
-            showInvoiceUTRWarning = true
-        } else {
-            Task { await runInvoiceGeneration() }
+        Task {
+            invoiceTaxIds = await InvoicePDFGenerationSupport.taxIdsForExport(subject: user, requested: includeTaxIds, userStore: userStore)
+            if InvoicePDFGenerationSupport.shouldWarnBlankUTR(requested: includeTaxIds, taxIds: invoiceTaxIds) {
+                showInvoiceUTRWarning = true
+            } else {
+                await runInvoiceGeneration()
+            }
         }
     }
 
@@ -5417,7 +5497,8 @@ private struct GenerateInvoiceView: View {
             operativeStore: operativeStore,
             projectStore: projectStore,
             managerScheduleStore: managerScheduleStore,
-            dayRateHistoryCollection: dayRateHistoryCollection
+            dayRateHistoryCollection: dayRateHistoryCollection,
+            taxIds: invoiceTaxIds
         )
 
         if let pdfURL {
@@ -6114,7 +6195,8 @@ private enum TimesheetExportHelper {
         organizationUsers: [AppUser] = [],
         recipientEmail: String,
         recipientName: String,
-        firebaseBackend: FirebaseBackend? = nil
+        firebaseBackend: FirebaseBackend? = nil,
+        taxIdsByUserId: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
     ) async -> Result {
         var emailedUserIds = Set<String>()
         var failed: [String] = []
@@ -6146,8 +6228,8 @@ private enum TimesheetExportHelper {
                 context: InvoicePDFBuilder.Context(
                     organizationName: organizationName,
                     userName: userName,
-                    vatNumber: operative.trimmedVATNumber,
-                    utrNumber: operative.trimmedUTRNumber,
+                    vatNumber: taxIdsByUserId[operative.id].flatMap { $0.vatNumber.isEmpty ? nil : $0.vatNumber },
+                    utrNumber: taxIdsByUserId[operative.id].flatMap { $0.utrNumber.isEmpty ? nil : $0.utrNumber },
                     generatedAt: Date(),
                     periodTitle: "Signed timesheet",
                     periodDateRange: periodRangeText,

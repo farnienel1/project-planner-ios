@@ -446,9 +446,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     var annualLeaveYearAllowanceKey: String?
     /// When true, schedule feeds into timesheets and payroll sign-off applies. Operatives default on; managers/admins default off.
     var timesheetsEnabled: Bool
-    /// VAT registration number (optional; shown on invoices when set).
+    /// Legacy VAT number still on users/{uid} before migration. The live value is users/{uid}/private/taxIds;
+    /// read both through `UserStore.loadSensitiveProfile`. Not written or encoded.
     var vatNumber: String?
-    /// Unique Taxpayer Reference (optional; recommended before generating invoices).
+    /// Legacy UTR still on users/{uid} before migration. See `vatNumber`.
     var utrNumber: String?
     /// In memory only. A `managers` record can place a non-admin who has no role flags on Managers.
     /// `saveUser` does not write this field.
@@ -670,8 +671,7 @@ extension AppUser {
         try container.encodeIfPresent(annualLeaveYearAllowance, forKey: .annualLeaveYearAllowance)
         try container.encodeIfPresent(annualLeaveYearAllowanceKey, forKey: .annualLeaveYearAllowanceKey)
         try container.encode(timesheetsEnabled, forKey: .timesheetsEnabled)
-        try container.encodeIfPresent(vatNumber, forKey: .vatNumber)
-        try container.encodeIfPresent(utrNumber, forKey: .utrNumber)
+        // vatNumber / utrNumber are not encoded, so no local cache holds tax identifiers.
         try container.encode(placedByManagersRecord, forKey: .placedByManagersRecord)
         try container.encode(sameEmailUserIds, forKey: .sameEmailUserIds)
         try container.encode(documentName, forKey: .documentName)
@@ -690,12 +690,12 @@ extension AppUser {
         timesheetsEnabled || employmentType(on: date) == .selfEmployed
     }
 
-    var trimmedUTRNumber: String? {
-        utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-    }
-
-    var trimmedVATNumber: String? {
-        vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    /// Legacy UTR / VAT still on users/{uid}, for `resolveSensitiveProfile` only. Never shown directly.
+    var legacySensitiveFields: [String: Any] {
+        var fields: [String: Any] = [:]
+        if let utrNumber { fields["utrNumber"] = utrNumber }
+        if let vatNumber { fields["vatNumber"] = vatNumber }
+        return fields
     }
 
     /// Manage Users, Managers, and Operatives share this order.

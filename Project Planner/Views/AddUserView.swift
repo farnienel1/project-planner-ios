@@ -58,6 +58,11 @@ struct AddUserView: View {
     @State private var remainingLeaveText = "25"
     @State private var vatNumber = ""
     @State private var utrNumber = ""
+
+    /// A new person has no uid yet, so this is the admin half of `canViewSensitiveProfile`.
+    private var canEnterTaxIds: Bool {
+        userStore.canViewSensitiveProfile(of: "")
+    }
     @State private var isCreating = false
     @State private var showSuccess = false
     @State private var errorMessage: String?
@@ -513,22 +518,35 @@ struct AddUserView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("VAT number (optional)")
-                        .font(.headline)
-                    TextField("If VAT registered", text: $vatNumber)
-                        .accessibilityIdentifier("addUser.ifVATRegistered")
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .textInputAutocapitalization(.characters)
-                }
+                // Admins only (`canViewSensitiveProfile` for someone else). Saved to the placeholder's private/taxIds.
+                if canEnterTaxIds {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("VAT number (optional)")
+                            .font(.headline)
+                        TextField("If VAT registered", text: $vatNumber)
+                            .accessibilityIdentifier("addUser.ifVATRegistered")
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .onChange(of: vatNumber) { _, newValue in
+                                let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
+                                if newValue.count > limit { vatNumber = String(newValue.prefix(limit)) }
+                            }
+                    }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("UTR number (optional)")
-                        .font(.headline)
-                    TextField("Unique Taxpayer Reference", text: $utrNumber)
-                        .accessibilityIdentifier("addUser.uniqueTaxpayerReference")
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .textInputAutocapitalization(.characters)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("UTR number (optional)")
+                            .font(.headline)
+                        TextField("Unique Taxpayer Reference", text: $utrNumber)
+                            .accessibilityIdentifier("addUser.uniqueTaxpayerReference")
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .onChange(of: utrNumber) { _, newValue in
+                                let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
+                                if newValue.count > limit { utrNumber = String(newValue.prefix(limit)) }
+                            }
+                    }
                 }
 
                 if mode == .admin {
@@ -1284,8 +1302,8 @@ struct AddUserView: View {
                 annualLeaveYearAllowance: inviteRemainingOverride?.annualLeaveYearAllowance,
                 annualLeaveYearAllowanceKey: inviteRemainingOverride?.annualLeaveYearAllowanceKey,
                 timesheetsEnabled: AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType),
-                vatNumber: vatNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : vatNumber.trimmingCharacters(in: .whitespacesAndNewlines),
-                utrNumber: utrNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : utrNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                vatNumber: canEnterTaxIds ? vatNumber : nil,
+                utrNumber: canEnterTaxIds ? utrNumber : nil
             )
             
             await MainActor.run {

@@ -65,6 +65,12 @@ enum UITestingMode {
         let managerUser = user(roleName: "manager", orgId: orgId)
         let operativeUser = user(roleName: "operative", orgId: orgId)
         userStore.organizationUsers = [signedIn, managerUser, operativeUser]
+        if seedDemoData, let taxIds = CanonicalBusinessEngine.resolveSensitiveProfile(
+            privateDoc: ["utrNumber": "1234567890", "vatNumber": "GB123456789"],
+            legacyUser: nil
+        ) {
+            userStore.uiTestSensitiveProfiles = [operativeUser.id: taxIds]
+        }
 
         let client = Client(name: "TEST-Client Alpha", email: "client@example.test")
         projectStore.clients = [client]
@@ -163,6 +169,8 @@ enum UITestingMode {
                     siteAudit: true
                 ),
                 policyAccepted: true,
+                assignedManagerUserId: "uitest-manager",
+                assignedManagerUserIds: ["uitest-manager"],
                 employmentType: .selfEmployed,
                 timesheetsEnabled: true
             )
