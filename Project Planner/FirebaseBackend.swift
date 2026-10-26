@@ -670,7 +670,9 @@ class FirebaseBackend: ObservableObject {
             ]
             
             print("🔥🔥🔥 DEBUG: Creating user document for: \(result.user.uid)")
-            print("🔥🔥🔥 DEBUG: User document data: \(userData)")
+            #if DEBUG
+            print("🔥🔥🔥 DEBUG: User document keys: \(userData.keys.sorted().joined(separator: ", "))")
+            #endif
             try await db.collection("users").document(result.user.uid).setData(userData)
             
             // Verify user document was created
@@ -4153,9 +4155,13 @@ class FirebaseBackend: ObservableObject {
                     permissions.removeValue(forKey: "adminAccess")
                     merged["permissions"] = permissions
                 }
+                let legacyTaxIds = merged
+                merged.removeValue(forKey: "utrNumber")
+                merged.removeValue(forKey: "vatNumber")
                 merged["updatedAt"] = Timestamp(date: Date())
                 merged["passwordSet"] = true
                 try await db.collection("users").document(authUid).setData(merged, merge: true)
+                await moveSensitiveProfile(fromPlaceholderId: placeholder.documentID, toUserId: authUid, legacyPlaceholder: legacyTaxIds)
                 let norm = rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                 try await db.collection("organizations").document(orgId)
                     .collection("userEmails").document(norm)
@@ -5498,18 +5504,8 @@ class FirebaseBackend: ObservableObject {
         }
         userData["hasNoLineManager"] = user.hasNoLineManager
         userData["timesheetsEnabled"] = user.timesheetsEnabled
-        
-        if let vat = user.vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !vat.isEmpty {
-            userData["vatNumber"] = vat
-        } else {
-            userData["vatNumber"] = FieldValue.delete()
-        }
-        if let utr = user.utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !utr.isEmpty {
-            userData["utrNumber"] = utr
-        } else {
-            userData["utrNumber"] = FieldValue.delete()
-        }
-        
+        // UTR and VAT number live in users/{uid}/private/taxIds. See `saveSensitiveProfile`.
+
         if sessionsAreSeparate(for: user) {
             try await saveSeparateDeviceSession(user, payload: userData)
             return
@@ -5577,30 +5573,83 @@ class FirebaseBackend: ObservableObject {
         try await db.collection("users").document(userId).updateData(payload)
     }
 
-    /// VAT and UTR only. Does not send role, permissions, or organizationId.
-    func patchOwnUserBillingFields(userId: String, vatNumber: String?, utrNumber: String?) async throws {
+    // MARK: - Sensitive profile (users/{uid}/private/taxIds)
+
+    private func sensitiveProfileRef(userId: String) -> DocumentReference? {
         let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        guard !trimmed.isEmpty, let path = CanonicalBusinessEngine.sensitiveProfileDocPath(userId: trimmed) else { return nil }
+        return db.document(path)
+    }
+
+    /// UTR and VAT number through `resolveSensitiveProfile`: the private document once it exists, else the legacy
+    /// fields still on users/{uid}. Callers check `canViewSensitiveProfile` first; the rules refuse anyone else.
+    func loadSensitiveProfile(userId: String, legacyUser: [String: Any]?) async throws -> CanonicalBusinessEngine.CanonicalSensitiveProfile? {
+        guard let ref = sensitiveProfileRef(userId: userId) else { return nil }
+        let snapshot = try await ref.getDocument()
+        let privateDoc: [String: Any]? = snapshot.exists ? (snapshot.data() ?? [:]) : nil
+        return CanonicalBusinessEngine.resolveSensitiveProfile(privateDoc: privateDoc, legacyUser: legacyUser)
+    }
+
+    /// Writes users/{uid}/private/taxIds from `sensitiveProfileWriteFields` (blank clears), then removes the legacy
+    /// fields from users/{uid}. Does not send role, permissions, or organizationId.
+    func saveSensitiveProfile(userId: String, utrNumber: String?, vatNumber: String?) async throws {
+        guard let ref = sensitiveProfileRef(userId: userId),
+              let signedIn = auth.currentUser?.uid,
+              let write = CanonicalBusinessEngine.sensitiveProfileWriteFields(
+                utrNumber: utrNumber,
+                vatNumber: vatNumber,
+                updatedByUserId: signedIn
+              ) else {
             throw NSError(
                 domain: "FirebaseBackend",
                 code: 400,
-                userInfo: [NSLocalizedDescriptionKey: "Billing fields need a user id."]
+                userInfo: [NSLocalizedDescriptionKey: "Could not save UTR and VAT number. Try again."]
             )
         }
-        var payload: [String: Any] = [
-            "updatedAt": Timestamp(date: Date())
-        ]
-        if let vat = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !vat.isEmpty {
-            payload["vatNumber"] = vat
-        } else {
-            payload["vatNumber"] = FieldValue.delete()
+        guard write.ok, let fields = write.fields else {
+            let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
+            let message = write.error == "too_long"
+                ? "UTR and VAT number can be up to \(limit) characters each."
+                : "Could not save UTR and VAT number. Try again."
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
         }
-        if let utr = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !utr.isEmpty {
-            payload["utrNumber"] = utr
-        } else {
-            payload["utrNumber"] = FieldValue.delete()
+        try await ref.setData([
+            "utrNumber": fields.utrNumber,
+            "vatNumber": fields.vatNumber,
+            "updatedByUserId": fields.updatedByUserId,
+            "updatedAt": FieldValue.serverTimestamp()
+        ])
+        do {
+            try await db.collection("users").document(userId.trimmingCharacters(in: .whitespacesAndNewlines)).updateData([
+                "utrNumber": FieldValue.delete(),
+                "vatNumber": FieldValue.delete()
+            ])
+        } catch {
+            // The private document already wins on read; the legacy copy is cleared on the next save.
+            print("🔥🔥🔥 DEBUG: Could not clear legacy tax fields: \((error as NSError).code)")
         }
-        try await db.collection("users").document(trimmed).updateData(payload)
+    }
+
+    /// Invite completion, as web `moveTaxIds`: copy the placeholder's private/taxIds to the new account as that
+    /// account, then delete the placeholder copy. A placeholder with only legacy fields moves those.
+    private func moveSensitiveProfile(fromPlaceholderId placeholderId: String, toUserId authUid: String, legacyPlaceholder: [String: Any]) async {
+        guard let source = sensitiveProfileRef(userId: placeholderId) else { return }
+        do {
+            let snapshot = try await source.getDocument(source: .server)
+            let privateDoc: [String: Any]? = snapshot.exists ? (snapshot.data() ?? [:]) : nil
+            guard let resolved = CanonicalBusinessEngine.resolveSensitiveProfile(
+                privateDoc: privateDoc,
+                legacyUser: legacyPlaceholder
+            ) else { return }
+            if resolved.source != "none" {
+                try await saveSensitiveProfile(userId: authUid, utrNumber: resolved.utrNumber, vatNumber: resolved.vatNumber)
+            }
+            if snapshot.exists {
+                try await source.delete()
+            }
+        } catch {
+            print("🔥🔥🔥 DEBUG: Could not move invite tax fields: \((error as NSError).code)")
+        }
     }
 
     /// Timesheets toggle only. Does not send role, permissions, or organizationId.
@@ -6706,14 +6755,11 @@ class FirebaseBackend: ObservableObject {
 
         let resolvedTimesheetsEnabled = timesheetsEnabled ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
         invitationData["timesheetsEnabled"] = resolvedTimesheetsEnabled
-        if let vat = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !vat.isEmpty {
-            invitationData["vatNumber"] = vat
-        }
-        if let utr = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !utr.isEmpty {
-            invitationData["utrNumber"] = utr
-        }
-        
-        print("🔥🔥🔥 DEBUG: Invitation data: \(invitationData)")
+        // UTR and VAT number go on the placeholder's private/taxIds document, never on the invitation.
+
+        #if DEBUG
+        print("🔥🔥🔥 DEBUG: Invitation keys: \(invitationData.keys.sorted().joined(separator: ", "))")
+        #endif
         
         try await db.collection("invitations").document(invitationId).setData(invitationData)
         
@@ -6792,15 +6838,7 @@ class FirebaseBackend: ObservableObject {
                 annualLeaveCarriesOver: resolvedAnnualLeaveCarry,
                 annualLeaveYearAllowance: annualLeaveYearAllowance,
                 annualLeaveYearAllowanceKey: annualLeaveYearAllowanceKey,
-                timesheetsEnabled: resolvedTimesheetsEnabled,
-                vatNumber: {
-                    guard let raw = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
-                    return raw
-                }(),
-                utrNumber: {
-                    guard let raw = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
-                    return raw
-                }()
+                timesheetsEnabled: resolvedTimesheetsEnabled
             )
             
             do {
@@ -6945,6 +6983,11 @@ class FirebaseBackend: ObservableObject {
                         "payBasis": fields.payBasis,
                         "dayRate": fields.dayRate
                     ], merge: true)
+                }
+                let inviteVAT = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let inviteUTR = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !inviteVAT.isEmpty || !inviteUTR.isEmpty {
+                    try await saveSensitiveProfile(userId: userId, utrNumber: inviteUTR, vatNumber: inviteVAT)
                 }
                 print("🔥🔥🔥 DEBUG: ✅ saveUser succeeded!")
                 print("🔥🔥🔥 DEBUG: ✅ User document saved successfully for invited user: \(email)")

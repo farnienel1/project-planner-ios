@@ -1421,8 +1421,9 @@ struct EditUserView: View {
     @State private var employmentTypeConfirmationAccepted = false
     @State private var showingEmploymentTypeEffectiveDatePicker = false
     @State private var employmentTypeEffectiveDate = Date()
-    @State private var vatNumberDraft: String
-    @State private var utrNumberDraft: String
+    @State private var vatDraft = SensitiveFieldDraft()
+    @State private var utrDraft = SensitiveFieldDraft()
+    @State private var isLoadingTaxIds = false
     @State private var showingPayeDayRateWarning = false
     @State private var pendingPayeDayRateText: String?
 
@@ -1448,8 +1449,6 @@ struct EditUserView: View {
         self._annualLeaveCarriesOver = State(initialValue: user.annualLeaveCarriesOver)
         self._annualLeaveEnabledDraft = State(initialValue: user.annualLeaveEnabled)
         self._employmentTypeDraft = State(initialValue: user.employmentType)
-        self._vatNumberDraft = State(initialValue: user.vatNumber ?? "")
-        self._utrNumberDraft = State(initialValue: user.utrNumber ?? "")
     }
 
     private static func formatAnnualLeaveDaysText(_ days: Double) -> String {
@@ -1849,7 +1848,7 @@ struct EditUserView: View {
         let origTradeP = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let origTradeC = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let tradeChanged = dayRateEligible && (trimmedTradeP != origTradeP || trimmedTradeC != origTradeC)
-        let billingChanged = normalizedVATDraft != displayedUser.vatNumber || normalizedUTRDraft != displayedUser.utrNumber
+        let billingChanged = canViewTaxIds && (vatDraft.isDirty || utrDraft.isDirty)
         let payrollRateDirty = isPayrollRateDirty(versus: user)
         let operativeProfileChanged = (permissions.operativeMode || permissions.manager || permissions.adminAccess) && (
             Set(selectedLineManagerUserIds) != Set(user.lineManagerUserIds) ||
@@ -1887,14 +1886,19 @@ struct EditUserView: View {
         return false
     }
 
-    private var normalizedVATDraft: String? {
-        let trimmed = vatNumberDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    /// Rulebook `canViewSensitiveProfile` for this subject. False shows "Held by admin" and reads nothing.
+    private var canViewTaxIds: Bool {
+        userStore.canViewSensitiveProfile(of: user.id)
     }
 
-    private var normalizedUTRDraft: String? {
-        let trimmed = utrNumberDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    private func loadTaxIds() async {
+        guard canViewTaxIds else { return }
+        isLoadingTaxIds = true
+        let profile = await userStore.loadSensitiveProfile(for: displayedUser)
+        isLoadingTaxIds = false
+        guard !vatDraft.isDirty, !utrDraft.isDirty else { return }
+        vatDraft.reset(saved: profile?.vatNumber ?? "")
+        utrDraft.reset(saved: profile?.utrNumber ?? "")
     }
 
     private var draftUserForAnnualLeaveValidation: AppUser {
@@ -2102,7 +2106,7 @@ struct EditUserView: View {
 
     @ViewBuilder
     private var editUserBillingAndTimesheetsSections: some View {
-        if canEditPermissionsMatrix {
+        if canEditPermissionsMatrix || canViewTaxIds {
             VStack(alignment: .leading, spacing: 8) {
                 ManageUserSectionTitle(text: "Employment & timesheets")
                 billingDetailsCard
@@ -2159,8 +2163,8 @@ struct EditUserView: View {
         remainingLeaveText = remaining
         baselineRemainingText = remaining
         employmentTypeDraft = u.employmentType
-        vatNumberDraft = u.vatNumber ?? ""
-        utrNumberDraft = u.utrNumber ?? ""
+        vatDraft.reset(saved: vatDraft.saved)
+        utrDraft.reset(saved: utrDraft.saved)
         hasNoLineManagerDraft = u.hasNoLineManager
         selectedLineManagerUserIds = Set(u.lineManagerUserIds)
         selectedAssignedManagerUserId = u.assignedManagerUserId
@@ -2812,30 +2816,70 @@ struct EditUserView: View {
         }
     }
 
+    private var taxIdColors: SensitiveFieldColors {
+        SensitiveFieldColors(
+            primary: ManageUserProfilePalette.textPrimary,
+            secondary: ManageUserProfilePalette.textSecondary
+        )
+    }
+
     private var billingDetailsCard: some View {
         ManageUserCard {
             VStack(spacing: 0) {
-                ManageUserDetailTextFieldRow(
+                taxIdRow(
                     iconName: "doc.text.fill",
                     iconBackground: ManageUserProfilePalette.chipPurpleBg,
                     iconForeground: ManageUserProfilePalette.chipPurpleFg,
                     label: "VAT number",
                     placeholder: "If VAT registered",
-                    text: $vatNumberDraft,
-                    autocapitalization: .characters
+                    draft: $vatDraft,
+                    token: "editUser.vatNumber"
                 )
                 ManageUserCardDivider()
-                ManageUserDetailTextFieldRow(
+                taxIdRow(
                     iconName: "number",
                     iconBackground: ManageUserProfilePalette.chipAmberBg,
                     iconForeground: ManageUserProfilePalette.chipAmberFg,
                     label: "UTR number",
                     placeholder: "Unique Taxpayer Reference",
-                    text: $utrNumberDraft,
-                    autocapitalization: .characters
+                    draft: $utrDraft,
+                    token: "editUser.utrNumber"
                 )
             }
         }
+        .task(id: user.id) { await loadTaxIds() }
+    }
+
+    private func taxIdRow(
+        iconName: String,
+        iconBackground: Color,
+        iconForeground: Color,
+        label: String,
+        placeholder: String,
+        draft: Binding<SensitiveFieldDraft>,
+        token: String
+    ) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            ManageUserIconChip(systemName: iconName, background: iconBackground, foreground: iconForeground)
+            Group {
+                if !canViewTaxIds {
+                    SensitiveFieldHeldByAdmin(label: label, colors: taxIdColors, accessibilityToken: token)
+                } else if isLoadingTaxIds {
+                    ProgressView()
+                } else {
+                    SensitiveFieldEditor(
+                        label: label,
+                        placeholder: placeholder,
+                        draft: draft,
+                        colors: taxIdColors,
+                        accessibilityToken: token
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
     }
 
     private var lineManagerPickRow: some View {
@@ -3739,12 +3783,18 @@ struct EditUserView: View {
         }
 
         var billingSuccess = true
-        if canEditPermissionsMatrix && (normalizedVATDraft != subjectUser.vatNumber || normalizedUTRDraft != subjectUser.utrNumber) {
+        if canViewTaxIds && (vatDraft.isDirty || utrDraft.isDirty) {
+            let vat = vatDraft.valueToSave
+            let utr = utrDraft.valueToSave
             billingSuccess = await userStore.updateUserBillingProfile(
                 userId: user.id,
-                vatNumber: normalizedVATDraft,
-                utrNumber: normalizedUTRDraft
+                vatNumber: vat,
+                utrNumber: utr
             )
+            if billingSuccess {
+                vatDraft.reset(saved: vat)
+                utrDraft.reset(saved: utr)
+            }
         }
 
         var identitySuccess = true

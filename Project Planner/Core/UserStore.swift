@@ -819,26 +819,68 @@ class UserStore: ObservableObject {
             || user.role == .admin
     }
 
-    func updateUserBillingProfile(userId: String, vatNumber: String?, utrNumber: String?) async -> Bool {
-        guard let firebaseBackend = firebaseBackend else { return false }
-        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+    // MARK: - Sensitive profile (UTR and VAT number)
 
-        var updated = organizationUsers[index]
-        let trimmedVAT = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedUTR = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
-        updated.vatNumber = (trimmedVAT?.isEmpty == false) ? trimmedVAT : nil
-        updated.utrNumber = (trimmedUTR?.isEmpty == false) ? trimmedUTR : nil
+    #if DEBUG
+    /// `-uiTesting` stand-in for users/{uid}/private/taxIds. TEST data only; never touches Firestore.
+    var uiTestSensitiveProfiles: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
+    #endif
 
+    /// `canViewSensitiveProfile` for the signed-in viewer (role testing applies).
+    func canViewSensitiveProfile(of subjectUserId: String) -> Bool {
+        guard let viewer = displayUser else { return false }
+        return CanonicalBusinessEngine.canViewSensitiveProfile(
+            viewerRole: Self.staffAccountRole(for: viewer),
+            viewerUserId: viewer.id,
+            subjectUserId: subjectUserId
+        )
+    }
+
+    /// Resolved UTR and VAT number, or nil without any read when the viewer may not see them.
+    func loadSensitiveProfile(for user: AppUser) async -> CanonicalBusinessEngine.CanonicalSensitiveProfile? {
+        guard canViewSensitiveProfile(of: user.id) else { return nil }
+        #if DEBUG
+        if UITestingMode.shouldSkipNetworkBootstrap {
+            return uiTestSensitiveProfiles[user.id]
+                ?? CanonicalBusinessEngine.resolveSensitiveProfile(privateDoc: nil, legacyUser: nil)
+        }
+        #endif
+        guard let firebaseBackend else { return nil }
         do {
-            try await firebaseBackend.patchOwnUserBillingFields(
-                userId: userId,
-                vatNumber: updated.vatNumber,
-                utrNumber: updated.utrNumber
+            return try await firebaseBackend.loadSensitiveProfile(userId: user.id, legacyUser: user.legacySensitiveFields)
+        } catch {
+            errorMessage = "Could not load UTR and VAT number: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Saves UTR and VAT number to users/{uid}/private/taxIds. Blank clears.
+    func updateUserBillingProfile(userId: String, vatNumber: String?, utrNumber: String?) async -> Bool {
+        guard canViewSensitiveProfile(of: userId) else { return false }
+        #if DEBUG
+        if UITestingMode.shouldSkipNetworkBootstrap {
+            guard let write = CanonicalBusinessEngine.sensitiveProfileWriteFields(
+                utrNumber: utrNumber,
+                vatNumber: vatNumber,
+                updatedByUserId: displayUser?.id ?? ""
+            ), write.ok, let fields = write.fields else { return false }
+            uiTestSensitiveProfiles[userId] = CanonicalBusinessEngine.resolveSensitiveProfile(
+                privateDoc: ["utrNumber": fields.utrNumber, "vatNumber": fields.vatNumber],
+                legacyUser: nil
             )
-            organizationUsers[index] = updated
-            if var cu = currentUser, cu.id == userId {
-                cu = updated
-                currentUser = cu
+            return true
+        }
+        #endif
+        guard let firebaseBackend = firebaseBackend else { return false }
+        do {
+            try await firebaseBackend.saveSensitiveProfile(userId: userId, utrNumber: utrNumber, vatNumber: vatNumber)
+            if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
+                organizationUsers[index].vatNumber = nil
+                organizationUsers[index].utrNumber = nil
+            }
+            if currentUser?.id == userId {
+                currentUser?.vatNumber = nil
+                currentUser?.utrNumber = nil
             }
             return true
         } catch {
@@ -1276,8 +1318,9 @@ class UserStore: ObservableObject {
                 annualLeaveYearAllowance: annualLeaveYearAllowance,
                 annualLeaveYearAllowanceKey: annualLeaveYearAllowanceKey,
                 timesheetsEnabled: timesheetsEnabled,
-                vatNumber: vatNumber,
-                utrNumber: utrNumber
+                // Only an admin may set another person's tax fields (`canViewSensitiveProfile`).
+                vatNumber: canViewSensitiveProfile(of: "") ? vatNumber : nil,
+                utrNumber: canViewSensitiveProfile(of: "") ? utrNumber : nil
             )
             print("🔥🔥🔥 DEBUG: createUserInvitation succeeded")
             
