@@ -165,6 +165,8 @@ nonisolated struct CanonicalUnbookedLabourPerson: Codable, Equatable, Sendable {
     var isAdmin: Bool
     var isSuperAdmin: Bool
     var status: String? = nil
+    /// `users/{uid}.formerUserIds`: invite placeholder ids bookings may still be stored under.
+    var formerIds: [String]? = nil
 }
 
 /// One roster profile (`RosterOperative` in the script).
@@ -263,6 +265,65 @@ nonisolated struct CanonicalBookingParseResult: Codable, Equatable, Sendable {
     let booking: CanonicalParsedBooking?
     let repairs: [String]?
     let errors: [String]?
+}
+
+/// The script's `WeekendPayrollSettings`, built from `OrgWeekendDayPayrollSettings` field for field.
+nonisolated struct CanonicalWeekendPayroll: Codable, Hashable, Sendable {
+    var allHoursAtMultiplierMode: Bool
+    var allHoursMultiplier: Double
+    var definedWindowStart: String?
+    var definedWindowEnd: String?
+    var countsAsStandardHours: Double?
+    var outsideWindowMultiplier: Double
+    var sameAsSaturday: Bool?
+}
+
+/// The script's `OrgPayrollTimePolicy`.
+nonisolated struct CanonicalPayrollPolicy: Codable, Hashable, Sendable {
+    var standardDayStart: String
+    var standardDayEnd: String
+    var unpaidBreakMinutes: Int
+    var standardPaidHours: Double
+    var breakWindowStart: String
+    var breakWindowEnd: String
+    var weekdayOutsideStandardMultiplier: Double
+    var saturday: CanonicalWeekendPayroll
+    var sunday: CanonicalWeekendPayroll
+    var breakPaid: Bool
+}
+
+/// The booking fields `payrollHoursResult` reads.
+nonisolated struct CanonicalPayrollBooking: Codable, Hashable, Sendable {
+    var timeSlot: String
+    var workStartTime: String?
+    var workEndTime: String?
+    var isBreakRemoved: Bool
+    var otMultiplierOverride: Double?
+}
+
+nonisolated struct CanonicalPayrollHoursInput: Codable, Hashable, Sendable {
+    var booking: CanonicalPayrollBooking
+    var dayKey: String
+    var policy: CanonicalPayrollPolicy
+    var timeZone: String = "Europe/London"
+}
+
+nonisolated struct CanonicalPayrollSegment: Codable, Hashable, Sendable {
+    let kind: String
+    let clockStart: String?
+    let clockEnd: String?
+    let baseHours: Double
+    let multiplier: Double
+    let paidHours: Double
+}
+
+/// `payrollHoursResult`: standard hours, hours outside the window, their multiplier, and the weighted total.
+nonisolated struct CanonicalPayrollHours: Codable, Hashable, Sendable {
+    let totalPaidHours: Double
+    let standardHours: Double
+    let outsideHours: Double
+    let outsideMultiplier: Double
+    let segments: [CanonicalPayrollSegment]
 }
 
 /// One weekly-report pay line for `reportPayCell` / `reportPayTotal` (`ReportPayLineInput` in the script).
@@ -1039,6 +1100,74 @@ nonisolated enum CanonicalBusinessEngine {
     /// `FULL_DAY`, `AM`, or `PM` for a leave record's slot.
     static func leaveSlotKind(_ timeSlot: String?) -> String {
         decode(String.self, function: "leaveSlotKind", arguments: [timeSlot]) ?? "FULL_DAY"
+    }
+
+    // MARK: - Clashes
+
+    /// Index groups of two or more overlapping intervals (`overlappingIntervalGroups`), in the script's order.
+    static func overlappingIntervalGroups(_ intervals: [CanonicalMinuteInterval?]) -> [[Int]]? {
+        decode([[Int]].self, function: "overlappingIntervalGroups", arguments: [intervals])
+    }
+
+    // MARK: - Paid hours
+
+    /// Paid hours for one booking on its London day. Daily Overview, the weekly report, timesheets and
+    /// invoicing all read this; web runs the same function. Memoised per distinct input.
+    static func payrollHoursResult(_ input: CanonicalPayrollHoursInput) -> CanonicalPayrollHours? {
+        payrollHoursMemo.value(for: input) {
+            decode(CanonicalPayrollHours.self, function: "payrollHoursResult", arguments: [input])
+        }
+    }
+
+    /// Weekly-report day units: weighted paid hours over the standard paid day, capped at 1.5.
+    static func reportDayValue(totalPaidHours: Double, standardPaidHours: Double) -> Double? {
+        let payload: [String: Any] = ["totalPaidHours": totalPaidHours, "standardPaidHours": standardPaidHours]
+        guard let json = jsonObjectFragment(payload) else { return nil }
+        return decodeExpression(Double.self, "ProjectPlannerCanonical.reportDayValue(\(json))")
+    }
+
+    /// Subcontractor day units: a full day is 1, anything else 0.5.
+    static func subcontractorDayValue(_ timeSlot: String) -> Double? {
+        decode(Double.self, function: "subcontractorDayValue", arguments: [timeSlot])
+    }
+
+    // MARK: - Booking identity
+
+    /// Confirmed, Tentative (and `pending`), and Completed put a person on a job that day; Cancelled does not.
+    /// Nil when the script did not run (bookings are then unreadable too, and the warning scan is skipped).
+    static func bookingOccupiesDay(_ status: String) -> Bool? {
+        decode(Bool.self, function: "bookingOccupiesDay", arguments: [status])
+    }
+
+    /// `operative`, `manager`, or nil (not labour) for a person, as the scheduling picker and unbooked rule share it.
+    static func labourBookingKind(_ person: CanonicalUnbookedLabourPerson) -> String? {
+        decode(String.self, function: "labourBookingKind", arguments: [person])
+    }
+
+    /// `users/{uid}.formerUserIds` as a clean id list. Nil only when the script did not run.
+    static func parseFormerUserIds(_ data: [String: Any]) -> [String]? {
+        let ids = data["formerUserIds"] as? [Any] ?? []
+        let clean: [String: Any] = ["formerUserIds": ids.compactMap { $0 as? String }]
+        guard let json = jsonObjectFragment(clean) else { return nil }
+        return decodeExpression([String].self, "ProjectPlannerCanonical.parseFormerUserIds(\(json))")
+    }
+
+    /// Fields to write on `users/{authUid}` when an invite placeholder is copied onto it.
+    static func inviteMigrationFormerIdWriteFields(placeholderId: String, authUid: String, existingFormerIds: [String]) -> [String: [String]]? {
+        let payload: [String: Any] = [
+            "placeholderId": placeholderId,
+            "authUid": authUid,
+            "existing": ["formerUserIds": existingFormerIds],
+        ]
+        guard let json = jsonObjectFragment(payload) else { return nil }
+        return decodeExpression([String: [String]].self, "ProjectPlannerCanonical.inviteMigrationFormerIdWriteFields(\(json))")
+    }
+
+    /// Former id → current `users/{uid}` id.
+    static func formerIdAliases(_ people: [(id: String, formerIds: [String])]) -> [String: String]? {
+        let rows: [[String: Any]] = people.map { ["id": $0.id, "formerIds": $0.formerIds] }
+        guard let json = jsonObjectFragment(rows) else { return nil }
+        return decodeExpression([String: String].self, "ProjectPlannerCanonical.formerIdAliases(\(json))")
     }
 
     // MARK: - Weekly report pay
@@ -2953,6 +3082,7 @@ nonisolated enum CanonicalBusinessEngine {
 
     private static let halfDayMemo = ResultMemo<CanonicalStandardDayInput, CanonicalHalfDayWindows>()
     private static let slotIntervalMemo = ResultMemo<SlotIntervalKey, CanonicalMinuteInterval>()
+    private static let payrollHoursMemo = ResultMemo<CanonicalPayrollHoursInput, CanonicalPayrollHours>()
 
     /// Calls `ProjectPlannerCanonical.function(arguments…)` and decodes the JSON of its result.
     /// A `null` or `undefined` result decodes as nil.

@@ -160,7 +160,7 @@ enum StaffEmailIdentity {
         let operativeIds = key.isEmpty ? Set<UUID>() : self.operativeIds(sharing: key, in: operatives)
         for booking in operativeBookings where operativeIds.contains(booking.operativeId) {
             guard calendar.isDate(booking.date, inSameDayAs: day) else { continue }
-            guard booking.status == .confirmed || booking.status == .tentative else { continue }
+            guard booking.status.occupiesDay else { continue }
             total += booking.paidBookedHours(policy: policy)
         }
         let ids = key.isEmpty ? Set<String>() : userIds(sharing: key, in: users)
@@ -338,7 +338,7 @@ enum BookLabourCandidateSelection {
                 operativeBookings.reduce(0) { partial, booking in
                     guard booking.operativeId == operativeId,
                           calendar.isDate(booking.date, inSameDayAs: day),
-                          booking.status == .confirmed || booking.status == .tentative else { return partial }
+                          booking.status.occupiesDay else { return partial }
                     return partial + booking.paidBookedHours(policy: policy)
                 }
             }

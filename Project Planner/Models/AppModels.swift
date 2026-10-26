@@ -457,6 +457,9 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// Other `users` document ids for this email. The roster shows one row. Bookings stored
     /// on a dropped id still belong to this person.
     var sameEmailUserIds: [String] = []
+    /// `users/{uid}.formerUserIds`: invite placeholder ids this account had before sign-up
+    /// (`parseFormerUserIds`). Bookings, leave and exclusions under those ids still belong to this person.
+    var formerUserIds: [String] = []
     /// `users/{uid}.name` as stored. Roster classification passes it to the packed script. A user save does not write it.
     var documentName: String = ""
     /// `users/{uid}.displayName` as stored. Roster classification passes it to the packed script. A user save does not write it.
@@ -585,7 +588,7 @@ extension AppUser {
         case employmentType, employmentTypeTransitionFrom, employmentTypeEffectiveAt
         case annualLeaveEnabled, annualLeaveDaysPerYear, annualLeaveYearStartMonth, annualLeaveYearEndMonth
         case annualLeaveCarriesOver, annualLeaveYearAllowance, annualLeaveYearAllowanceKey
-        case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
+        case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds, formerUserIds
         case documentName, documentDisplayName
     }
 
@@ -630,6 +633,7 @@ extension AppUser {
         utrNumber = try container.decodeIfPresent(String.self, forKey: .utrNumber)
         placedByManagersRecord = try container.decodeIfPresent(Bool.self, forKey: .placedByManagersRecord) ?? false
         sameEmailUserIds = try container.decodeIfPresent([String].self, forKey: .sameEmailUserIds) ?? []
+        formerUserIds = try container.decodeIfPresent([String].self, forKey: .formerUserIds) ?? []
         documentName = try container.decodeIfPresent(String.self, forKey: .documentName) ?? ""
         documentDisplayName = try container.decodeIfPresent(String.self, forKey: .documentDisplayName) ?? ""
     }
@@ -674,6 +678,7 @@ extension AppUser {
         // vatNumber / utrNumber are not encoded, so no local cache holds tax identifiers.
         try container.encode(placedByManagersRecord, forKey: .placedByManagersRecord)
         try container.encode(sameEmailUserIds, forKey: .sameEmailUserIds)
+        try container.encode(formerUserIds, forKey: .formerUserIds)
         try container.encode(documentName, forKey: .documentName)
         try container.encode(documentDisplayName, forKey: .documentDisplayName)
     }

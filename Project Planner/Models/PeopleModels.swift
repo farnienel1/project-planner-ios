@@ -327,7 +327,9 @@ func rosterNameForLabourBooking(operativeId: UUID, operatives: [Operative], user
         if !trimmed.isEmpty { return trimmed }
     }
     // A booking stored under a users/{uid} id carries that id's stable UUID (`StableBookingIdentity`).
-    if let user = users.first(where: { StableBookingIdentity.uuid(for: $0.id) == operativeId }) {
+    // A booking made for a pending invitee carries the placeholder id kept in `formerUserIds`.
+    if let user = users.first(where: { StableBookingIdentity.uuid(for: $0.id) == operativeId })
+        ?? users.first(where: { $0.formerUserIds.contains { StableBookingIdentity.uuid(for: $0) == operativeId } }) {
         let trimmed = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
         let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines)

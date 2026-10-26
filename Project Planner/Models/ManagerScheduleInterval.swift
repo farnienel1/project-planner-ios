@@ -179,7 +179,7 @@ extension ManagerSiteBooking {
     }
 
     func effectiveWeekdayOtMultiplier(policy: OrgPayrollTimePolicy = .default) -> Double {
-        PayrollTimePolicyCatalog.effectiveMultiplier(for: self, policy: policy)
+        payrollHoursResult(policy: policy).outsideMultiplier
     }
 
     /// Maps manager schedule booking into the shared operative payroll probe shape.
@@ -219,10 +219,11 @@ extension ManagerSiteBooking {
     }
 
     /// Rough “day units” for reports from paid hours (includes break toggle and OT).
+    /// Weekly-report day units (`reportDayValue`): weighted paid hours over the standard day, capped at 1.5.
     func reportDayValue(policy: OrgPayrollTimePolicy = .default) -> Double {
         let paidHrs = paidBookedHours(policy: policy)
-        let standard = max(policy.standardPaidHours, 0.01)
-        return min(1.5, paidHrs / standard)
+        // Nil only when the script did not run; bookings are then unreadable too.
+        return CanonicalBusinessEngine.reportDayValue(totalPaidHours: paidHrs, standardPaidHours: policy.standardPaidHours) ?? 0
     }
 
     /// Start/end instants on the booking’s calendar day (for Calendar export and reminders).

@@ -538,7 +538,7 @@ struct ScheduleOperativeView: View {
         let inGroup = bookingStore.bookings.filter {
             $0.projectId == project.id &&
                 $0.bookingGroupId == groupId &&
-                ($0.status == .confirmed || $0.status == .tentative)
+                ($0.status.occupiesDay)
         }
         guard !inGroup.isEmpty else { return }
         selectedOperatives = Set(inGroup.map(\.operativeId))
@@ -1527,7 +1527,7 @@ struct ScheduleOperativeView: View {
             let existingBookings = bookingStore.bookings.filter { booking in
                 booking.operativeId == operative.id &&
                     Calendar.current.isDate(booking.date, inSameDayAs: date) &&
-                    (booking.status == .confirmed || booking.status == .tentative)
+                    (booking.status.occupiesDay)
             }
 
             for existingBooking in existingBookings {
@@ -1613,7 +1613,7 @@ struct ScheduleOperativeView: View {
                             booking.workEndTime == choice.workEndTime &&
                             booking.isBreakRemoved == choice.isBreakRemoved &&
                             booking.otMultiplierOverride == choice.otMultiplierOverride &&
-                            (booking.status == .confirmed || booking.status == .tentative)
+                            (booking.status.occupiesDay)
                     }
 
                     if !duplicateExists {

@@ -35,7 +35,9 @@ struct Booking: Identifiable, Codable, Hashable {
     var documentId: String? = nil
 
     /// The id written to `operativeId`.
-    var operativeKey: String { storedOperativeId ?? operativeId.uuidString }
+    var operativeKey: String {
+        storedOperativeId ?? StableBookingIdentity.rawId(for: operativeId) ?? operativeId.uuidString
+    }
     /// The id written to `projectId`.
     var projectKey: String { storedProjectId ?? projectId.uuidString }
     /// The Firestore document id under `organizations/{orgId}/bookings`.
@@ -196,13 +198,28 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-enum BookingStatus: String, CaseIterable, Identifiable, Codable {
+nonisolated enum BookingStatus: String, CaseIterable, Identifiable, Codable, Sendable {
     case confirmed = "Confirmed"
     case tentative = "Tentative"
     case cancelled = "Cancelled"
     case completed = "Completed"
     
     var id: String { rawValue }
+
+    /// Whether this status puts the person on a job that day (`bookingOccupiesDay`): Confirmed,
+    /// Tentative and Completed do; Cancelled does not. Coverage, Daily Overview and clashes use this.
+    var occupiesDay: Bool {
+        BookingStatus.occupiesDayMemo[self] ?? false
+    }
+
+    /// One script answer per status, cached once the script has answered for all four.
+    private static let occupiesDayMemo: [BookingStatus: Bool] = {
+        var memo: [BookingStatus: Bool] = [:]
+        for status in allCases {
+            if let answer = CanonicalBusinessEngine.bookingOccupiesDay(status.rawValue) { memo[status] = answer }
+        }
+        return memo
+    }()
     
     var color: String {
         switch self {

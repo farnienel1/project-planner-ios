@@ -224,4 +224,82 @@ final class BookingChainCanonicalTests: XCTestCase {
         XCTAssertEqual(user.employmentType(on: londonDay), .selfEmployed)
         XCTAssertEqual(user.employmentType(on: CanonicalBusinessEngine.date(fromDayKey: "2026-10-28")!), .paye)
     }
+
+    // MARK: - Booking identity (web #189)
+
+    func testCompletedBookingsCoverTheDayAndCancelledDoNot() {
+        XCTAssertTrue(BookingStatus.confirmed.occupiesDay)
+        XCTAssertTrue(BookingStatus.tentative.occupiesDay)
+        XCTAssertTrue(BookingStatus.completed.occupiesDay, "a worked day is booked, as on web (bookingOccupiesDay)")
+        XCTAssertFalse(BookingStatus.cancelled.occupiesDay)
+    }
+
+    func testBookingUnderAFormerInvitePlaceholderIdStillCoversThePerson() throws {
+        let placeholder = "6C1F2E7A-1111-4222-8333-944455556666"
+        var user = person()
+        user.formerUserIds = [placeholder]
+        let booking = try XCTUnwrap(parsed([
+            (id: UUID().uuidString, data: [
+                "operativeId": placeholder,
+                "projectId": projectId,
+                "date": dayTimestamp,
+                "timeSlot": "FULL DAY",
+                "status": "Confirmed",
+                "bookedBy": "admin@site.test",
+            ]),
+        ]).first)
+        XCTAssertEqual(rowsOnDay([booking], users: [user]).count, 0)
+        var withoutFormer = user
+        withoutFormer.formerUserIds = []
+        XCTAssertEqual(rowsOnDay([booking], users: [withoutFormer]).count, 1)
+        XCTAssertEqual(rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: [], users: [user]), "Pat Login")
+    }
+
+    func testFormerIdsReadAndMigrateThroughTheRulebook() {
+        XCTAssertEqual(CanonicalBusinessEngine.parseFormerUserIds(["formerUserIds": [" A ", "", "A", "B"]]), ["A", "B"])
+        XCTAssertEqual(
+            CanonicalBusinessEngine.inviteMigrationFormerIdWriteFields(placeholderId: "P1", authUid: uid, existingFormerIds: ["P0"]),
+            ["formerUserIds": ["P0", "P1"]]
+        )
+    }
+
+    func testABookableUserWithAFirebaseUidIsSavedUnderThatUid() {
+        let id = StableBookingIdentity.uuid(for: uid)
+        XCTAssertEqual(StableBookingIdentity.rawId(for: id), uid)
+        let booking = LogicFixtures.booking(on: londonDay, operativeId: id)
+        XCTAssertEqual(booking.operativeKey, uid, "a booking made on iOS for this person stores users/{uid}, as web does")
+    }
+
+    // MARK: - Paid hours (payrollHoursResult)
+
+    private func paid(_ slot: TimeSlot, _ start: String? = nil, _ end: String? = nil, dayKey: String = "2026-10-21") -> PayrollHoursResult {
+        let day = CanonicalBusinessEngine.date(fromDayKey: dayKey)!
+        let booking = LogicFixtures.booking(on: day, slot: slot, start: start, end: end)
+        return PayrollHoursEngine.compute(booking: booking, day: day, policy: .default)
+    }
+
+    func testPaidHoursMatchTheWebFigures() {
+        XCTAssertEqual(paid(.customHours, "07:30", "16:00").totalPaidHours, 8, accuracy: 0.001)
+        XCTAssertEqual(paid(.customHours, "07:30", "18:00").totalPaidHours, 11, accuracy: 0.001)
+        // The 21/10 small works booking on the web Daily Overview: 06:00–17:45.
+        let early = paid(.customHours, "06:00", "17:45")
+        XCTAssertEqual(early.totalPaidHours, 8 + 3.25 * 1.5, accuracy: 0.001)
+        XCTAssertEqual(early.outsideMultiplier, 1.5, accuracy: 0.001)
+        XCTAssertEqual(paid(.morning).totalPaidHours, 4, accuracy: 0.001)
+        XCTAssertEqual(paid(.fullDay).totalPaidHours, 8, accuracy: 0.001)
+        XCTAssertEqual(paid(.customHours, "22:00", "02:00").totalPaidHours, 4, accuracy: 0.001)
+        XCTAssertEqual(CanonicalBusinessEngine.reportDayValue(totalPaidHours: 11, standardPaidHours: 8) ?? 0, 1.375, accuracy: 0.001)
+        XCTAssertEqual(CanonicalBusinessEngine.subcontractorDayValue("CUSTOM_HOURS"), 0.5)
+    }
+
+    // MARK: - Clash groups (overlappingIntervalGroups)
+
+    func testClashGroupsChainAndBackToBackIsNotAClash() {
+        let am = CanonicalMinuteInterval(start: 450, end: 720)
+        let pm = CanonicalMinuteInterval(start: 720, end: 960)
+        let middle = CanonicalMinuteInterval(start: 660, end: 780)
+        XCTAssertEqual(CanonicalBusinessEngine.overlappingIntervalGroups([am, pm]), [])
+        XCTAssertEqual(CanonicalBusinessEngine.overlappingIntervalGroups([am, pm, middle]), [[0, 1, 2]])
+        XCTAssertEqual(CanonicalBusinessEngine.overlappingIntervalGroups([am, nil, middle]), [[0, 2]])
+    }
 }

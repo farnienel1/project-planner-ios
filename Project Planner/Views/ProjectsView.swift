@@ -389,7 +389,7 @@ struct ProjectsView: View {
             let assignedProjectIds = Set(bookingStore.bookings
                 .filter {
                     $0.operativeId == operative.id &&
-                    ($0.status == .confirmed || $0.status == .tentative)
+                    ($0.status.occupiesDay)
                 }
                 .map { $0.projectId })
             projects = projects.filter {

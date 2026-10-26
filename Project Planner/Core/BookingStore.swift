@@ -369,7 +369,7 @@ class BookingStore: ObservableObject {
     var upcomingBookings: [Booking] {
         bookings.filter { 
             $0.date >= Date() && 
-            ($0.status == .confirmed || $0.status == .tentative)
+            ($0.status.occupiesDay)
         }.sorted { $0.date < $1.date }
     }
     
@@ -377,7 +377,7 @@ class BookingStore: ObservableObject {
         let today = Calendar.current.startOfDay(for: Date())
         return bookings.filter { 
             Calendar.current.isDate($0.date, inSameDayAs: today) &&
-            ($0.status == .confirmed || $0.status == .tentative)
+            ($0.status.occupiesDay)
         }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
     }
     
@@ -404,7 +404,7 @@ class BookingStore: ObservableObject {
         return bookings.filter { 
             $0.operativeId == operative.id && 
             Calendar.current.isDate($0.date, inSameDayAs: dayStart) &&
-            ($0.status == .confirmed || $0.status == .tentative)
+            ($0.status.occupiesDay)
         }
     }
     
@@ -413,7 +413,7 @@ class BookingStore: ObservableObject {
         return bookings.filter { 
             $0.projectId == project.id && 
             Calendar.current.isDate($0.date, inSameDayAs: dayStart) &&
-            ($0.status == .confirmed || $0.status == .tentative)
+            ($0.status.occupiesDay)
         }
     }
     
@@ -422,7 +422,7 @@ class BookingStore: ObservableObject {
             $0.operativeId == operative.id && 
             $0.date >= startDate && 
             $0.date <= endDate &&
-            ($0.status == .confirmed || $0.status == .tentative)
+            ($0.status.occupiesDay)
         }.sorted { $0.date < $1.date }
     }
     
@@ -431,7 +431,7 @@ class BookingStore: ObservableObject {
             $0.projectId == project.id && 
             $0.date >= startDate && 
             $0.date <= endDate &&
-            ($0.status == .confirmed || $0.status == .tentative)
+            ($0.status.occupiesDay)
         }.sorted { $0.date < $1.date }
     }
     

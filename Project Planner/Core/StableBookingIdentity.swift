@@ -18,10 +18,37 @@ nonisolated enum StableBookingIdentity {
         var bytes = Array(SHA256.hash(data: Data("pp-booking-id:\(trimmed)".utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0F) | 0x50
         bytes[8] = (bytes[8] & 0x3F) | 0x80
-        return UUID(uuid: (
+        let id = UUID(uuid: (
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
             bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
         ))
+        if !trimmed.isEmpty { registry.remember(id, raw: trimmed) }
+        return id
+    }
+
+    /// The stored id a synthetic UUID was made from, when this run has seen it. A booking created on
+    /// this device for a `users/{uid}` person (no operative record) is saved under that uid this way.
+    static func rawId(for id: UUID) -> String? {
+        registry.raw(for: id)
+    }
+
+    private static let registry = Registry()
+
+    private final class Registry: @unchecked Sendable {
+        private let lock = NSLock()
+        private var raws: [UUID: String] = [:]
+
+        func remember(_ id: UUID, raw: String) {
+            lock.lock()
+            raws[id] = raw
+            lock.unlock()
+        }
+
+        func raw(for id: UUID) -> String? {
+            lock.lock()
+            defer { lock.unlock() }
+            return raws[id]
+        }
     }
 
     /// The stored string when it is not a UUID, so it can be written back and matched as-is.

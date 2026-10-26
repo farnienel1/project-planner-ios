@@ -370,7 +370,7 @@ enum WarningsRefreshHelper {
             bookingStore.bookings
                 .filter {
                     cal.isDate($0.date, inSameDayAs: tomorrow) &&
-                        ($0.status == .confirmed || $0.status == .tentative)
+                        ($0.status.occupiesDay)
                 }
                 .map(\.projectId)
         )

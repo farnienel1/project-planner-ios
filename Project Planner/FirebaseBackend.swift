@@ -4162,6 +4162,18 @@ class FirebaseBackend: ObservableObject {
                 merged.removeValue(forKey: "vatNumber")
                 merged["updatedAt"] = Timestamp(date: Date())
                 merged["passwordSet"] = true
+                // Bookings made while the person was a pending invitee carry the placeholder id.
+                // Keep it on the account (`inviteMigrationFormerIdWriteFields`) so they still count.
+                let existingAccount = try? await db.collection("users").document(authUid).getDocument(source: .server)
+                let existingFormer = CanonicalBusinessEngine.parseFormerUserIds(existingAccount?.data() ?? [:]) ?? []
+                let placeholderFormer = CanonicalBusinessEngine.parseFormerUserIds(merged) ?? []
+                if let former = CanonicalBusinessEngine.inviteMigrationFormerIdWriteFields(
+                    placeholderId: placeholder.documentID,
+                    authUid: authUid,
+                    existingFormerIds: Array(Set(existingFormer + placeholderFormer)).sorted()
+                )?["formerUserIds"] {
+                    merged["formerUserIds"] = former
+                }
                 try await db.collection("users").document(authUid).setData(merged, merge: true)
                 await moveSensitiveProfile(fromPlaceholderId: placeholder.documentID, toUserId: authUid, legacyPlaceholder: legacyTaxIds)
                 let norm = rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4311,6 +4323,7 @@ class FirebaseBackend: ObservableObject {
         )
         parsed.documentName = data["name"] as? String ?? ""
         parsed.documentDisplayName = data["displayName"] as? String ?? ""
+        parsed.formerUserIds = CanonicalBusinessEngine.parseFormerUserIds(data) ?? []
         return parsed
     }
     
@@ -4783,6 +4796,7 @@ class FirebaseBackend: ObservableObject {
         aliases.insert(other.id)
         aliases.remove(chosen.id)
         chosen.sameEmailUserIds = aliases.sorted()
+        chosen.formerUserIds = Array(Set(chosen.formerUserIds).union(other.formerUserIds)).sorted()
         let chosenTrade = StaffEmailIdentity.reportTrade(for: chosen)
         let otherTrade = StaffEmailIdentity.reportTrade(for: other)
         if chosenTrade == "General", otherTrade != "General" {

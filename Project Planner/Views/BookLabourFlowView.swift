@@ -1097,7 +1097,7 @@ struct BookLabourFlowView: View {
             .filter {
                 $0.operativeId == operativeId &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
-                ($0.status == .confirmed || $0.status == .tentative)
+                ($0.status.occupiesDay)
             }
             .compactMap { OperativeBookingInterval.clashInterval(for: $0, policy: dayPayrollPolicy) }
             .sorted { $0.0 < $1.0 }
@@ -1164,7 +1164,7 @@ struct BookLabourFlowView: View {
             .filter {
                 $0.operativeId == operativeId &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
-                ($0.status == .confirmed || $0.status == .tentative)
+                ($0.status.occupiesDay)
             }
             .reduce(0.0) { $0 + $1.paidBookedHours(policy: dayPayrollPolicy) }
     }

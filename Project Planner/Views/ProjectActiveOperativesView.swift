@@ -106,7 +106,7 @@ struct ProjectActiveOperativesView: View {
     private var subcontractorSummaries: [ProjectBookedPersonSummary] {
         let projectBookings = subcontractorStore.bookings.filter { booking in
             booking.projectId == project.id &&
-            (booking.status == .confirmed || booking.status == .tentative)
+            (booking.status.occupiesDay)
         }
         let grouped = Dictionary(grouping: projectBookings, by: \.subcontractorId)
         return grouped.compactMap { subcontractorId, bookings -> ProjectBookedPersonSummary? in
@@ -294,7 +294,7 @@ private struct ProjectBookedPersonHistoryView: View {
                 .filter {
                     $0.projectId == project.id &&
                     $0.subcontractorId == subcontractorId &&
-                    ($0.status == .confirmed || $0.status == .tentative)
+                    ($0.status.occupiesDay)
                 }
                 .sorted { $0.date > $1.date }
                 .map {

@@ -154,7 +154,7 @@ struct DailyOverviewView: View {
     private var onSitePeopleCount: Int {
         let cal = CanonicalBusinessEngine.businessCalendar
         var keys = Set<String>()
-        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+        for b in dayBookings where b.status.occupiesDay {
             keys.insert(overviewPersonKey(operativeId: b.operativeId))
         }
         for b in managerScheduleStore.managerSiteBookings {
@@ -201,7 +201,7 @@ struct DailyOverviewView: View {
     private var bookedPeopleCount: Int {
         let cal = CanonicalBusinessEngine.businessCalendar
         var keys = Set<String>()
-        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+        for b in dayBookings where b.status.occupiesDay {
             keys.insert(overviewPersonKey(operativeId: b.operativeId))
         }
         for b in managerScheduleStore.managerSiteBookings where cal.isDate(b.date, inSameDayAs: overviewDate) {
@@ -220,7 +220,7 @@ struct DailyOverviewView: View {
         let p = payrollTimePolicy
         let cal = CanonicalBusinessEngine.businessCalendar
         var t = 0.0
-        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+        for b in dayBookings where b.status.occupiesDay {
             t += b.paidBookedHours(policy: p)
         }
         for b in managerScheduleStore.managerSiteBookings {
@@ -238,7 +238,7 @@ struct DailyOverviewView: View {
         let p = payrollTimePolicy
         let cal = CanonicalBusinessEngine.businessCalendar
         var t = 0.0
-        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+        for b in dayBookings where b.status.occupiesDay {
             t += b.overtimeHoursBeyondPaidStandard(policy: p)
         }
         for b in managerScheduleStore.managerSiteBookings {
@@ -257,7 +257,7 @@ struct DailyOverviewView: View {
         let p = payrollTimePolicy
         let cal = CanonicalBusinessEngine.businessCalendar
         var t = 0.0
-        for b in dayBookings where b.status == .confirmed || b.status == .tentative {
+        for b in dayBookings where b.status.occupiesDay {
             let wall = b.paidBookedHours(policy: p)
             t += wall - b.overtimeHoursBeyondPaidStandard(policy: p)
         }
@@ -1147,6 +1147,7 @@ struct DailyOverviewView: View {
         }
         .onAppear { coverOverviewDay() }
         .onChange(of: selectedCalendarDay) { _, _ in coverOverviewDay() }
+        .onChange(of: displayDate) { _, _ in coverOverviewDay() }
         .sheet(isPresented: $showingPastBookings) {
             HistoricDailyOverviewView()
                 .environmentObject(bookingStore)

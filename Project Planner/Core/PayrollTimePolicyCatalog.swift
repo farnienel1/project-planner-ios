@@ -123,7 +123,7 @@ enum PayrollTimePolicyCatalog {
     }
 
     static func weekendSettings(for day: Date, policy: OrgPayrollTimePolicy) -> OrgWeekendDayPayrollSettings {
-        let wd = Calendar.current.component(.weekday, from: day)
+        let wd = CanonicalBusinessEngine.businessCalendar.component(.weekday, from: day)
         if wd == 7 { return policy.saturday }
         return resolvedSundaySettings(from: policy)
     }
@@ -144,7 +144,7 @@ enum PayrollTimePolicyCatalog {
     }
 
     static func timelinePolicy(for day: Date, policy: OrgPayrollTimePolicy) -> DayTimelinePolicy {
-        let wd = Calendar.current.component(.weekday, from: day)
+        let wd = CanonicalBusinessEngine.businessCalendar.component(.weekday, from: day)
         if wd >= 2 && wd <= 6 {
             return DayTimelinePolicy(
                 dayKind: .weekday,

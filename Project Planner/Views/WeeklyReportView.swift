@@ -117,13 +117,19 @@ struct WeeklyReportView: View {
         InvoicingPeriodResolver.resolve(invoicing: invoicingSettings)
     }
 
+    /// The picked day (this device's calendar) as London midnight, the instant bookings are stored at.
+    private func londonDay(_ picked: Date) -> Date {
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: picked)
+        let key = String(format: "%04d-%02d-%02d", parts.year ?? 1970, parts.month ?? 1, parts.day ?? 1)
+        return CanonicalBusinessEngine.date(fromDayKey: key)
+            ?? CanonicalBusinessEngine.businessCalendar.startOfDay(for: picked)
+    }
+
+    private var reportStartDay: Date { londonDay(min(startDate, endDate)) }
+    private var reportEndDay: Date { londonDay(max(startDate, endDate)) }
+
     private var reportDateRange: ClosedRange<Date> {
-        let cal = Calendar.current
-        let start = cal.startOfDay(for: startDate)
-        let end = cal.startOfDay(for: endDate)
-        let lower = min(start, end)
-        let upper = max(start, end)
-        return lower...upper
+        reportStartDay...reportEndDay
     }
 
     private var hasReportWarnings: Bool {
@@ -728,7 +734,7 @@ struct WeeklyReportView: View {
         let service = exportWarningsService ?? WarningsService(hydrateFromDisk: false)
         exportWarningsService = service
         let range = reportDateRange
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let shared = WarningsService.shared
 
         // REBUILD: prefer live cache filtered by report dates — avoids Generate jetsam.
@@ -1155,11 +1161,11 @@ struct WeeklyReportView: View {
     }
 
     private func operativeProjectRows() -> [ProjectWorkRow] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let filtered = bookingStore.bookings.filter { booking in
             let day = cal.startOfDay(for: booking.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && booking.status != .cancelled
         }
         var totals: [String: Double] = [:]
@@ -1193,11 +1199,11 @@ struct WeeklyReportView: View {
     }
 
     private func managerProjectRows() -> [ProjectWorkRow] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let filtered = managerScheduleStore.managerSiteBookings.filter { booking in
             let day = cal.startOfDay(for: booking.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && (booking.locationType == .project || booking.locationType == .smallWork)
         }
         var totals: [String: Double] = [:]
@@ -1229,7 +1235,7 @@ struct WeeklyReportView: View {
     }
 
     private func annualLeaveRows() -> [AnnualLeaveRow] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let approved = holidayStore.bookings.filter {
             $0.status == .approved && $0.cancellationRequestedAt == nil
         }
@@ -1255,17 +1261,17 @@ struct WeeklyReportView: View {
     }
 
     private func labourRateSummaries() -> [LabourRateSummary] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let operativeBookings = bookingStore.bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && $0.status != .cancelled
         }
         let managerBookings = managerScheduleStore.managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
         }
         
         var totals: [String: LabourRateSummary] = [:]
@@ -1300,12 +1306,12 @@ struct WeeklyReportView: View {
     }
     
     private func managerAdditionalScheduleRows() -> [ManagerAdditionalScheduleRow] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let opts = appSettings.settings.myScheduleOptions
         let filtered = managerScheduleStore.managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && ($0.locationType == .office || $0.locationType == .workingFromHome || $0.locationType == .siteSurvey || $0.locationType == .custom)
                 && opts.includesManagerScheduleLocation($0)
                 && !timesheetFeed.covers(userId: $0.userId, day: $0.date)
@@ -1339,11 +1345,11 @@ struct WeeklyReportView: View {
     }
     
     private func subcontractorRows() -> [SubcontractorWorkRow] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let filtered = subcontractorStore.bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && $0.status != .cancelled
         }
         return filtered.compactMap { booking in
@@ -1376,7 +1382,7 @@ struct WeeklyReportView: View {
     }
 
     private func calendarDayStart(_ date: Date) -> Date {
-        Calendar.current.startOfDay(for: date)
+        CanonicalBusinessEngine.businessCalendar.startOfDay(for: date)
     }
 
     /// Uses day-rate history keyed by user id; compares **calendar days** so a change effective “tomorrow” does not apply to today’s bookings.
@@ -1417,12 +1423,9 @@ struct WeeklyReportView: View {
         booking.reportDayValue(policy: firebaseBackend.payrollPolicy(for: booking.date))
     }
 
+    /// Subcontractor day units from the rulebook (`subcontractorDayValue`).
     private func subcontractorDayValue(from timeSlot: TimeSlot) -> Double {
-        switch timeSlot {
-        case .fullDay: return 1
-        case .morning, .afternoon: return 0.5
-        default: return 0.5
-        }
+        CanonicalBusinessEngine.subcontractorDayValue(timeSlot.rawValue) ?? 0
     }
 
     private func managerDayValue(from booking: ManagerSiteBooking) -> Double {
@@ -1440,7 +1443,8 @@ struct WeeklyReportView: View {
             return (operative, linkedAppUser(for: operative))
         }
         let users = userStore.organizationUsers
-        guard let user = users.first(where: { StableBookingIdentity.uuid(for: $0.id) == booking.operativeId }) else {
+        guard let user = users.first(where: { StableBookingIdentity.uuid(for: $0.id) == booking.operativeId })
+            ?? users.first(where: { $0.formerUserIds.contains { StableBookingIdentity.uuid(for: $0) == booking.operativeId } }) else {
             NSLog("WEEKLY_REPORT_UNMATCHED_BOOKING doc=%@ operativeId=%@ — no operative or account with that id", booking.documentKey, booking.operativeKey)
             return nil
         }
@@ -1528,12 +1532,12 @@ struct WeeklyReportView: View {
             var isPaye: Bool = false
         }
         var byKey: [String: Acc] = [:]
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
 
         let operativeBookings = bookingStore.bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && $0.status != .cancelled
         }
         for booking in operativeBookings {
@@ -1567,8 +1571,8 @@ struct WeeklyReportView: View {
 
         let managerBookings = managerScheduleStore.managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && appSettings.settings.myScheduleOptions.includesManagerScheduleLocation($0)
         }
         for booking in managerBookings {
