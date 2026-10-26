@@ -1902,6 +1902,7 @@ private struct HomeProfileCardSheet: View {
     @EnvironmentObject var notificationService: NotificationService
 
     private var user: AppUser? { userStore.displayUser }
+    @State private var taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
 
     private var operative: Operative? {
         guard let email = user?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
@@ -1973,8 +1974,12 @@ private struct HomeProfileCardSheet: View {
 
                     profileRow("Day rate", dayRateText)
                     profileRow("Employment type", user?.employmentType(on: Date()).title ?? "—")
-                    profileRow("VAT number", user?.trimmedVATNumber ?? "Not set")
-                    profileRow("UTR number", user?.trimmedUTRNumber ?? "Not set")
+                    sensitiveProfileRow("VAT number", taxIds?.vatNumber ?? "", token: "homeProfile.vatNumber")
+                        .task(id: user?.id) {
+                            guard let user else { return }
+                            taxIds = await userStore.loadSensitiveProfile(for: user)
+                        }
+                    sensitiveProfileRow("UTR number", taxIds?.utrNumber ?? "", token: "homeProfile.utrNumber")
                     profileRow("Qualifications", qualificationsText)
                 }
                 .padding(16)
@@ -2008,6 +2013,20 @@ private struct HomeProfileCardSheet: View {
                 }
             }
         }
+    }
+
+    /// Own UTR / VAT: masked by default with Show / Hide.
+    private func sensitiveProfileRow(_ label: String, _ value: String, token: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label.uppercased())
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            SensitiveFieldValue(value: value, accessibilityToken: token)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func profileRow(_ label: String, _ value: String) -> some View {
