@@ -1985,12 +1985,14 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .timesheetPendingManagerSignoff, .timesheetSignedByManager: return .timesheetSignoff
         case .lineManagerPeerUpdate: return .lineManagerPeerUpdate
         case .materialAdded: return .materialAdded
-        case .toolboxTalkIssued: return .toolboxTalkIssued
+        // `notificationPreferenceKeyForType` maps hs_toolbox_reminder to the toolbox talk toggle.
+        case .toolboxTalkIssued, .hsToolboxReminder: return .toolboxTalkIssued
         case .qualificationExpiry: return .qualificationExpiry
         case .materialOrderCutOff: return .materialOrderCutOff
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return nil
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return nil
         case .timesheetSubmissionReminder: return nil
+        case .ideaStatus, .ideaShipped: return nil
         }
     }
 }
