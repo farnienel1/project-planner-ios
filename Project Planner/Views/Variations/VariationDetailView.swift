@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 
 struct VariationDetailView: View {
     let project: Project
@@ -17,6 +18,7 @@ struct VariationDetailView: View {
     @State private var confirmSubmitted = false
     @State private var statusError: String?
     @State private var fullscreenURL: URL?
+    @State private var reportTarget: FileReportTarget?
 
     private var variation: Variation? {
         store.variations.first(where: { $0.id == variationId && !$0.isDeleted })
@@ -92,6 +94,7 @@ struct VariationDetailView: View {
             }
         }
         .navigationTitle(variation?.voNumber ?? "Variation")
+        .fileReportSheet($reportTarget)
         .toolbar {
             if canEdit, variation != nil {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -251,6 +254,20 @@ struct VariationDetailView: View {
         }
         .accessibilityIdentifier("variationDetail.pdf")
         .buttonStyle(.plain)
+        .contextMenu {
+            // Not on the viewer's own uploads, nor on files still uploading.
+            if !item.isPending, item.uploadedByUid != firebaseBackend.currentUser?.uid {
+                FileReportMenuButton(
+                    target: FileReportTarget(
+                        surface: "variation_evidence",
+                        parentId: variationId,
+                        fileRef: item.storagePath,
+                        fileName: item.fileName
+                    ),
+                    presented: $reportTarget
+                )
+            }
+        }
     }
 
     private func historyLines(_ variation: Variation) -> [String] {

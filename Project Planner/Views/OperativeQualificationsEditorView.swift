@@ -32,6 +32,7 @@ struct OperativeQualificationsEditorView: View {
     @State private var pendingUploadQualificationId: String?
     @State private var showingCertificateImporter = false
     @State private var certificateViewerURL: IdentifiableURL?
+    @State private var reportTarget: FileReportTarget?
     @State private var isSaving = false
     @State private var errorMessage: String?
 
@@ -173,6 +174,7 @@ struct OperativeQualificationsEditorView: View {
         .sheet(item: $certificateViewerURL) { item in
             InAppRemoteDocumentViewer(remoteURL: item.url, title: "Certificate")
         }
+        .fileReportSheet($reportTarget)
     }
 
     private var editorForm: some View {
@@ -433,6 +435,19 @@ struct OperativeQualificationsEditorView: View {
                             .buttonStyle(.borderless)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.green)
+                            .contextMenu {
+                                // Someone else's certificate only; My Qualifications is the viewer's own.
+                                if !isMyQualifications {
+                                    FileReportMenuButton(
+                                        target: FileReportTarget(
+                                            surface: "qualification_certificate",
+                                            parentId: operative.id.uuidString,
+                                            fileRef: existingURLString
+                                        ),
+                                        presented: $reportTarget
+                                    )
+                                }
+                            }
                         }
                     }
                 } else {
