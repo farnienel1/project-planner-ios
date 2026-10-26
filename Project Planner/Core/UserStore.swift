@@ -103,6 +103,65 @@ class UserStore: ObservableObject {
         }
     }
 
+    /// Operatives-list people whose `users` id is a Firebase Auth uid have no booking id: bookings and Book Labour
+    /// use an `operatives` catalogue row (a UUID). This adds that row, matched by email, for people who have none —
+    /// for example someone re-added after deleting their account, whose old row was anonymised.
+    /// Staff only. The catalogue is re-read from the server first so a row is never created twice. Sends no email.
+    @discardableResult
+    func ensureCatalogueRowsForUserOnlyOperatives(operativeStore: OperativeStore) async -> Int {
+        guard let firebaseBackend, displayUser != nil, !isOperativeMode() else { return 0 }
+        let orgId = normalizedOrganizationId(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "")
+        guard !orgId.isEmpty, organizationUsersLoadOrganizationId == orgId else { return 0 }
+        let current = CanonicalBusinessEngine.listedCurrentLabourPeople(organizationUsers) ?? organizationUsers
+        let local = Self.userOnlyOperativesNeedingCatalogueRow(users: current, catalogue: operativeStore.allOperatives)
+        guard !local.isEmpty else { return 0 }
+        guard let serverCatalogue = try? await firebaseBackend.loadOperatives(organizationId: orgId) else { return 0 }
+        let missing = Self.userOnlyOperativesNeedingCatalogueRow(users: local, catalogue: serverCatalogue)
+        var created = 0
+        for user in missing {
+            let first = user.firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let row = Operative(
+                firstName: first.isEmpty ? String(user.email.split(separator: "@").first ?? "Operative") : first,
+                lastName: user.surname.trimmingCharacters(in: .whitespacesAndNewlines),
+                email: user.email.trimmingCharacters(in: .whitespacesAndNewlines),
+                phone: user.mobileNumber,
+                startDate: Calendar.current.startOfDay(for: Date()),
+                isActive: user.isActive,
+                dayRate: user.dayRate,
+                tradeTypePreset: user.tradeTypePreset,
+                tradeTypeCustom: user.tradeTypeCustom
+            )
+            do {
+                try await firebaseBackend.saveOperative(row, organizationId: orgId)
+                if !operativeStore.operatives.contains(where: { $0.id == row.id }) {
+                    operativeStore.operatives.append(row)
+                }
+                created += 1
+                print("🔥🔥🔥 DEBUG: CATALOGUE_ROW_ADDED for user-only operative \(user.id)")
+            } catch {
+                print("🔥🔥🔥 DEBUG: CATALOGUE_ROW_FAILED for \(user.id): \(error.localizedDescription)")
+            }
+        }
+        return created
+    }
+
+    /// Active Operatives-list users with a non-UUID id and no catalogue row for their email (active or not).
+    /// Anonymised deleted profiles are expected to be removed by the caller with `listedCurrentLabourPeople`.
+    nonisolated static func userOnlyOperativesNeedingCatalogueRow(users: [AppUser], catalogue: [Operative]) -> [AppUser] {
+        func emailKey(_ raw: String) -> String {
+            raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let catalogueEmails = Set(catalogue.map { emailKey($0.email) }.filter { !$0.isEmpty })
+        var seen = Set<String>()
+        return users.filter { user in
+            let email = emailKey(user.email)
+            guard !email.isEmpty, user.isActive, user.appearsOnOperativesList, user.isStoredUserDocument else { return false }
+            guard UUID(uuidString: user.id) == nil else { return false }
+            guard !catalogueEmails.contains(email) else { return false }
+            return seen.insert(email).inserted
+        }
+    }
+
     /// Ensures an `operatives` roster row exists for this app user (matched by email) so qualifications can attach.
     func ensureOperativeProfileForAppUser(_ user: AppUser, operativeStore: OperativeStore) async -> Operative? {
         let emailNorm = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -778,7 +837,9 @@ class UserStore: ObservableObject {
     }
 
     /// Operative timesheets visibility:
-    /// - Admin/super-admin accounts can always access when operative users exist in the organization.
+    /// - Admin/super-admin accounts (`seesEveryUserTimesheet`) always have User Timesheets, even while the
+    ///   roster is loading or the company has no active operative. The roster must not turn an admin's hub
+    ///   into the operative one.
     /// - Manager accounts can access when at least one active operative is directly assigned to them.
     func canAccessOperativeTimesheets() -> Bool {
         guard let user = displayUser else { return false }
@@ -786,11 +847,8 @@ class UserStore: ObservableObject {
         guard CanonicalBusinessEngine.canReviewUserTimesheets(role) == true else {
             return false
         }
-        let hasAnyActiveOperative = organizationUsers.contains { orgUser in
-            orgUser.permissions.operativeMode && orgUser.isActive
-        }
         if CanonicalBusinessEngine.seesEveryUserTimesheet(role) == true {
-            return hasAnyActiveOperative || isHomeProfileLoading
+            return true
         }
         return organizationUsers.contains { orgUser in
             guard orgUser.permissions.operativeMode else { return false }

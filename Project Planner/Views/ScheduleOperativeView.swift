@@ -238,6 +238,10 @@ struct ScheduleOperativeView: View {
             .onAppear {
                 scheduleBookingOnAppear()
             }
+            .task {
+                // A user-only operative (Auth uid, no catalogue row) needs a catalogue row to be bookable here.
+                await userStore.ensureCatalogueRowsForUserOnlyOperatives(operativeStore: operativeStore)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .organizationDidLoad)) { _ in
                 refreshDefaultHoursFromOrgPolicy()
             }

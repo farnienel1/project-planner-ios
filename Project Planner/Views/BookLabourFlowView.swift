@@ -192,6 +192,10 @@ struct BookLabourFlowView: View {
 
     private var bookFlowRoot: some View {
         phaseContent
+            .task {
+                // A user-only operative (Auth uid, no catalogue row) has no `linkedOperative` to book until this runs.
+                await userStore.ensureCatalogueRowsForUserOnlyOperatives(operativeStore: operativeStore)
+            }
             .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationTitle(isCustomHoursPhase ? "Custom hours" : "Book labour")
             .navigationBarTitleDisplayMode(.inline)

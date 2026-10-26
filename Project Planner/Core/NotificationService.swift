@@ -33,6 +33,9 @@ class NotificationService: ObservableObject {
     private var notificationsListener: ListenerRegistration?
     private var listenerScopeKey: String?
     private var didPrimeNotificationStream = false
+    /// Consecutive inbox listener errors. A failed listener is re-attached after a growing delay
+    /// so one error does not leave only on-device rows for the rest of the session.
+    private var notificationsListenerFailures = 0
     private var hasRequestedLocalNotificationPermission = false
     private var didLoadPersistedLocalAlertDedupKeys = false
     /// FIFO order for dedupe keys — must not use `Set`→`Array` truncation (order is undefined and evicts random keys).
@@ -1538,6 +1541,22 @@ class NotificationService: ObservableObject {
         triggerLocalAlertIfNeeded(for: notification)
     }
 
+    /// A Firestore listener stops for good after an error. Drop it and load again after 5, 10 … 60 seconds,
+    /// unless the signed-in scope changed in the meantime. `loadNotifications` re-attaches the listener.
+    private func retryNotificationsListener(scopeKey: String) {
+        guard listenerScopeKey == scopeKey else { return }
+        notificationsListener?.remove()
+        notificationsListener = nil
+        listenerScopeKey = nil
+        notificationsListenerFailures += 1
+        let delaySeconds = UInt64(min(60, 5 * notificationsListenerFailures))
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delaySeconds * 1_000_000_000)
+            guard let self, self.listenerScopeKey == nil else { return }
+            await self.loadNotifications()
+        }
+    }
+
     private func startNotificationsListenerIfNeeded(organizationId: String, userId: String) {
         let key = "\(organizationId)|\(userId)"
         if listenerScopeKey == key, notificationsListener != nil {
@@ -1556,12 +1575,16 @@ class NotificationService: ObservableObject {
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error {
                     print("🔥🔥🔥 DEBUG: Notifications listener error: \(error.localizedDescription)")
+                    Task { @MainActor in
+                        self?.retryNotificationsListener(scopeKey: key)
+                    }
                     return
                 }
                 guard let snapshot else { return }
                 Task { @MainActor in
                     guard let self else { return }
                     guard let currentUser = self.userStore?.currentUser else { return }
+                    self.notificationsListenerFailures = 0
 
                     let parsed = snapshot.documents.compactMap { self.parseNotificationDocument($0) }
                     self.capturePendingDeadlineNotifications(from: parsed, currentUser: currentUser)
@@ -2229,7 +2252,8 @@ class NotificationService: ObservableObject {
         guard let visible = CanonicalBusinessEngine.visibleSortedInboxNotifications(rows, userId: userId) else {
             return items
         }
-        let byId = Dictionary(uniqueKeysWithValues: items.map { ($0.id.uuidString, $0) })
+        // A repeated id keeps the first row. uniqueKeysWithValues would crash on it.
+        let byId = Dictionary(items.map { ($0.id.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
         return visible.compactMap { byId[$0.id] }
     }
 
