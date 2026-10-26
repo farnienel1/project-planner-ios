@@ -91,6 +91,9 @@ struct Booking: Identifiable, Codable, Hashable {
         }
     }
 
+    /// The rulebook's `bookingOccupiesDay` for this booking's status.
+    nonisolated var occupiesDay: Bool { status.occupiesDay }
+
     nonisolated static func internalOperativeId(for raw: String) -> UUID {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if let uuid = UUID(uuidString: trimmed) { return uuid }
@@ -253,6 +256,18 @@ enum BookingStatus: String, CaseIterable, Identifiable, Codable {
     
     var id: String { rawValue }
     
+    /// The rulebook's `bookingOccupiesDay`: the person is taken that day. Asked once per status, then remembered,
+    /// because schedule, warnings and payroll screens filter every booking with it.
+    nonisolated var occupiesDay: Bool { Self.occupiesDayByStatus[self] ?? (self != .cancelled) }
+
+    private nonisolated static let occupiesDayByStatus: [BookingStatus: Bool] = {
+        var map: [BookingStatus: Bool] = [:]
+        for status in BookingStatus.allCases {
+            if let answer = CanonicalBusinessEngine.bookingOccupiesDay(status.rawValue) { map[status] = answer }
+        }
+        return map
+    }()
+
     var color: String {
         switch self {
         case .confirmed: return "green"

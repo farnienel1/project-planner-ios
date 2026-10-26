@@ -67,19 +67,20 @@ enum TimesheetPayrollCollector {
             $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 == user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         }
-        let operativeIds = Set(matchedOperatives.map(\.id))
+        // Bookings under the person's uid, a former invite id, a same-email account or a catalogue row on their
+        // email (`bookingIdsForAccount`), so a deleted and re-added person is paid for every booked day.
+        let operativeIds = labourBookingIds(for: user, operatives: operatives).union(matchedOperatives.map(\.id))
 
         let projectsById = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let smallWorksById = Dictionary(smallWorks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let eligibleBookings = bookings.filter { booking in
-            guard booking.status != .cancelled, operativeIds.contains(booking.operativeId) else { return false }
+            guard booking.occupiesDay, operativeIds.contains(booking.operativeId) else { return false }
             let day = cal.startOfDay(for: booking.date)
             guard day >= rangeStart && day <= rangeEnd else { return false }
             return TimesheetPayrollPolicy.isBillableSelfEmployedDay(user, on: day, calendar: cal)
         }
-        let bookingsByDay = Dictionary(grouping: eligibleBookings) {
-            "\($0.operativeId.uuidString)-\(cal.startOfDay(for: $0.date).timeIntervalSince1970)"
-        }
+        // One person, so one group per day even when the day's bookings carry different stored ids.
+        let bookingsByDay = Dictionary(grouping: eligibleBookings) { cal.startOfDay(for: $0.date) }
         for group in bookingsByDay.values {
             guard let first = group.first else { continue }
             let day = cal.startOfDay(for: first.date)
@@ -88,7 +89,7 @@ enum TimesheetPayrollCollector {
             let booking = cluster.payable
             let standardDayHours = max(policy.standardPaidHours, 0.01)
             shiftCount += 1
-            let matchedOperative = matchedOperatives.first(where: { $0.id == booking.operativeId })
+            let matchedOperative = matchedOperatives.first(where: { $0.id == booking.operativeId }) ?? matchedOperatives.first
             let resolved = PayrollRateResolver.resolveForTimesheetDay(
                 user: user,
                 operative: matchedOperative,
@@ -148,8 +149,8 @@ enum TimesheetPayrollCollector {
             }
         }
 
-        let managerUserIds = StaffEmailIdentity.userIds(sharing: user.email, in: relatedUsers + [user])
-        let managerIds = managerUserIds.isEmpty ? Set([user.id]) : managerUserIds
+        let managerIds = StaffEmailIdentity.userIds(sharing: user.email, in: relatedUsers + [user])
+            .union(WorkAccess.managerBookingUserIds(for: user))
         for booking in managerBookings where managerIds.contains(booking.userId) {
             guard scheduleOptions.includesManagerScheduleLocation(booking) else { continue }
             let day = cal.startOfDay(for: booking.date)

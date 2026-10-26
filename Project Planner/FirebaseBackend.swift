@@ -7231,7 +7231,7 @@ class FirebaseBackend: ObservableObject {
         }
         let snapshot = try await getQueryPreferringServer(bookingsQuery)
         
-        return snapshot.documents.compactMap { bookingFromFirestoreDocument($0) }
+        return bookingsFromFirestoreDocuments(snapshot.documents)
     }
 
     private func getQueryPreferringServer(_ query: Query) async throws -> QuerySnapshot {
@@ -7245,6 +7245,94 @@ class FirebaseBackend: ObservableObject {
                 throw error
             }
             return cached
+        }
+    }
+
+    /// Firestore values as JSON for the rulebook. Timestamps become `{ seconds, nanoseconds }`, which
+    /// `bookingDateMs` reads; references become their path. Other non-JSON values become null.
+    nonisolated static func firestoreJSON(_ value: Any) -> Any {
+        switch value {
+        case let timestamp as Timestamp:
+            return ["seconds": timestamp.seconds, "nanoseconds": timestamp.nanoseconds]
+        case let date as Date:
+            return date.timeIntervalSince1970 * 1000
+        case let reference as DocumentReference:
+            return reference.path
+        case let map as [String: Any]:
+            return map.mapValues { firestoreJSON($0) }
+        case let list as [Any]:
+            return list.map { firestoreJSON($0) }
+        case is String, is NSNumber, is NSNull:
+            return value
+        default:
+            return NSNull()
+        }
+    }
+
+    /// Operative bookings read through the rulebook's `parseBookingDocument`, the same reader web uses, so a
+    /// lower-case status, a slot alias or a text date no longer drops a booking on iOS only.
+    /// Falls back to `bookingFromFirestoreDocument` when the script does not answer.
+    func bookingsFromFirestoreDocuments(_ documents: [QueryDocumentSnapshot]) -> [Booking] {
+        let payload: [[String: Any]] = documents.map { ["id": $0.documentID, "data": Self.firestoreJSON($0.data())] }
+        guard let parsed = CanonicalBusinessEngine.parseBookingDocuments(payload) else {
+            return documents.compactMap { bookingFromFirestoreDocument($0) }
+        }
+        return parsed.compactMap(Self.booking(fromCanonical:))
+    }
+
+    nonisolated static func booking(fromCanonical row: CanonicalBusinessEngine.CanonicalParsedBooking) -> Booking? {
+        guard let projectId = UUID(uuidString: row.projectId),
+              let timeSlot = TimeSlot.fromStored(row.timeSlot),
+              let status = BookingStatus(rawValue: row.status) else {
+            print("🔥🔥🔥 DEBUG: BOOKING_UNREADABLE_ON_IOS id=\(row.id) project=\(row.projectId) slot=\(row.timeSlot) status=\(row.status)")
+            return nil
+        }
+        var booking = Booking(
+            // A document id that is not a UUID keeps one stable in-app id instead of a new random one per read.
+            id: UUID(uuidString: row.id) ?? OperativeKeyRegistry.derivedUUID(for: "booking.\(row.id)"),
+            operativeId: Booking.internalOperativeId(for: row.operativeId),
+            projectId: projectId,
+            date: Date(timeIntervalSince1970: row.dateMs / 1000),
+            timeSlot: timeSlot,
+            bookedBy: row.bookedBy,
+            notes: row.notes.isEmpty ? nil : row.notes,
+            status: status,
+            workStartTime: row.workStartTime,
+            workEndTime: row.workEndTime,
+            isBreakRemoved: row.isBreakRemoved,
+            otMultiplierOverride: row.otMultiplierOverride,
+            bookingGroupId: row.bookingGroupId,
+            createdAt: row.createdAtMs.map { Date(timeIntervalSince1970: $0 / 1000) },
+            updatedAt: row.updatedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }
+        )
+        booking.operativeKey = row.operativeId
+        return booking
+    }
+
+    /// Manager site bookings read through the rulebook's `parseManagerSiteBookingDocument` (web uses the same reader).
+    func managerSiteBookingsFromFirestoreDocuments(_ documents: [QueryDocumentSnapshot]) -> [ManagerSiteBooking] {
+        let payload: [[String: Any]] = documents.map { ["id": $0.documentID, "data": Self.firestoreJSON($0.data())] }
+        guard let parsed = CanonicalBusinessEngine.parseManagerSiteBookingDocuments(payload) else {
+            return documents.compactMap { managerSiteBookingFromFirestoreDocument($0) }
+        }
+        return parsed.compactMap { row in
+            guard let timeSlot = ManagerTimeSlot.fromStored(row.timeSlot),
+                  let locationType = ManagerLocationType(rawValue: row.locationType) else { return nil }
+            return ManagerSiteBooking(
+                id: UUID(uuidString: row.id) ?? OperativeKeyRegistry.derivedUUID(for: "managerBooking.\(row.id)"),
+                userId: row.userId,
+                date: Date(timeIntervalSince1970: row.dateMs / 1000),
+                timeSlot: timeSlot,
+                locationType: locationType,
+                locationId: row.locationId.flatMap { UUID(uuidString: $0) },
+                customLocationName: row.customLocationName,
+                workStartTime: row.workStartTime,
+                workEndTime: row.workEndTime,
+                isBreakRemoved: row.isBreakRemoved,
+                bookingGroupId: row.bookingGroupId,
+                createdAt: row.createdAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
+                updatedAt: row.updatedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date()
+            )
         }
     }
 
@@ -7342,7 +7430,7 @@ class FirebaseBackend: ObservableObject {
                         print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT — ignored an empty cache snapshot")
                         return
                     }
-                    let list = snapshot.documents.compactMap { self.bookingFromFirestoreDocument($0) }
+                    let list = self.bookingsFromFirestoreDocuments(snapshot.documents)
                     onChange(list, fromCache)
                 }
             }
@@ -7397,7 +7485,7 @@ class FirebaseBackend: ObservableObject {
             query = query.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
         }
         let snapshot = try await getQueryPreferringServer(query)
-        return snapshot.documents.compactMap { managerSiteBookingFromFirestoreDocument($0) }
+        return managerSiteBookingsFromFirestoreDocuments(snapshot.documents)
     }
 
     func managerSiteBookingFromFirestoreDocument(_ doc: QueryDocumentSnapshot) -> ManagerSiteBooking? {
@@ -7475,7 +7563,7 @@ class FirebaseBackend: ObservableObject {
                         print("🔥🔥🔥 DEBUG: manager schedule kept — ignored an empty cache snapshot")
                         return
                     }
-                    let list = snapshot.documents.compactMap { self.managerSiteBookingFromFirestoreDocument($0) }
+                    let list = self.managerSiteBookingsFromFirestoreDocuments(snapshot.documents)
                     onChange(list)
                 }
             }
