@@ -45,6 +45,35 @@ final class MaterialsTimesheetsParityTests: XCTestCase {
         XCTAssertEqual(AppNotification.NotificationType(rawValue: "material_added"), .materialAdded)
     }
 
+    func testMaterialRecipientPayloadNamesTheJobManagersAndTheAdder() throws {
+        let managerRow = Manager(firstName: "TEST", lastName: "Manager", email: "mgr@test.com", mobileNumber: "")
+        let adder = user(id: "op-1", role: .operative, permissions: UserPermissions(operativeMode: true), formerIds: ["op-old"])
+        let payload = MaterialOrderRecipientsRulebook.payload(
+            jobManagerIds: [managerRow.id.uuidString],
+            managers: [managerRow],
+            accounts: [adder],
+            adder: adder,
+            adderUserId: "op-1"
+        )
+        XCTAssertTrue(JSONSerialization.isValidJSONObject(payload))
+        XCTAssertEqual(payload["jobManagerIds"] as? [String], [managerRow.id.uuidString])
+        XCTAssertEqual((payload["managers"] as? [[String: Any]])?.first?["email"] as? String, "mgr@test.com")
+        XCTAssertEqual(Set(payload["adderIds"] as? [String] ?? []), ["op-1", "op-old"])
+        let account = try XCTUnwrap((payload["accounts"] as? [[String: Any]])?.first)
+        XCTAssertEqual((account["role"] as? [String: Any])?["isOperativeMode"] as? Bool, true)
+    }
+
+    func testMaterialRecipientsWaitForTheScript() {
+        let ids = MaterialOrderRecipientsRulebook.recipientUserIds(
+            jobManagerIds: [], managers: [], accounts: [], adder: nil, adderUserId: nil
+        )
+        if MaterialOrderRecipientsRulebook.isAvailable {
+            XCTAssertEqual(ids, [])
+        } else {
+            XCTAssertNil(ids)
+        }
+    }
+
     // MARK: - Wholesaler contact mobile (web `phone`)
 
     func testContactWithoutPhoneStillDecodes() throws {

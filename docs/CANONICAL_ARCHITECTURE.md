@@ -72,6 +72,10 @@ Order required delivery and quote omission come from `defaultMaterialDeliveryReq
 
 A new material line writes inbox type `material_order_placed`, which `notificationDeliversDevicePush` pushes and `notificationPreferenceKeyForType` maps to `materialOrderPlaced`. The older iOS `material_added` rows still parse, but the script has no push, toggle, or destination for them. The inbox writes run after the sheet closes; the line itself is saved first.
 
+Recipients come from `materialOrderRecipients`: the active, non-operative accounts that are the managers assigned to that project or small works (`managerIds`, matched to accounts by id or by the managers row's email), never the person who added the line. Admins are not added unless they are one of the job's managers. Until the packed script exports that function, iOS keeps its previous recipients (every admin plus the job's managers).
+
+Quote and order history is part of every job's Materials for admins and managers on both apps, with no Wholesalers toggle. Both apps write the same `materialSendRecords` document (`id`, `projectId`, `requestType` `Order`/`Quote`, `sentAt`, `sentBy`, `recipients`, `lines`, `materialsDate`, `deliveryRequiredAt` on orders), and both list every record for the job, newest first. Firestore `canReadMaterialSendHistory` still requires `wholesalersOrderHistory` for managers until the web repo changes and deploys that rule.
+
 The WhatsApp order message, the wa.me number, and the landline refusal come from `materialWhatsAppRows` (one row per recipient: `recipientId`, `message`, `ok`, `digits`, `reason`, `url`), called through `CanonicalBusinessEngine.objectRows` by `MaterialWhatsAppRulebook`. Swift builds no message text. Send via WhatsApp stays hidden until the packed script exports that function. A wholesaler contact's mobile is `contacts[].phone` (string or null), read and written on every save so an iOS edit keeps a number saved on web.
 
 ## User Timesheets scope

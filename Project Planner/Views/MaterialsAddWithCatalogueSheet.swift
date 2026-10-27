@@ -739,6 +739,13 @@ struct MaterialsAddWithCatalogueSheet: View {
                     .map(\.id)
                 // One inbox write per recipient, each waiting for the server. The line is already saved,
                 // so the sheet closes now and the inbox rows (and their device push) follow.
+                let rulebookRecipients = MaterialOrderRecipientsRulebook.recipientUserIds(
+                    jobManagerIds: project.managerIds.map(\.uuidString),
+                    managers: operativeStore.managers,
+                    accounts: userStore.organizationUsers,
+                    adder: userStore.currentUser,
+                    adderUserId: ownerUid
+                )
                 let notifier = notificationService
                 let projectId = project.id
                 let siteName = project.siteName
@@ -750,7 +757,8 @@ struct MaterialsAddWithCatalogueSheet: View {
                         materialName: materialName,
                         addedByName: addedBy,
                         addedByUserId: ownerUid,
-                        extraRecipientUserIds: managerUserIds
+                        extraRecipientUserIds: managerUserIds,
+                        rulebookRecipientUserIds: rulebookRecipients
                     )
                 }
             }
