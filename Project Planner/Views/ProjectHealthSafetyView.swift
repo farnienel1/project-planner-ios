@@ -673,9 +673,13 @@ struct ProjectHealthSafetyView: View {
             userStore.organizationUsers.map { ($0.email.lowercased(), $0) },
             uniquingKeysWith: { _, last in last }
         )
-        for booking in bookingStore.bookings where booking.projectId == project.id {
-            guard let operative = operativeById[booking.operativeId] else { continue }
-            if let user = userByEmail[operative.email.lowercased()] {
+        let people = LabourBookingPeople(operatives: operativeStore.operatives, users: userStore.organizationUsers)
+        for booking in bookingStore.bookings where booking.projectId == project.id && booking.occupiesDay {
+            let person = people.person(for: booking.operativeId)
+            if let operative = person.operative ?? operativeById[booking.operativeId],
+               let user = userByEmail[operative.email.lowercased()] {
+                ids.insert(user.id)
+            } else if let user = person.user {
                 ids.insert(user.id)
             }
         }

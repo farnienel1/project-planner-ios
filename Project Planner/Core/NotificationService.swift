@@ -397,13 +397,15 @@ class NotificationService: ObservableObject {
             await userStore.loadOrganizationUsers()
         }
         
+        // `resolveBookingPerson`: a person booked under their uid or a former invite id, with no catalogue row, is still told.
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
         for recipient in recipients {
-            guard let operative = operativeStore.allOperatives.first(where: { $0.id == recipient.operativeId }) else { continue }
-            let normalizedEmail = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !normalizedEmail.isEmpty else { continue }
-            guard let user = userStore.organizationUsers.first(where: {
+            let person = people.person(for: recipient.operativeId)
+            let normalizedEmail = (person.operative?.email ?? person.user?.email ?? "")
+                .lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let user = normalizedEmail.isEmpty ? person.user : (userStore.organizationUsers.first(where: {
                 $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
-            }) else { continue }
+            }) ?? person.user) else { continue }
             
             let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(user.id)
             let dateText = recipient.dates

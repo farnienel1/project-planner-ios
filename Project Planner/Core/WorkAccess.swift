@@ -110,18 +110,20 @@ enum WorkAccess {
             return true
         }
 
+        let accountIds = managerBookingUserIds(for: user)
         if managerBookings.contains(where: { booking in
-            booking.userId == user.id
+            accountIds.contains(booking.userId)
                 && (booking.locationType == .project || booking.locationType == .smallWork)
                 && booking.locationId == project.id
         }) {
             return true
         }
 
-        if let operative = operativeMatching(email: user.email, in: operativeStore.allOperatives),
-           bookingStore.bookings.contains(where: {
-               $0.operativeId == operative.id && $0.projectId == project.id && $0.status != .cancelled
-           }) {
+        // Every id this person's bookings may carry (`bookingIdsForAccount`), not only the catalogue row on their email.
+        let bookingIds = labourBookingIds(for: user, operatives: operativeStore.allOperatives)
+        if bookingStore.bookings.contains(where: {
+            bookingIds.contains($0.operativeId) && $0.projectId == project.id && $0.occupiesDay
+        }) {
             return true
         }
 
@@ -151,12 +153,13 @@ enum WorkAccess {
                 operatives: operatives
             )
             var bookedIds = Set<UUID>()
-            if let operative {
-                for booking in bookings where booking.operativeId == operative.id && booking.status != .cancelled {
-                    bookedIds.insert(booking.projectId)
-                }
+            var bookingIds = labourBookingIds(for: user, operatives: operatives)
+            if let operative { bookingIds.insert(operative.id) }
+            for booking in bookings where bookingIds.contains(booking.operativeId) && booking.occupiesDay {
+                bookedIds.insert(booking.projectId)
             }
-            for booking in managerBookings where booking.userId == user.id {
+            let accountIds = managerBookingUserIds(for: user)
+            for booking in managerBookings where accountIds.contains(booking.userId) {
                 guard booking.locationType == .project || booking.locationType == .smallWork,
                       let locationId = booking.locationId else { continue }
                 bookedIds.insert(locationId)
@@ -201,17 +204,24 @@ enum WorkAccess {
         email: String?,
         firstName: String?,
         surname: String?,
-        operatives: [Operative]
+        operatives: [Operative],
+        users: [AppUser] = []
     ) -> Set<UUID> {
         let needle = normalizedEmail(email)
+        // Bookings under the accounts on this email, their former invite ids and their catalogue rows
+        // (`bookingIdsForAccount`), so a re-added person with no catalogue row still sees their own days.
+        var accountIds = Set<UUID>()
         if !needle.isEmpty {
+            for user in users where normalizedEmail(user.email) == needle {
+                accountIds.formUnion(labourBookingIds(for: user, operatives: operatives))
+            }
             let matches = Set(operatives.filter { normalizedEmail($0.email) == needle }.map(\.id))
-            if !matches.isEmpty { return matches }
+            if !matches.isEmpty { return matches.union(accountIds) }
         }
         if let one = signedInOperative(email: email, firstName: firstName, surname: surname, operatives: operatives) {
-            return [one.id]
+            return accountIds.union([one.id])
         }
-        return []
+        return accountIds
     }
 
     /// Auth uid plus every `users` document id for the same email.
@@ -237,7 +247,13 @@ enum WorkAccess {
             for alias in user.sameEmailUserIds { add(alias) }
         }
         for alias in currentUser?.sameEmailUserIds ?? [] { add(alias) }
+        for former in currentUser?.formerUserIds ?? [] { add(former) }
         return ids
+    }
+
+    /// `managerSiteBookings.userId` values that are this person: their uid, former invite ids and same-email ids.
+    static func managerBookingUserIds(for user: AppUser) -> Set<String> {
+        Set([user.id] + user.formerUserIds + user.sameEmailUserIds)
     }
 
     private static func operativeMatching(email: String, in operatives: [Operative]) -> Operative? {
@@ -254,10 +270,11 @@ enum WorkAccess {
         deadlineAssignedProjectIds: Set<UUID>
     ) -> Set<UUID> {
         var ids = Set<UUID>()
-        if let operative {
-            for booking in bookingStore.bookings where booking.operativeId == operative.id && booking.status != .cancelled {
-                ids.insert(booking.projectId)
-            }
+        // A person with no catalogue row still sees jobs booked under their uid or a former invite id.
+        var bookingIds = currentUser.map { labourBookingIds(for: $0, operatives: operatives) } ?? []
+        if let operative { bookingIds.insert(operative.id) }
+        for booking in bookingStore.bookings where bookingIds.contains(booking.operativeId) && booking.occupiesDay {
+            ids.insert(booking.projectId)
         }
         if let taskStore {
             ids.formUnion(taskAssignedProjectIds(
@@ -316,15 +333,18 @@ enum WorkAccess {
             ids.insert(booking.userId)
         }
 
-        let operativeById = Dictionary(uniqueKeysWithValues: operativeStore.allOperatives.map { ($0.id, $0) })
-        for booking in bookingStore.bookings where booking.projectId == projectId && booking.status != .cancelled {
-            guard let operative = operativeById[booking.operativeId] else { continue }
-            if let user = userMatchingEmail(operative.email, in: users) {
+        let operativeById = Dictionary(operativeStore.allOperatives.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: users)
+        for booking in bookingStore.bookings where booking.projectId == projectId && booking.occupiesDay {
+            let person = people.person(for: booking.operativeId)
+            if let operative = person.operative, let user = userMatchingEmail(operative.email, in: users) {
+                ids.insert(user.id)
+            } else if let user = person.user {
                 ids.insert(user.id)
             }
         }
 
-        let managerById = Dictionary(uniqueKeysWithValues: operativeStore.allManagers.map { ($0.id, $0) })
+        let managerById = Dictionary(operativeStore.allManagers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for task in taskStore.tasks where task.projectId == projectId {
             for opId in task.allAssignedOperativeIds {
                 if let operative = operativeById[opId], let user = userMatchingEmail(operative.email, in: users) {

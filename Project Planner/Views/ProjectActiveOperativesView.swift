@@ -51,19 +51,29 @@ struct ProjectActiveOperativesView: View {
 
     private var operativeSummaries: [ProjectBookedPersonSummary] {
         let projectBookings = bookingStore.bookings.filter {
-            $0.projectId == project.id && $0.status != .cancelled
+            $0.projectId == project.id && $0.occupiesDay
         }
-        let grouped = Dictionary(grouping: projectBookings, by: \.operativeId)
+        // One row per person (`resolveBookingPerson`): a re-added person's bookings under an old and a new id share a row,
+        // and a booking with no catalogue row is still listed.
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+        let grouped = Dictionary(grouping: projectBookings) { booking -> UUID in
+            let person = people.person(for: booking.operativeId)
+            return person.operative?.id ?? person.user.map { Booking.internalOperativeId(for: $0.id) } ?? booking.operativeId
+        }
         return grouped.compactMap { operativeId, bookings -> ProjectBookedPersonSummary? in
-            guard let operative = operativeStore.allOperatives.first(where: { $0.id == operativeId }) else { return nil }
+            let name = rosterNameForLabourBooking(
+                operativeId: operativeId,
+                operatives: operativeStore.allOperatives,
+                users: userStore.organizationUsers
+            )
             let sorted = bookings.sorted { $0.date < $1.date }
             let hours = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: payrollPolicy) }
             return ProjectBookedPersonSummary(
                 id: "op-\(operativeId.uuidString)",
                 kind: .operative,
-                displayName: operative.name,
+                displayName: name,
                 subtitle: "Operative",
-                initials: PlannerUIInitials.from(operative.name),
+                initials: PlannerUIInitials.from(name),
                 bookingCount: bookings.count,
                 totalHours: hours,
                 firstDate: sorted.first?.date ?? Date(),
@@ -248,6 +258,8 @@ private struct ProjectBookedPersonHistoryView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var subcontractorStore: SubcontractorStore
+    @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var userStore: UserStore
 
     private struct DayRow: Identifiable {
         let id: String
@@ -260,8 +272,9 @@ private struct ProjectBookedPersonHistoryView: View {
         switch summary.kind {
         case .operative:
             guard let operativeId = summary.operativeId else { return [] }
+            let personIds = labourBookingIds(sameAs: operativeId, operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
             return bookingStore.bookings
-                .filter { $0.projectId == project.id && $0.operativeId == operativeId && $0.status != .cancelled }
+                .filter { $0.projectId == project.id && personIds.contains($0.operativeId) && $0.occupiesDay }
                 .sorted { $0.date > $1.date }
                 .map {
                     DayRow(

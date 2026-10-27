@@ -322,7 +322,7 @@ extension Operative: Hashable {
 /// Name for a labour booking. Bookings store an operative id, not a user account.
 /// When that id is not on the roster, the row is leftover data, not a person called Operative.
 /// Shown for a booked person no catalogue row or account matches. The booking row is never hidden.
-let unknownLabourPersonName = "Unknown person"
+nonisolated let unknownLabourPersonName = "Unknown person"
 
 /// The account a labour booking names: its stored id, or the account that replaced that id (`formerIdAliases`).
 func accountForLabourBooking(operativeId: UUID, users: [AppUser]) -> AppUser? {
@@ -353,6 +353,92 @@ func rosterNameForLabourBooking(operativeId: UUID, operatives: [Operative], user
         if !email.isEmpty { return email }
     }
     return unknownLabourPersonName
+}
+
+/// The roster as the rulebook's `resolveBookingPerson` and `bookingIdsForAccount` take it: one account per
+/// users document with its former invite ids and same-email ids, and every catalogue row with its email.
+func bookingPersonInput(operatives: [Operative], users: [AppUser]) -> CanonicalBusinessEngine.CanonicalBookingPersonInput {
+    CanonicalBusinessEngine.CanonicalBookingPersonInput(
+        accounts: users.map {
+            CanonicalBusinessEngine.CanonicalBookingPersonAccount(
+                id: $0.id, email: $0.email, formerIds: $0.formerUserIds, aliasIds: $0.sameEmailUserIds
+            )
+        },
+        operatives: operatives.map {
+            CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.id.uuidString, email: $0.email)
+        }
+    )
+}
+
+/// The account and catalogue row behind a labour booking.
+struct LabourBookingPerson: Equatable {
+    var user: AppUser?
+    var operative: Operative?
+}
+
+/// Answers "whose booking is this" with the rulebook's `resolveBookingPerson`, the function web's weekly report,
+/// payroll and timesheets call. A booking stored under a uid, a former invite id or a same-email id finds its person
+/// even with no catalogue row. Build one per screen pass: each distinct id asks the script once.
+final class LabourBookingPeople {
+    private let operatives: [Operative]
+    private let users: [AppUser]
+    private lazy var input = bookingPersonInput(operatives: operatives, users: users)
+    private var cache: [UUID: LabourBookingPerson] = [:]
+
+    init(operatives: [Operative], users: [AppUser]) {
+        self.operatives = operatives
+        self.users = users
+    }
+
+    func person(for operativeId: UUID) -> LabourBookingPerson {
+        if let hit = cache[operativeId] { return hit }
+        let found: LabourBookingPerson
+        if let resolved = CanonicalBusinessEngine.resolveBookingPerson(Booking.storedOperativeId(for: operativeId), input) {
+            found = LabourBookingPerson(
+                user: resolved.accountId.flatMap { id in users.first { $0.id == id } },
+                operative: resolved.operativeId.flatMap { id in
+                    operatives.first { $0.id.uuidString.caseInsensitiveCompare(id) == .orderedSame }
+                }
+            )
+        } else {
+            // The script did not answer: keep the catalogue id and former-id lookups this app had before.
+            found = LabourBookingPerson(
+                user: accountForLabourBooking(operativeId: operativeId, users: users),
+                operative: operatives.first { $0.id == operativeId }
+            )
+        }
+        cache[operativeId] = found
+        return found
+    }
+}
+
+/// In-app ids of every booking this account owns, from the rulebook's `bookingIdsForAccount`: its own id, its former
+/// invite ids, its same-email account ids and the catalogue rows on its email. Timesheets and job visibility use it so a
+/// deleted and re-added person keeps the days booked under any of those ids.
+func labourBookingIds(for user: AppUser, operatives: [Operative]) -> Set<UUID> {
+    let account = CanonicalBusinessEngine.CanonicalBookingPersonAccount(
+        id: user.id, email: user.email, formerIds: user.formerUserIds, aliasIds: user.sameEmailUserIds
+    )
+    let ids = CanonicalBusinessEngine.bookingIdsForAccount(
+        account,
+        operatives: operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.id.uuidString, email: $0.email) }
+    ) ?? {
+        // The script did not answer: the account's own ids and the catalogue rows on its email.
+        let key = StaffEmailIdentity.emailKey(user.email)
+        let catalogue = key.isEmpty ? [] : operatives.filter { StaffEmailIdentity.emailKey($0.email) == key }.map(\.id.uuidString)
+        return [user.id] + user.formerUserIds + user.sameEmailUserIds + catalogue
+    }()
+    return Set(ids.map { Booking.internalOperativeId(for: $0) })
+}
+
+/// Every in-app id that names the same person as `operativeId`, from the rulebook's `bookingIdsForPerson` (web's
+/// Book Labour and schedule checks call it too). Only `operativeId` itself when the script does not answer.
+func labourBookingIds(sameAs operativeId: UUID, operatives: [Operative], users: [AppUser]) -> Set<UUID> {
+    let ids = CanonicalBusinessEngine.bookingIdsForPerson(
+        Booking.storedOperativeId(for: operativeId),
+        bookingPersonInput(operatives: operatives, users: users)
+    ) ?? []
+    return Set(ids.map { Booking.internalOperativeId(for: $0) }).union([operativeId])
 }
 
 enum TradeSkill: String, CaseIterable, Identifiable, Codable, Hashable {

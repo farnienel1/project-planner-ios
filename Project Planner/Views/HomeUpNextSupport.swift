@@ -82,7 +82,8 @@ enum HomeUpNextSupport {
             email: emailKey,
             firstName: currentUserFirstName,
             surname: currentUserSurname,
-            operatives: operatives
+            operatives: operatives,
+            users: organizationUsers
         )
         if !operativeIds.isEmpty {
             let mine = bookings.filter { b in

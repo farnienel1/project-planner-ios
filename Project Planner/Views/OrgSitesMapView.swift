@@ -179,9 +179,14 @@ struct OrgSitesMapView: View {
             let operativeCount = Set(siteBookings.map(\.operativeId)).count
             let rows = siteBookings
                 .sorted { $0.timeSlot.displayName < $1.timeSlot.displayName }
-                .compactMap { booking -> String? in
-                    guard let operative = operativeStore.operatives.first(where: { $0.id == booking.operativeId }) else { return nil }
-                    return "\(booking.timeSlot.displayName) - \(operative.name)"
+                .map { booking -> String in
+                    // Same name the schedule shows; a booking with no catalogue row is not dropped from the pin.
+                    let name = rosterNameForLabourBooking(
+                        operativeId: booking.operativeId,
+                        operatives: operativeStore.allOperatives,
+                        users: userStore.organizationUsers
+                    )
+                    return "\(booking.timeSlot.displayName) - \(name)"
                 }
             builtPins.append(
                 SiteMapPin(

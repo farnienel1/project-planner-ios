@@ -1547,67 +1547,26 @@ class UserStore: ObservableObject {
                      }
                  }
                  
-                 // If this is an operative, delete all bookings and remove from OperativeStore
-                 if isOperative {
-                     print("🔥🔥🔥 DEBUG: User is an operative - deleting bookings and operative record")
-                     
-                     // Find the operative in OperativeStore by email
-                     if let operativeStore = operativeStore {
-                         let matchingOperative = await MainActor.run {
-                             operativeStore.operatives.first { $0.email.lowercased() == userEmail }
-                         }
-                         
-                         if let operative = matchingOperative {
-                             print("🔥🔥🔥 DEBUG: Found operative record: \(operative.name) (ID: \(operative.id))")
-                             
-                             // Delete all bookings for this operative
-                             if let bookingStore = bookingStore {
-                                 let bookingsToDelete = await MainActor.run {
-                                     bookingStore.bookings.filter { $0.operativeId == operative.id }
-                                 }
-                                 print("🔥🔥🔥 DEBUG: Deleting \(bookingsToDelete.count) bookings for operative \(operative.name)")
-                                 
-                                 for booking in bookingsToDelete {
-                                     await bookingStore.deleteBooking(booking)
-                                 }
-                                 
-                                 if !bookingsToDelete.isEmpty {
-                                     print("🔥🔥🔥 DEBUG: ✅ Deleted \(bookingsToDelete.count) bookings for operative")
-                                 }
-                             }
-                             
-                             // Delete the operative from OperativeStore
-                             await operativeStore.deleteOperative(operative, bookingStore: bookingStore)
-                             print("🔥🔥🔥 DEBUG: ✅ Deleted operative record from OperativeStore")
-                         } else {
-                             print("🔥🔥🔥 DEBUG: ⚠️ No matching operative record found in OperativeStore (may not exist)")
-                             
-                             // Still delete bookings that might reference this user by email or name
-                             if let bookingStore = bookingStore {
-                                 // Try to find bookings by matching operative name or email
-                                 let bookingsToDelete = await MainActor.run {
-                                     bookingStore.bookings.filter { booking in
-                                         // Check if any operative matches this booking's operativeId
-                                         if let operative = operativeStore.operatives.first(where: { $0.id == booking.operativeId }) {
-                                             return operative.email.lowercased() == userEmail || operative.name == userName
-                                         }
-                                         return false
-                                     }
-                                 }
-                                 
-                                 if !bookingsToDelete.isEmpty {
-                                     print("🔥🔥🔥 DEBUG: Deleting \(bookingsToDelete.count) additional bookings found by email/name match")
-                                     for booking in bookingsToDelete {
-                                         await bookingStore.deleteBooking(booking)
-                                     }
-                                 }
-                             }
-                         }
-                     } else {
-                         print("🔥🔥🔥 DEBUG: ⚠️ OperativeStore not provided - cannot delete operative record")
+                 // Rulebook `bookingsToRemoveOnOperativeDelete`: this person's bookings from today on, under every id they
+                 // have had (`bookingIdsForAccount`). Past bookings stay for timesheets and weekly reports. Never by name.
+                 if let bookingStore = bookingStore {
+                     let personIds = labourBookingIds(for: user, operatives: operativeStore?.allOperatives ?? [])
+                     let bookingsToDelete = bookingStore.bookingsToRemoveOnPersonDelete(personIds: personIds)
+                     print("🔥🔥🔥 DEBUG: Deleting \(bookingsToDelete.count) bookings from today on for \(userName)")
+                     for booking in bookingsToDelete {
+                         await bookingStore.deleteBooking(booking)
                      }
                  }
-                 
+
+                 // An operative's catalogue row on the same email goes too.
+                 if isOperative, let operativeStore = operativeStore {
+                     let matchingOperative = operativeStore.operatives.first { $0.email.lowercased() == userEmail }
+                     if let operative = matchingOperative {
+                         await operativeStore.deleteOperative(operative, bookingStore: bookingStore)
+                         print("🔥🔥🔥 DEBUG: ✅ Deleted operative record from OperativeStore")
+                     }
+                 }
+
                 // Delete from Firebase: remove ALL user documents for this email in this org
                 // (invited users: users/{randomUUID}; after signup may also have users/{authUid} — delete every match)
                 guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {

@@ -1160,19 +1160,20 @@ struct WeeklyReportView: View {
             let day = cal.startOfDay(for: booking.date)
             return day >= cal.startOfDay(for: startDate)
                 && day <= cal.startOfDay(for: endDate)
-                && booking.status != .cancelled
+                && booking.occupiesDay
         }
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
         var totals: [String: Double] = [:]
         var rowsMap: [String: ProjectWorkRow] = [:]
         for booking in filtered {
-            guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
-            let linkedUser = linkedAppUser(for: operative)
+            let person = reportPerson(for: booking, people: people)
+            let linkedUser = person.user
             if timesheetFeed.covers(userId: linkedUser?.id, day: booking.date) { continue }
             let project = projectStore.projects.first(where: { $0.id == booking.projectId })
                 ?? projectStore.smallWorks.first(where: { $0.id == booking.projectId })
             let projectName = project?.siteName ?? "Unknown"
             let jobNumber = project?.jobNumber ?? "N/A"
-            let personName = linkedUser?.fullName.isEmpty == false ? (linkedUser?.fullName ?? operative.name) : operative.name
+            let personName = person.name
             let roleLabel = reportRoleLabel(for: linkedUser, fallback: "Operative")
             let key = "\(projectName)|\(jobNumber)|\(personName)|\(roleLabel)"
             let dayValue = bookingDayValue(from: booking)
@@ -1259,23 +1260,24 @@ struct WeeklyReportView: View {
             let day = cal.startOfDay(for: $0.date)
             return day >= cal.startOfDay(for: startDate)
                 && day <= cal.startOfDay(for: endDate)
-                && $0.status != .cancelled
+                && $0.occupiesDay
         }
         let managerBookings = managerScheduleStore.managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
             return day >= cal.startOfDay(for: startDate)
                 && day <= cal.startOfDay(for: endDate)
         }
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
         
         var totals: [String: LabourRateSummary] = [:]
         for booking in operativeBookings {
-            guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
-            let user = linkedAppUser(for: operative)
+            let person = reportPerson(for: booking, people: people)
+            let user = person.user
             if timesheetFeed.covers(userId: user?.id, day: booking.date) { continue }
-            let rate = dayRateForOperativeBooking(user: user, operative: operative, on: booking.date)
+            let rate = resolvedPayrollRate(user: user, operative: person.operative, on: booking.date).reportRateValue()
             let days = bookingDayValue(from: booking)
-            let key = labourRateKey(name: operative.name, role: "Operative", rate: rate)
-            var summary = totals[key] ?? LabourRateSummary(name: operative.name, role: "Operative", rate: rate, days: 0)
+            let key = labourRateKey(name: person.name, role: "Operative", rate: rate)
+            var summary = totals[key] ?? LabourRateSummary(name: person.name, role: "Operative", rate: rate, days: 0)
             summary.days += days
             totals[key] = summary
         }
@@ -1396,11 +1398,6 @@ struct WeeklyReportView: View {
         return resolved.reportRateValue() ?? fallback
     }
 
-    private func dayRateForOperativeBooking(user: AppUser?, operative: Operative, on date: Date) -> Double? {
-        let resolved = resolvedPayrollRate(user: user, operative: operative, on: date)
-        return resolved.reportRateValue()
-    }
-
     private func overlappingDays(for booking: HolidayBooking, calendar: Calendar) -> Double {
         let rangeStart = calendar.startOfDay(for: startDate)
         let rangeEnd = calendar.startOfDay(for: endDate)
@@ -1431,8 +1428,32 @@ struct WeeklyReportView: View {
         StaffEmailIdentity.preferredUser(sharing: operative.email, in: userStore.organizationUsers)
     }
 
+    /// The person on a labour booking, from the rulebook's `resolveBookingPerson` (web's `findUserAndOperative` asks
+    /// the same function). A booking under a uid or a former invite id with no catalogue row stays on the report.
+    private func reportPerson(for booking: Booking, people: LabourBookingPeople) -> (operative: Operative?, user: AppUser?, name: String) {
+        let person = people.person(for: booking.operativeId)
+        let user = person.operative.flatMap(linkedAppUser(for:))
+            ?? person.user.map { StaffEmailIdentity.preferredUser(sharing: $0.email, in: userStore.organizationUsers) ?? $0 }
+        let name: String
+        if let full = user?.fullName.trimmingCharacters(in: .whitespacesAndNewlines), !full.isEmpty {
+            name = full
+        } else if let catalogue = person.operative?.name.trimmingCharacters(in: .whitespacesAndNewlines), !catalogue.isEmpty {
+            name = catalogue
+        } else if let email = user?.email.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty {
+            name = email
+        } else {
+            name = unknownLabourPersonName
+        }
+        return (person.operative, user, name)
+    }
+
     private func reportingUser(for userId: String) -> AppUser? {
-        guard let user = userStore.organizationUsers.first(where: { $0.id == userId }) else { return nil }
+        // A manager booking saved under an invite id the account later replaced (`formerIdAliases`) names that account.
+        let users = userStore.organizationUsers
+        let currentId = users.contains(where: { $0.id == userId }) ? userId : (CanonicalBusinessEngine.formerIdAliases(
+            users.map { CanonicalFormerIdPerson(id: $0.id, formerIds: $0.formerUserIds) }
+        )?[userId] ?? userId)
+        guard let user = users.first(where: { $0.id == currentId }) else { return nil }
         return StaffEmailIdentity.preferredUser(sharing: user.email, in: userStore.organizationUsers) ?? user
     }
 
@@ -1484,18 +1505,19 @@ struct WeeklyReportView: View {
             let day = cal.startOfDay(for: $0.date)
             return day >= cal.startOfDay(for: startDate)
                 && day <= cal.startOfDay(for: endDate)
-                && $0.status != .cancelled
+                && $0.occupiesDay
         }
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
         for booking in operativeBookings {
-            guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else { continue }
-            let linkedUser = linkedAppUser(for: operative)
+            let person = reportPerson(for: booking, people: people)
+            let linkedUser = person.user
             if timesheetFeed.covers(userId: linkedUser?.id, day: booking.date) { continue }
             let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let role = reportRoleLabel(for: linkedUser, fallback: "Operative")
-            let name = (linkedUser?.fullName.isEmpty == false) ? (linkedUser?.fullName ?? operative.name) : operative.name
+            let name = person.name
             let resolved = resolvedPayrollRate(
                 user: linkedUser,
-                operative: StaffEmailIdentity.operativeUsedForPay(user: linkedUser, operative: operative),
+                operative: StaffEmailIdentity.operativeUsedForPay(user: linkedUser, operative: person.operative),
                 on: booking.date
             )
             let paid = booking.paidBookedHours(policy: policy)

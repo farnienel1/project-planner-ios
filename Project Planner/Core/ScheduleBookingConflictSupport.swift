@@ -17,8 +17,15 @@ struct ScheduleBookablePerson: Identifiable, Hashable {
     let roleLabel: String
     let tradeLabel: String
     let hasPastBookingOnProject: Bool
+    /// Every in-app id this person's bookings may carry (`bookingIdsForAccount`), so a booking under an old
+    /// catalogue id or invite id still shows as a clash when they are booked again.
+    var bookingIds: Set<UUID> = []
 
     var id: UUID { operativeId }
+
+    func owns(_ booking: Booking) -> Bool {
+        booking.operativeId == operativeId || bookingIds.contains(booking.operativeId)
+    }
 }
 
 enum ScheduleBookablePersonBuilder {
@@ -62,13 +69,14 @@ enum ScheduleBookablePersonBuilder {
 
         let pastOperativeIds = Set(
             bookings
-                .filter { $0.projectId == projectId && CanonicalBusinessEngine.bookingOccupiesDay($0.status.rawValue) == true }
+                .filter { $0.projectId == projectId && $0.occupiesDay }
                 .map(\.operativeId)
         )
 
         func append(operative: Operative, user: AppUser?, role: String) {
             let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             guard seenEmails.insert(email).inserted else { return }
+            let bookingIds = (user.map { labourBookingIds(for: $0, operatives: sourceOperatives) } ?? []).union([operative.id])
             rows.append(
                 ScheduleBookablePerson(
                     operativeId: operative.id,
@@ -77,7 +85,8 @@ enum ScheduleBookablePersonBuilder {
                     email: operative.email,
                     roleLabel: role,
                     tradeLabel: operative.displayTradeType,
-                    hasPastBookingOnProject: pastOperativeIds.contains(operative.id)
+                    hasPastBookingOnProject: !pastOperativeIds.isDisjoint(with: bookingIds),
+                    bookingIds: bookingIds
                 )
             )
         }
@@ -275,9 +284,9 @@ enum ScheduleBookingConflictEngine {
             }
 
             let existingProjectBookings = bookingStore.bookings.filter { booking in
-                booking.operativeId == person.operativeId &&
+                person.owns(booking) &&
                     Calendar.current.isDate(booking.date, inSameDayAs: day) &&
-                    (booking.status == .confirmed || booking.status == .tentative) &&
+                    booking.occupiesDay &&
                     !excludingBookingIds.contains(booking.id)
             }
             for existing in existingProjectBookings {

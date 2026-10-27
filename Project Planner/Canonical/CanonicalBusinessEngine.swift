@@ -798,6 +798,147 @@ nonisolated enum CanonicalBusinessEngine {
         return decodeExpression([String].self, "ProjectPlannerCanonical.parseFormerUserIds(\(json))")
     }
 
+    // MARK: - Booking documents and booking people
+
+    /// One operative booking as `parseBookingDocument` reads it. Dates are milliseconds.
+    struct CanonicalParsedBooking: Codable, Equatable, Sendable {
+        var id: String
+        var operativeId: String
+        var projectId: String
+        var dateMs: Double
+        var timeSlot: String
+        var status: String
+        var bookedBy: String
+        var notes: String
+        var isBreakRemoved: Bool
+        var workStartTime: String?
+        var workEndTime: String?
+        var otMultiplierOverride: Double?
+        var bookingGroupId: String?
+        var createdAtMs: Double?
+        var updatedAtMs: Double?
+    }
+
+    /// One manager site booking as `parseManagerSiteBookingDocument` reads it. Dates are milliseconds.
+    struct CanonicalParsedManagerSiteBooking: Codable, Equatable, Sendable {
+        var id: String
+        var userId: String
+        var dateMs: Double
+        var timeSlot: String
+        var locationType: String
+        var locationId: String?
+        var customLocationName: String?
+        var workStartTime: String?
+        var workEndTime: String?
+        var isBreakRemoved: Bool
+        var bookingGroupId: String?
+        var createdAtMs: Double?
+        var updatedAtMs: Double?
+    }
+
+    /// Reads many booking documents in one script call. `documents` are `["id": docId, "data": json]` with
+    /// Timestamps already turned into `{ seconds, nanoseconds }`. A document the rulebook refuses is absent
+    /// from the result, as on web. Nil when the script did not answer.
+    static func parseBookingDocuments(_ documents: [[String: Any]]) -> [CanonicalParsedBooking]? {
+        guard let json = jsonArrayText(documents) else { return nil }
+        return decodeExpression(
+            [CanonicalParsedBooking].self,
+            "(\(json)).map(function(d){var r=ProjectPlannerCanonical.parseBookingDocument(d.id,d.data);return r.ok?r.booking:null;}).filter(function(b){return b;})"
+        )
+    }
+
+    /// Manager site bookings in one script call, same shape as `parseBookingDocuments`.
+    static func parseManagerSiteBookingDocuments(_ documents: [[String: Any]]) -> [CanonicalParsedManagerSiteBooking]? {
+        guard let json = jsonArrayText(documents) else { return nil }
+        return decodeExpression(
+            [CanonicalParsedManagerSiteBooking].self,
+            "(\(json)).map(function(d){var r=ProjectPlannerCanonical.parseManagerSiteBookingDocument(d.id,d.data);return r.ok?r.booking:null;}).filter(function(b){return b;})"
+        )
+    }
+
+    private static func jsonArrayText(_ value: [[String: Any]]) -> String? {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        return text
+    }
+
+    /// A roster person for `resolveBookingPerson` and `bookingIdsForAccount`.
+    struct CanonicalBookingPersonAccount: Codable, Equatable, Hashable, Sendable {
+        var id: String
+        var email: String?
+        var formerIds: [String]?
+        var aliasIds: [String]?
+    }
+
+    struct CanonicalBookingPersonOperative: Codable, Equatable, Hashable, Sendable {
+        var id: String
+        var email: String?
+    }
+
+    struct CanonicalBookingPersonInput: Codable, Equatable, Hashable, Sendable {
+        var accounts: [CanonicalBookingPersonAccount]
+        var operatives: [CanonicalBookingPersonOperative]
+    }
+
+    struct CanonicalResolvedBookingPerson: Codable, Equatable, Sendable {
+        var accountId: String?
+        var operativeId: String?
+        var email: String?
+    }
+
+    /// The account and catalogue row a stored booking `operativeId` names. Nil when the script did not answer.
+    static func resolveBookingPerson(_ operativeId: String, _ input: CanonicalBookingPersonInput) -> CanonicalResolvedBookingPerson? {
+        decode(CanonicalResolvedBookingPerson.self, function: "resolveBookingPerson", arguments: [operativeId, input])
+    }
+
+    struct CanonicalRemovableBooking: Codable, Equatable, Sendable {
+        var id: String
+        var operativeId: String
+        var dateMs: Double
+    }
+
+    private struct CanonicalPersonDeleteInput: Codable, Sendable {
+        var bookings: [CanonicalRemovableBooking]
+        var operativeIds: [String]
+        var nowIso: String
+        var timeZone: String
+    }
+
+    /// Booking ids to remove when a person is deleted: theirs, dated today or later in the organisation zone.
+    /// Past bookings stay as history, and names are never matched. Nil when the script did not answer.
+    static func bookingsToRemoveOnOperativeDelete(
+        _ bookings: [CanonicalRemovableBooking],
+        operativeIds: [String],
+        now: Date
+    ) -> [String]? {
+        decode([String].self, function: "bookingsToRemoveOnOperativeDelete", arguments: [CanonicalPersonDeleteInput(
+            bookings: bookings,
+            operativeIds: operativeIds,
+            nowIso: ISO8601DateFormatter().string(from: now),
+            timeZone: businessCalendar.timeZone.identifier
+        )])
+    }
+
+    /// Every stored id that names the same person as `operativeId`. Nil when the script did not answer.
+    static func bookingIdsForPerson(_ operativeId: String, _ input: CanonicalBookingPersonInput) -> [String]? {
+        decode([String].self, function: "bookingIdsForPerson", arguments: [operativeId, input])
+    }
+
+    /// One grouping key per person (`account:…`, `operative:…` or `id:…`), so a re-added person's bookings under an
+    /// old and a new id land together. Nil when the script did not answer.
+    static func bookingPersonKey(_ operativeId: String, _ input: CanonicalBookingPersonInput) -> String? {
+        decode(String.self, function: "bookingPersonKey", arguments: [operativeId, input])
+    }
+
+    /// Every stored `operativeId` this account's bookings may carry. Nil when the script did not answer.
+    static func bookingIdsForAccount(
+        _ account: CanonicalBookingPersonAccount,
+        operatives: [CanonicalBookingPersonOperative]
+    ) -> [String]? {
+        decode([String].self, function: "bookingIdsForAccount", arguments: [account, operatives])
+    }
+
     /// `oldest` or `newest`. A missing or unrecognised value is `oldest`. Nil when the script did not answer.
     static func parseWarningsSortDirection(_ value: String?) -> String? {
         decode(String.self, function: "parseWarningsSortDirection", arguments: [value])
