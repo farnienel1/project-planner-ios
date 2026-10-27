@@ -737,14 +737,30 @@ struct MaterialsAddWithCatalogueSheet: View {
                 let managerUserIds = userStore.organizationUsers
                     .filter { managerEmails.contains($0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
                     .map(\.id)
-                await notificationService.notifyMaterialAdded(
-                    projectId: project.id,
-                    siteName: project.siteName,
-                    materialName: item.material,
-                    addedByName: addedBy,
-                    addedByUserId: ownerUid,
-                    extraRecipientUserIds: managerUserIds
+                // One inbox write per recipient, each waiting for the server. The line is already saved,
+                // so the sheet closes now and the inbox rows (and their device push) follow.
+                let rulebookRecipients = MaterialOrderRecipientsRulebook.recipientUserIds(
+                    jobManagerIds: project.managerIds.map(\.uuidString),
+                    managers: operativeStore.managers,
+                    accounts: userStore.organizationUsers,
+                    adder: userStore.currentUser,
+                    adderUserId: ownerUid
                 )
+                let notifier = notificationService
+                let projectId = project.id
+                let siteName = project.siteName
+                let materialName = item.material
+                Task {
+                    await notifier.notifyMaterialAdded(
+                        projectId: projectId,
+                        siteName: siteName,
+                        materialName: materialName,
+                        addedByName: addedBy,
+                        addedByUserId: ownerUid,
+                        extraRecipientUserIds: managerUserIds,
+                        rulebookRecipientUserIds: rulebookRecipients
+                    )
+                }
             }
             NotificationCenter.default.post(
                 name: NSNotification.Name("reloadMaterials"),

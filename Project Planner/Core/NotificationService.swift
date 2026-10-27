@@ -569,15 +569,23 @@ class NotificationService: ObservableObject {
         materialName: String,
         addedByName: String,
         addedByUserId: String?,
-        extraRecipientUserIds: [String]
+        extraRecipientUserIds: [String],
+        rulebookRecipientUserIds: [String]? = nil
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let adder = addedByUserId.map(resolvedRecipientUserId)
-        var recipientIds = Set(extraRecipientUserIds.map(resolvedRecipientUserId))
-        for user in userStore?.organizationUsers ?? [] {
-            if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
-                recipientIds.insert(resolvedRecipientUserId(user.id))
+        var recipientIds: Set<String>
+        if let rulebookRecipientUserIds {
+            // `materialOrderRecipients`: the job's managers only.
+            recipientIds = Set(rulebookRecipientUserIds.map(resolvedRecipientUserId))
+        } else {
+            // Previous recipients until the packed script has `materialOrderRecipients`.
+            recipientIds = Set(extraRecipientUserIds.map(resolvedRecipientUserId))
+            for user in userStore?.organizationUsers ?? [] {
+                if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+                    recipientIds.insert(resolvedRecipientUserId(user.id))
+                }
             }
         }
         if let adder {
@@ -589,7 +597,7 @@ class NotificationService: ObservableObject {
         for userId in recipientIds {
             let notification = AppNotification(
                 organizationId: organizationId,
-                type: .materialAdded,
+                type: .materialOrderPlaced,
                 title: "Material added",
                 message: "\(addedByName) added \(detail) on \(siteName).",
                 userId: userId,

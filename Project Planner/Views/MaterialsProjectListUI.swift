@@ -218,8 +218,11 @@ struct OperativeMaterialsPanel: View {
             .sorted { $0.addedAt > $1.addedAt }
     }
 
+    /// Admins and managers only, never operative mode (`isStaffAccount`; web adds `canViewMaterialOrderHistory`).
+    /// Not the Wholesalers toggle.
     private var canViewQuoteOrderHistory: Bool {
-        userStore.canViewWholesalerOrderHistory()
+        guard let user = userStore.displayUser else { return false }
+        return CanonicalBusinessEngine.isStaffAccount(UserStore.staffAccountRole(for: user))
     }
 
     var body: some View {
@@ -300,7 +303,7 @@ struct OperativeMaterialsPanel: View {
                 .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingHistory) {
-            MaterialsOrderHistorySheet(project: project, selectedDate: selectedDate)
+            MaterialsOrderHistorySheet(project: project)
                 .environmentObject(firebaseBackend)
         }
         .alert("Could Not Delete Material", isPresented: $showingDeleteErrorAlert) {
@@ -367,31 +370,21 @@ struct MaterialsOrderHistorySheet: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
 
     let project: Project
-    let selectedDate: Date
     @State private var records: [MaterialSendRecord] = []
     @State private var expandedRecordIds: Set<UUID> = []
     @State private var isLoading = true
     @State private var loadErrorMessage: String?
 
-    private var dayRecords: [MaterialSendRecord] {
-        let calendar = Calendar.current
-        let day = calendar.startOfDay(for: selectedDate)
-        return records
-            .filter { calendar.isDate($0.historyDay(calendar: calendar), inSameDayAs: day) }
-            .sorted { $0.sentAt > $1.sentAt }
-    }
-
-    private var dayTitle: String {
-        let f = DateFormatter()
-        f.dateFormat = "EEEE d MMM"
-        return f.string(from: selectedDate)
+    /// Every send for this job, newest first, as web `ProjectMaterialsSection` lists `materialSendRecords`.
+    private var jobRecords: [MaterialSendRecord] {
+        records.sorted { $0.sentAt > $1.sentAt }
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Sends on \(dayTitle)")
+                    Text("Every quote and order sent for this job")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(MaterialsOrderingTheme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -409,11 +402,11 @@ struct MaterialsOrderHistorySheet: View {
                                 .foregroundStyle(MaterialsOrderingTheme.muted)
                                 .multilineTextAlignment(.center)
                         }
-                    } else if dayRecords.isEmpty {
+                    } else if jobRecords.isEmpty {
                         VStack(spacing: 8) {
-                            Text("No quotes or orders for this materials day")
+                            Text("No quotes or orders for this job yet")
                                 .font(.system(size: 15, weight: .semibold))
-                            Text("When you send a quote or order for materials on \(dayTitle), it appears here. The day strip above the list is the materials day, not the day you tapped send.")
+                            Text("When you send a quote or order to a wholesaler, it appears here.")
                                 .font(.system(size: 13))
                                 .foregroundStyle(MaterialsOrderingTheme.muted)
                                 .multilineTextAlignment(.center)
@@ -422,7 +415,7 @@ struct MaterialsOrderHistorySheet: View {
                         .padding(.vertical, 32)
                         .padding(.horizontal, 8)
                     } else {
-                        ForEach(dayRecords) { record in
+                        ForEach(jobRecords) { record in
                             historyTimelineCard(record)
                         }
                     }
@@ -505,7 +498,7 @@ struct MaterialsOrderHistorySheet: View {
                                 .background(isQuote ? Color(red: 0.88, green: 0.96, blue: 1) : Color(red: 0.882, green: 0.969, blue: 0.929))
                                 .clipShape(Capsule())
                             Spacer()
-                            Text(record.sentAt.formatted(date: .omitted, time: .shortened))
+                            Text(record.sentAt.formatted(date: .abbreviated, time: .shortened))
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(MaterialsOrderingTheme.muted)
                         }

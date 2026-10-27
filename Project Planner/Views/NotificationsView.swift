@@ -157,7 +157,7 @@ struct NotificationRowView: View {
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return "calendar.badge.clock"
         case .qualificationExpiry: return "checkmark.seal"
         case .materialOrderCutOff: return "shippingbox"
-        case .materialAdded: return "shippingbox.fill"
+        case .materialAdded, .materialOrderPlaced: return "shippingbox.fill"
         case .toolboxTalkIssued, .hsToolboxReminder: return "list.clipboard.fill"
         case .ideaStatus, .ideaShipped: return "lightbulb.fill"
         case .holidayRequestSubmitted: return "sun.max"
@@ -186,7 +186,7 @@ struct NotificationRowView: View {
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return ProjectWorksRevampColors.upcomingAmber
         case .qualificationExpiry: return ProjectWorksRevampColors.upcomingAmber
         case .materialOrderCutOff: return ProjectWorksRevampColors.upcomingAmber
-        case .materialAdded: return ProjectWorksRevampColors.activeGreen
+        case .materialAdded, .materialOrderPlaced: return ProjectWorksRevampColors.activeGreen
         case .toolboxTalkIssued, .hsToolboxReminder: return ProjectWorksRevampColors.blueLight
         case .ideaStatus, .ideaShipped: return ProjectWorksRevampColors.activeGreen
         case .holidayRequestSubmitted: return ProjectWorksRevampColors.upcomingAmber
