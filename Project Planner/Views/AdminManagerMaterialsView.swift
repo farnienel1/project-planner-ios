@@ -84,7 +84,7 @@ struct AdminManagerMaterialsView: View {
             .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingHistory) {
-            MaterialsOrderHistorySheet(project: project, selectedDate: selectedDate)
+            MaterialsOrderHistorySheet(project: project)
                 .environmentObject(firebaseBackend)
         }
         .alert("Could Not Delete Material", isPresented: $showingDeleteErrorAlert) {

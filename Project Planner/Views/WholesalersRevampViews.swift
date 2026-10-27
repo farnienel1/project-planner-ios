@@ -1201,6 +1201,10 @@ struct WholesalerEditorSheet: View {
             get: { contacts.indices.contains(index) ? contacts[index].email : "" },
             set: { if contacts.indices.contains(index) { contacts[index].email = $0 } }
         )
+        let phoneBinding = Binding(
+            get: { contacts.indices.contains(index) ? (contacts[index].phone ?? "") : "" },
+            set: { if contacts.indices.contains(index) { contacts[index].phone = $0 } }
+        )
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 Text(String((contacts.indices.contains(index) ? contacts[index].name : "?").prefix(1)).uppercased())
@@ -1218,6 +1222,10 @@ struct WholesalerEditorSheet: View {
                         .font(.system(size: 12))
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
+                    TextField("Mobile · WhatsApp (optional)", text: phoneBinding)
+                        .accessibilityIdentifier("wholesalerEditor.mobile")
+                        .font(.system(size: 12))
+                        .keyboardType(.phonePad)
                     if contact.isPrimary {
                         Text("PRIMARY · order & quote emails go here")
                             .font(.system(size: 9.5, weight: .heavy))

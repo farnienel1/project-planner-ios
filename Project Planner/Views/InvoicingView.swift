@@ -24,6 +24,8 @@ struct InvoicingView: View {
     @State private var pushMyTimesheets = false
     @State private var pushTeamTimesheets = false
     @State private var teamListSurface = "awaiting"
+    /// Scope the landing sync last ran for. Nil until the first sync.
+    @State private var landingScopeIds: [String]?
 
     @Binding var initialReviewUserId: String?
     @Binding var initialReviewWeekStart: Date?
@@ -100,6 +102,18 @@ struct InvoicingView: View {
                     bookingStore.loadData()
                     managerScheduleStore.loadData(force: true)
                 }
+                await syncLandingDraftsFromCloud()
+            }
+            // The first sync can run on an empty or cached roster. Fetch again for the people who arrive later.
+            .task(id: usersForManagerTimesheetScope.map(\.id)) {
+                let ids = usersForManagerTimesheetScope.map(\.id)
+                guard let previous = landingScopeIds else {
+                    landingScopeIds = ids
+                    return
+                }
+                guard ids != previous else { return }
+                landingScopeIds = ids
+                guard canShowOperativeTimesheets, !ids.isEmpty else { return }
                 await syncLandingDraftsFromCloud()
             }
         }
@@ -406,16 +420,7 @@ struct InvoicingView: View {
     }
 
     private var usersForManagerTimesheetScope: [AppUser] {
-        guard let currentUser = userStore.displayUser else { return [] }
-        if isAdminViewer {
-            return userStore.organizationUsers.filter {
-                $0.isActive &&
-                ($0.permissions.operativeMode || $0.permissions.manager || $0.permissions.adminAccess || $0.role == .manager || $0.role == .admin)
-            }
-        }
-        return userStore.organizationUsers.filter {
-            $0.isActive && $0.isLineManager(currentUser.id)
-        }
+        userStore.userTimesheetSubjectUsers()
     }
 
     private var usersForManagerReview: [AppUser] {
@@ -2787,6 +2792,8 @@ private struct OperativeTimesheetsView: View {
     @State private var awaitingRows: [ManagerTimesheetRow] = []
     @State private var autoOpenReview: TimesheetAutoOpenTarget?
     @State private var didAutoOpenReview = false
+    /// Scope the list was last built and fetched for. Nil until the first appear.
+    @State private var listScopeIds: [String]?
 
     private var isAdminViewer: Bool {
         guard let u = userStore.displayUser else { return false }
@@ -2818,19 +2825,9 @@ private struct OperativeTimesheetsView: View {
         return userStore.organizationUsers.first(where: { $0.id == id })
     }
 
+    /// `UserStore.userTimesheetSubjectUsers` — the one list the hub, this screen and its counts use.
     private var managerScopeUsers: [AppUser] {
-        guard let currentUser = userStore.displayUser else { return [] }
-        var users: [AppUser]
-        if seesEveryTimesheet {
-            users = userStore.organizationUsers.filter { user in
-                user.isActive
-                && (user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess || user.role == .manager || user.role == .admin)
-            }
-        } else {
-            users = userStore.organizationUsers.filter { user in
-                user.isActive && user.isLineManager(currentUser.id)
-            }
-        }
+        var users = userStore.userTimesheetSubjectUsers()
         if let extra = extraReviewUser, !users.contains(where: { $0.id == extra.id }) {
             users.append(extra)
         }
@@ -2838,22 +2835,8 @@ private struct OperativeTimesheetsView: View {
     }
 
     private var directReports: [AppUser] {
-        guard let currentUser = userStore.displayUser else { return [] }
-        var users: [AppUser]
-        if seesEveryTimesheet {
-            users = userStore.organizationUsers
-                .filter { user in
-                    user.isActive
-                    && TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: user, week: week, settings: settings)
-                    && (user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess || user.role == .manager || user.role == .admin)
-                }
-        } else {
-            users = userStore.organizationUsers
-                .filter { user in
-                    user.isActive
-                    && TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: user, week: week, settings: settings)
-                    && user.isLineManager(currentUser.id)
-                }
+        var users = userStore.userTimesheetSubjectUsers().filter { user in
+            TimesheetPayrollPolicy.shouldAppearInOperativeTimesheetRoster(user: user, week: week, settings: settings)
         }
         if let extra = extraReviewUser, !users.contains(where: { $0.id == extra.id }) {
             users.append(extra)
@@ -3148,6 +3131,21 @@ private struct OperativeTimesheetsView: View {
         }
         .onAppear {
             rebuildAwaitingRows()
+        }
+        // Rows were built only on appear and after the first fetch. When the roster arrives or is replaced
+        // later, rebuild from the people now in scope and fetch their timesheets, instead of keeping the
+        // first (empty or cached) list.
+        .task(id: managerScopeUsers.map(\.id)) {
+            let ids = managerScopeUsers.map(\.id)
+            guard let previous = listScopeIds else {
+                listScopeIds = ids
+                return
+            }
+            guard ids != previous else { return }
+            listScopeIds = ids
+            rebuildAwaitingRows()
+            guard !ids.isEmpty else { return }
+            await refreshFromCloud()
         }
         .onChange(of: autoOpenReview) { _, newValue in
             if newValue == nil {

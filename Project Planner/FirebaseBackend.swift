@@ -8725,10 +8725,13 @@ extension FirebaseBackend {
         try await docRef.setData(data)
 
         if material.catalogueItemId == nil {
-            do {
-                try await upsertMaterialCatalogueFromMaterial(material, organizationId: orgId)
-            } catch {
-                print("⚠️ [FirebaseBackend] Catalogue upsert from material failed: \(error.localizedDescription)")
+            // Reads the whole catalogue first. The material line is already saved, so this must not hold the sheet open.
+            Task {
+                do {
+                    try await self.upsertMaterialCatalogueFromMaterial(material, organizationId: orgId)
+                } catch {
+                    print("⚠️ [FirebaseBackend] Catalogue upsert from material failed: \(error.localizedDescription)")
+                }
             }
         }
         
@@ -9163,14 +9166,7 @@ extension FirebaseBackend {
     
     func saveWholesaler(_ wholesaler: Wholesaler, organizationId: String) async throws {
         let contactsData = wholesaler.contacts.map { contact in
-            let row: [String: Any] = [
-                "id": contact.id.uuidString,
-                "name": contact.name,
-                "email": contact.email,
-                "createdAt": Timestamp(date: contact.createdAt),
-                "isPrimary": contact.isPrimary
-            ]
-            return row
+            wholesalerContactFirestoreRow(contact)
         }
         
         var data: [String: Any] = [
@@ -9197,6 +9193,19 @@ extension FirebaseBackend {
             .collection("wholesalers")
             .document(wholesaler.id.uuidString)
             .setData(data, merge: true)
+    }
+
+    /// One `contacts[]` row, the shape web `wholesalerPayload` writes. `phone` is null when no mobile is saved.
+    private func wholesalerContactFirestoreRow(_ contact: WholesalerContact) -> [String: Any] {
+        let phone = contact.phone?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return [
+            "id": contact.id.uuidString,
+            "name": contact.name,
+            "email": contact.email,
+            "createdAt": Timestamp(date: contact.createdAt),
+            "isPrimary": contact.isPrimary,
+            "phone": phone.isEmpty ? NSNull() : phone
+        ]
     }
 
     func deleteWholesaler(wholesalerId: UUID, organizationId: String) async throws {
@@ -9232,12 +9241,14 @@ extension FirebaseBackend {
                    let contactName = contactData["name"] as? String,
                    let contactEmail = contactData["email"] as? String,
                    let contactCreatedAt = (contactData["createdAt"] as? Timestamp)?.dateValue() {
+                    let phone = (contactData["phone"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let contact = WholesalerContact(
                         id: contactId,
                         name: contactName,
                         email: contactEmail,
                         isPrimary: contactData["isPrimary"] as? Bool ?? false,
-                        createdAt: contactCreatedAt
+                        createdAt: contactCreatedAt,
+                        phone: phone?.isEmpty == false ? phone : nil
                     )
                     contacts.append(contact)
                 }
@@ -9291,23 +9302,16 @@ extension FirebaseBackend {
         if contactsArray.contains(where: { ($0["id"] as? String) == contactIdString }) {
             // Contact already exists, update it instead
             if let index = contactsArray.firstIndex(where: { ($0["id"] as? String) == contactIdString }) {
-                contactsArray[index] = [
-                    "id": contact.id.uuidString,
-                    "name": contact.name,
-                    "email": contact.email,
-                    "createdAt": Timestamp(date: contact.createdAt),
-                    "isPrimary": contact.isPrimary
-                ]
+                var row = wholesalerContactFirestoreRow(contact)
+                // Keep a mobile saved on web when this edit did not carry one.
+                if contact.phone == nil, let stored = contactsArray[index]["phone"] {
+                    row["phone"] = stored
+                }
+                contactsArray[index] = row
             }
         } else {
             // Add new contact
-            contactsArray.append([
-                "id": contact.id.uuidString,
-                "name": contact.name,
-                "email": contact.email,
-                "createdAt": Timestamp(date: contact.createdAt),
-                "isPrimary": contact.isPrimary
-            ])
+            contactsArray.append(wholesalerContactFirestoreRow(contact))
         }
         
         // Update the wholesaler with the new contacts array

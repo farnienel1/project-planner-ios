@@ -106,7 +106,7 @@ class LocalNotificationService {
         case .lineManagerPeerUpdate:
             content.title = "Line manager update"
             content.body = details.isEmpty ? "Another line manager actioned a shared request." : details
-        case .materialAdded:
+        case .materialAdded, .materialOrderPlaced:
             content.title = "Material added"
             content.body = details.isEmpty ? "A material was added to a job." : details
         case .toolboxTalkIssued:

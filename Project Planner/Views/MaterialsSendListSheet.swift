@@ -38,6 +38,7 @@ struct MaterialsSendListSheet: View {
     @State private var sendAsPlainText = false
     @State private var requiredDeliveryAt: Date?
     @State private var sendErrorMessage: String?
+    @State private var showingWhatsApp = false
 
     struct ResendDialogState: Identifiable {
         let id = UUID()
@@ -107,6 +108,18 @@ struct MaterialsSendListSheet: View {
                     .accessibilityIdentifier("materialsSendList.sendErrorOk")
             } message: {
                 Text(sendErrorMessage ?? "")
+            }
+            .sheet(isPresented: $showingWhatsApp) {
+                MaterialsWhatsAppSheet(
+                    project: project,
+                    materials: materials.filter { selectedMaterialIds.contains($0.id) },
+                    recipients: whatsAppRecipients,
+                    deliveryAt: requiredDeliveryAt,
+                    wholesalers: wholesalers,
+                    onContactPhoneSaved: { Task { await loadWholesalers() } }
+                )
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
             }
             .sheet(item: $sendConfirmation) { conf in
                 MaterialsSendConfirmationView(
@@ -410,11 +423,60 @@ struct MaterialsSendListSheet: View {
                 .tint(MaterialsOrderingTheme.success)
             }
             .disabled(selectedMaterialIds.isEmpty || recipientCount == 0 || isSending)
+            if MaterialWhatsAppRulebook.isAvailable {
+                Button {
+                    beginWhatsApp()
+                } label: {
+                    Label("Send via WhatsApp", systemImage: "message.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .accessibilityIdentifier("materialsSendList.whatsApp")
+                .buttonStyle(.bordered)
+                .tint(MaterialsOrderingTheme.success)
+                .disabled(selectedMaterialIds.isEmpty || isSending)
+                Text("Opens WhatsApp with the message prepared. You press Send there — this does not mark the list as sent.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(MaterialsOrderingTheme.muted)
+                    .multilineTextAlignment(.center)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(MaterialsOrderingTheme.cardBackground)
         .overlay(Rectangle().frame(height: 0.5).foregroundStyle(MaterialsOrderingTheme.border), alignment: .top)
+    }
+
+    /// Selected wholesaler contacts, then one-off recipients (web `buildRecipientSnapshots`).
+    private var whatsAppRecipients: [MaterialWhatsAppRulebook.Recipient] {
+        var rows: [MaterialWhatsAppRulebook.Recipient] = []
+        for wholesaler in wholesalers {
+            for contact in wholesaler.contacts where selectedContactIds.contains(contact.id) {
+                rows.append(MaterialWhatsAppRulebook.Recipient(
+                    id: contact.id.uuidString,
+                    name: contact.name,
+                    wholesalerName: wholesaler.name,
+                    phone: contact.phone ?? ""
+                ))
+            }
+        }
+        for recipient in oneOffRecipients {
+            rows.append(MaterialWhatsAppRulebook.Recipient(
+                id: recipient.id.uuidString,
+                name: recipient.name,
+                wholesalerName: nil,
+                phone: ""
+            ))
+        }
+        return rows
+    }
+
+    private func beginWhatsApp() {
+        guard !selectedMaterialIds.isEmpty else { return }
+        guard !whatsAppRecipients.isEmpty else {
+            sendErrorMessage = "Select a wholesaler contact or add a one-off recipient first."
+            return
+        }
+        showingWhatsApp = true
     }
 
     private var recipientCount: Int {

@@ -781,7 +781,9 @@ class UserStore: ObservableObject {
     /// - Admin/super-admin accounts (`seesEveryUserTimesheet`) always have User Timesheets, even while the
     ///   roster is loading or the company has no active operative. The roster must not turn an admin's hub
     ///   into the operative one.
-    /// - Manager accounts can access when at least one active operative is directly assigned to them.
+    /// - Managers: `userTimesheetSubjects` once the packed script has it (anyone active they line-manage,
+    ///   under any of their ids). Before that, the previous check stays: an active operative-mode report.
+    /// - While the profile or this organisation's roster is still loading, a manager keeps the screen.
     func canAccessOperativeTimesheets() -> Bool {
         guard let user = displayUser else { return false }
         let role = Self.staffAccountRole(for: user)
@@ -791,11 +793,44 @@ class UserStore: ObservableObject {
         if CanonicalBusinessEngine.seesEveryUserTimesheet(role) == true {
             return true
         }
+        if isUserTimesheetRosterLoading {
+            return true
+        }
+        if let ids = UserTimesheetAccessRulebook.subjectUserIds(viewer: user, members: organizationUsers) {
+            return !ids.isEmpty
+        }
         return organizationUsers.contains { orgUser in
             guard orgUser.permissions.operativeMode else { return false }
             guard orgUser.isActive else { return false }
             return orgUser.isLineManager(user.id)
-        } || isHomeProfileLoading
+        }
+    }
+
+    /// The profile, or this organisation's roster, has not arrived yet. Screens wait instead of deciding on an empty list.
+    var isUserTimesheetRosterLoading: Bool {
+        if isHomeProfileLoading { return true }
+        return organizationUsers.isEmpty && organizationUsersLoadInProgress
+    }
+
+    /// People on User Timesheets for the signed-in viewer (role testing applies), sorted by name.
+    /// `userTimesheetSubjects` decides once the packed script has it; before that, the screen's previous filter.
+    func userTimesheetSubjectUsers() -> [AppUser] {
+        guard let viewer = displayUser else { return [] }
+        let users: [AppUser]
+        if let ids = UserTimesheetAccessRulebook.subjectUserIds(viewer: viewer, members: organizationUsers) {
+            let wanted = Set(ids)
+            users = organizationUsers.filter { wanted.contains($0.id) }
+        } else if CanonicalBusinessEngine.seesEveryUserTimesheet(Self.staffAccountRole(for: viewer)) == true {
+            users = organizationUsers.filter { user in
+                user.isActive
+                && (user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess || user.role == .manager || user.role == .admin)
+            }
+        } else {
+            users = organizationUsers.filter { user in
+                user.isActive && user.isLineManager(viewer.id)
+            }
+        }
+        return users.sorted(by: { $0.fullName < $1.fullName })
     }
 
     func canAccessTimesheetsSurface() -> Bool {

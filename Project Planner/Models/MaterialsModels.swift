@@ -494,19 +494,23 @@ struct WholesalerContact: Identifiable, Codable, Hashable {
     var email: String
     var isPrimary: Bool
     var createdAt: Date
-    
+    /// Mobile for WhatsApp. Web writes `phone` on the contact row; a save must keep it.
+    var phone: String?
+
     init(
         id: UUID = UUID(),
         name: String,
         email: String,
         isPrimary: Bool = false,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        phone: String? = nil
     ) {
         self.id = id
         self.name = name
         self.email = email
         self.isPrimary = isPrimary
         self.createdAt = createdAt
+        self.phone = phone
     }
 }
 

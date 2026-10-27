@@ -589,7 +589,7 @@ class NotificationService: ObservableObject {
         for userId in recipientIds {
             let notification = AppNotification(
                 organizationId: organizationId,
-                type: .materialAdded,
+                type: .materialOrderPlaced,
                 title: "Material added",
                 message: "\(addedByName) added \(detail) on \(siteName).",
                 userId: userId,
