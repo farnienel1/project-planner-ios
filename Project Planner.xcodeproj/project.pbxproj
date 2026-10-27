@@ -490,6 +490,7 @@
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
 				INFOPLIST_KEY_NSCalendarsWriteOnlyAccessUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access for profile photos, site audits, and task attachments.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Use Face ID to unlock Project Planner.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving photos for your profile, site audits, and tasks.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow selecting photos for your profile, site audits, and task attachments.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -536,6 +537,7 @@
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
 				INFOPLIST_KEY_NSCalendarsWriteOnlyAccessUsageDescription = "Allow Project Planner to add your scheduled work bookings to your iPhone Calendar.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Allow camera access for profile photos, site audits, and task attachments.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Use Face ID to unlock Project Planner.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Allow saving photos for your profile, site audits, and tasks.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Allow selecting photos for your profile, site audits, and task attachments.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
