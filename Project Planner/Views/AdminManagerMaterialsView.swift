@@ -101,19 +101,27 @@ struct AdminManagerMaterialsView: View {
         return materials.filter { calendar.isDate(calendar.startOfDay(for: $0.date), inSameDayAs: day) }
     }
 
+    /// Admins and managers only, never operative mode (`isStaffAccount`; web adds `canViewMaterialOrderHistory`).
+    /// Not the Wholesalers toggle.
+    private var canViewQuoteOrderHistory: Bool {
+        guard let user = userStore.displayUser else { return false }
+        return CanonicalBusinessEngine.isStaffAccount(UserStore.staffAccountRole(for: user))
+    }
+
     private var dayHeader: some View {
         HStack {
             Text(dayTitle)
                 .font(.system(size: 12, weight: .medium))
             Spacer()
-            // Quote and order history is part of every job's Materials, on iOS and web; not the Wholesalers toggle.
-            Button("Quote/Order History") {
-                showingHistory = true
+            if canViewQuoteOrderHistory {
+                Button("Quote/Order History") {
+                    showingHistory = true
+                }
+                .accessibilityIdentifier("adminManagerMaterials.quoteOrderHistory")
+                .font(.system(size: 11, weight: .medium))
+                .buttonStyle(.bordered)
+                .tint(MaterialsOrderingTheme.muted)
             }
-            .accessibilityIdentifier("adminManagerMaterials.quoteOrderHistory")
-            .font(.system(size: 11, weight: .medium))
-            .buttonStyle(.bordered)
-            .tint(MaterialsOrderingTheme.muted)
             Button { showingAddMaterial = true } label: {
                 Label("Add", systemImage: "plus")
                     .font(.system(size: 11, weight: .medium))

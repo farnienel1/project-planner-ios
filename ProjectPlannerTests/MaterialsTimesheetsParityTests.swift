@@ -74,6 +74,17 @@ final class MaterialsTimesheetsParityTests: XCTestCase {
         }
     }
 
+    /// Order and quote history: admins and managers, never operatives, and not the Wholesalers toggle.
+    func testOrderHistoryRuleIsStaffOnly() {
+        let admin = user(id: "admin-1", role: .admin, permissions: UserPermissions(adminAccess: true))
+        var manager = user(id: "mgr-1", role: .manager, permissions: UserPermissions(manager: true))
+        manager.permissions.wholesalersOrderHistory = false
+        let operative = user(id: "op-1", role: .operative, permissions: UserPermissions(operativeMode: true))
+        XCTAssertTrue(CanonicalBusinessEngine.isStaffAccount(UserStore.staffAccountRole(for: admin)))
+        XCTAssertTrue(CanonicalBusinessEngine.isStaffAccount(UserStore.staffAccountRole(for: manager)))
+        XCTAssertFalse(CanonicalBusinessEngine.isStaffAccount(UserStore.staffAccountRole(for: operative)))
+    }
+
     // MARK: - Wholesaler contact mobile (web `phone`)
 
     func testContactWithoutPhoneStillDecodes() throws {
