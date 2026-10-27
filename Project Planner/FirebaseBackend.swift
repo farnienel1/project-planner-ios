@@ -4112,6 +4112,7 @@ class FirebaseBackend: ObservableObject {
     
     /// Copies profile fields from an older `users/*` row in the known company onto `users/{authUid}`.
     /// Does not list every user, and does not copy organisation or privilege fields onto the signed-in document.
+    /// Invited user signing in before the invitation's set-password step created users/{authUid}.
     private func mergePlaceholderUserDocOntoAuthUidIfNeeded(authUid: String, email rawEmail: String) async throws {
         let orgId = normalizedOrganizationId(
             currentOrganization?.firestoreDocumentId ?? cachedOrganizationIdString() ?? ""
@@ -4143,44 +4144,17 @@ class FirebaseBackend: ObservableObject {
 
             var seen = Set<String>()
             for placeholder in documents where placeholder.documentID != authUid && seen.insert(placeholder.documentID).inserted {
-                guard var merged = placeholder.data() else { continue }
-                print("🔥🔥🔥 DEBUG: Merging invited user doc \(placeholder.documentID) → \(authUid) for email \(variant)")
-                merged["email"] = rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                merged.removeValue(forKey: "organizationId")
-                merged.removeValue(forKey: "role")
-                merged.removeValue(forKey: "adminAccess")
-                merged.removeValue(forKey: "isSuperAdmin")
-                if var permissions = merged["permissions"] as? [String: Any] {
-                    permissions.removeValue(forKey: "adminAccess")
-                    merged["permissions"] = permissions
-                } else if var permissions = merged["permissions"] as? [String: Bool] {
-                    permissions.removeValue(forKey: "adminAccess")
-                    merged["permissions"] = permissions
-                }
-                let legacyTaxIds = merged
-                merged.removeValue(forKey: "utrNumber")
-                merged.removeValue(forKey: "vatNumber")
-                merged["updatedAt"] = Timestamp(date: Date())
-                merged["passwordSet"] = true
-                // Bookings made while the person was a pending invitee carry the placeholder id.
-                // Keep it on the account (`inviteMigrationFormerIdWriteFields`) so they still count.
-                let existingAccount = try? await db.collection("users").document(authUid).getDocument(source: .server)
-                let existingFormer = CanonicalBusinessEngine.parseFormerUserIds(existingAccount?.data() ?? [:]) ?? []
-                let placeholderFormer = CanonicalBusinessEngine.parseFormerUserIds(merged) ?? []
-                if let former = CanonicalBusinessEngine.inviteMigrationFormerIdWriteFields(
-                    placeholderId: placeholder.documentID,
-                    authUid: authUid,
-                    existingFormerIds: Array(Set(existingFormer + placeholderFormer)).sorted()
-                )?["formerUserIds"] {
-                    merged["formerUserIds"] = former
-                }
-                try await db.collection("users").document(authUid).setData(merged, merge: true)
-                await moveSensitiveProfile(fromPlaceholderId: placeholder.documentID, toUserId: authUid, legacyPlaceholder: legacyTaxIds)
-                let norm = rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                try await db.collection("organizations").document(orgId)
-                    .collection("userEmails").document(norm)
-                    .setData(["userId": authUid], merge: true)
-                return
+                guard let data = placeholder.data(), firestoreBool(data["passwordSet"]) != true else { continue }
+                // users/{authUid} is created by the invitation's set-password step (web
+                // `completeInviteSetup`), which records the 16-or-over confirmation, moves the tax ids,
+                // and writes `formerUserIds`. The app never asks for that confirmation, and the rules
+                // (Path 1) refuse a self-create without it, so the app does not create the profile here.
+                NSLog("INVITE_SETUP_INCOMPLETE placeholder=%@ authUid=%@ — users/{authUid} is created by the invitation link", placeholder.documentID, authUid)
+                throw NSError(
+                    domain: "FirebaseBackend",
+                    code: 412,
+                    userInfo: [NSLocalizedDescriptionKey: "Finish setting up your account from the invitation email (set your password and confirm you are 16 or over), then sign in here."]
+                )
             }
         }
     }
@@ -5643,28 +5617,6 @@ class FirebaseBackend: ObservableObject {
         } catch {
             // The private document already wins on read; the legacy copy is cleared on the next save.
             print("🔥🔥🔥 DEBUG: Could not clear legacy tax fields: \((error as NSError).code)")
-        }
-    }
-
-    /// Invite completion, as web `moveTaxIds`: copy the placeholder's private/taxIds to the new account as that
-    /// account, then delete the placeholder copy. A placeholder with only legacy fields moves those.
-    private func moveSensitiveProfile(fromPlaceholderId placeholderId: String, toUserId authUid: String, legacyPlaceholder: [String: Any]) async {
-        guard let source = sensitiveProfileRef(userId: placeholderId) else { return }
-        do {
-            let snapshot = try await source.getDocument(source: .server)
-            let privateDoc: [String: Any]? = snapshot.exists ? (snapshot.data() ?? [:]) : nil
-            guard let resolved = CanonicalBusinessEngine.resolveSensitiveProfile(
-                privateDoc: privateDoc,
-                legacyUser: legacyPlaceholder
-            ) else { return }
-            if resolved.source != "none" {
-                try await saveSensitiveProfile(userId: authUid, utrNumber: resolved.utrNumber, vatNumber: resolved.vatNumber)
-            }
-            if snapshot.exists {
-                try await source.delete()
-            }
-        } catch {
-            print("🔥🔥🔥 DEBUG: Could not move invite tax fields: \((error as NSError).code)")
         }
     }
 
