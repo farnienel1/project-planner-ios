@@ -66,8 +66,8 @@ struct WarningsComputationSnapshot: Sendable {
         let isSuperAdmin: Bool
         let isAdminRole: Bool
         var sameEmailUserIds: [String] = []
-        /// `users/{uid}.formerUserIds` (invite placeholder ids), passed to the script as `formerIds`.
-        var formerIds: [String] = []
+        /// `users/{uid}.formerUserIds`: invite placeholder ids this account replaced (web #189).
+        var formerUserIds: [String] = []
     }
 
     struct ProjectSnapshot: Sendable {
@@ -91,8 +91,6 @@ struct WarningsComputationSnapshot: Sendable {
         let timeSlot: String
         let workStart: String?
         let workEnd: String?
-        /// The stored `operativeId` (`Booking.operativeKey`): the id the shared coverage functions compare.
-        var personKey: String = ""
     }
 
     enum ManagerLocationKind: Sendable {
@@ -234,7 +232,7 @@ enum WarningsComputation {
                 isSuperAdmin: user.isSuperAdmin,
                 isAdminRole: user.role == .admin,
                 sameEmailUserIds: user.sameEmailUserIds,
-                formerIds: user.formerUserIds
+                formerUserIds: user.formerUserIds
             )
         }
 
@@ -254,14 +252,13 @@ enum WarningsComputation {
                 projectId: booking.projectId,
                 date: booking.date,
                 dayStart: cal.startOfDay(for: booking.date),
-                isActiveStatus: booking.status.occupiesDay,
+                isActiveStatus: CanonicalBusinessEngine.bookingOccupiesDay(booking.status.rawValue) == true,
                 paidHours: booking.paidBookedHours(policy: input.payrollTimePolicy),
                 scheduleLabel: booking.scheduleLabel(policy: input.payrollTimePolicy),
                 clashInterval: OperativeBookingInterval.clashInterval(for: booking, policy: input.payrollTimePolicy),
                 timeSlot: booking.timeSlot.rawValue,
                 workStart: booking.workStartTime,
-                workEnd: booking.workEndTime,
-                personKey: booking.operativeKey
+                workEnd: booking.workEndTime
             )
         }
 
@@ -446,21 +443,32 @@ enum WarningsComputation {
 
         var processedOpClash: Set<String> = []
         let managerAdminEmails = Set(managerOrAdminUsers.map(\.emailLowercased))
+        let bookingPeople = WarningsBookingPeople(users: input.users, operatives: input.operatives)
         if input.warningDetection.detectClashes {
-            for (_, dayBookings) in scheduleIndex.operativeBookingsByDayKey {
+            // Grouped by person (`bookingPersonKey`), as web does: bookings under a re-added person's old and new ids
+            // clash with each other, and a person with no catalogue row still gets the warning.
+            var operativeBookingsByPersonDay: [String: [WarningsComputationSnapshot.OperativeBookingSnapshot]] = [:]
+            for booking in coverageBookings {
+                operativeBookingsByPersonDay[
+                    "\(bookingPeople.key(for: booking.operativeId))-\(booking.dayStart.timeIntervalSince1970)", default: []
+                ].append(booking)
+            }
+            for (_, dayBookings) in operativeBookingsByPersonDay {
                 guard dayBookings.count > 1 else { continue }
-                // A booking stored under a users/{uid} id has no operative record; name it from the account.
-                guard let operative = operativesById[dayBookings[0].operativeId]
-                    ?? usersById[dayBookings[0].personKey].map({ user in
-                        WarningsComputationSnapshot.OperativeSnapshot(
-                            id: dayBookings[0].operativeId,
-                            name: user.displayName,
-                            emailLowercased: user.emailLowercased,
-                            isActive: user.isActive,
-                            qualificationExpiries: []
-                        )
-                    }) else { continue }
-                if managerAdminEmails.contains(operative.emailLowercased) { continue }
+                let first = dayBookings[0].operativeId
+                let person = bookingPeople.person(for: first)
+                if let email = person?.email, managerAdminEmails.contains(email) { continue }
+                let catalogue = operativesById[first]
+                    ?? person?.operativeId.flatMap(UUID.init(uuidString:)).flatMap { operativesById[$0] }
+                if let catalogue, managerAdminEmails.contains(catalogue.emailLowercased) { continue }
+                let account = person?.accountId.flatMap { usersById[$0] }
+                let operative = catalogue ?? WarningsComputationSnapshot.OperativeSnapshot(
+                    id: first,
+                    name: account?.displayName ?? unknownLabourPersonName,
+                    emailLowercased: account?.emailLowercased ?? "",
+                    isActive: true,
+                    qualificationExpiries: []
+                )
                 let clusters = overlappingClusters(dayBookings) { $0.clashInterval }
                 for (clusterIndex, cluster) in clusters.enumerated() {
                     let sortedCluster = cluster.sorted { $0.id.uuidString < $1.id.uuidString }
@@ -505,9 +513,9 @@ enum WarningsComputation {
             let managerPersonDays = scheduleIndex.managerPersonDayItems(
                 operativeBookings: coverageBookings,
                 managerBookings: coverageManagerBookings,
-                operativesById: operativesById,
                 usersById: usersById,
-                managerAdminUserIds: managerAdminUserIds
+                managerAdminUserIds: managerAdminUserIds,
+                people: bookingPeople
             )
             for (_, items) in managerPersonDays {
                 guard items.count > 1 else { continue }
@@ -944,9 +952,9 @@ enum WarningsComputation {
             ]
         }
         var bookingRows: [[String: Any]] = []
-        for booking in operativeBookings where (booking.status.occupiesDay) && calendar.isDate(booking.date, inSameDayAs: dayStart) {
+        for booking in operativeBookings where CanonicalBusinessEngine.bookingOccupiesDay(booking.status.rawValue) == true && calendar.isDate(booking.date, inSameDayAs: dayStart) {
             bookingRows.append([
-                "personId": booking.operativeKey,
+                "personId": Booking.storedOperativeId(for: booking.operativeId),
                 "dayKey": dayKey,
                 "kind": "operative",
                 "timeSlot": booking.timeSlot.rawValue,
@@ -1091,7 +1099,7 @@ enum WarningsComputation {
         var bookings: [[String: Any]] = []
         for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= rowEnd {
             bookings.append([
-                "personId": booking.personKey,
+                "personId": Booking.storedOperativeId(for: booking.operativeId),
                 "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
                 "kind": "operative",
                 "timeSlot": booking.timeSlot,
@@ -1121,7 +1129,7 @@ enum WarningsComputation {
                 "isManager": user.isManager,
                 "isAdmin": user.hasAdminAccess || user.isAdminRole,
                 "isSuperAdmin": user.isSuperAdmin,
-                "formerIds": user.formerIds,
+                "formerIds": user.formerUserIds,
             ]
             peopleRows.append(row)
             for alias in user.sameEmailUserIds where !alias.isEmpty && alias != user.id {
@@ -1264,7 +1272,7 @@ enum WarningsComputation {
         for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
             bookings.append(CanonicalLeaveBooking(
                 id: booking.id.uuidString,
-                personId: booking.personKey,
+                personId: Booking.storedOperativeId(for: booking.operativeId),
                 kind: "operative",
                 dayKey: dayKeyString(booking.dayStart, calendar: calendar),
                 timeSlot: booking.timeSlot,
@@ -1719,9 +1727,9 @@ private struct WarningsScheduleIndex {
     nonisolated func managerPersonDayItems(
         operativeBookings: [WarningsComputationSnapshot.OperativeBookingSnapshot],
         managerBookings: [WarningsComputationSnapshot.ManagerBookingSnapshot],
-        operativesById: [UUID: WarningsComputationSnapshot.OperativeSnapshot],
         usersById: [String: WarningsComputationSnapshot.UserSnapshot],
-        managerAdminUserIds: Set<String>
+        managerAdminUserIds: Set<String>,
+        people: WarningsBookingPeople
     ) -> [String: [ManagerPersonDayItem]] {
         var emailToUserId: [String: String] = [:]
         emailToUserId.reserveCapacity(usersById.count)
@@ -1732,25 +1740,20 @@ private struct WarningsScheduleIndex {
         var map: [String: [ManagerPersonDayItem]] = [:]
 
         for booking in managerBookings {
-            guard managerAdminUserIds.contains(booking.userId) else { continue }
+            // A manager booking saved under an invite id the account later replaced belongs to the current account.
+            let userId = people.currentAccountId(forStoredUserId: booking.userId)
+            guard managerAdminUserIds.contains(userId) else { continue }
             let day = booking.dayStart
-            let key = "\(booking.userId)-\(day.timeIntervalSince1970)"
+            let key = "\(userId)-\(day.timeIntervalSince1970)"
             map[key, default: []].append(
-                ManagerPersonDayItem(userId: booking.userId, date: day, managerBooking: booking, operativeBooking: nil)
+                ManagerPersonDayItem(userId: userId, date: day, managerBooking: booking, operativeBooking: nil)
             )
         }
 
         for booking in operativeBookings {
-            let userId: String
-            if let op = operativesById[booking.operativeId], let linked = emailToUserId[op.emailLowercased] {
-                userId = linked
-            } else if managerAdminUserIds.contains(booking.personKey) {
-                userId = booking.personKey
-            } else if let user = usersById[booking.personKey], let linked = emailToUserId[user.emailLowercased] {
-                userId = linked
-            } else {
-                continue
-            }
+            // The rulebook names the person even when the booking carries a uid and no catalogue row matches.
+            guard let email = people.person(for: booking.operativeId)?.email,
+                  let userId = emailToUserId[email] else { continue }
             let day = booking.dayStart
             let key = "\(userId)-\(day.timeIntervalSince1970)"
             map[key, default: []].append(
@@ -1765,5 +1768,49 @@ private struct WarningsScheduleIndex {
             return false
         }
         return WarningsComputation.intervalsOverlap(ia, ib)
+    }
+}
+
+/// Who a booking belongs to while warnings are built, from the rulebook's `bookingPersonKey` and
+/// `resolveBookingPerson` (web's clash check asks the same functions). Each distinct id asks the script once.
+nonisolated final class WarningsBookingPeople {
+    private let input: CanonicalBusinessEngine.CanonicalBookingPersonInput
+    private let accountIdByFormerId: [String: String]
+    private var keys: [UUID: String] = [:]
+    private var people: [UUID: CanonicalBusinessEngine.CanonicalResolvedBookingPerson?] = [:]
+
+    init(users: [WarningsComputationSnapshot.UserSnapshot], operatives: [WarningsComputationSnapshot.OperativeSnapshot]) {
+        input = CanonicalBusinessEngine.CanonicalBookingPersonInput(
+            accounts: users.map {
+                CanonicalBusinessEngine.CanonicalBookingPersonAccount(
+                    id: $0.id, email: $0.emailLowercased, formerIds: $0.formerUserIds, aliasIds: $0.sameEmailUserIds
+                )
+            },
+            operatives: operatives.map {
+                CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.id.uuidString, email: $0.emailLowercased)
+            }
+        )
+        accountIdByFormerId = CanonicalBusinessEngine.formerIdAliases(
+            users.map { CanonicalFormerIdPerson(id: $0.id, formerIds: $0.formerUserIds) }
+        ) ?? [:]
+    }
+
+    func key(for operativeId: UUID) -> String {
+        if let hit = keys[operativeId] { return hit }
+        let stored = Booking.storedOperativeId(for: operativeId)
+        let key = CanonicalBusinessEngine.bookingPersonKey(stored, input) ?? "id:\(stored.lowercased())"
+        keys[operativeId] = key
+        return key
+    }
+
+    func person(for operativeId: UUID) -> CanonicalBusinessEngine.CanonicalResolvedBookingPerson? {
+        if let hit = people[operativeId] { return hit }
+        let found = CanonicalBusinessEngine.resolveBookingPerson(Booking.storedOperativeId(for: operativeId), input)
+        people[operativeId] = found
+        return found
+    }
+
+    func currentAccountId(forStoredUserId id: String) -> String {
+        accountIdByFormerId[id] ?? id
     }
 }

@@ -206,6 +206,7 @@ final class PersistenceService: @unchecked Sendable {
                     // UserDefaults is thread-safe, no need for MainActor
                     if let bookingsData = userDefaults.data(forKey: key) {
                         bookings = try JSONDecoder().decode([Booking].self, from: bookingsData)
+                        Booking.registerStoredOperativeKeys(bookings)
                     }
                     
                     continuation.resume(returning: bookings)

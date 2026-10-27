@@ -113,7 +113,8 @@ struct EditWholesalerContactView: View {
             name: name,
             email: email,
             isPrimary: contact.isPrimary,
-            createdAt: contact.createdAt
+            createdAt: contact.createdAt,
+            phone: contact.phone
         )
         Task {
             guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {

@@ -484,9 +484,9 @@ class OperativeStore: ObservableObject {
         let operativeName = operative.name
         let operativeId = operative.id
         
-        // Delete all bookings for this operative
+        // This operative's bookings from today on (`bookingsToRemoveOnOperativeDelete`). Past days stay as history.
         if let bookingStore = bookingStore {
-            let bookingsToDelete = bookingStore.bookings.filter { $0.operativeId == operativeId }
+            let bookingsToDelete = bookingStore.bookingsToRemoveOnPersonDelete(personIds: [operativeId])
             print("🔥🔥🔥 DEBUG: Deleting \(bookingsToDelete.count) bookings for operative \(operativeName)")
             
             for booking in bookingsToDelete {

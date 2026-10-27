@@ -25,7 +25,10 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case timesheetPendingManagerSignoff = "timesheet_pending_manager_signoff"
         case timesheetSignedByManager = "timesheet_signed_by_manager"
         case lineManagerPeerUpdate = "line_manager_peer_update"
+        /// Older iOS rows. The rulebook has no `material_added`: no device push, no toggle, no destination.
         case materialAdded = "material_added"
+        /// Rulebook type for a new material line (`DEVICE_PUSH_NOTIFICATION_TYPES`, toggle `materialOrderPlaced`).
+        case materialOrderPlaced = "material_order_placed"
         case toolboxTalkIssued = "toolbox_talk_issued"
         case deadlineAssigned = "deadline_assigned"
         case deadlineReminder = "deadline_reminder"
@@ -36,6 +39,12 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case variationFromTracker = "variation_from_tracker"
         case variationNumbersUpdated = "variation_numbers_updated"
         case timesheetSubmissionReminder = "timesheet_submission_reminder"
+        /// Web health-and-safety toolbox reminder. Destination and preference key come from the script.
+        case hsToolboxReminder = "hs_toolbox_reminder"
+        /// Web feedback board: a status change on an idea this user raised or voted for.
+        case ideaStatus = "idea_status"
+        /// Web feedback board: an idea this user raised or voted for has shipped.
+        case ideaShipped = "idea_shipped"
     }
     
     let id: UUID

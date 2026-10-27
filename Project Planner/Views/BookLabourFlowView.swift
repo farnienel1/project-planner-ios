@@ -1092,12 +1092,19 @@ struct BookLabourFlowView: View {
         return .init(startMinutes: start, endMinutes: max(start + 30, end), breakRemoved: timeline.allHoursAtMultiplier)
     }
 
+    /// The picked person's ids (`resolveBookingPerson`, `bookingIdsForAccount`), so a booking under their old catalogue
+    /// id or invite id counts as theirs here.
+    private func samePersonIds(_ operativeId: UUID) -> Set<UUID> {
+        labourBookingIds(sameAs: operativeId, operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+    }
+
     private func existingIntervalsForOperative(_ operativeId: UUID) -> [(Int, Int)] {
-        bookingStore.bookings
+        let personIds = samePersonIds(operativeId)
+        return bookingStore.bookings
             .filter {
-                $0.operativeId == operativeId &&
+                personIds.contains($0.operativeId) &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
-                ($0.status.occupiesDay)
+                $0.occupiesDay
             }
             .compactMap { OperativeBookingInterval.clashInterval(for: $0, policy: dayPayrollPolicy) }
             .sorted { $0.0 < $1.0 }
@@ -1160,11 +1167,12 @@ struct BookLabourFlowView: View {
     }
 
     private func existingPaidHoursForOperative(_ operativeId: UUID) -> Double {
-        bookingStore.bookings
+        let personIds = samePersonIds(operativeId)
+        return bookingStore.bookings
             .filter {
-                $0.operativeId == operativeId &&
+                personIds.contains($0.operativeId) &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
-                ($0.status.occupiesDay)
+                $0.occupiesDay
             }
             .reduce(0.0) { $0 + $1.paidBookedHours(policy: dayPayrollPolicy) }
     }
@@ -1451,8 +1459,9 @@ struct BookLabourFlowView: View {
         breakRemoved: Bool,
         otMultiplierOverride: Double?
     ) -> Bool {
-        bookingStore.bookings.contains {
-            $0.operativeId == operativeId &&
+        let personIds = samePersonIds(operativeId)
+        return bookingStore.bookings.contains {
+            personIds.contains($0.operativeId) &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
                 $0.projectId == projectId &&
                 $0.timeSlot == slot &&
@@ -1649,8 +1658,9 @@ struct BookLabourFlowView: View {
             errorBanner = "Not signed in."
             return
         }
+        let personIds = samePersonIds(operative.id)
         if bookingStore.bookings.contains(where: {
-            $0.operativeId == operative.id &&
+            personIds.contains($0.operativeId) &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
                 $0.projectId == project.id &&
                 $0.timeSlot == slot &&
@@ -1724,11 +1734,11 @@ struct BookLabourFlowView: View {
         workEnd: String?,
         breakRemoved: Bool
     ) -> [String]? {
+        let personIds = samePersonIds(operativeId)
         let existing = bookingStore.bookings.filter {
-            $0.operativeId == operativeId &&
+            personIds.contains($0.operativeId) &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
-                $0.status != .cancelled &&
-                $0.status != .completed
+                $0.occupiesDay
         }
         guard !existing.isEmpty else { return nil }
         let policy = payrollTimePolicy
@@ -1797,11 +1807,11 @@ struct BookLabourFlowView: View {
         workEnd: String? = nil,
         breakRemoved: Bool = false
     ) -> Bool {
+        let personIds = samePersonIds(operativeId)
         let existing = bookingStore.bookings.filter {
-            $0.operativeId == operativeId &&
+            personIds.contains($0.operativeId) &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
-                $0.status != .cancelled &&
-                $0.status != .completed
+                $0.occupiesDay
         }
         if existing.isEmpty { return false }
         let policy = payrollTimePolicy

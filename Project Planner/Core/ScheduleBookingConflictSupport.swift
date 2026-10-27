@@ -17,13 +17,22 @@ struct ScheduleBookablePerson: Identifiable, Hashable {
     let roleLabel: String
     let tradeLabel: String
     let hasPastBookingOnProject: Bool
+    /// Every in-app id this person's bookings may carry (`bookingIdsForAccount`), so a booking under an old
+    /// catalogue id or invite id still shows as a clash when they are booked again.
+    var bookingIds: Set<UUID> = []
 
     var id: UUID { operativeId }
+
+    func owns(_ booking: Booking) -> Bool {
+        booking.operativeId == operativeId || bookingIds.contains(booking.operativeId)
+    }
 }
 
 enum ScheduleBookablePersonBuilder {
-    /// Operative catalogue plus Operatives-list user documents that have no matching operative.
+    /// Operative catalogue plus operative user documents that have no matching operative.
     /// `listedCurrentLabourPeople` already drops an anonymised deleted profile. `passwordSet` is not required.
+    /// `labourBookingKind` decides who is an operative. A user id that is not a UUID (a Firebase Auth uid)
+    /// gets `Booking.internalOperativeId(for:)`, and saves write that uid back (web #189).
     /// This does not write `operativeProfiles`.
     @MainActor
     static func operativesForScheduling(
@@ -35,14 +44,10 @@ enum ScheduleBookablePersonBuilder {
         var rows = operatives
         var seenEmails = Set(operatives.map { emailKey($0.email) }.filter { !$0.isEmpty })
         var seenIds = Set(operatives.map(\.id))
-        // Who is booked in `bookings` is `labourBookingKind`, the same split the unbooked rule uses,
-        // so anyone who can be flagged as unbooked labour can be booked here.
-        for user in users where labourBookingKind(user) == "operative" {
+        for user in users where labourKind(user) == "operative" {
             let email = emailKey(user.email)
             if !email.isEmpty, seenEmails.contains(email) { continue }
-            // A Firebase uid is bookable too, as on web: the booking is saved under `user.id`
-            // (`StableBookingIdentity.rawId` → `Booking.operativeKey`).
-            let id = StableBookingIdentity.uuid(for: user.id)
+            let id = Booking.internalOperativeId(for: user.id)
             guard seenIds.insert(id).inserted else { continue }
             rows.append(operativeRecord(from: user, id: id))
             if !email.isEmpty { seenEmails.insert(email) }
@@ -64,13 +69,14 @@ enum ScheduleBookablePersonBuilder {
 
         let pastOperativeIds = Set(
             bookings
-                .filter { $0.projectId == projectId && ($0.status.occupiesDay) }
+                .filter { $0.projectId == projectId && $0.occupiesDay }
                 .map(\.operativeId)
         )
 
         func append(operative: Operative, user: AppUser?, role: String) {
             let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             guard seenEmails.insert(email).inserted else { return }
+            let bookingIds = (user.map { labourBookingIds(for: $0, operatives: sourceOperatives) } ?? []).union([operative.id])
             rows.append(
                 ScheduleBookablePerson(
                     operativeId: operative.id,
@@ -79,7 +85,8 @@ enum ScheduleBookablePersonBuilder {
                     email: operative.email,
                     roleLabel: role,
                     tradeLabel: operative.displayTradeType,
-                    hasPastBookingOnProject: pastOperativeIds.contains(operative.id)
+                    hasPastBookingOnProject: !pastOperativeIds.isDisjoint(with: bookingIds),
+                    bookingIds: bookingIds
                 )
             )
         }
@@ -88,7 +95,7 @@ enum ScheduleBookablePersonBuilder {
         for op in activeOps.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) {
             let email = op.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             let user = users.first { emailKey($0.email) == email && !email.isEmpty }
-                ?? users.first { StableBookingIdentity.uuid(for: $0.id) == op.id }
+                ?? users.first { $0.id == Booking.storedOperativeId(for: op.id) }
             let role: String = {
                 guard let user else { return "Operative" }
                 if user.permissions.adminAccess || user.isSuperAdmin { return "Admin" }
@@ -98,13 +105,13 @@ enum ScheduleBookablePersonBuilder {
             append(operative: op, user: user, role: role)
         }
 
-        for user in users where user.isActive && user.passwordSet && !user.permissions.operativeMode {
-            guard user.permissions.manager || user.permissions.adminAccess || user.isSuperAdmin else { continue }
+        for user in users where user.passwordSet && labourKind(user) == "manager" {
             let email = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             guard seenEmails.contains(email) == false else { continue }
-            guard let op = operatives.first(where: {
+            // A manager with no catalogue row is booked under their user id, like an operative.
+            let op = operatives.first(where: {
                 $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
-            }) else { continue }
+            }) ?? operativeRecord(from: user, id: Booking.internalOperativeId(for: user.id))
             let role = user.permissions.adminAccess || user.isSuperAdmin ? "Admin" : "Manager"
             append(operative: op, user: user, role: role)
         }
@@ -112,16 +119,12 @@ enum ScheduleBookablePersonBuilder {
         return rows
     }
 
-    /// `operative`, `manager`, or nil from the rulebook.
-    static func labourBookingKind(_ user: AppUser) -> String? {
-        CanonicalBusinessEngine.labourBookingKind(CanonicalUnbookedLabourPerson(
-            id: user.id,
-            email: user.email.lowercased(),
-            name: user.fullName,
+    /// `labourBookingKind` for a profile: "operative", "manager", or nil (not bookable labour).
+    static func labourKind(_ user: AppUser) -> String? {
+        CanonicalBusinessEngine.labourBookingKind(CanonicalLabourKindPerson(
             isActive: user.isActive,
-            passwordSet: user.passwordSet,
-            isOperativeMode: user.permissions.operativeMode,
-            isManager: user.permissions.manager,
+            isOperativeMode: user.permissions.operativeMode || user.role == .operative,
+            isManager: user.permissions.manager || user.role == .manager,
             isAdmin: user.permissions.adminAccess || user.role == .admin,
             isSuperAdmin: user.isSuperAdmin
         ))
@@ -131,9 +134,8 @@ enum ScheduleBookablePersonBuilder {
         value.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// An operative stand-in for a `users/{uid}` row. Also used where a booking is stored under that user id.
     @MainActor
-    static func operativeRecord(from user: AppUser, id: UUID) -> Operative {
+    private static func operativeRecord(from user: AppUser, id: UUID) -> Operative {
         Operative(
             id: id,
             firstName: user.firstName,
@@ -282,9 +284,9 @@ enum ScheduleBookingConflictEngine {
             }
 
             let existingProjectBookings = bookingStore.bookings.filter { booking in
-                booking.operativeId == person.operativeId &&
+                person.owns(booking) &&
                     Calendar.current.isDate(booking.date, inSameDayAs: day) &&
-                    (booking.status.occupiesDay) &&
+                    booking.occupiesDay &&
                     !excludingBookingIds.contains(booking.id)
             }
             for existing in existingProjectBookings {

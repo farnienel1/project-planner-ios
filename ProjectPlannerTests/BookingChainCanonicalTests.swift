@@ -3,6 +3,7 @@ import XCTest
 
 /// Scheduling → Daily Overview → Warnings → Weekly Report, through the packed rulebook.
 /// The same scenarios run on the web in `lib/canonical/canonical.test.ts` ("Booking chain").
+/// Booking identity itself is covered by `BookingIdentityTests` and `BookingAuditTests`.
 @MainActor
 final class BookingChainCanonicalTests: XCTestCase {
     /// A Firebase Auth uid: what web stores as `operativeId` for a person with no operative record.
@@ -35,10 +36,25 @@ final class BookingChainCanonicalTests: XCTestCase {
         )
     }
 
-    private func parsed(_ documents: [(id: String, data: [String: Any])]) throws -> [Booking] {
-        let results = try XCTUnwrap(CanonicalBusinessEngine.parseBookingDocuments(documents), "the packed script did not run")
-        XCTAssertEqual(results.count, documents.count)
-        return results.compactMap { result in result.booking.flatMap { FirebaseBackend.booking(from: $0) } }
+    /// Stored documents read the way `FirebaseBackend.bookingsFromFirestoreDocuments` reads them.
+    private func read(_ documents: [(id: String, data: [String: Any])]) throws -> [Booking] {
+        let payload: [[String: Any]] = documents.map { ["id": $0.id, "data": $0.data] }
+        let parsed = try XCTUnwrap(CanonicalBusinessEngine.parseBookingDocuments(payload), "the packed script did not run")
+        return parsed.compactMap { FirebaseBackend.booking(fromCanonical: $0) }
+    }
+
+    private func stored(_ start: String? = nil, _ end: String? = nil, slot: String = "FULL DAY", on job: String? = nil, id: String = UUID().uuidString) -> (id: String, data: [String: Any]) {
+        var data: [String: Any] = [
+            "operativeId": uid,
+            "projectId": job ?? projectId,
+            "date": dayTimestamp,
+            "timeSlot": slot,
+            "status": "Confirmed",
+            "bookedBy": "admin@site.test",
+        ]
+        if let start { data["workStartTime"] = start }
+        if let end { data["workEndTime"] = end }
+        return (id: id, data: data)
     }
 
     private func rowsOnDay(_ bookings: [Booking], users: [AppUser]? = nil, excluded: [String] = []) -> [CanonicalUnbookedLabourRow] {
@@ -55,112 +71,44 @@ final class BookingChainCanonicalTests: XCTestCase {
         )
     }
 
-    // MARK: - Reading stored bookings
+    // MARK: - The missing-booking regression, end to end
 
-    func testRegressionBookingUnderFirebaseUserIdIsReadAndCoversThatPerson() throws {
-        // Before: `bookingFromFirestoreDocument` required a UUID operativeId and dropped this document,
-        // so Daily Overview and Warnings showed the person as not booked although web showed them booked.
-        let bookings = try parsed([
-            (id: "A1B2C3D4-0000-0000-0000-000000000001", data: [
-                "operativeId": uid,
-                "projectId": projectId,
-                "date": dayTimestamp,
-                "timeSlot": "FULL DAY",
-                "status": "Confirmed",
-                "bookedBy": "admin@site.test",
-            ]),
-        ])
-        let booking = try XCTUnwrap(bookings.first)
-        XCTAssertEqual(booking.operativeKey, uid)
-        XCTAssertEqual(booking.storedOperativeId, uid)
-        XCTAssertEqual(booking.operativeId, StableBookingIdentity.uuid(for: uid))
-        XCTAssertTrue(CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: londonDay))
-
-        XCTAssertEqual(rowsOnDay([booking]).map(\.personKey), [])
+    func testRegressionBookingUnderFirebaseUserIdCoversThatPersonOnDailyOverview() throws {
+        // Before: iOS required a UUID operativeId and dropped this document, so Daily Overview and
+        // Warnings showed the person as not booked although web showed them booked.
+        let bookings = try read([stored()])
+        XCTAssertEqual(bookings.count, 1)
+        XCTAssertEqual(bookings.first?.storedOperativeId, uid)
+        XCTAssertEqual(rowsOnDay(bookings).map(\.personKey), [])
         // Without the booking the same person is a gap, so the empty list above is the booking's doing.
         XCTAssertEqual(rowsOnDay([]).map(\.personKey), [uid])
-        // The booked row is named from the account, not "Not on the roster".
-        XCTAssertEqual(rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: [], users: [person()]), "Pat Login")
     }
 
-    func testLegacySpellingsAreKeptLikeTheWebReader() throws {
-        let results = try XCTUnwrap(CanonicalBusinessEngine.parseBookingDocuments([
-            (id: "legacy-doc", data: [
-                "operativeId": "11111111-2222-3333-4444-555555555556",
-                "projectId": projectId,
-                "date": londonDay.timeIntervalSince1970 * 1000,
-                "status": "confirmed",
-            ]),
-            (id: "bad", data: ["projectId": projectId]),
-        ]))
-        XCTAssertEqual(results.map(\.ok), [true, false])
-        let row = try XCTUnwrap(results[0].booking)
-        XCTAssertEqual(row.status, "Confirmed")
-        XCTAssertEqual(row.timeSlot, "FULL DAY")
-        XCTAssertEqual(Set(results[0].repairs ?? []), ["date_not_timestamp", "status_alias", "slot_missing_full_day", "booked_by_missing"])
-        XCTAssertEqual(Set(results[1].errors ?? []), ["missing_operative_id", "missing_date", "bad_status"])
-
-        let booking = try XCTUnwrap(FirebaseBackend.booking(from: row))
-        XCTAssertEqual(booking.documentKey, "legacy-doc", "a non-UUID document id is saved and deleted under its own id")
-        XCTAssertNil(booking.storedOperativeId, "a UUID operative id keeps the uppercase uuidString")
-        XCTAssertEqual(booking.operativeKey, "11111111-2222-3333-4444-555555555556".uppercased())
-    }
-
-    func testStableIdentityIsDeterministicAndPassesUUIDsThrough() {
-        XCTAssertEqual(StableBookingIdentity.uuid(for: uid), StableBookingIdentity.uuid(for: " \(uid) "))
-        XCTAssertNotEqual(StableBookingIdentity.uuid(for: uid), StableBookingIdentity.uuid(for: uid + "x"))
-        XCTAssertEqual(StableBookingIdentity.uuid(for: projectId), UUID(uuidString: projectId))
-        XCTAssertNil(StableBookingIdentity.storedIdIfNotUUID(projectId))
-        XCTAssertEqual(StableBookingIdentity.storedIdIfNotUUID(uid), uid)
-    }
-
-    func testCachedBookingsWithoutTheNewKeysStillDecode() throws {
-        var booking = LogicFixtures.booking(on: londonDay)
-        booking.storedOperativeId = uid
-        let roundTrip = try JSONDecoder().decode(Booking.self, from: JSONEncoder().encode(booking))
-        XCTAssertEqual(roundTrip.operativeKey, uid)
-
-        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(LogicFixtures.booking(on: londonDay))) as? [String: Any])
-        legacy.removeValue(forKey: "storedOperativeId")
-        legacy.removeValue(forKey: "storedProjectId")
-        legacy.removeValue(forKey: "documentId")
-        let decoded = try JSONDecoder().decode(Booking.self, from: JSONSerialization.data(withJSONObject: legacy))
-        XCTAssertNil(decoded.storedOperativeId)
-        XCTAssertEqual(decoded.operativeKey, decoded.operativeId.uuidString)
+    func testABookingWhoseDocumentIdIsNotAUuidIsSavedAndDeletedUnderThatId() throws {
+        let booking = try XCTUnwrap(read([stored(id: "legacy-doc")]).first)
+        XCTAssertEqual(booking.documentKey, "legacy-doc")
+        let normal = try XCTUnwrap(read([stored(id: "A1B2C3D4-0000-0000-0000-000000000001")]).first)
+        XCTAssertEqual(normal.documentKey, "A1B2C3D4-0000-0000-0000-000000000001")
     }
 
     // MARK: - Coverage
 
-    private func custom(_ start: String, _ end: String, on job: String) throws -> Booking {
-        try XCTUnwrap(parsed([
-            (id: UUID().uuidString, data: [
-                "operativeId": uid,
-                "projectId": job,
-                "date": dayTimestamp,
-                "timeSlot": "CUSTOM_HOURS",
-                "workStartTime": start,
-                "workEndTime": end,
-                "status": "Confirmed",
-                "bookedBy": "admin@site.test",
-            ]),
-        ]).first)
-    }
-
     func testCoverageIsTheUnionAcrossAProjectAndASmallWorksJob() throws {
-        let morning = try custom("07:30", "12:00", on: projectId)
-        let afternoon = try custom("12:00", "16:00", on: smallWorksId)
+        let morning = try XCTUnwrap(read([stored("07:30", "12:00", slot: "CUSTOM_HOURS")]).first)
+        let afternoon = try XCTUnwrap(read([stored("12:00", "16:00", slot: "CUSTOM_HOURS", on: smallWorksId)]).first)
+        let overlap = try XCTUnwrap(read([stored("11:00", "16:00", slot: "CUSTOM_HOURS", on: smallWorksId)]).first)
+        let long = try XCTUnwrap(read([stored("06:00", "18:00", slot: "CUSTOM_HOURS")]).first)
         XCTAssertEqual(rowsOnDay([morning]).first?.missingHours, 3.5)
         XCTAssertEqual(rowsOnDay([morning, afternoon]).count, 0, "back-to-back bookings on two jobs cover the day")
-        XCTAssertEqual(rowsOnDay([morning, try custom("11:00", "16:00", on: smallWorksId)]).count, 0, "overlap is not double counted")
-        XCTAssertEqual(rowsOnDay([try custom("06:00", "18:00", on: projectId)]).count, 0, "hours beyond the company day still cover it")
+        XCTAssertEqual(rowsOnDay([morning, overlap]).count, 0, "overlap is not double counted")
+        XCTAssertEqual(rowsOnDay([long]).count, 0, "hours beyond the company day still cover it")
     }
 
     func testNamedAmPlusPmIsAFullDay() throws {
-        let am = LogicFixtures.booking(on: londonDay, slot: .morning)
-        let pm = LogicFixtures.booking(on: londonDay, slot: .afternoon, operativeId: am.operativeId)
-        let user = person(id: am.operativeId.uuidString)
-        XCTAssertEqual(rowsOnDay([am], users: [user]).count, 1)
-        XCTAssertEqual(rowsOnDay([am, pm], users: [user]).count, 0)
+        let am = try XCTUnwrap(read([stored(slot: "AM")]).first)
+        let pm = try XCTUnwrap(read([stored(slot: "PM")]).first)
+        XCTAssertEqual(rowsOnDay([am]).count, 1)
+        XCTAssertEqual(rowsOnDay([am, pm]).count, 0)
     }
 
     func testExcludedPersonIsNeverUnbookedAndComesBackWhenIncluded() {
@@ -174,7 +122,7 @@ final class BookingChainCanonicalTests: XCTestCase {
         XCTAssertNil(WarningsDataCompleteness.blockingReason(bookingsLoadFailed: false, managerBookingsLoadFailed: false, bookingDecode: nil))
         XCTAssertNotNil(WarningsDataCompleteness.blockingReason(bookingsLoadFailed: true, managerBookingsLoadFailed: false, bookingDecode: nil))
         XCTAssertNotNil(WarningsDataCompleteness.blockingReason(bookingsLoadFailed: false, managerBookingsLoadFailed: true, bookingDecode: nil))
-        let scriptDown = BookingDecodeReport(total: 4, refused: 4, repaired: 0, scriptFailed: true)
+        let scriptDown = BookingDecodeReport(total: 4, refused: 0, repaired: 0, scriptFailed: true)
         XCTAssertNotNil(WarningsDataCompleteness.blockingReason(bookingsLoadFailed: false, managerBookingsLoadFailed: false, bookingDecode: scriptDown))
         // A document the shared reader refuses is refused on the web too, so it does not block the scan.
         let oneRefused = BookingDecodeReport(total: 4, refused: 1, repaired: 0, scriptFailed: false)
@@ -191,83 +139,14 @@ final class BookingChainCanonicalTests: XCTestCase {
         XCTAssertFalse(BookingStore.sameBookings([moved], [kept]))
     }
 
-    // MARK: - Weekly report pay
+    // MARK: - Statuses
 
-    func testPayeLineShowsPayeNeverZeroAndIsNotTotalled() throws {
-        let paye = try XCTUnwrap(CanonicalBusinessEngine.reportPayCell(CanonicalReportPayLine(isPaye: true, pay: 0)))
-        XCTAssertEqual(paye, CanonicalReportPayCell(pay: nil, label: "PAYE", countsTowardPayTotal: false))
-        let selfEmployed = try XCTUnwrap(CanonicalBusinessEngine.reportPayCell(CanonicalReportPayLine(isPaye: false, pay: 150.004)))
-        XCTAssertEqual(selfEmployed, CanonicalReportPayCell(pay: 150, label: nil, countsTowardPayTotal: true))
-        let noRate = try XCTUnwrap(CanonicalBusinessEngine.reportPayCell(CanonicalReportPayLine(isPaye: false, pay: nil)))
-        XCTAssertEqual(noRate, CanonicalReportPayCell(pay: nil, label: nil, countsTowardPayTotal: false))
-
-        XCTAssertEqual(CanonicalBusinessEngine.reportPayTotal([
-            CanonicalReportPayLine(isPaye: false, pay: 150),
-            CanonicalReportPayLine(isPaye: true, pay: 120),
-            CanonicalReportPayLine(isPaye: false, pay: 75.5),
-        ]), 225.5)
-        XCTAssertEqual(
-            CanonicalBusinessEngine.reportPersonPayCell([CanonicalReportPayLine(isPaye: true, pay: 0)])?.label,
-            "PAYE"
-        )
-        let mixed = try XCTUnwrap(CanonicalBusinessEngine.reportPersonPayCell([
-            CanonicalReportPayLine(isPaye: true, pay: 0),
-            CanonicalReportPayLine(isPaye: false, pay: 200),
-        ]))
-        XCTAssertEqual(mixed, CanonicalReportPayCell(pay: 200, label: nil, countsTowardPayTotal: true))
-    }
-
-    func testEmploymentTypeOnTheDayDecidesPaye() {
-        var user = person(employment: .paye)
-        user.employmentTypeTransitionFrom = .selfEmployed
-        user.employmentTypeEffectiveAt = CanonicalBusinessEngine.date(fromDayKey: "2026-10-28")
-        XCTAssertEqual(user.employmentType(on: londonDay), .selfEmployed)
-        XCTAssertEqual(user.employmentType(on: CanonicalBusinessEngine.date(fromDayKey: "2026-10-28")!), .paye)
-    }
-
-    // MARK: - Booking identity (web #189)
-
-    func testCompletedBookingsCoverTheDayAndCancelledDoNot() {
-        XCTAssertTrue(BookingStatus.confirmed.occupiesDay)
-        XCTAssertTrue(BookingStatus.tentative.occupiesDay)
-        XCTAssertTrue(BookingStatus.completed.occupiesDay, "a worked day is booked, as on web (bookingOccupiesDay)")
-        XCTAssertFalse(BookingStatus.cancelled.occupiesDay)
-    }
-
-    func testBookingUnderAFormerInvitePlaceholderIdStillCoversThePerson() throws {
-        let placeholder = "6C1F2E7A-1111-4222-8333-944455556666"
-        var user = person()
-        user.formerUserIds = [placeholder]
-        let booking = try XCTUnwrap(parsed([
-            (id: UUID().uuidString, data: [
-                "operativeId": placeholder,
-                "projectId": projectId,
-                "date": dayTimestamp,
-                "timeSlot": "FULL DAY",
-                "status": "Confirmed",
-                "bookedBy": "admin@site.test",
-            ]),
-        ]).first)
-        XCTAssertEqual(rowsOnDay([booking], users: [user]).count, 0)
-        var withoutFormer = user
-        withoutFormer.formerUserIds = []
-        XCTAssertEqual(rowsOnDay([booking], users: [withoutFormer]).count, 1)
-        XCTAssertEqual(rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: [], users: [user]), "Pat Login")
-    }
-
-    func testFormerIdsReadAndMigrateThroughTheRulebook() {
-        XCTAssertEqual(CanonicalBusinessEngine.parseFormerUserIds(["formerUserIds": [" A ", "", "A", "B"]]), ["A", "B"])
-        XCTAssertEqual(
-            CanonicalBusinessEngine.inviteMigrationFormerIdWriteFields(placeholderId: "P1", authUid: uid, existingFormerIds: ["P0"]),
-            ["formerUserIds": ["P0", "P1"]]
-        )
-    }
-
-    func testABookableUserWithAFirebaseUidIsSavedUnderThatUid() {
-        let id = StableBookingIdentity.uuid(for: uid)
-        XCTAssertEqual(StableBookingIdentity.rawId(for: id), uid)
-        let booking = LogicFixtures.booking(on: londonDay, operativeId: id)
-        XCTAssertEqual(booking.operativeKey, uid, "a booking made on iOS for this person stores users/{uid}, as web does")
+    func testOpenIsConfirmedOrTentativeOnly() {
+        XCTAssertTrue(BookingStatus.confirmed.isOpen)
+        XCTAssertTrue(BookingStatus.tentative.isOpen)
+        XCTAssertFalse(BookingStatus.completed.isOpen, "a finished subcontractor booking is not open (isOpenBookingStatus)")
+        XCTAssertFalse(BookingStatus.cancelled.isOpen)
+        XCTAssertTrue(BookingStatus.completed.occupiesDay, "but a completed day was still booked (bookingOccupiesDay)")
     }
 
     // MARK: - Paid hours (payrollHoursResult)
@@ -292,6 +171,22 @@ final class BookingChainCanonicalTests: XCTestCase {
         XCTAssertEqual(CanonicalBusinessEngine.subcontractorDayValue("CUSTOM_HOURS"), 0.5)
     }
 
+    func testAWeekendDayTheCompanyNeverSavedUsesTheDefaults() {
+        let policy = OrgPayrollTimePolicy.fromFirestore(["standardDayStart": "07:30"])
+        XCTAssertEqual(policy.saturday, .defaultSaturday)
+        XCTAssertEqual(policy.sunday, .defaultSunday)
+        // Saturday 24/10, 07:30–13:00: the default window credits the full 8h.
+        XCTAssertEqual(
+            PayrollHoursEngine.compute(
+                booking: LogicFixtures.booking(on: CanonicalBusinessEngine.date(fromDayKey: "2026-10-24")!, slot: .customHours, start: "07:30", end: "13:00"),
+                day: CanonicalBusinessEngine.date(fromDayKey: "2026-10-24")!,
+                policy: policy
+            ).totalPaidHours,
+            8,
+            accuracy: 0.001
+        )
+    }
+
     // MARK: - Clash groups (overlappingIntervalGroups)
 
     func testClashGroupsChainAndBackToBackIsNotAClash() {
@@ -301,5 +196,35 @@ final class BookingChainCanonicalTests: XCTestCase {
         XCTAssertEqual(CanonicalBusinessEngine.overlappingIntervalGroups([am, pm]), [])
         XCTAssertEqual(CanonicalBusinessEngine.overlappingIntervalGroups([am, pm, middle]), [[0, 1, 2]])
         XCTAssertEqual(CanonicalBusinessEngine.overlappingIntervalGroups([am, nil, middle]), [[0, 2]])
+    }
+
+    // MARK: - Weekly report pay
+
+    func testPayeLineShowsPayeNeverZeroAndIsNotTotalled() throws {
+        let paye = try XCTUnwrap(CanonicalBusinessEngine.reportPayCell(CanonicalReportPayLine(isPaye: true, pay: 0)))
+        XCTAssertEqual(paye, CanonicalReportPayCell(pay: nil, label: "PAYE", countsTowardPayTotal: false))
+        let selfEmployed = try XCTUnwrap(CanonicalBusinessEngine.reportPayCell(CanonicalReportPayLine(isPaye: false, pay: 150.004)))
+        XCTAssertEqual(selfEmployed, CanonicalReportPayCell(pay: 150, label: nil, countsTowardPayTotal: true))
+        let noRate = try XCTUnwrap(CanonicalBusinessEngine.reportPayCell(CanonicalReportPayLine(isPaye: false, pay: nil)))
+        XCTAssertEqual(noRate, CanonicalReportPayCell(pay: nil, label: nil, countsTowardPayTotal: false))
+        XCTAssertEqual(CanonicalBusinessEngine.reportPayTotal([
+            CanonicalReportPayLine(isPaye: false, pay: 150),
+            CanonicalReportPayLine(isPaye: true, pay: 120),
+            CanonicalReportPayLine(isPaye: false, pay: 75.5),
+        ]), 225.5)
+        XCTAssertEqual(CanonicalBusinessEngine.reportPersonPayCell([CanonicalReportPayLine(isPaye: true, pay: 0)])?.label, "PAYE")
+        let mixed = try XCTUnwrap(CanonicalBusinessEngine.reportPersonPayCell([
+            CanonicalReportPayLine(isPaye: true, pay: 0),
+            CanonicalReportPayLine(isPaye: false, pay: 200),
+        ]))
+        XCTAssertEqual(mixed, CanonicalReportPayCell(pay: 200, label: nil, countsTowardPayTotal: true))
+    }
+
+    func testEmploymentTypeOnTheDayDecidesPaye() {
+        var user = person(employment: .paye)
+        user.employmentTypeTransitionFrom = .selfEmployed
+        user.employmentTypeEffectiveAt = CanonicalBusinessEngine.date(fromDayKey: "2026-10-28")
+        XCTAssertEqual(user.employmentType(on: londonDay), .selfEmployed)
+        XCTAssertEqual(user.employmentType(on: CanonicalBusinessEngine.date(fromDayKey: "2026-10-28")!), .paye)
     }
 }

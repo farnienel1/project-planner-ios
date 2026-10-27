@@ -115,8 +115,7 @@ enum OperativeBookingInterval {
                 createdAt: source.createdAt,
                 updatedAt: source.updatedAt
             )
-            payable.storedOperativeId = source.storedOperativeId
-            payable.storedProjectId = source.storedProjectId
+            payable.operativeKey = source.operativeKey
             payable.documentId = source.documentId
             result.append(PayCluster(payable: payable))
         }

@@ -165,8 +165,23 @@ nonisolated struct CanonicalUnbookedLabourPerson: Codable, Equatable, Sendable {
     var isAdmin: Bool
     var isSuperAdmin: Bool
     var status: String? = nil
-    /// `users/{uid}.formerUserIds`: invite placeholder ids bookings may still be stored under.
+    /// `users/{uid}.formerUserIds` (invite placeholder ids), from `parseFormerUserIds`. A booking under one counts.
     var formerIds: [String]? = nil
+}
+
+/// The flags `labourBookingKind` reads (`LabourPerson` in the script).
+nonisolated struct CanonicalLabourKindPerson: Codable, Equatable, Sendable {
+    var isActive: Bool
+    var isOperativeMode: Bool
+    var isManager: Bool
+    var isAdmin: Bool
+    var isSuperAdmin: Bool
+}
+
+/// One person for `formerIdAliases`: the current id and the ids they had before.
+nonisolated struct CanonicalFormerIdPerson: Codable, Equatable, Sendable {
+    var id: String
+    var formerIds: [String]
 }
 
 /// One roster profile (`RosterOperative` in the script).
@@ -235,36 +250,6 @@ nonisolated struct CanonicalUnbookedLabourDayInput: Codable, Equatable, Sendable
     var operatives: [CanonicalUnbookedLabourOperative]
     var bookings: [CanonicalUnbookedLabourBooking]
     var holidays: [CanonicalUnbookedLabourHoliday]
-}
-
-/// One stored booking as `parseBookingDocument` reads it (`CanonicalBooking` in the script).
-/// Ids are the stored strings, which may not be UUIDs (a Firebase user id, for example).
-nonisolated struct CanonicalParsedBooking: Codable, Equatable, Sendable {
-    let id: String
-    let operativeId: String
-    let projectId: String
-    let dateMs: Double
-    let timeSlot: String
-    let status: String
-    let bookedBy: String
-    let notes: String
-    let workStartTime: String?
-    let workEndTime: String?
-    let isBreakRemoved: Bool
-    let otMultiplierOverride: Double?
-    let bookingGroupId: String?
-    let createdAtMs: Double?
-    let updatedAtMs: Double?
-    let operativeIdIsUuid: Bool
-    let projectIdIsUuid: Bool
-}
-
-/// `parseBookingDocument` result: a booking plus the legacy spellings it repaired, or the reasons it refused.
-nonisolated struct CanonicalBookingParseResult: Codable, Equatable, Sendable {
-    let ok: Bool
-    let booking: CanonicalParsedBooking?
-    let repairs: [String]?
-    let errors: [String]?
 }
 
 /// The script's `WeekendPayrollSettings`, built from `OrgWeekendDayPayrollSettings` field for field.
@@ -835,27 +820,6 @@ nonisolated enum CanonicalBusinessEngine {
         decode([CanonicalMinuteInterval].self, function: "subtractMinuteIntervals", arguments: [window, covered])
     }
 
-    // MARK: - Stored bookings
-
-    /// `parseBookingDocument` for each `(documentId, data)` pair, in order, in one script call.
-    /// `data` must be JSON: the caller turns a Firestore Timestamp into `{ seconds, nanoseconds }`.
-    /// Nil only when the script did not run; a refused document comes back with `ok == false`.
-    static func parseBookingDocuments(
-        _ documents: [(id: String, data: [String: Any])],
-        timeZone: String = "Europe/London"
-    ) -> [CanonicalBookingParseResult]? {
-        if documents.isEmpty { return [] }
-        let rows: [[String: Any]] = documents.map { ["id": $0.id, "data": $0.data] }
-        guard let rowsJSON = jsonObjectFragment(rows),
-              let options = jsonObjectFragment(["timeZone": timeZone]) else {
-            return nil
-        }
-        return decodeExpression(
-            [CanonicalBookingParseResult].self,
-            "(\(rowsJSON)).map(function (row) { return ProjectPlannerCanonical.parseBookingDocument(row.id, row.data, \(options)) })"
-        )
-    }
-
     // MARK: - Annual leave against bookings
 
     /// Leave-clash and half-day-cover rows for approved leave inside the window.
@@ -871,6 +835,180 @@ nonisolated enum CanonicalBusinessEngine {
     /// The same rows as `unbookedLabourRows` for one London day. Not a second person loop.
     static func unbookedLabourRowsOnDay(_ input: CanonicalUnbookedLabourDayInput) -> [CanonicalUnbookedLabourRow]? {
         decode([CanonicalUnbookedLabourRow].self, function: "unbookedLabourRowsOnDay", arguments: [input])
+    }
+
+    /// True when a booking with this stored status fills its day (confirmed, tentative, pending, completed).
+    /// Nil when the script did not answer.
+    static func bookingOccupiesDay(_ status: String) -> Bool? {
+        decode(Bool.self, function: "bookingOccupiesDay", arguments: [status])
+    }
+
+    /// `"operative"`, `"manager"`, or nil when the person is not bookable labour (inactive, or no role flags).
+    /// Nil also when the script did not answer.
+    static func labourBookingKind(_ person: CanonicalLabourKindPerson) -> String? {
+        guard let json = jsonFragment(person) else { return nil }
+        let kind = decodeExpression(String.self, "(ProjectPlannerCanonical.labourBookingKind(\(json)) || '')")
+        return kind?.isEmpty == false ? kind : nil
+    }
+
+    /// Former id → current id, so a booking stored under an invite placeholder names the person now.
+    static func formerIdAliases(_ people: [CanonicalFormerIdPerson]) -> [String: String]? {
+        decode([String: String].self, function: "formerIdAliases", arguments: [people])
+    }
+
+    /// `formerUserIds` from a users document: strings only, trimmed, unique. Nil when the script did not answer.
+    /// `raw` is the stored field as Firestore returned it.
+    static func parseFormerUserIds(_ raw: Any?) -> [String]? {
+        let payload: [String: Any] = ["formerUserIds": raw ?? NSNull()]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            // Not JSON (for example a Timestamp in the array): the script still drops anything that is not a string.
+            let strings = (raw as? [Any])?.compactMap { $0 as? String } ?? []
+            return decode([String].self, function: "parseFormerUserIds", arguments: [["formerUserIds": strings]])
+        }
+        return decodeExpression([String].self, "ProjectPlannerCanonical.parseFormerUserIds(\(json))")
+    }
+
+    // MARK: - Booking documents and booking people
+
+    /// One operative booking as `parseBookingDocument` reads it. Dates are milliseconds.
+    struct CanonicalParsedBooking: Codable, Equatable, Sendable {
+        var id: String
+        var operativeId: String
+        var projectId: String
+        var dateMs: Double
+        var timeSlot: String
+        var status: String
+        var bookedBy: String
+        var notes: String
+        var isBreakRemoved: Bool
+        var workStartTime: String?
+        var workEndTime: String?
+        var otMultiplierOverride: Double?
+        var bookingGroupId: String?
+        var createdAtMs: Double?
+        var updatedAtMs: Double?
+    }
+
+    /// One manager site booking as `parseManagerSiteBookingDocument` reads it. Dates are milliseconds.
+    struct CanonicalParsedManagerSiteBooking: Codable, Equatable, Sendable {
+        var id: String
+        var userId: String
+        var dateMs: Double
+        var timeSlot: String
+        var locationType: String
+        var locationId: String?
+        var customLocationName: String?
+        var workStartTime: String?
+        var workEndTime: String?
+        var isBreakRemoved: Bool
+        var bookingGroupId: String?
+        var createdAtMs: Double?
+        var updatedAtMs: Double?
+    }
+
+    /// Reads many booking documents in one script call. `documents` are `["id": docId, "data": json]` with
+    /// Timestamps already turned into `{ seconds, nanoseconds }`. A document the rulebook refuses is absent
+    /// from the result, as on web. Nil when the script did not answer.
+    static func parseBookingDocuments(_ documents: [[String: Any]]) -> [CanonicalParsedBooking]? {
+        guard let json = jsonArrayText(documents) else { return nil }
+        return decodeExpression(
+            [CanonicalParsedBooking].self,
+            "(\(json)).map(function(d){var r=ProjectPlannerCanonical.parseBookingDocument(d.id,d.data);return r.ok?r.booking:null;}).filter(function(b){return b;})"
+        )
+    }
+
+    /// Manager site bookings in one script call, same shape as `parseBookingDocuments`.
+    static func parseManagerSiteBookingDocuments(_ documents: [[String: Any]]) -> [CanonicalParsedManagerSiteBooking]? {
+        guard let json = jsonArrayText(documents) else { return nil }
+        return decodeExpression(
+            [CanonicalParsedManagerSiteBooking].self,
+            "(\(json)).map(function(d){var r=ProjectPlannerCanonical.parseManagerSiteBookingDocument(d.id,d.data);return r.ok?r.booking:null;}).filter(function(b){return b;})"
+        )
+    }
+
+    private static func jsonArrayText(_ value: [[String: Any]]) -> String? {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        return text
+    }
+
+    /// A roster person for `resolveBookingPerson` and `bookingIdsForAccount`.
+    struct CanonicalBookingPersonAccount: Codable, Equatable, Hashable, Sendable {
+        var id: String
+        var email: String?
+        var formerIds: [String]?
+        var aliasIds: [String]?
+    }
+
+    struct CanonicalBookingPersonOperative: Codable, Equatable, Hashable, Sendable {
+        var id: String
+        var email: String?
+    }
+
+    struct CanonicalBookingPersonInput: Codable, Equatable, Hashable, Sendable {
+        var accounts: [CanonicalBookingPersonAccount]
+        var operatives: [CanonicalBookingPersonOperative]
+    }
+
+    struct CanonicalResolvedBookingPerson: Codable, Equatable, Sendable {
+        var accountId: String?
+        var operativeId: String?
+        var email: String?
+    }
+
+    /// The account and catalogue row a stored booking `operativeId` names. Nil when the script did not answer.
+    static func resolveBookingPerson(_ operativeId: String, _ input: CanonicalBookingPersonInput) -> CanonicalResolvedBookingPerson? {
+        decode(CanonicalResolvedBookingPerson.self, function: "resolveBookingPerson", arguments: [operativeId, input])
+    }
+
+    struct CanonicalRemovableBooking: Codable, Equatable, Sendable {
+        var id: String
+        var operativeId: String
+        var dateMs: Double
+    }
+
+    private struct CanonicalPersonDeleteInput: Codable, Sendable {
+        var bookings: [CanonicalRemovableBooking]
+        var operativeIds: [String]
+        var nowIso: String
+        var timeZone: String
+    }
+
+    /// Booking ids to remove when a person is deleted: theirs, dated today or later in the organisation zone.
+    /// Past bookings stay as history, and names are never matched. Nil when the script did not answer.
+    static func bookingsToRemoveOnOperativeDelete(
+        _ bookings: [CanonicalRemovableBooking],
+        operativeIds: [String],
+        now: Date
+    ) -> [String]? {
+        decode([String].self, function: "bookingsToRemoveOnOperativeDelete", arguments: [CanonicalPersonDeleteInput(
+            bookings: bookings,
+            operativeIds: operativeIds,
+            nowIso: ISO8601DateFormatter().string(from: now),
+            timeZone: businessCalendar.timeZone.identifier
+        )])
+    }
+
+    /// Every stored id that names the same person as `operativeId`. Nil when the script did not answer.
+    static func bookingIdsForPerson(_ operativeId: String, _ input: CanonicalBookingPersonInput) -> [String]? {
+        decode([String].self, function: "bookingIdsForPerson", arguments: [operativeId, input])
+    }
+
+    /// One grouping key per person (`account:…`, `operative:…` or `id:…`), so a re-added person's bookings under an
+    /// old and a new id land together. Nil when the script did not answer.
+    static func bookingPersonKey(_ operativeId: String, _ input: CanonicalBookingPersonInput) -> String? {
+        decode(String.self, function: "bookingPersonKey", arguments: [operativeId, input])
+    }
+
+    /// Every stored `operativeId` this account's bookings may carry. Nil when the script did not answer.
+    static func bookingIdsForAccount(
+        _ account: CanonicalBookingPersonAccount,
+        operatives: [CanonicalBookingPersonOperative]
+    ) -> [String]? {
+        decode([String].self, function: "bookingIdsForAccount", arguments: [account, operatives])
     }
 
     /// `oldest` or `newest`. A missing or unrecognised value is `oldest`. Nil when the script did not answer.
@@ -1131,43 +1269,12 @@ nonisolated enum CanonicalBusinessEngine {
         decode(Double.self, function: "subcontractorDayValue", arguments: [timeSlot])
     }
 
-    // MARK: - Booking identity
+    // MARK: - Open bookings
 
-    /// Confirmed, Tentative (and `pending`), and Completed put a person on a job that day; Cancelled does not.
-    /// Nil when the script did not run (bookings are then unreadable too, and the warning scan is skipped).
-    static func bookingOccupiesDay(_ status: String) -> Bool? {
-        decode(Bool.self, function: "bookingOccupiesDay", arguments: [status])
-    }
-
-    /// `operative`, `manager`, or nil (not labour) for a person, as the scheduling picker and unbooked rule share it.
-    static func labourBookingKind(_ person: CanonicalUnbookedLabourPerson) -> String? {
-        decode(String.self, function: "labourBookingKind", arguments: [person])
-    }
-
-    /// `users/{uid}.formerUserIds` as a clean id list. Nil only when the script did not run.
-    static func parseFormerUserIds(_ data: [String: Any]) -> [String]? {
-        let ids = data["formerUserIds"] as? [Any] ?? []
-        let clean: [String: Any] = ["formerUserIds": ids.compactMap { $0 as? String }]
-        guard let json = jsonObjectFragment(clean) else { return nil }
-        return decodeExpression([String].self, "ProjectPlannerCanonical.parseFormerUserIds(\(json))")
-    }
-
-    /// Fields to write on `users/{authUid}` when an invite placeholder is copied onto it.
-    static func inviteMigrationFormerIdWriteFields(placeholderId: String, authUid: String, existingFormerIds: [String]) -> [String: [String]]? {
-        let payload: [String: Any] = [
-            "placeholderId": placeholderId,
-            "authUid": authUid,
-            "existing": ["formerUserIds": existingFormerIds],
-        ]
-        guard let json = jsonObjectFragment(payload) else { return nil }
-        return decodeExpression([String: [String]].self, "ProjectPlannerCanonical.inviteMigrationFormerIdWriteFields(\(json))")
-    }
-
-    /// Former id → current `users/{uid}` id.
-    static func formerIdAliases(_ people: [(id: String, formerIds: [String])]) -> [String: String]? {
-        let rows: [[String: Any]] = people.map { ["id": $0.id, "formerIds": $0.formerIds] }
-        guard let json = jsonObjectFragment(rows) else { return nil }
-        return decodeExpression([String: String].self, "ProjectPlannerCanonical.formerIdAliases(\(json))")
+    /// Still on the job: Confirmed or Tentative (`isOpenBookingStatus`). Completed and Cancelled are not.
+    /// Nil only when the script did not run.
+    static func isOpenBookingStatus(_ status: String) -> Bool? {
+        decode(Bool.self, function: "isOpenBookingStatus", arguments: [status])
     }
 
     // MARK: - Weekly report pay

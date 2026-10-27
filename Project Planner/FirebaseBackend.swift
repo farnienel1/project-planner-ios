@@ -230,7 +230,7 @@ class FirebaseBackend: ObservableObject {
     private var organizationDocumentListenerTarget: String?
     private var bookingsLiveListener: ListenerRegistration?
     private var bookingsLiveListenerTarget: String?
-    /// Counts from the last booking read: how many documents the shared parser kept, refused, or repaired.
+    /// Counts from the last booking read: how many documents the shared parser kept or refused.
     @Published private(set) var lastBookingDecodeReport: BookingDecodeReport?
     private var managerScheduleLiveListener: ListenerRegistration?
     private var managerScheduleLiveListenerTarget: String?
@@ -4297,7 +4297,7 @@ class FirebaseBackend: ObservableObject {
         )
         parsed.documentName = data["name"] as? String ?? ""
         parsed.documentDisplayName = data["displayName"] as? String ?? ""
-        parsed.formerUserIds = CanonicalBusinessEngine.parseFormerUserIds(data) ?? []
+        parsed.formerUserIds = CanonicalBusinessEngine.parseFormerUserIds(data["formerUserIds"]) ?? []
         return parsed
     }
     
@@ -7102,8 +7102,9 @@ class FirebaseBackend: ObservableObject {
         
         var bookingData: [String: Any] = [
             "id": booking.documentKey,
-            "operativeId": booking.operativeKey,
-            "projectId": booking.projectKey,
+            // A Firebase Auth uid stays a uid (web #189). Writing the in-app UUID would book nobody.
+            "operativeId": booking.storedOperativeId,
+            "projectId": booking.projectId.uuidString,
             "date": Timestamp(date: booking.date),
             "timeSlot": booking.timeSlot.rawValue,
             "bookedBy": booking.bookedBy,
@@ -7134,7 +7135,7 @@ class FirebaseBackend: ObservableObject {
             bookingData["bookingGroupId"] = FieldValue.delete()
         }
 
-        print("🔥🔥🔥 DEBUG: Saving booking to organizations/\(orgId)/bookings/\(booking.documentKey)")
+        print("🔥🔥🔥 DEBUG: Saving booking to organizations/\(orgId)/bookings/\(booking.id.uuidString)")
         
         try await db.collection("organizations").document(orgId).collection("bookings").document(booking.documentKey).setData(bookingData, merge: true)
         
@@ -7191,14 +7192,7 @@ class FirebaseBackend: ObservableObject {
             bookingsQuery = bookingsQuery.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
         }
         let snapshot = try await getQueryPreferringServer(bookingsQuery)
-        
-        guard let bookings = bookingsFromFirestoreDocuments(snapshot.documents, source: "load") else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 500,
-                userInfo: [NSLocalizedDescriptionKey: "Bookings could not be read. Pull to refresh."]
-            )
-        }
+        let bookings = bookingsFromFirestoreDocuments(snapshot.documents)
         if bookings.isEmpty {
             NSLog("BOOKINGS_EMPTY org=%@ start=%@ fromCache=%d — no booking documents in range", orgId, start.map { CanonicalBusinessEngine.isoString(from: $0) } ?? "all", snapshot.metadata.isFromCache ? 1 : 0)
         }
@@ -7219,50 +7213,58 @@ class FirebaseBackend: ObservableObject {
         }
     }
 
-    /// Reads booking documents with the shared `parseBookingDocument`, the same reader the web app uses.
-    /// A refused document is logged with its id and reasons; it is never dropped silently.
-    func bookingsFromFirestoreDocuments(_ docs: [QueryDocumentSnapshot], source: String) -> [Booking]? {
-        let inputs = docs.map { (id: $0.documentID, data: Self.canonicalJSONObject($0.data())) }
-        guard let results = CanonicalBusinessEngine.parseBookingDocuments(inputs) else {
-            NSLog("BOOKINGS_PARSE_FAILED source=%@ docs=%d — canonical script did not run", source, docs.count)
-            lastBookingDecodeReport = BookingDecodeReport(total: docs.count, refused: docs.count, repaired: 0, scriptFailed: true)
-            return nil
+    /// Firestore values as JSON for the rulebook. Timestamps become `{ seconds, nanoseconds }`, which
+    /// `bookingDateMs` reads; references become their path. Other non-JSON values become null.
+    nonisolated static func firestoreJSON(_ value: Any) -> Any {
+        switch value {
+        case let timestamp as Timestamp:
+            return ["seconds": timestamp.seconds, "nanoseconds": timestamp.nanoseconds]
+        case let date as Date:
+            return date.timeIntervalSince1970 * 1000
+        case let reference as DocumentReference:
+            return reference.path
+        case let map as [String: Any]:
+            return map.mapValues { firestoreJSON($0) }
+        case let list as [Any]:
+            return list.map { firestoreJSON($0) }
+        case is String, is NSNumber, is NSNull:
+            return value
+        default:
+            return NSNull()
         }
-        var bookings: [Booking] = []
-        bookings.reserveCapacity(results.count)
-        var refused = 0
-        var repaired = 0
-        for (doc, result) in zip(docs, results) {
-            guard result.ok, let row = result.booking, let booking = Self.booking(from: row) else {
-                refused += 1
-                NSLog("BOOKING_REFUSED source=%@ doc=%@ errors=%@", source, doc.documentID, (result.errors ?? ["unreadable"]).joined(separator: ","))
-                continue
-            }
-            if let repairs = result.repairs, !repairs.isEmpty {
-                repaired += 1
-                #if DEBUG
-                print("BOOKING_REPAIRED source=\(source) doc=\(doc.documentID) repairs=\(repairs.joined(separator: ","))")
-                #endif
-            }
-            bookings.append(booking)
+    }
+
+    /// Operative bookings read through the rulebook's `parseBookingDocument`, the same reader web uses, so a
+    /// lower-case status, a slot alias or a text date no longer drops a booking on iOS only.
+    /// Falls back to `bookingFromFirestoreDocument` when the script does not answer.
+    func bookingsFromFirestoreDocuments(_ documents: [QueryDocumentSnapshot]) -> [Booking] {
+        let payload: [[String: Any]] = documents.map { ["id": $0.documentID, "data": Self.firestoreJSON($0.data())] }
+        guard let parsed = CanonicalBusinessEngine.parseBookingDocuments(payload) else {
+            NSLog("BOOKINGS_PARSE_FAILED docs=%d — canonical script did not answer; using the fallback reader", documents.count)
+            let fallback = documents.compactMap { bookingFromFirestoreDocument($0) }
+            lastBookingDecodeReport = BookingDecodeReport(total: documents.count, refused: documents.count - fallback.count, repaired: 0, scriptFailed: true)
+            return fallback
         }
-        lastBookingDecodeReport = BookingDecodeReport(total: docs.count, refused: refused, repaired: repaired, scriptFailed: false)
-        if refused > 0 || repaired > 0 {
-            NSLog("BOOKINGS_DECODED source=%@ kept=%d refused=%d repaired=%d", source, bookings.count, refused, repaired)
+        let bookings = parsed.compactMap(Self.booking(fromCanonical:))
+        lastBookingDecodeReport = BookingDecodeReport(total: documents.count, refused: documents.count - bookings.count, repaired: 0, scriptFailed: false)
+        if bookings.count < documents.count {
+            NSLog("BOOKINGS_REFUSED kept=%d of %d — see BOOKING_UNREADABLE_ON_IOS lines for the ids", bookings.count, documents.count)
         }
         return bookings
     }
 
-    /// One parsed canonical booking as the Swift model. Ids that are not UUIDs keep their stored string.
-    static func booking(from row: CanonicalParsedBooking) -> Booking? {
-        guard let timeSlot = TimeSlot(rawValue: row.timeSlot) ?? TimeSlot.fromStored(row.timeSlot),
+    nonisolated static func booking(fromCanonical row: CanonicalBusinessEngine.CanonicalParsedBooking) -> Booking? {
+        guard let projectId = UUID(uuidString: row.projectId),
+              let timeSlot = TimeSlot.fromStored(row.timeSlot),
               let status = BookingStatus(rawValue: row.status) else {
+            NSLog("BOOKING_UNREADABLE_ON_IOS id=%@ project=%@ slot=%@ status=%@", row.id, row.projectId, row.timeSlot, row.status)
             return nil
         }
         var booking = Booking(
-            id: StableBookingIdentity.uuid(for: row.id),
-            operativeId: StableBookingIdentity.uuid(for: row.operativeId),
-            projectId: StableBookingIdentity.uuid(for: row.projectId),
+            // A document id that is not a UUID keeps one stable in-app id instead of a new random one per read.
+            id: UUID(uuidString: row.id) ?? OperativeKeyRegistry.derivedUUID(for: "booking.\(row.id)"),
+            operativeId: Booking.internalOperativeId(for: row.operativeId),
+            projectId: projectId,
             date: Date(timeIntervalSince1970: row.dateMs / 1000),
             timeSlot: timeSlot,
             bookedBy: row.bookedBy,
@@ -7276,42 +7278,90 @@ class FirebaseBackend: ObservableObject {
             createdAt: row.createdAtMs.map { Date(timeIntervalSince1970: $0 / 1000) },
             updatedAt: row.updatedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }
         )
-        booking.storedOperativeId = StableBookingIdentity.storedIdIfNotUUID(row.operativeId)
-        booking.storedProjectId = StableBookingIdentity.storedIdIfNotUUID(row.projectId)
+        booking.operativeKey = row.operativeId
         // Firestore ids are case-sensitive: keep any id that `uuidString` would not spell the same way.
         booking.documentId = row.id == booking.id.uuidString ? nil : row.id
         return booking
     }
 
-    /// Firestore field values as plain JSON for the canonical script. A Timestamp becomes
-    /// `{ seconds, nanoseconds }`, the shape `bookingDateMs` reads; other non-JSON values are left out.
-    nonisolated static func canonicalJSONObject(_ data: [String: Any]) -> [String: Any] {
-        var out: [String: Any] = [:]
-        for (key, value) in data {
-            if let converted = canonicalJSONValue(value) { out[key] = converted }
+    /// Manager site bookings read through the rulebook's `parseManagerSiteBookingDocument` (web uses the same reader).
+    func managerSiteBookingsFromFirestoreDocuments(_ documents: [QueryDocumentSnapshot]) -> [ManagerSiteBooking] {
+        let payload: [[String: Any]] = documents.map { ["id": $0.documentID, "data": Self.firestoreJSON($0.data())] }
+        guard let parsed = CanonicalBusinessEngine.parseManagerSiteBookingDocuments(payload) else {
+            return documents.compactMap { managerSiteBookingFromFirestoreDocument($0) }
         }
-        return out
+        return parsed.compactMap { row in
+            guard let timeSlot = ManagerTimeSlot.fromStored(row.timeSlot),
+                  let locationType = ManagerLocationType(rawValue: row.locationType) else { return nil }
+            return ManagerSiteBooking(
+                id: UUID(uuidString: row.id) ?? OperativeKeyRegistry.derivedUUID(for: "managerBooking.\(row.id)"),
+                userId: row.userId,
+                date: Date(timeIntervalSince1970: row.dateMs / 1000),
+                timeSlot: timeSlot,
+                locationType: locationType,
+                locationId: row.locationId.flatMap { UUID(uuidString: $0) },
+                customLocationName: row.customLocationName,
+                workStartTime: row.workStartTime,
+                workEndTime: row.workEndTime,
+                isBreakRemoved: row.isBreakRemoved,
+                bookingGroupId: row.bookingGroupId,
+                createdAt: row.createdAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
+                updatedAt: row.updatedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date()
+            )
+        }
     }
 
-    nonisolated private static func canonicalJSONValue(_ value: Any) -> Any? {
-        switch value {
-        case let timestamp as Timestamp:
-            return ["seconds": timestamp.seconds, "nanoseconds": Int(timestamp.nanoseconds)]
-        case let date as Date:
-            return date.timeIntervalSince1970 * 1000
-        case let text as String:
-            return text
-        case let number as NSNumber:
-            return number
-        case let list as [Any]:
-            return list.compactMap { canonicalJSONValue($0) }
-        case let map as [String: Any]:
-            return canonicalJSONObject(map)
-        case is NSNull:
-            return NSNull()
-        default:
-            return nil
-        }
+    func bookingFromFirestoreDocument(_ doc: QueryDocumentSnapshot) -> Booking? {
+        let data = doc.data()
+            
+            // operativeId may be a Firebase Auth uid, not a UUID (web #189). Keep the booking and its stored id.
+            guard let operativeIdString = (data["operativeId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !operativeIdString.isEmpty,
+                  let projectIdString = data["projectId"] as? String,
+                  let projectId = UUID(uuidString: projectIdString),
+                  let date = (data["date"] as? Timestamp)?.dateValue(),
+                  let timeSlotString = data["timeSlot"] as? String,
+                  let timeSlot = TimeSlot.fromStored(timeSlotString),
+                  let bookedBy = data["bookedBy"] as? String,
+                  let statusString = data["status"] as? String,
+                  let status = BookingStatus(rawValue: statusString) else {
+                return nil
+            }
+            
+            let id = UUID(uuidString: doc.documentID) ?? UUID()
+            let notes = data["notes"] as? String
+            let workStartTime = data["workStartTime"] as? String
+            let workEndTime = data["workEndTime"] as? String
+            let isBreakRemoved = (data["isBreakRemoved"] as? Bool) ?? false
+            let otMultiplierOverride: Double? = {
+                guard let v = data["otMultiplierOverride"] else { return nil }
+                if let n = v as? NSNumber { return n.doubleValue }
+                if let d = v as? Double { return d }
+                return nil
+            }()
+            let bookingGroupId = data["bookingGroupId"] as? String
+            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+
+            var booking = Booking(
+                id: id,
+                operativeId: Booking.internalOperativeId(for: operativeIdString),
+                projectId: projectId,
+                date: date,
+                timeSlot: timeSlot,
+                bookedBy: bookedBy,
+                notes: notes,
+                status: status,
+                workStartTime: workStartTime,
+                workEndTime: workEndTime,
+                isBreakRemoved: isBreakRemoved,
+                otMultiplierOverride: otMultiplierOverride,
+                bookingGroupId: bookingGroupId,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
+            booking.operativeKey = operativeIdString
+            return booking
     }
 
     func listenBookings(
@@ -7358,9 +7408,7 @@ class FirebaseBackend: ObservableObject {
                         print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT — ignored an empty cache snapshot")
                         return
                     }
-                    guard let list = self.bookingsFromFirestoreDocuments(snapshot.documents, source: fromCache ? "listener-cache" : "listener-server") else {
-                        return
-                    }
+                    let list = self.bookingsFromFirestoreDocuments(snapshot.documents)
                     onChange(list, fromCache)
                 }
             }
@@ -7415,7 +7463,7 @@ class FirebaseBackend: ObservableObject {
             query = query.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
         }
         let snapshot = try await getQueryPreferringServer(query)
-        return snapshot.documents.compactMap { managerSiteBookingFromFirestoreDocument($0) }
+        return managerSiteBookingsFromFirestoreDocuments(snapshot.documents)
     }
 
     func managerSiteBookingFromFirestoreDocument(_ doc: QueryDocumentSnapshot) -> ManagerSiteBooking? {
@@ -7423,14 +7471,9 @@ class FirebaseBackend: ObservableObject {
         guard let userId = data["userId"] as? String,
               let date = (data["date"] as? Timestamp)?.dateValue(),
               let timeSlotRaw = data["timeSlot"] as? String,
-              let timeSlot = ManagerTimeSlot.fromStored(timeSlotRaw) else {
-            NSLog("MANAGER_BOOKING_REFUSED doc=%@ — userId, date Timestamp and a manager timeSlot are required", doc.documentID)
-            return nil
-        }
-        // Web (`parseManagerSiteBooking`) reads a missing or unknown location as a project booking.
-        // Dropping it here hid a covered day and showed the person as unbooked.
-        let locationType = (data["locationType"] as? String)
-            .flatMap { ManagerLocationType(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? .project
+              let timeSlot = ManagerTimeSlot.fromStored(timeSlotRaw),
+              let locationTypeRaw = data["locationType"] as? String,
+              let locationType = ManagerLocationType(rawValue: locationTypeRaw) else { return nil }
         let id = UUID(uuidString: doc.documentID) ?? UUID()
         let locationId = (data["locationId"] as? String).flatMap { UUID(uuidString: $0) }
         let customLocationName = data["customLocationName"] as? String
@@ -7498,7 +7541,7 @@ class FirebaseBackend: ObservableObject {
                         print("🔥🔥🔥 DEBUG: manager schedule kept — ignored an empty cache snapshot")
                         return
                     }
-                    let list = snapshot.documents.compactMap { self.managerSiteBookingFromFirestoreDocument($0) }
+                    let list = self.managerSiteBookingsFromFirestoreDocuments(snapshot.documents)
                     onChange(list)
                 }
             }
@@ -8660,10 +8703,13 @@ extension FirebaseBackend {
         try await docRef.setData(data)
 
         if material.catalogueItemId == nil {
-            do {
-                try await upsertMaterialCatalogueFromMaterial(material, organizationId: orgId)
-            } catch {
-                print("⚠️ [FirebaseBackend] Catalogue upsert from material failed: \(error.localizedDescription)")
+            // Reads the whole catalogue first. The material line is already saved, so this must not hold the sheet open.
+            Task {
+                do {
+                    try await self.upsertMaterialCatalogueFromMaterial(material, organizationId: orgId)
+                } catch {
+                    print("⚠️ [FirebaseBackend] Catalogue upsert from material failed: \(error.localizedDescription)")
+                }
             }
         }
         
@@ -9098,14 +9144,7 @@ extension FirebaseBackend {
     
     func saveWholesaler(_ wholesaler: Wholesaler, organizationId: String) async throws {
         let contactsData = wholesaler.contacts.map { contact in
-            let row: [String: Any] = [
-                "id": contact.id.uuidString,
-                "name": contact.name,
-                "email": contact.email,
-                "createdAt": Timestamp(date: contact.createdAt),
-                "isPrimary": contact.isPrimary
-            ]
-            return row
+            wholesalerContactFirestoreRow(contact)
         }
         
         var data: [String: Any] = [
@@ -9132,6 +9171,19 @@ extension FirebaseBackend {
             .collection("wholesalers")
             .document(wholesaler.id.uuidString)
             .setData(data, merge: true)
+    }
+
+    /// One `contacts[]` row, the shape web `wholesalerPayload` writes. `phone` is null when no mobile is saved.
+    private func wholesalerContactFirestoreRow(_ contact: WholesalerContact) -> [String: Any] {
+        let phone = contact.phone?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return [
+            "id": contact.id.uuidString,
+            "name": contact.name,
+            "email": contact.email,
+            "createdAt": Timestamp(date: contact.createdAt),
+            "isPrimary": contact.isPrimary,
+            "phone": phone.isEmpty ? NSNull() : phone
+        ]
     }
 
     func deleteWholesaler(wholesalerId: UUID, organizationId: String) async throws {
@@ -9167,12 +9219,14 @@ extension FirebaseBackend {
                    let contactName = contactData["name"] as? String,
                    let contactEmail = contactData["email"] as? String,
                    let contactCreatedAt = (contactData["createdAt"] as? Timestamp)?.dateValue() {
+                    let phone = (contactData["phone"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let contact = WholesalerContact(
                         id: contactId,
                         name: contactName,
                         email: contactEmail,
                         isPrimary: contactData["isPrimary"] as? Bool ?? false,
-                        createdAt: contactCreatedAt
+                        createdAt: contactCreatedAt,
+                        phone: phone?.isEmpty == false ? phone : nil
                     )
                     contacts.append(contact)
                 }
@@ -9226,23 +9280,16 @@ extension FirebaseBackend {
         if contactsArray.contains(where: { ($0["id"] as? String) == contactIdString }) {
             // Contact already exists, update it instead
             if let index = contactsArray.firstIndex(where: { ($0["id"] as? String) == contactIdString }) {
-                contactsArray[index] = [
-                    "id": contact.id.uuidString,
-                    "name": contact.name,
-                    "email": contact.email,
-                    "createdAt": Timestamp(date: contact.createdAt),
-                    "isPrimary": contact.isPrimary
-                ]
+                var row = wholesalerContactFirestoreRow(contact)
+                // Keep a mobile saved on web when this edit did not carry one.
+                if contact.phone == nil, let stored = contactsArray[index]["phone"] {
+                    row["phone"] = stored
+                }
+                contactsArray[index] = row
             }
         } else {
             // Add new contact
-            contactsArray.append([
-                "id": contact.id.uuidString,
-                "name": contact.name,
-                "email": contact.email,
-                "createdAt": Timestamp(date: contact.createdAt),
-                "isPrimary": contact.isPrimary
-            ])
+            contactsArray.append(wholesalerContactFirestoreRow(contact))
         }
         
         // Update the wholesaler with the new contacts array

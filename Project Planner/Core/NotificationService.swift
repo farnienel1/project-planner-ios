@@ -33,6 +33,9 @@ class NotificationService: ObservableObject {
     private var notificationsListener: ListenerRegistration?
     private var listenerScopeKey: String?
     private var didPrimeNotificationStream = false
+    /// Consecutive inbox listener errors. A failed listener is re-attached after a growing delay
+    /// so one error does not leave only on-device rows for the rest of the session.
+    private var notificationsListenerFailures = 0
     private var hasRequestedLocalNotificationPermission = false
     private var didLoadPersistedLocalAlertDedupKeys = false
     /// FIFO order for dedupe keys — must not use `Set`→`Array` truncation (order is undefined and evicts random keys).
@@ -394,13 +397,15 @@ class NotificationService: ObservableObject {
             await userStore.loadOrganizationUsers()
         }
         
+        // `resolveBookingPerson`: a person booked under their uid or a former invite id, with no catalogue row, is still told.
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
         for recipient in recipients {
-            guard let operative = operativeStore.allOperatives.first(where: { $0.id == recipient.operativeId }) else { continue }
-            let normalizedEmail = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !normalizedEmail.isEmpty else { continue }
-            guard let user = userStore.organizationUsers.first(where: {
+            let person = people.person(for: recipient.operativeId)
+            let normalizedEmail = (person.operative?.email ?? person.user?.email ?? "")
+                .lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let user = normalizedEmail.isEmpty ? person.user : (userStore.organizationUsers.first(where: {
                 $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
-            }) else { continue }
+            }) ?? person.user) else { continue }
             
             let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(user.id)
             let dateText = recipient.dates
@@ -564,15 +569,23 @@ class NotificationService: ObservableObject {
         materialName: String,
         addedByName: String,
         addedByUserId: String?,
-        extraRecipientUserIds: [String]
+        extraRecipientUserIds: [String],
+        rulebookRecipientUserIds: [String]? = nil
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let adder = addedByUserId.map(resolvedRecipientUserId)
-        var recipientIds = Set(extraRecipientUserIds.map(resolvedRecipientUserId))
-        for user in userStore?.organizationUsers ?? [] {
-            if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
-                recipientIds.insert(resolvedRecipientUserId(user.id))
+        var recipientIds: Set<String>
+        if let rulebookRecipientUserIds {
+            // `materialOrderRecipients`: the job's managers only.
+            recipientIds = Set(rulebookRecipientUserIds.map(resolvedRecipientUserId))
+        } else {
+            // Previous recipients until the packed script has `materialOrderRecipients`.
+            recipientIds = Set(extraRecipientUserIds.map(resolvedRecipientUserId))
+            for user in userStore?.organizationUsers ?? [] {
+                if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin {
+                    recipientIds.insert(resolvedRecipientUserId(user.id))
+                }
             }
         }
         if let adder {
@@ -584,7 +597,7 @@ class NotificationService: ObservableObject {
         for userId in recipientIds {
             let notification = AppNotification(
                 organizationId: organizationId,
-                type: .materialAdded,
+                type: .materialOrderPlaced,
                 title: "Material added",
                 message: "\(addedByName) added \(detail) on \(siteName).",
                 userId: userId,
@@ -1538,6 +1551,22 @@ class NotificationService: ObservableObject {
         triggerLocalAlertIfNeeded(for: notification)
     }
 
+    /// A Firestore listener stops for good after an error. Drop it and load again after 5, 10 … 60 seconds,
+    /// unless the signed-in scope changed in the meantime. `loadNotifications` re-attaches the listener.
+    private func retryNotificationsListener(scopeKey: String) {
+        guard listenerScopeKey == scopeKey else { return }
+        notificationsListener?.remove()
+        notificationsListener = nil
+        listenerScopeKey = nil
+        notificationsListenerFailures += 1
+        let delaySeconds = UInt64(min(60, 5 * notificationsListenerFailures))
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delaySeconds * 1_000_000_000)
+            guard let self, self.listenerScopeKey == nil else { return }
+            await self.loadNotifications()
+        }
+    }
+
     private func startNotificationsListenerIfNeeded(organizationId: String, userId: String) {
         let key = "\(organizationId)|\(userId)"
         if listenerScopeKey == key, notificationsListener != nil {
@@ -1556,12 +1585,16 @@ class NotificationService: ObservableObject {
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error {
                     print("🔥🔥🔥 DEBUG: Notifications listener error: \(error.localizedDescription)")
+                    Task { @MainActor in
+                        self?.retryNotificationsListener(scopeKey: key)
+                    }
                     return
                 }
                 guard let snapshot else { return }
                 Task { @MainActor in
                     guard let self else { return }
                     guard let currentUser = self.userStore?.currentUser else { return }
+                    self.notificationsListenerFailures = 0
 
                     let parsed = snapshot.documents.compactMap { self.parseNotificationDocument($0) }
                     self.capturePendingDeadlineNotifications(from: parsed, currentUser: currentUser)
@@ -2229,7 +2262,8 @@ class NotificationService: ObservableObject {
         guard let visible = CanonicalBusinessEngine.visibleSortedInboxNotifications(rows, userId: userId) else {
             return items
         }
-        let byId = Dictionary(uniqueKeysWithValues: items.map { ($0.id.uuidString, $0) })
+        // A repeated id keeps the first row. uniqueKeysWithValues would crash on it.
+        let byId = Dictionary(items.map { ($0.id.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
         return visible.compactMap { byId[$0.id] }
     }
 

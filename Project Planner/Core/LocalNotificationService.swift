@@ -106,7 +106,7 @@ class LocalNotificationService {
         case .lineManagerPeerUpdate:
             content.title = "Line manager update"
             content.body = details.isEmpty ? "Another line manager actioned a shared request." : details
-        case .materialAdded:
+        case .materialAdded, .materialOrderPlaced:
             content.title = "Material added"
             content.body = details.isEmpty ? "A material was added to a job." : details
         case .toolboxTalkIssued:
@@ -124,6 +124,15 @@ class LocalNotificationService {
         case .timesheetSubmissionReminder:
             content.title = "Timesheet submission reminder"
             content.body = details.isEmpty ? "Please submit your timesheet before the payment deadline." : details
+        case .hsToolboxReminder:
+            content.title = "Toolbox talk reminder"
+            content.body = details.isEmpty ? "A toolbox talk still needs your signature." : details
+        case .ideaStatus:
+            content.title = "Update on your feedback"
+            content.body = details.isEmpty ? "An idea you raised or voted for has a new status." : details
+        case .ideaShipped:
+            content.title = "You asked, we built it"
+            content.body = details.isEmpty ? "An idea you raised or voted for has shipped." : details
         }
         
         // Set sound

@@ -457,13 +457,13 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// Other `users` document ids for this email. The roster shows one row. Bookings stored
     /// on a dropped id still belong to this person.
     var sameEmailUserIds: [String] = []
-    /// `users/{uid}.formerUserIds`: invite placeholder ids this account had before sign-up
-    /// (`parseFormerUserIds`). Bookings, leave and exclusions under those ids still belong to this person.
-    var formerUserIds: [String] = []
     /// `users/{uid}.name` as stored. Roster classification passes it to the packed script. A user save does not write it.
     var documentName: String = ""
     /// `users/{uid}.displayName` as stored. Roster classification passes it to the packed script. A user save does not write it.
     var documentDisplayName: String = ""
+    /// `users/{uid}.formerUserIds` from `parseFormerUserIds`: invite placeholder ids this account replaced.
+    /// Bookings stored under one still belong to this person. Append-only in Firestore; a user save does not write it.
+    var formerUserIds: [String] = []
     
     init(
         id: String,
@@ -588,8 +588,8 @@ extension AppUser {
         case employmentType, employmentTypeTransitionFrom, employmentTypeEffectiveAt
         case annualLeaveEnabled, annualLeaveDaysPerYear, annualLeaveYearStartMonth, annualLeaveYearEndMonth
         case annualLeaveCarriesOver, annualLeaveYearAllowance, annualLeaveYearAllowanceKey
-        case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds, formerUserIds
-        case documentName, documentDisplayName
+        case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
+        case documentName, documentDisplayName, formerUserIds
     }
 
     init(from decoder: Decoder) throws {
@@ -633,9 +633,9 @@ extension AppUser {
         utrNumber = try container.decodeIfPresent(String.self, forKey: .utrNumber)
         placedByManagersRecord = try container.decodeIfPresent(Bool.self, forKey: .placedByManagersRecord) ?? false
         sameEmailUserIds = try container.decodeIfPresent([String].self, forKey: .sameEmailUserIds) ?? []
-        formerUserIds = try container.decodeIfPresent([String].self, forKey: .formerUserIds) ?? []
         documentName = try container.decodeIfPresent(String.self, forKey: .documentName) ?? ""
         documentDisplayName = try container.decodeIfPresent(String.self, forKey: .documentDisplayName) ?? ""
+        formerUserIds = try container.decodeIfPresent([String].self, forKey: .formerUserIds) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -678,9 +678,9 @@ extension AppUser {
         // vatNumber / utrNumber are not encoded, so no local cache holds tax identifiers.
         try container.encode(placedByManagersRecord, forKey: .placedByManagersRecord)
         try container.encode(sameEmailUserIds, forKey: .sameEmailUserIds)
-        try container.encode(formerUserIds, forKey: .formerUserIds)
         try container.encode(documentName, forKey: .documentName)
         try container.encode(documentDisplayName, forKey: .documentDisplayName)
+        try container.encode(formerUserIds, forKey: .formerUserIds)
     }
 
     /// Operatives default on; self-employed managers/admins default on; PAYE managers/admins default off.
@@ -1991,13 +1991,15 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .holidayRequestApproved, .holidayRequestDeclined: return .annualLeaveDecisions
         case .timesheetPendingManagerSignoff, .timesheetSignedByManager: return .timesheetSignoff
         case .lineManagerPeerUpdate: return .lineManagerPeerUpdate
-        case .materialAdded: return .materialAdded
-        case .toolboxTalkIssued: return .toolboxTalkIssued
+        case .materialAdded, .materialOrderPlaced: return .materialAdded
+        // `notificationPreferenceKeyForType` maps hs_toolbox_reminder to the toolbox talk toggle.
+        case .toolboxTalkIssued, .hsToolboxReminder: return .toolboxTalkIssued
         case .qualificationExpiry: return .qualificationExpiry
         case .materialOrderCutOff: return .materialOrderCutOff
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return nil
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return nil
         case .timesheetSubmissionReminder: return nil
+        case .ideaStatus, .ideaShipped: return nil
         }
     }
 }

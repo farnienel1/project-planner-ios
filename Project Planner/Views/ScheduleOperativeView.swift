@@ -538,7 +538,7 @@ struct ScheduleOperativeView: View {
         let inGroup = bookingStore.bookings.filter {
             $0.projectId == project.id &&
                 $0.bookingGroupId == groupId &&
-                ($0.status.occupiesDay)
+                ($0.status == .confirmed || $0.status == .tentative)
         }
         guard !inGroup.isEmpty else { return }
         selectedOperatives = Set(inGroup.map(\.operativeId))
@@ -1524,10 +1524,12 @@ struct ScheduleOperativeView: View {
                 date: date,
                 bookedBy: loggedInUserName
             )
+            // Bookings under any id this person has had clash too (`resolveBookingPerson`, `bookingIdsForAccount`).
+            let personIds = labourBookingIds(sameAs: operative.id, operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
             let existingBookings = bookingStore.bookings.filter { booking in
-                booking.operativeId == operative.id &&
+                personIds.contains(booking.operativeId) &&
                     Calendar.current.isDate(booking.date, inSameDayAs: date) &&
-                    (booking.status.occupiesDay)
+                    booking.occupiesDay
             }
 
             for existingBooking in existingBookings {
@@ -1604,16 +1606,17 @@ struct ScheduleOperativeView: View {
                     }
 
                     let choice = resolvedChoice(operativeId: operative.id, date: date)
+                    let personIds = labourBookingIds(sameAs: operative.id, operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
                     let duplicateExists = bookingStore.bookings.contains { booking in
                         booking.projectId == project.id &&
-                            booking.operativeId == operative.id &&
+                            personIds.contains(booking.operativeId) &&
                             Calendar.current.isDate(booking.date, inSameDayAs: date) &&
                             booking.timeSlot == choice.timeSlot &&
                             booking.workStartTime == choice.workStartTime &&
                             booking.workEndTime == choice.workEndTime &&
                             booking.isBreakRemoved == choice.isBreakRemoved &&
                             booking.otMultiplierOverride == choice.otMultiplierOverride &&
-                            (booking.status.occupiesDay)
+                            (booking.status == .confirmed || booking.status == .tentative)
                     }
 
                     if !duplicateExists {

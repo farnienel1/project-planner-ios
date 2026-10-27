@@ -5,13 +5,18 @@
 //  Created by Assistant on 29/09/2025.
 //
 
+import CryptoKit
 import Foundation
 
 // MARK: - Booking Models
 
 struct Booking: Identifiable, Codable, Hashable {
     let id: UUID
+    /// In-app key for the booked person. A stored `operativeId` that is not a UUID (a Firebase Auth uid,
+    /// web #189) maps to a stable UUID from `internalOperativeId(for:)`; `operativeKey` keeps the stored text.
     var operativeId: UUID
+    /// The `operativeId` exactly as Firestore stores it. Nil on bookings made before this field existed.
+    var operativeKey: String?
     var projectId: UUID
     var date: Date
     var timeSlot: TimeSlot
@@ -27,22 +32,12 @@ struct Booking: Identifiable, Codable, Hashable {
     var bookingGroupId: String?
     var createdAt: Date
     var updatedAt: Date
-    /// Stored Firestore strings when they are not the UUIDs above. Web books a person who has no
-    /// operative record under their `users/{uid}` id, which is not a UUID; the UUID fields then hold
-    /// `StableBookingIdentity.uuid(for:)` and these keep the real id for coverage, lookups and saves.
-    var storedOperativeId: String? = nil
-    var storedProjectId: String? = nil
+    /// The Firestore document id when `id.uuidString` would not spell it the same way (ids are case-sensitive).
     var documentId: String? = nil
 
-    /// The id written to `operativeId`.
-    var operativeKey: String {
-        storedOperativeId ?? StableBookingIdentity.rawId(for: operativeId) ?? operativeId.uuidString
-    }
-    /// The id written to `projectId`.
-    var projectKey: String { storedProjectId ?? projectId.uuidString }
-    /// The Firestore document id under `organizations/{orgId}/bookings`.
+    /// The document id under `organizations/{orgId}/bookings`.
     var documentKey: String { documentId ?? id.uuidString }
-
+    
     init(
         id: UUID = UUID(),
         operativeId: UUID,
@@ -75,6 +70,66 @@ struct Booking: Identifiable, Codable, Hashable {
         self.bookingGroupId = bookingGroupId
         self.createdAt = createdAt ?? Date()
         self.updatedAt = updatedAt ?? Date()
+    }
+
+    /// The `operativeId` written to Firestore: the stored text when known, else the person behind a
+    /// mapped id, else the UUID itself.
+    var storedOperativeId: String {
+        if let key = operativeKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty { return key }
+        return Self.storedOperativeId(for: operativeId)
+    }
+
+    /// The stored id behind an in-app operative key (a Firebase Auth uid mapped by `internalOperativeId(for:)`).
+    nonisolated static func storedOperativeId(for internalId: UUID) -> String {
+        OperativeKeyRegistry.shared.rawKey(for: internalId) ?? internalId.uuidString
+    }
+
+    /// In-app UUID for a stored `operativeId`. A UUID is used as is. Any other id (a Firebase Auth uid)
+    /// gets a stable name-based UUID, and the pair is remembered so saves write the original id back.
+    /// Bookings read from this phone's saved copy carry `operativeKey` but have not been through
+    /// `internalOperativeId(for:)` yet. Register their ids so warnings and names use the stored id before the server answers.
+    nonisolated static func registerStoredOperativeKeys(_ bookings: [Booking]) {
+        for booking in bookings {
+            guard let key = booking.operativeKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !key.isEmpty, UUID(uuidString: key) == nil else { continue }
+            OperativeKeyRegistry.shared.remember(raw: key, as: booking.operativeId)
+        }
+    }
+
+    /// The rulebook's `bookingOccupiesDay` for this booking's status.
+    nonisolated var occupiesDay: Bool { status.occupiesDay }
+
+    nonisolated static func internalOperativeId(for raw: String) -> UUID {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let uuid = UUID(uuidString: trimmed) { return uuid }
+        let derived = OperativeKeyRegistry.derivedUUID(for: trimmed)
+        OperativeKeyRegistry.shared.remember(raw: trimmed, as: derived)
+        return derived
+    }
+}
+
+/// Maps the stable UUIDs made for non-UUID person ids back to those ids. In memory only: the mapping is
+/// deterministic, so every booking read or picker row that uses a mapped id has registered it first.
+nonisolated final class OperativeKeyRegistry: @unchecked Sendable {
+    static let shared = OperativeKeyRegistry()
+    private let lock = NSLock()
+    private var rawById: [UUID: String] = [:]
+
+    func remember(raw: String, as id: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        rawById[id] = raw
+    }
+
+    func rawKey(for id: UUID) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return rawById[id]
+    }
+
+    /// Version-5-shaped UUID from SHA-256 of a fixed prefix and the id. Same input, same UUID, on every device.
+    static func derivedUUID(for raw: String) -> UUID {
+        let b = Array(SHA256.hash(data: Data("pp.operative-key.\(raw)".utf8)).prefix(16))
+        return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], (b[6] & 0x0F) | 0x50, b[7],
+                           (b[8] & 0x3F) | 0x80, b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
     }
 }
 
@@ -198,29 +253,38 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-nonisolated enum BookingStatus: String, CaseIterable, Identifiable, Codable, Sendable {
+enum BookingStatus: String, CaseIterable, Identifiable, Codable {
     case confirmed = "Confirmed"
     case tentative = "Tentative"
     case cancelled = "Cancelled"
     case completed = "Completed"
     
     var id: String { rawValue }
-
-    /// Whether this status puts the person on a job that day (`bookingOccupiesDay`): Confirmed,
-    /// Tentative and Completed do; Cancelled does not. Coverage, Daily Overview and clashes use this.
-    var occupiesDay: Bool {
-        BookingStatus.occupiesDayMemo[self] ?? false
-    }
-
-    /// One script answer per status, cached once the script has answered for all four.
-    private static let occupiesDayMemo: [BookingStatus: Bool] = {
-        var memo: [BookingStatus: Bool] = [:]
-        for status in allCases {
-            if let answer = CanonicalBusinessEngine.bookingOccupiesDay(status.rawValue) { memo[status] = answer }
-        }
-        return memo
-    }()
     
+    /// The rulebook's `bookingOccupiesDay`: the person is taken that day. Asked once per status, then remembered,
+    /// because schedule, warnings and payroll screens filter every booking with it.
+    nonisolated var occupiesDay: Bool { Self.occupiesDayByStatus[self] ?? (self != .cancelled) }
+
+    private nonisolated static let occupiesDayByStatus: [BookingStatus: Bool] = {
+        var map: [BookingStatus: Bool] = [:]
+        for status in BookingStatus.allCases {
+            if let answer = CanonicalBusinessEngine.bookingOccupiesDay(status.rawValue) { map[status] = answer }
+        }
+        return map
+    }()
+
+    /// The rulebook's `isOpenBookingStatus`: still on the job (Confirmed or Tentative). A job's active people
+    /// list uses this for subcontractor bookings, as web does; Completed and Cancelled are not open.
+    nonisolated var isOpen: Bool { Self.isOpenByStatus[self] ?? false }
+
+    private nonisolated static let isOpenByStatus: [BookingStatus: Bool] = {
+        var map: [BookingStatus: Bool] = [:]
+        for status in BookingStatus.allCases {
+            if let answer = CanonicalBusinessEngine.isOpenBookingStatus(status.rawValue) { map[status] = answer }
+        }
+        return map
+    }()
+
     var color: String {
         switch self {
         case .confirmed: return "green"

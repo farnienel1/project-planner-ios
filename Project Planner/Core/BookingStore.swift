@@ -246,6 +246,26 @@ class BookingStore: ObservableObject {
         }
     }
     
+    /// A deleted person's bookings to remove, from the rulebook's `bookingsToRemoveOnOperativeDelete` (web calls it too):
+    /// bookings under any of `personIds` dated today or later. Past bookings stay for timesheets and weekly reports.
+    /// Nothing is removed when the script does not answer.
+    func bookingsToRemoveOnPersonDelete(personIds: Set<UUID>, now: Date = Date()) -> [Booking] {
+        guard !personIds.isEmpty,
+              let ids = CanonicalBusinessEngine.bookingsToRemoveOnOperativeDelete(
+                bookings.map {
+                    CanonicalBusinessEngine.CanonicalRemovableBooking(
+                        id: $0.id.uuidString,
+                        operativeId: $0.storedOperativeId,
+                        dateMs: $0.date.timeIntervalSince1970 * 1000
+                    )
+                },
+                operativeIds: personIds.map { Booking.storedOperativeId(for: $0) },
+                now: now
+              ) else { return [] }
+        let remove = Set(ids.map { $0.uppercased() })
+        return bookings.filter { remove.contains($0.id.uuidString.uppercased()) }
+    }
+
     func deleteBooking(_ booking: Booking) async {
         bookings.removeAll { $0.id == booking.id }
         try? await persistenceService.saveBookingData(bookings: bookings)
