@@ -23,7 +23,7 @@ enum PayrollPolicyBookingRecalibrator {
 
         for booking in bookingStore.bookings {
             guard cal.isDate(booking.date, inSameDayAs: dayStart) else { continue }
-            guard booking.status == .confirmed || booking.status == .tentative else { continue }
+            guard booking.status.occupiesDay else { continue }
             let updated = recalibrateOperativeBooking(booking, priorPolicy: priorPolicy, newPolicy: newPolicy)
             guard updated != booking else { continue }
             await bookingStore.updateBooking(updated)

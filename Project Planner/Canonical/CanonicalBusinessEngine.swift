@@ -252,6 +252,78 @@ nonisolated struct CanonicalUnbookedLabourDayInput: Codable, Equatable, Sendable
     var holidays: [CanonicalUnbookedLabourHoliday]
 }
 
+/// The script's `WeekendPayrollSettings`, built from `OrgWeekendDayPayrollSettings` field for field.
+nonisolated struct CanonicalWeekendPayroll: Codable, Hashable, Sendable {
+    var allHoursAtMultiplierMode: Bool
+    var allHoursMultiplier: Double
+    var definedWindowStart: String?
+    var definedWindowEnd: String?
+    var countsAsStandardHours: Double?
+    var outsideWindowMultiplier: Double
+    var sameAsSaturday: Bool?
+}
+
+/// The script's `OrgPayrollTimePolicy`.
+nonisolated struct CanonicalPayrollPolicy: Codable, Hashable, Sendable {
+    var standardDayStart: String
+    var standardDayEnd: String
+    var unpaidBreakMinutes: Int
+    var standardPaidHours: Double
+    var breakWindowStart: String
+    var breakWindowEnd: String
+    var weekdayOutsideStandardMultiplier: Double
+    var saturday: CanonicalWeekendPayroll
+    var sunday: CanonicalWeekendPayroll
+    var breakPaid: Bool
+}
+
+/// The booking fields `payrollHoursResult` reads.
+nonisolated struct CanonicalPayrollBooking: Codable, Hashable, Sendable {
+    var timeSlot: String
+    var workStartTime: String?
+    var workEndTime: String?
+    var isBreakRemoved: Bool
+    var otMultiplierOverride: Double?
+}
+
+nonisolated struct CanonicalPayrollHoursInput: Codable, Hashable, Sendable {
+    var booking: CanonicalPayrollBooking
+    var dayKey: String
+    var policy: CanonicalPayrollPolicy
+    var timeZone: String = "Europe/London"
+}
+
+nonisolated struct CanonicalPayrollSegment: Codable, Hashable, Sendable {
+    let kind: String
+    let clockStart: String?
+    let clockEnd: String?
+    let baseHours: Double
+    let multiplier: Double
+    let paidHours: Double
+}
+
+/// `payrollHoursResult`: standard hours, hours outside the window, their multiplier, and the weighted total.
+nonisolated struct CanonicalPayrollHours: Codable, Hashable, Sendable {
+    let totalPaidHours: Double
+    let standardHours: Double
+    let outsideHours: Double
+    let outsideMultiplier: Double
+    let segments: [CanonicalPayrollSegment]
+}
+
+/// One weekly-report pay line for `reportPayCell` / `reportPayTotal` (`ReportPayLineInput` in the script).
+nonisolated struct CanonicalReportPayLine: Codable, Equatable, Sendable {
+    var isPaye: Bool
+    var pay: Double?
+}
+
+/// What a weekly-report pay cell shows (`ReportPayCell` in the script). `label` is `PAYE` for a PAYE line.
+nonisolated struct CanonicalReportPayCell: Codable, Equatable, Sendable {
+    let pay: Double?
+    let label: String?
+    let countsTowardPayTotal: Bool
+}
+
 /// One warning row for `sortWarningsByDate`. `dayKey` is the coverage day (`YYYY-MM-DD`), or blank when the row has no day.
 nonisolated struct CanonicalWarningDateRow: Codable, Equatable, Sendable {
     var id: String
@@ -1166,6 +1238,60 @@ nonisolated enum CanonicalBusinessEngine {
     /// `FULL_DAY`, `AM`, or `PM` for a leave record's slot.
     static func leaveSlotKind(_ timeSlot: String?) -> String {
         decode(String.self, function: "leaveSlotKind", arguments: [timeSlot]) ?? "FULL_DAY"
+    }
+
+    // MARK: - Clashes
+
+    /// Index groups of two or more overlapping intervals (`overlappingIntervalGroups`), in the script's order.
+    static func overlappingIntervalGroups(_ intervals: [CanonicalMinuteInterval?]) -> [[Int]]? {
+        decode([[Int]].self, function: "overlappingIntervalGroups", arguments: [intervals])
+    }
+
+    // MARK: - Paid hours
+
+    /// Paid hours for one booking on its London day. Daily Overview, the weekly report, timesheets and
+    /// invoicing all read this; web runs the same function. Memoised per distinct input.
+    static func payrollHoursResult(_ input: CanonicalPayrollHoursInput) -> CanonicalPayrollHours? {
+        payrollHoursMemo.value(for: input) {
+            decode(CanonicalPayrollHours.self, function: "payrollHoursResult", arguments: [input])
+        }
+    }
+
+    /// Weekly-report day units: weighted paid hours over the standard paid day, capped at 1.5.
+    static func reportDayValue(totalPaidHours: Double, standardPaidHours: Double) -> Double? {
+        let payload: [String: Any] = ["totalPaidHours": totalPaidHours, "standardPaidHours": standardPaidHours]
+        guard let json = jsonObjectFragment(payload) else { return nil }
+        return decodeExpression(Double.self, "ProjectPlannerCanonical.reportDayValue(\(json))")
+    }
+
+    /// Subcontractor day units: a full day is 1, anything else 0.5.
+    static func subcontractorDayValue(_ timeSlot: String) -> Double? {
+        decode(Double.self, function: "subcontractorDayValue", arguments: [timeSlot])
+    }
+
+    // MARK: - Open bookings
+
+    /// Still on the job: Confirmed or Tentative (`isOpenBookingStatus`). Completed and Cancelled are not.
+    /// Nil only when the script did not run.
+    static func isOpenBookingStatus(_ status: String) -> Bool? {
+        decode(Bool.self, function: "isOpenBookingStatus", arguments: [status])
+    }
+
+    // MARK: - Weekly report pay
+
+    /// One pay line: a PAYE line shows `PAYE`, no figure, and is not totalled. Nil when the script did not run.
+    static func reportPayCell(_ line: CanonicalReportPayLine) -> CanonicalReportPayCell? {
+        decode(CanonicalReportPayCell.self, function: "reportPayCell", arguments: [line])
+    }
+
+    /// Pay total of the lines that count; PAYE lines add nothing. Nil when the script did not run.
+    static func reportPayTotal(_ lines: [CanonicalReportPayLine]) -> Double? {
+        decode(Double.self, function: "reportPayTotal", arguments: [lines])
+    }
+
+    /// A person's total row: `PAYE` when every line is PAYE, otherwise the total of the counted lines.
+    static func reportPersonPayCell(_ lines: [CanonicalReportPayLine]) -> CanonicalReportPayCell? {
+        decode(CanonicalReportPayCell.self, function: "reportPersonPayCell", arguments: [lines])
     }
 
     // MARK: - Dismissed warnings
@@ -3063,6 +3189,7 @@ nonisolated enum CanonicalBusinessEngine {
 
     private static let halfDayMemo = ResultMemo<CanonicalStandardDayInput, CanonicalHalfDayWindows>()
     private static let slotIntervalMemo = ResultMemo<SlotIntervalKey, CanonicalMinuteInterval>()
+    private static let payrollHoursMemo = ResultMemo<CanonicalPayrollHoursInput, CanonicalPayrollHours>()
 
     /// Calls `ProjectPlannerCanonical.function(arguments…)` and decodes the JSON of its result.
     /// A `null` or `undefined` result decodes as nil.

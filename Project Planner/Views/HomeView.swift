@@ -2164,7 +2164,7 @@ private struct HomeOverviewMetrics: Equatable {
 
         let operativeIds = Set(
             bookings
-                .filter { cal.isDate($0.date, inSameDayAs: today) && ($0.status == .confirmed || $0.status == .tentative) }
+                .filter { cal.isDate($0.date, inSameDayAs: today) && ($0.status.occupiesDay) }
                 .map { $0.operativeId.uuidString }
         )
         let managerIds = Set(

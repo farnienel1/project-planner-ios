@@ -34,6 +34,8 @@ struct PayrollHoursSegment: Equatable {
 struct PayrollHoursResult: Equatable {
     var totalPaidHours: Double
     var segments: [PayrollHoursSegment]
+    /// Multiplier for hours outside the standard window on this day (`payrollHoursResult.outsideMultiplier`).
+    var outsideMultiplier: Double = 1
 
     var breakdownSummary: String {
         guard !segments.isEmpty else { return ScheduleCoverageFormat.hours(totalPaidHours) + "h" }
@@ -57,17 +59,38 @@ struct PayrollHoursResult: Equatable {
 }
 
 enum PayrollHoursEngine {
+    /// Paid hours for a booking on `day` (its London calendar day), from the rulebook's
+    /// `payrollHoursResult`. The web app runs the same function, so Daily Overview, the weekly report,
+    /// timesheets and invoicing show the same hours on both. There is no Swift copy of the rule.
     static func compute(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
-        let cal = Calendar.current
-        let weekday = cal.component(.weekday, from: day)
-        if weekday == 7 {
-            return computeWeekend(booking: booking, weekend: policy.saturday, policy: policy, dayLabel: "Saturday")
+        let input = CanonicalPayrollHoursInput(
+            booking: CanonicalPayrollBooking(
+                timeSlot: booking.timeSlot.rawValue,
+                workStartTime: booking.workStartTime,
+                workEndTime: booking.workEndTime,
+                isBreakRemoved: booking.isBreakRemoved,
+                otMultiplierOverride: booking.otMultiplierOverride
+            ),
+            dayKey: CanonicalBusinessEngine.dayKey(for: day),
+            policy: canonicalPolicy(policy)
+        )
+        guard let result = CanonicalBusinessEngine.payrollHoursResult(input) else {
+            NSLog("PAYROLL_HOURS_UNAVAILABLE slot=%@ — canonical script did not answer", booking.timeSlot.rawValue)
+            return PayrollHoursResult(totalPaidHours: 0, segments: [])
         }
-        if weekday == 1 {
-            let sun = PayrollTimePolicyCatalog.resolvedSundaySettings(from: policy)
-            return computeWeekend(booking: booking, weekend: sun, policy: policy, dayLabel: "Sunday")
-        }
-        return computeWeekday(booking: booking, policy: policy)
+        return PayrollHoursResult(
+            totalPaidHours: result.totalPaidHours,
+            segments: result.segments.map { segment in
+                PayrollHoursSegment(
+                    kind: segmentKind(segment.kind),
+                    clockStart: segment.clockStart,
+                    clockEnd: segment.clockEnd,
+                    baseHours: segment.baseHours,
+                    multiplier: segment.multiplier
+                )
+            },
+            outsideMultiplier: result.outsideMultiplier
+        )
     }
 
     static func compute(choice: OperativeDayBookingChoice, day: Date, policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
@@ -80,300 +103,43 @@ enum PayrollHoursEngine {
         return compute(booking: probe, day: day, policy: policy)
     }
 
-    // MARK: - Weekday
-
-    private static func computeWeekday(booking: Booking, policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
-        if let overnight = overnightWallResult(booking: booking) {
-            return overnight
-        }
-        if isHalfDayPaidSlot(booking: booking, policy: policy) {
-            return halfDayPaidResult(booking: booking, policy: policy, weekend: nil)
-        }
-        guard let interval = OperativeBookingInterval.clashInterval(for: booking, policy: policy) else {
-            return legacySlotResult(booking: booking, policy: policy)
-        }
-        let ds = ManagerScheduleInterval.parseMinutes(policy.standardDayStart) ?? 0
-        let de = ManagerScheduleInterval.parseMinutes(policy.standardDayEnd) ?? 0
-        guard de > ds else {
-            return simpleWallResult(booking: booking, policy: policy, multiplier: booking.effectiveOutsideMultiplier(policy: policy, weekend: nil))
-        }
-
-        let sm = interval.0
-        let em = interval.1
-        let outsideMult = booking.effectiveOutsideMultiplier(policy: policy, weekend: nil)
-
-        var segments: [PayrollHoursSegment] = []
-        var total = 0.0
-
-        let insideStart = max(sm, ds)
-        let insideEnd = min(em, de)
-        if insideEnd > insideStart {
-            var insideHours = Double(insideEnd - insideStart) / 60.0
-            // AM/PM already exclude the unpaid break (it sits in the gap between sessions).
-            // Only deduct the break from full-day / custom spans that cover the break window.
-            let isHalfDay = booking.timeSlot == .morning || booking.timeSlot == .afternoon
-            if !isHalfDay, !policy.breakPaid, !booking.isBreakRemoved {
-                insideHours = max(0, insideHours - breakDeductionMinutes(booking: booking, policy: policy, interval: interval) / 60.0)
-            }
-            if insideHours > 0.001 {
-                segments.append(PayrollHoursSegment(
-                    kind: .standardWindow,
-                    clockStart: ManagerScheduleInterval.formatMinutes(insideStart),
-                    clockEnd: ManagerScheduleInterval.formatMinutes(insideEnd),
-                    baseHours: insideHours,
-                    multiplier: 1
-                ))
-                total += insideHours
-            }
-        }
-
-        if sm < ds {
-            let hours = Double(min(em, ds) - sm) / 60.0
-            if hours > 0.001 {
-                segments.append(PayrollHoursSegment(
-                    kind: .outsideWindow,
-                    clockStart: ManagerScheduleInterval.formatMinutes(sm),
-                    clockEnd: ManagerScheduleInterval.formatMinutes(min(em, ds)),
-                    baseHours: hours,
-                    multiplier: outsideMult
-                ))
-                total += hours * outsideMult
-            }
-        }
-        if em > de {
-            let hours = Double(em - max(sm, de)) / 60.0
-            if hours > 0.001 {
-                segments.append(PayrollHoursSegment(
-                    kind: .outsideWindow,
-                    clockStart: ManagerScheduleInterval.formatMinutes(max(sm, de)),
-                    clockEnd: ManagerScheduleInterval.formatMinutes(em),
-                    baseHours: hours,
-                    multiplier: outsideMult
-                ))
-                total += hours * outsideMult
-            }
-        }
-
-        if segments.isEmpty {
-            return legacySlotResult(booking: booking, policy: policy)
-        }
-        return PayrollHoursResult(totalPaidHours: total, segments: segments)
-    }
-
-    // MARK: - Weekend
-
-    private static func computeWeekend(
-        booking: Booking,
-        weekend: OrgWeekendDayPayrollSettings,
-        policy: OrgPayrollTimePolicy,
-        dayLabel: String
-    ) -> PayrollHoursResult {
-        if let overnight = overnightWallResult(booking: booking) {
-            return overnight
-        }
-        guard let interval = OperativeBookingInterval.clashInterval(for: booking, policy: policy) else {
-            return legacySlotResult(booking: booking, policy: policy)
-        }
-
-        if weekend.allHoursAtMultiplierMode {
-            if isNamedHalfDaySlot(booking.timeSlot) {
-                return halfDayPaidResult(booking: booking, policy: policy, weekend: weekend)
-            }
-            let wall = Double(interval.1 - interval.0) / 60.0
-            let mult = booking.effectiveOutsideMultiplier(policy: policy, weekend: weekend)
-            let segment = PayrollHoursSegment(
-                kind: .allHoursMultiplier,
-                clockStart: ManagerScheduleInterval.formatMinutes(interval.0),
-                clockEnd: ManagerScheduleInterval.formatMinutes(interval.1),
-                baseHours: wall,
-                multiplier: mult
+    /// The organisation policy in the script's field names. A mapping, not a rule.
+    static func canonicalPolicy(_ policy: OrgPayrollTimePolicy) -> CanonicalPayrollPolicy {
+        func weekend(_ day: OrgWeekendDayPayrollSettings, sameAsSaturday: Bool? = nil) -> CanonicalWeekendPayroll {
+            CanonicalWeekendPayroll(
+                allHoursAtMultiplierMode: day.allHoursAtMultiplierMode,
+                allHoursMultiplier: day.allHoursMultiplier,
+                definedWindowStart: day.customStandardStart,
+                definedWindowEnd: day.customStandardEnd,
+                countsAsStandardHours: day.countsAsHours,
+                outsideWindowMultiplier: day.outsideStandardWindowMultiplier,
+                sameAsSaturday: sameAsSaturday
             )
-            return PayrollHoursResult(totalPaidHours: wall * mult, segments: [segment])
         }
-
-        let ws = ManagerScheduleInterval.parseMinutes(weekend.customStandardStart ?? policy.standardDayStart) ?? 0
-        let we = ManagerScheduleInterval.parseMinutes(weekend.customStandardEnd ?? "13:00") ?? 0
-        guard we > ws else {
-            return simpleWallResult(booking: booking, policy: policy, multiplier: booking.effectiveOutsideMultiplier(policy: policy, weekend: weekend))
-        }
-
-        let sm = interval.0
-        let em = interval.1
-        if isHalfDayPaidSlot(booking: booking, policy: policy) {
-            return halfDayPaidResult(booking: booking, policy: policy, weekend: weekend)
-        }
-        let countsAs = weekend.resolvedCountsAsHours(fallback: policy.standardPaidHours)
-        let outsideMult = booking.effectiveOutsideMultiplier(policy: policy, weekend: weekend)
-
-        var segments: [PayrollHoursSegment] = []
-        var total = 0.0
-
-        let overlapStart = max(sm, ws)
-        let overlapEnd = min(em, we)
-        if overlapEnd > overlapStart {
-            let overlapMinutes = overlapEnd - overlapStart
-            let credited: Double
-            if overlapStart <= ws && overlapEnd >= we {
-                credited = countsAs
-            } else {
-                credited = countsAs * (Double(overlapMinutes) / Double(we - ws))
-            }
-            segments.append(PayrollHoursSegment(
-                kind: .standardWindow,
-                clockStart: ManagerScheduleInterval.formatMinutes(overlapStart),
-                clockEnd: ManagerScheduleInterval.formatMinutes(overlapEnd),
-                baseHours: credited,
-                multiplier: 1
-            ))
-            total += credited
-        }
-
-        if sm < ws {
-            let hours = Double(min(em, ws) - sm) / 60.0
-            if hours > 0.001 {
-                segments.append(PayrollHoursSegment(
-                    kind: .outsideWindow,
-                    clockStart: ManagerScheduleInterval.formatMinutes(sm),
-                    clockEnd: ManagerScheduleInterval.formatMinutes(min(em, ws)),
-                    baseHours: hours,
-                    multiplier: outsideMult
-                ))
-                total += hours * outsideMult
-            }
-        }
-        if em > we {
-            let hours = Double(em - max(sm, we)) / 60.0
-            if hours > 0.001 {
-                segments.append(PayrollHoursSegment(
-                    kind: .outsideWindow,
-                    clockStart: ManagerScheduleInterval.formatMinutes(max(sm, we)),
-                    clockEnd: ManagerScheduleInterval.formatMinutes(em),
-                    baseHours: hours,
-                    multiplier: outsideMult
-                ))
-                total += hours * outsideMult
-            }
-        }
-
-        if segments.isEmpty {
-            return legacySlotResult(booking: booking, policy: policy)
-        }
-        return PayrollHoursResult(totalPaidHours: total, segments: segments)
-    }
-
-    // MARK: - Helpers
-
-    /// A finish time before the start is the next morning (22:00–02:00 is 4 hours), paid as those hours.
-    private static func overnightWallResult(booking: Booking) -> PayrollHoursResult? {
-        guard let start = booking.workStartTime, let end = booking.workEndTime,
-              let sm = ManagerScheduleInterval.parseMinutes(start),
-              let em = ManagerScheduleInterval.parseMinutes(end),
-              em < sm else { return nil }
-        let hours = Double(em + 24 * 60 - sm) / 60.0
-        let segment = PayrollHoursSegment(
-            kind: .standardWindow,
-            clockStart: start,
-            clockEnd: end,
-            baseHours: hours,
-            multiplier: 1
+        return CanonicalPayrollPolicy(
+            standardDayStart: policy.standardDayStart,
+            standardDayEnd: policy.standardDayEnd,
+            unpaidBreakMinutes: policy.unpaidBreakMinutes,
+            standardPaidHours: policy.standardPaidHours,
+            breakWindowStart: policy.breakWindowStart,
+            breakWindowEnd: policy.breakWindowEnd,
+            weekdayOutsideStandardMultiplier: policy.weekdayOutsideStandardMultiplier,
+            saturday: weekend(policy.saturday),
+            sunday: weekend(policy.sunday, sameAsSaturday: policy.sundaySameAsSaturday),
+            breakPaid: policy.breakPaid
         )
-        return PayrollHoursResult(totalPaidHours: hours, segments: [segment])
     }
 
-    /// AM/PM (and custom hours that match those half-windows) pay half the standard day rate, not wall-clock minus break.
-    static func isHalfDayPaidSlot(booking: Booking, policy: OrgPayrollTimePolicy) -> Bool {
-        if isNamedHalfDaySlot(booking.timeSlot) { return true }
-        guard booking.timeSlot == .customHours else { return false }
-        return matchesStandardHalfWindow(booking: booking, policy: policy)
-    }
-
-    private static func isNamedHalfDaySlot(_ slot: TimeSlot) -> Bool {
-        slot == .morning || slot == .afternoon
-    }
-
-    /// Custom hours within 20 minutes of the canonical AM or PM window pay as that half day.
-    /// The halves are the weekday standard day's, on every day, the same input the web app uses.
-    private static func matchesStandardHalfWindow(booking: Booking, policy: OrgPayrollTimePolicy) -> Bool {
-        guard let interval = OperativeBookingInterval.clashInterval(for: booking, policy: policy),
-              !PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy).allHoursAtMultiplier,
-              let windows = CanonicalBusinessEngine.halfDayWindows(CanonicalStandardDayInput(policy: policy)) else { return false }
-        let tolerance = 20
-        func near(_ a: Int, _ b: Int) -> Bool { abs(a - b) <= tolerance }
-        let isMorningHalf = near(interval.0, windows.am.start) && near(interval.1, windows.am.end)
-        let isAfternoonHalf = near(interval.0, windows.pm.start) && near(interval.1, windows.pm.end)
-        return isMorningHalf || isAfternoonHalf
-    }
-
-    private static func halfDayPaidResult(
-        booking: Booking,
-        policy: OrgPayrollTimePolicy,
-        weekend: OrgWeekendDayPayrollSettings?
-    ) -> PayrollHoursResult {
-        let paid: Double
-        if let weekend, !weekend.allHoursAtMultiplierMode {
-            paid = max(weekend.resolvedCountsAsHours(fallback: policy.standardPaidHours), 0) / 2
-        } else {
-            paid = max(policy.standardPaidHours, 0) / 2
+    private static func segmentKind(_ raw: String) -> PayrollHoursSegment.Kind {
+        switch raw {
+        case "outsideWindow": return .outsideWindow
+        case "allHoursMultiplier": return .allHoursMultiplier
+        default: return .standardWindow
         }
-        let interval = OperativeBookingInterval.clashInterval(for: booking, policy: policy)
-        let segment = PayrollHoursSegment(
-            kind: .standardWindow,
-            clockStart: interval.map { ManagerScheduleInterval.formatMinutes($0.0) },
-            clockEnd: interval.map { ManagerScheduleInterval.formatMinutes($0.1) },
-            baseHours: paid,
-            multiplier: 1
-        )
-        return PayrollHoursResult(totalPaidHours: paid, segments: [segment])
-    }
-
-    private static func breakDeductionMinutes(booking: Booking, policy: OrgPayrollTimePolicy, interval: (Int, Int)) -> Double {
-        guard let bws = ManagerScheduleInterval.parseMinutes(policy.breakWindowStart),
-              let bwe = ManagerScheduleInterval.parseMinutes(policy.breakWindowEnd),
-              bwe > bws else { return 0 }
-        let overlapStart = max(interval.0, bws)
-        let overlapEnd = min(interval.1, bwe)
-        guard overlapEnd > overlapStart else { return 0 }
-        return Double(policy.unpaidBreakMinutes)
-    }
-
-    private static func simpleWallResult(booking: Booking, policy: OrgPayrollTimePolicy, multiplier: Double) -> PayrollHoursResult {
-        let wall = booking.totalBookedHours(policy: policy)
-        let segment = PayrollHoursSegment(
-            kind: .allHoursMultiplier,
-            clockStart: booking.workStartTime,
-            clockEnd: booking.workEndTime,
-            baseHours: wall,
-            multiplier: multiplier
-        )
-        return PayrollHoursResult(totalPaidHours: wall * multiplier, segments: [segment])
-    }
-
-    private static func legacySlotResult(booking: Booking, policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
-        let paid: Double
-        switch booking.timeSlot {
-        case .fullDay, .customHours:
-            paid = max(policy.standardPaidHours, 0)
-        case .morning, .afternoon:
-            paid = max(policy.standardPaidHours, 0) / 2
-        case .evening:
-            paid = 4
-        case .overtime:
-            paid = 2
-        }
-        let segment = PayrollHoursSegment(kind: .standardWindow, clockStart: nil, clockEnd: nil, baseHours: paid, multiplier: 1)
-        return PayrollHoursResult(totalPaidHours: paid, segments: [segment])
     }
 }
 
 extension Booking {
-    func effectiveOutsideMultiplier(policy: OrgPayrollTimePolicy, weekend: OrgWeekendDayPayrollSettings?) -> Double {
-        if let override = otMultiplierOverride, override > 0 { return override }
-        if let weekend {
-            return weekend.allHoursAtMultiplierMode ? weekend.allHoursMultiplier : weekend.outsideStandardWindowMultiplier
-        }
-        return PayrollTimePolicyCatalog.effectiveMultiplier(for: self, policy: policy)
-    }
-
     func payrollHoursResult(policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
         PayrollHoursEngine.compute(booking: self, day: date, policy: policy)
     }

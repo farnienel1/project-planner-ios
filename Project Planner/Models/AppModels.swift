@@ -1388,8 +1388,10 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
             breakWindowStart: bws,
             breakWindowEnd: bwe,
             weekdayOutsideStandardMultiplier: wkMult,
-            saturday: OrgWeekendDayPayrollSettings.fromFirestore(satDict),
-            sunday: OrgWeekendDayPayrollSettings.fromFirestore(sunDict),
+            // A weekend day the company never saved uses the defaults, as `parsePayrollPolicy` does
+            // (`DEFAULT_SATURDAY_PAYROLL`, `DEFAULT_SUNDAY_PAYROLL`), not an empty map's 07:30–16:00 at 1.5×.
+            saturday: data["saturday"] is [String: Any] ? OrgWeekendDayPayrollSettings.fromFirestore(satDict) : .defaultSaturday,
+            sunday: data["sunday"] is [String: Any] ? OrgWeekendDayPayrollSettings.fromFirestore(sunDict) : .defaultSunday,
             sundaySameAsSaturday: sundaySame
         )
     }

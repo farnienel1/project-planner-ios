@@ -230,6 +230,8 @@ class FirebaseBackend: ObservableObject {
     private var organizationDocumentListenerTarget: String?
     private var bookingsLiveListener: ListenerRegistration?
     private var bookingsLiveListenerTarget: String?
+    /// Counts from the last booking read: how many documents the shared parser kept or refused.
+    @Published private(set) var lastBookingDecodeReport: BookingDecodeReport?
     private var managerScheduleLiveListener: ListenerRegistration?
     private var managerScheduleLiveListenerTarget: String?
     /// Lower bound of the launch booking and manager-site listeners. Nil with `scheduleHistoryIsFull` means every date.
@@ -4110,6 +4112,7 @@ class FirebaseBackend: ObservableObject {
     
     /// Copies profile fields from an older `users/*` row in the known company onto `users/{authUid}`.
     /// Does not list every user, and does not copy organisation or privilege fields onto the signed-in document.
+    /// Invited user signing in before the invitation's set-password step created users/{authUid}.
     private func mergePlaceholderUserDocOntoAuthUidIfNeeded(authUid: String, email rawEmail: String) async throws {
         let orgId = normalizedOrganizationId(
             currentOrganization?.firestoreDocumentId ?? cachedOrganizationIdString() ?? ""
@@ -4141,37 +4144,17 @@ class FirebaseBackend: ObservableObject {
 
             var seen = Set<String>()
             for placeholder in documents where placeholder.documentID != authUid && seen.insert(placeholder.documentID).inserted {
-                guard var merged = placeholder.data() else { continue }
-                print("🔥🔥🔥 DEBUG: Merging invited user doc \(placeholder.documentID) → \(authUid) for email \(variant)")
-                merged["email"] = rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                merged.removeValue(forKey: "organizationId")
-                merged.removeValue(forKey: "role")
-                merged.removeValue(forKey: "adminAccess")
-                merged.removeValue(forKey: "isSuperAdmin")
-                if var permissions = merged["permissions"] as? [String: Any] {
-                    permissions.removeValue(forKey: "adminAccess")
-                    merged["permissions"] = permissions
-                } else if var permissions = merged["permissions"] as? [String: Bool] {
-                    permissions.removeValue(forKey: "adminAccess")
-                    merged["permissions"] = permissions
-                }
-                let legacyTaxIds = merged
-                merged.removeValue(forKey: "utrNumber")
-                merged.removeValue(forKey: "vatNumber")
-                merged["updatedAt"] = Timestamp(date: Date())
-                merged["passwordSet"] = true
-                // Bookings made while the invite was pending still name the placeholder. Append-only, the shape of
-                // `inviteMigrationFormerIdWriteFields`, so `formerIdAliases` can find this person from those bookings.
-                // The placeholder's own former ids come along too, so a chain of invites stays linked.
-                let placeholderFormerIds = CanonicalBusinessEngine.parseFormerUserIds(merged["formerUserIds"]) ?? []
-                merged["formerUserIds"] = FieldValue.arrayUnion(placeholderFormerIds + [placeholder.documentID])
-                try await db.collection("users").document(authUid).setData(merged, merge: true)
-                await moveSensitiveProfile(fromPlaceholderId: placeholder.documentID, toUserId: authUid, legacyPlaceholder: legacyTaxIds)
-                let norm = rawEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                try await db.collection("organizations").document(orgId)
-                    .collection("userEmails").document(norm)
-                    .setData(["userId": authUid], merge: true)
-                return
+                guard let data = placeholder.data(), firestoreBool(data["passwordSet"]) != true else { continue }
+                // users/{authUid} is created by the invitation's set-password step (web
+                // `completeInviteSetup`), which records the 16-or-over confirmation, moves the tax ids,
+                // and writes `formerUserIds`. The app never asks for that confirmation, and the rules
+                // (Path 1) refuse a self-create without it, so the app does not create the profile here.
+                NSLog("INVITE_SETUP_INCOMPLETE placeholder=%@ authUid=%@ — users/{authUid} is created by the invitation link", placeholder.documentID, authUid)
+                throw NSError(
+                    domain: "FirebaseBackend",
+                    code: 412,
+                    userInfo: [NSLocalizedDescriptionKey: "Finish setting up your account from the invitation email (set your password and confirm you are 16 or over), then sign in here."]
+                )
             }
         }
     }
@@ -4787,6 +4770,7 @@ class FirebaseBackend: ObservableObject {
         aliases.insert(other.id)
         aliases.remove(chosen.id)
         chosen.sameEmailUserIds = aliases.sorted()
+        chosen.formerUserIds = Array(Set(chosen.formerUserIds).union(other.formerUserIds)).sorted()
         let chosenTrade = StaffEmailIdentity.reportTrade(for: chosen)
         let otherTrade = StaffEmailIdentity.reportTrade(for: other)
         if chosenTrade == "General", otherTrade != "General" {
@@ -5633,28 +5617,6 @@ class FirebaseBackend: ObservableObject {
         } catch {
             // The private document already wins on read; the legacy copy is cleared on the next save.
             print("🔥🔥🔥 DEBUG: Could not clear legacy tax fields: \((error as NSError).code)")
-        }
-    }
-
-    /// Invite completion, as web `moveTaxIds`: copy the placeholder's private/taxIds to the new account as that
-    /// account, then delete the placeholder copy. A placeholder with only legacy fields moves those.
-    private func moveSensitiveProfile(fromPlaceholderId placeholderId: String, toUserId authUid: String, legacyPlaceholder: [String: Any]) async {
-        guard let source = sensitiveProfileRef(userId: placeholderId) else { return }
-        do {
-            let snapshot = try await source.getDocument(source: .server)
-            let privateDoc: [String: Any]? = snapshot.exists ? (snapshot.data() ?? [:]) : nil
-            guard let resolved = CanonicalBusinessEngine.resolveSensitiveProfile(
-                privateDoc: privateDoc,
-                legacyUser: legacyPlaceholder
-            ) else { return }
-            if resolved.source != "none" {
-                try await saveSensitiveProfile(userId: authUid, utrNumber: resolved.utrNumber, vatNumber: resolved.vatNumber)
-            }
-            if snapshot.exists {
-                try await source.delete()
-            }
-        } catch {
-            print("🔥🔥🔥 DEBUG: Could not move invite tax fields: \((error as NSError).code)")
         }
     }
 
@@ -7139,7 +7101,7 @@ class FirebaseBackend: ObservableObject {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         
         var bookingData: [String: Any] = [
-            "id": booking.id.uuidString,
+            "id": booking.documentKey,
             // A Firebase Auth uid stays a uid (web #189). Writing the in-app UUID would book nobody.
             "operativeId": booking.storedOperativeId,
             "projectId": booking.projectId.uuidString,
@@ -7175,7 +7137,7 @@ class FirebaseBackend: ObservableObject {
 
         print("🔥🔥🔥 DEBUG: Saving booking to organizations/\(orgId)/bookings/\(booking.id.uuidString)")
         
-        try await db.collection("organizations").document(orgId).collection("bookings").document(booking.id.uuidString).setData(bookingData, merge: true)
+        try await db.collection("organizations").document(orgId).collection("bookings").document(booking.documentKey).setData(bookingData, merge: true)
         
         print("🔥🔥🔥 DEBUG: Booking saved successfully to Firebase")
     }
@@ -7230,8 +7192,11 @@ class FirebaseBackend: ObservableObject {
             bookingsQuery = bookingsQuery.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
         }
         let snapshot = try await getQueryPreferringServer(bookingsQuery)
-        
-        return bookingsFromFirestoreDocuments(snapshot.documents)
+        let bookings = bookingsFromFirestoreDocuments(snapshot.documents)
+        if bookings.isEmpty {
+            NSLog("BOOKINGS_EMPTY org=%@ start=%@ fromCache=%d — no booking documents in range", orgId, start.map { CanonicalBusinessEngine.isoString(from: $0) } ?? "all", snapshot.metadata.isFromCache ? 1 : 0)
+        }
+        return bookings
     }
 
     private func getQueryPreferringServer(_ query: Query) async throws -> QuerySnapshot {
@@ -7275,16 +7240,24 @@ class FirebaseBackend: ObservableObject {
     func bookingsFromFirestoreDocuments(_ documents: [QueryDocumentSnapshot]) -> [Booking] {
         let payload: [[String: Any]] = documents.map { ["id": $0.documentID, "data": Self.firestoreJSON($0.data())] }
         guard let parsed = CanonicalBusinessEngine.parseBookingDocuments(payload) else {
-            return documents.compactMap { bookingFromFirestoreDocument($0) }
+            NSLog("BOOKINGS_PARSE_FAILED docs=%d — canonical script did not answer; using the fallback reader", documents.count)
+            let fallback = documents.compactMap { bookingFromFirestoreDocument($0) }
+            lastBookingDecodeReport = BookingDecodeReport(total: documents.count, refused: documents.count - fallback.count, repaired: 0, scriptFailed: true)
+            return fallback
         }
-        return parsed.compactMap(Self.booking(fromCanonical:))
+        let bookings = parsed.compactMap(Self.booking(fromCanonical:))
+        lastBookingDecodeReport = BookingDecodeReport(total: documents.count, refused: documents.count - bookings.count, repaired: 0, scriptFailed: false)
+        if bookings.count < documents.count {
+            NSLog("BOOKINGS_REFUSED kept=%d of %d — see BOOKING_UNREADABLE_ON_IOS lines for the ids", bookings.count, documents.count)
+        }
+        return bookings
     }
 
     nonisolated static func booking(fromCanonical row: CanonicalBusinessEngine.CanonicalParsedBooking) -> Booking? {
         guard let projectId = UUID(uuidString: row.projectId),
               let timeSlot = TimeSlot.fromStored(row.timeSlot),
               let status = BookingStatus(rawValue: row.status) else {
-            print("🔥🔥🔥 DEBUG: BOOKING_UNREADABLE_ON_IOS id=\(row.id) project=\(row.projectId) slot=\(row.timeSlot) status=\(row.status)")
+            NSLog("BOOKING_UNREADABLE_ON_IOS id=%@ project=%@ slot=%@ status=%@", row.id, row.projectId, row.timeSlot, row.status)
             return nil
         }
         var booking = Booking(
@@ -7306,6 +7279,8 @@ class FirebaseBackend: ObservableObject {
             updatedAt: row.updatedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }
         )
         booking.operativeKey = row.operativeId
+        // Firestore ids are case-sensitive: keep any id that `uuidString` would not spell the same way.
+        booking.documentId = row.id == booking.id.uuidString ? nil : row.id
         return booking
     }
 
@@ -7410,7 +7385,10 @@ class FirebaseBackend: ObservableObject {
         bookingsLiveListener = bookingsQuery
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error {
-                    print("🔥🔥🔥 DEBUG: bookings live listener error: \(error.localizedDescription)")
+                    NSLog("BOOKINGS_LISTENER_FAILED org=%@ error=%@", orgId, error.localizedDescription)
+                    Task { @MainActor in
+                        NotificationCenter.default.post(name: .bookingsListenerFailed, object: nil, userInfo: ["organizationId": orgId])
+                    }
                     return
                 }
                 guard let snapshot else { return }
@@ -7438,7 +7416,7 @@ class FirebaseBackend: ObservableObject {
     
     func deleteBooking(_ booking: Booking, organizationId: String) async throws {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
-        try await db.collection("organizations").document(orgId).collection("bookings").document(booking.id.uuidString).delete()
+        try await db.collection("organizations").document(orgId).collection("bookings").document(booking.documentKey).delete()
     }
 
     // MARK: - Manager / Admin site bookings (where I'm working – AM, PM, Full Day, Office)

@@ -14,6 +14,8 @@ class ManagerScheduleStore: ObservableObject {
     @Published var managerSiteBookings: [ManagerSiteBooking] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
+    /// The last server read failed and nothing (or only a cached copy) is on screen.
+    @Published private(set) var lastLoadFailed = false
     @Published var isOffline = false
 
     private var firebaseBackend: FirebaseBackend?
@@ -96,6 +98,7 @@ class ManagerScheduleStore: ObservableObject {
                 self.managerSiteBookings = self.deduplicated(list)
                 OfflineManagerScheduleLocalStore.save(self.managerSiteBookings, organizationId: orgId)
                 self.lastLoadAt = Date()
+                self.lastLoadFailed = false
                 fb.listenManagerSiteBookings(organizationId: orgId, startingOn: queryStart) { [weak self] remote in
                     guard let self else { return }
                     guard WarningsBookingScanScheduler.acceptsListener(
@@ -122,6 +125,8 @@ class ManagerScheduleStore: ObservableObject {
                 }
                 NotificationCenter.default.post(name: self.didChangeNotificationName, object: nil)
             } catch {
+                NSLog("MANAGER_BOOKINGS_LOAD_FAILED org=%@ error=%@", orgId, error.localizedDescription)
+                self.lastLoadFailed = true
                 let cached = OfflineManagerScheduleLocalStore.load(organizationId: orgId)
                 if !cached.isEmpty {
                     self.managerSiteBookings = self.deduplicated(cached)

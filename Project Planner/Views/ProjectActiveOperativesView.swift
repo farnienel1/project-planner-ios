@@ -116,7 +116,9 @@ struct ProjectActiveOperativesView: View {
     private var subcontractorSummaries: [ProjectBookedPersonSummary] {
         let projectBookings = subcontractorStore.bookings.filter { booking in
             booking.projectId == project.id &&
-            (booking.status == .confirmed || booking.status == .tentative)
+            // Still on the job (`isOpenBookingStatus`), as web's active users list: a completed
+            // subcontractor booking is not open.
+            booking.status.isOpen
         }
         let grouped = Dictionary(grouping: projectBookings, by: \.subcontractorId)
         return grouped.compactMap { subcontractorId, bookings -> ProjectBookedPersonSummary? in
@@ -307,7 +309,7 @@ private struct ProjectBookedPersonHistoryView: View {
                 .filter {
                     $0.projectId == project.id &&
                     $0.subcontractorId == subcontractorId &&
-                    ($0.status == .confirmed || $0.status == .tentative)
+                    $0.status.isOpen
                 }
                 .sorted { $0.date > $1.date }
                 .map {

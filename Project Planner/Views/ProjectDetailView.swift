@@ -721,7 +721,7 @@ struct ProjectDetailView: View {
             subcontractorStore.bookings
                 .filter {
                     $0.projectId == project.id &&
-                    ($0.status == .confirmed || $0.status == .tentative)
+                    ($0.status.occupiesDay)
                 }
                 .map(\.subcontractorId)
         )
@@ -2495,7 +2495,7 @@ struct ProjectDetailView: View {
         return bookingStore.bookings.filter { booking in
             Calendar.current.isDate(booking.date, inSameDayAs: date) &&
             booking.projectId == project.id &&
-            (booking.status == .confirmed || booking.status == .tentative)
+            (booking.status.occupiesDay)
         }.sorted { $0.minutesSortKey(policy: policy) < $1.minutesSortKey(policy: policy) }
     }
     
@@ -2503,7 +2503,7 @@ struct ProjectDetailView: View {
         subcontractorStore.bookings.filter { booking in
             Calendar.current.isDate(booking.date, inSameDayAs: date) &&
             booking.projectId == project.id &&
-            (booking.status == .confirmed || booking.status == .tentative)
+            (booking.status.occupiesDay)
         }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
     }
     

@@ -117,13 +117,19 @@ struct WeeklyReportView: View {
         InvoicingPeriodResolver.resolve(invoicing: invoicingSettings)
     }
 
+    /// The picked day (this device's calendar) as London midnight, the instant bookings are stored at.
+    private func londonDay(_ picked: Date) -> Date {
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: picked)
+        let key = String(format: "%04d-%02d-%02d", parts.year ?? 1970, parts.month ?? 1, parts.day ?? 1)
+        return CanonicalBusinessEngine.date(fromDayKey: key)
+            ?? CanonicalBusinessEngine.businessCalendar.startOfDay(for: picked)
+    }
+
+    private var reportStartDay: Date { londonDay(min(startDate, endDate)) }
+    private var reportEndDay: Date { londonDay(max(startDate, endDate)) }
+
     private var reportDateRange: ClosedRange<Date> {
-        let cal = Calendar.current
-        let start = cal.startOfDay(for: startDate)
-        let end = cal.startOfDay(for: endDate)
-        let lower = min(start, end)
-        let upper = max(start, end)
-        return lower...upper
+        reportStartDay...reportEndDay
     }
 
     private var hasReportWarnings: Bool {
@@ -728,7 +734,7 @@ struct WeeklyReportView: View {
         let service = exportWarningsService ?? WarningsService(hydrateFromDisk: false)
         exportWarningsService = service
         let range = reportDateRange
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let shared = WarningsService.shared
 
         // REBUILD: prefer live cache filtered by report dates — avoids Generate jetsam.
@@ -981,9 +987,10 @@ struct WeeklyReportView: View {
             )
         )
 
-        var totalAmount = 0.0
         var payRows: [[String]] = []
-        for person in payrollPersonSummaries() {
+        let paySummaries = payrollPersonSummaries()
+        let totalAmount = reportGrandTotal(paySummaries)
+        for person in paySummaries {
             for line in person.lines {
                 payRows.append([
                     person.name,
@@ -991,11 +998,10 @@ struct WeeklyReportView: View {
                     line.rateTypeLabel,
                     formatDays(line.days),
                     formatCurrency(line.rate),
-                    formatCurrency(line.pay),
+                    line.payLabel ?? formatCurrency(line.pay),
                 ])
-                totalAmount += line.pay ?? 0
             }
-            payRows.append(["", "", "\(person.name) total", "", "", formatCurrency(person.totalPay)])
+            payRows.append(["", "", "\(person.name) total", "", "", person.totalLabel ?? formatCurrency(person.totalPay)])
         }
         sections.append(
             WeeklyReportExportBuilder.Section(
@@ -1120,8 +1126,9 @@ struct WeeklyReportView: View {
 
         rows.append(["PAY SUMMARY"])
         rows.append(["Person", "Role", "Rate Type", "Days", "Rate", "Pay"])
-        var totalAmount = 0.0
-        for person in payrollPersonSummaries() {
+        let paySummaries = payrollPersonSummaries()
+        let totalAmount = reportGrandTotal(paySummaries)
+        for person in paySummaries {
             for line in person.lines {
                 rows.append([
                     person.name,
@@ -1129,9 +1136,8 @@ struct WeeklyReportView: View {
                     line.rateTypeLabel,
                     formatDays(line.days),
                     formatCurrency(line.rate),
-                    formatCurrency(line.pay)
+                    line.payLabel ?? formatCurrency(line.pay)
                 ])
-                totalAmount += line.pay ?? 0
             }
             rows.append([
                 "",
@@ -1139,7 +1145,7 @@ struct WeeklyReportView: View {
                 "\(person.name) total",
                 "",
                 "",
-                formatCurrency(person.totalPay)
+                person.totalLabel ?? formatCurrency(person.totalPay)
             ])
         }
         rows.append(["", "", "Grand Total", "", "", formatCurrency(totalAmount)])
@@ -1155,11 +1161,11 @@ struct WeeklyReportView: View {
     }
 
     private func operativeProjectRows() -> [ProjectWorkRow] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let filtered = bookingStore.bookings.filter { booking in
             let day = cal.startOfDay(for: booking.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && booking.occupiesDay
         }
         let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
@@ -1193,11 +1199,11 @@ struct WeeklyReportView: View {
     }
 
     private func managerProjectRows() -> [ProjectWorkRow] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let filtered = managerScheduleStore.managerSiteBookings.filter { booking in
             let day = cal.startOfDay(for: booking.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && (booking.locationType == .project || booking.locationType == .smallWork)
         }
         var totals: [String: Double] = [:]
@@ -1229,7 +1235,7 @@ struct WeeklyReportView: View {
     }
 
     private func annualLeaveRows() -> [AnnualLeaveRow] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let approved = holidayStore.bookings.filter {
             $0.status == .approved && $0.cancellationRequestedAt == nil
         }
@@ -1255,17 +1261,17 @@ struct WeeklyReportView: View {
     }
 
     private func labourRateSummaries() -> [LabourRateSummary] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let operativeBookings = bookingStore.bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && $0.occupiesDay
         }
         let managerBookings = managerScheduleStore.managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
         }
         let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
         
@@ -1300,12 +1306,12 @@ struct WeeklyReportView: View {
     }
     
     private func managerAdditionalScheduleRows() -> [ManagerAdditionalScheduleRow] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let opts = appSettings.settings.myScheduleOptions
         let filtered = managerScheduleStore.managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && ($0.locationType == .office || $0.locationType == .workingFromHome || $0.locationType == .siteSurvey || $0.locationType == .custom)
                 && opts.includesManagerScheduleLocation($0)
                 && !timesheetFeed.covers(userId: $0.userId, day: $0.date)
@@ -1339,11 +1345,11 @@ struct WeeklyReportView: View {
     }
     
     private func subcontractorRows() -> [SubcontractorWorkRow] {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         let filtered = subcontractorStore.bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && $0.status != .cancelled
         }
         return filtered.compactMap { booking in
@@ -1376,7 +1382,7 @@ struct WeeklyReportView: View {
     }
 
     private func calendarDayStart(_ date: Date) -> Date {
-        Calendar.current.startOfDay(for: date)
+        CanonicalBusinessEngine.businessCalendar.startOfDay(for: date)
     }
 
     /// Uses day-rate history keyed by user id; compares **calendar days** so a change effective “tomorrow” does not apply to today’s bookings.
@@ -1412,12 +1418,9 @@ struct WeeklyReportView: View {
         booking.reportDayValue(policy: firebaseBackend.payrollPolicy(for: booking.date))
     }
 
+    /// Subcontractor day units from the rulebook (`subcontractorDayValue`).
     private func subcontractorDayValue(from timeSlot: TimeSlot) -> Double {
-        switch timeSlot {
-        case .fullDay: return 1
-        case .morning, .afternoon: return 0.5
-        default: return 0.5
-        }
+        CanonicalBusinessEngine.subcontractorDayValue(timeSlot.rawValue) ?? 0
     }
 
     private func managerDayValue(from booking: ManagerSiteBooking) -> Double {
@@ -1445,6 +1448,38 @@ struct WeeklyReportView: View {
             name = unknownLabourPersonName
         }
         return (person.operative, user, name)
+    }
+
+    private func isPaye(_ user: AppUser?, on day: Date) -> Bool {
+        user?.employmentType(on: day) == .paye
+    }
+
+    /// Pay cells and the person total from the rulebook (`reportPayCell`, `reportPersonPayCell`):
+    /// a PAYE line shows PAYE, no figure, and adds nothing to the totals.
+    private func settledSummary(name: String, role: String, lines: [PayrollRateLine]) -> PayrollPersonSummary {
+        var settled: [PayrollRateLine] = []
+        for line in lines {
+            var copy = line
+            if let cell = CanonicalBusinessEngine.reportPayCell(CanonicalReportPayLine(isPaye: line.isPaye, pay: line.pay)) {
+                copy.pay = cell.pay
+                copy.payLabel = cell.label
+            }
+            settled.append(copy)
+        }
+        let inputs = settled.map { CanonicalReportPayLine(isPaye: $0.isPaye, pay: $0.pay) }
+        let personCell = CanonicalBusinessEngine.reportPersonPayCell(inputs)
+        return PayrollPersonSummary(
+            name: name,
+            role: role,
+            lines: settled,
+            totalPay: personCell?.pay ?? 0,
+            totalLabel: personCell?.label
+        )
+    }
+
+    private func reportGrandTotal(_ summaries: [PayrollPersonSummary]) -> Double {
+        let inputs = summaries.flatMap { $0.lines.map { CanonicalReportPayLine(isPaye: $0.isPaye, pay: $0.pay) } }
+        return CanonicalBusinessEngine.reportPayTotal(inputs) ?? 0
     }
 
     private func reportingUser(for userId: String) -> AppUser? {
@@ -1497,14 +1532,15 @@ struct WeeklyReportView: View {
             var otHours: Double = 0
             var otMultiplier: Double
             var standardDayHours: Double
+            var isPaye: Bool = false
         }
         var byKey: [String: Acc] = [:]
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
 
         let operativeBookings = bookingStore.bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && $0.occupiesDay
         }
         let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
@@ -1528,8 +1564,9 @@ struct WeeklyReportView: View {
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
-            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))"
-            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours)
+            let paye = isPaye(linkedUser, on: booking.date)
+            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(paye ? "paye" : "")"
+            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
             acc.normalHours += normalHours
             acc.otHours += otHours
             byKey[key] = acc
@@ -1537,8 +1574,8 @@ struct WeeklyReportView: View {
 
         let managerBookings = managerScheduleStore.managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= cal.startOfDay(for: startDate)
-                && day <= cal.startOfDay(for: endDate)
+            return day >= reportStartDay
+                && day <= reportEndDay
                 && appSettings.settings.myScheduleOptions.includesManagerScheduleLocation($0)
         }
         for booking in managerBookings {
@@ -1564,8 +1601,9 @@ struct WeeklyReportView: View {
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
-            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))"
-            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours)
+            let paye = isPaye(manager, on: booking.date)
+            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(paye ? "paye" : "")"
+            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
             acc.normalHours += normalHours
             acc.otHours += otHours
             byKey[key] = acc
@@ -1589,8 +1627,9 @@ struct WeeklyReportView: View {
                         PayrollRateLine(
                             rateTypeLabel: rateLabel,
                             days: days,
-                            rate: entry.resolved.reportRateValue(),
-                            pay: pay
+                            rate: entry.isPaye ? nil : entry.resolved.reportRateValue(),
+                            pay: pay,
+                            isPaye: entry.isPaye
                         )
                     )
                     total += pay
@@ -1618,14 +1657,15 @@ struct WeeklyReportView: View {
                         PayrollRateLine(
                             rateTypeLabel: otLabel,
                             days: otDays,
-                            rate: otRate,
-                            pay: otPay
+                            rate: entry.isPaye ? nil : otRate,
+                            pay: otPay,
+                            isPaye: entry.isPaye
                         )
                     )
                     total += otPay
                 }
             }
-            summaries.append(PayrollPersonSummary(name: first.name, role: first.role, lines: lines, totalPay: total))
+            summaries.append(PayrollPersonSummary(name: first.name, role: first.role, lines: lines, totalPay: total, totalLabel: nil))
         }
         return mergeTimesheetPay(into: summaries).sorted {
             if $0.name == $1.name { return $0.role < $1.role }
@@ -1738,8 +1778,11 @@ struct WeeklyReportView: View {
             map[key] = acc
         }
         for (week, line) in timesheetFeed.labourLines(in: reportDateRange) {
-            guard line.amount > 0.0001 else { continue }
-            let rate = line.days > 0.0001 ? line.amount / line.days : nil
+            // A PAYE day keeps its hours on the report with no pay (`reportPayCell`).
+            let weekUser = userStore.organizationUsers.first { $0.id == week.userId }
+            let paye = isPaye(weekUser, on: line.date)
+            guard line.amount > 0.0001 || (paye && line.days > 0.0001) else { continue }
+            let rate = !paye && line.days > 0.0001 ? line.amount / line.days : nil
             add(
                 name: week.personName,
                 role: week.role,
@@ -1747,7 +1790,8 @@ struct WeeklyReportView: View {
                     rateTypeLabel: line.isOvertime ? "Timesheet OT" : "Timesheet",
                     days: line.days,
                     rate: rate,
-                    pay: line.amount
+                    pay: paye ? 0 : line.amount,
+                    isPaye: paye
                 )
             )
         }
@@ -1765,9 +1809,7 @@ struct WeeklyReportView: View {
                 line: PayrollRateLine(rateTypeLabel: "Expenses", days: 0, rate: nil, pay: line.amount)
             )
         }
-        return map.values.map {
-            PayrollPersonSummary(name: $0.name, role: $0.role, lines: $0.lines, totalPay: $0.totalPay)
-        }
+        return map.values.map { settledSummary(name: $0.name, role: $0.role, lines: $0.lines) }
     }
 
     private func formatDate(_ date: Date) -> String {
@@ -1864,7 +1906,11 @@ private struct PayrollRateLine {
     let rateTypeLabel: String
     let days: Double
     let rate: Double?
-    let pay: Double?
+    var pay: Double?
+    /// PAYE on the line's day(s): hours stay, pay is not shown or totalled.
+    var isPaye: Bool = false
+    /// `PAYE` when the cell shows that instead of a figure (`reportPayCell`).
+    var payLabel: String? = nil
 }
 
 private struct PayrollPersonSummary {
@@ -1872,6 +1918,8 @@ private struct PayrollPersonSummary {
     let role: String
     let lines: [PayrollRateLine]
     let totalPay: Double
+    /// `PAYE` when every line is PAYE (`reportPersonPayCell`).
+    var totalLabel: String? = nil
 }
 
 private struct WeeklyReportShareSheet: UIViewControllerRepresentable {

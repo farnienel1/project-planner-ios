@@ -46,12 +46,22 @@ struct DailyOverviewView: View {
     /// When `displayDate` is nil, the user can change the day from the strip (today’s overview sheet).
     @State private var selectedCalendarDay: Date = Calendar.current.startOfDay(for: Date())
     
+    /// London midnight of the day picked on this device's calendar. Bookings are stored at London
+    /// midnight, so a phone in another zone still lists the same day's bookings as the web app.
     private var overviewDate: Date {
-        let cal = Calendar.current
-        if let displayDate {
-            return cal.startOfDay(for: displayDate)
-        }
-        return cal.startOfDay(for: selectedCalendarDay)
+        let picked = displayDate ?? selectedCalendarDay
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: picked)
+        let key = String(format: "%04d-%02d-%02d", parts.year ?? 1970, parts.month ?? 1, parts.day ?? 1)
+        return CanonicalBusinessEngine.date(fromDayKey: key)
+            ?? CanonicalBusinessEngine.businessCalendar.startOfDay(for: picked)
+    }
+
+    /// A day before the launch query window (the warning window / current week) is loaded on demand,
+    /// so a historic date does not show everyone as not booked.
+    private func coverOverviewDay() {
+        guard firebaseBackend.noteScheduleNeedsDate(overviewDate) else { return }
+        bookingStore.loadData()
+        managerScheduleStore.loadData(force: true)
     }
     
     private var scheduleOptions: MyScheduleOptions {
@@ -74,7 +84,7 @@ struct DailyOverviewView: View {
     /// so the project cards and every row below use the same list as web.
     private var dayBookings: [Booking] {
         bookingStore.bookings.filter { booking in
-            Calendar.current.isDate(booking.date, inSameDayAs: overviewDate)
+            CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate)
                 && CanonicalBusinessEngine.bookingOccupiesDay(booking.status.rawValue) == true
         }
     }
@@ -87,7 +97,7 @@ struct DailyOverviewView: View {
         let p = payrollTimePolicy
         return managerScheduleStore.managerSiteBookings
             .filter { booking in
-                Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
+                CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .office
             }
             .sorted { $0.minutesSortKey(policy: p) < $1.minutesSortKey(policy: p) }
@@ -97,7 +107,7 @@ struct DailyOverviewView: View {
         let p = payrollTimePolicy
         return managerScheduleStore.managerSiteBookings
             .filter { booking in
-                Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
+                CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .workingFromHome
             }
             .sorted { $0.minutesSortKey(policy: p) < $1.minutesSortKey(policy: p) }
@@ -107,7 +117,7 @@ struct DailyOverviewView: View {
         let p = payrollTimePolicy
         return managerScheduleStore.managerSiteBookings
             .filter { booking in
-                Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
+                CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .siteSurvey
             }
             .sorted { $0.minutesSortKey(policy: p) < $1.minutesSortKey(policy: p) }
@@ -115,7 +125,7 @@ struct DailyOverviewView: View {
     
     private var dayCustomBookingsByName: [String: [ManagerSiteBooking]] {
         let list = managerScheduleStore.managerSiteBookings.filter { booking in
-            Calendar.current.isDate(booking.date, inSameDayAs: overviewDate) &&
+            CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .custom
         }
         return Dictionary(grouping: list) { booking in
@@ -145,7 +155,7 @@ struct DailyOverviewView: View {
 
     /// Distinct people with a project or small-work booking on this day (operative bookings + manager site bookings).
     private var onSitePeopleCount: Int {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         var keys = Set<String>()
         for b in dayBookings {
             keys.insert(overviewPersonKey(operativeId: b.operativeId))
@@ -192,7 +202,7 @@ struct DailyOverviewView: View {
 
     /// Unique people with any same-day booking (operatives on jobs, managers on jobs or “other” locations, subs on jobs).
     private var bookedPeopleCount: Int {
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         var keys = Set<String>()
         for b in dayBookings {
             keys.insert(overviewPersonKey(operativeId: b.operativeId))
@@ -211,7 +221,7 @@ struct DailyOverviewView: View {
     /// Wall-clock hours on project / small-work sites (operatives + managers on jobs) for the overview day.
     private var dayJobSiteLabourHours: Double {
         let p = payrollTimePolicy
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         var t = 0.0
         for b in dayBookings {
             t += b.paidBookedHours(policy: p)
@@ -229,7 +239,7 @@ struct DailyOverviewView: View {
 
     private var dayJobSiteOvertimeHours: Double {
         let p = payrollTimePolicy
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         var t = 0.0
         for b in dayBookings {
             t += b.overtimeHoursBeyondPaidStandard(policy: p)
@@ -248,7 +258,7 @@ struct DailyOverviewView: View {
     /// Portion of job-site hours counted at standard (elapsed minus per-booking “beyond standard” bucket).
     private var dayJobSiteStandardPortionHours: Double {
         let p = payrollTimePolicy
-        let cal = Calendar.current
+        let cal = CanonicalBusinessEngine.businessCalendar
         var t = 0.0
         for b in dayBookings {
             let wall = b.paidBookedHours(policy: p)
@@ -278,8 +288,9 @@ struct DailyOverviewView: View {
 
     private func shiftOverviewDay(_ delta: Int) {
         guard displayDate == nil else { return }
+        // `selectedCalendarDay` is the day as picked on this device; `overviewDate` turns it into London midnight.
         let cal = Calendar.current
-        guard let d = cal.date(byAdding: .day, value: delta, to: overviewDate) else { return }
+        guard let d = cal.date(byAdding: .day, value: delta, to: selectedCalendarDay) else { return }
         selectedCalendarDay = cal.startOfDay(for: d)
     }
 
@@ -305,12 +316,12 @@ struct DailyOverviewView: View {
     private var displayedProjectIds: [UUID] {
         var ids = Set(bookingsByProject.keys)
         let managerIds = managerScheduleStore.managerSiteBookings.compactMap { booking -> UUID? in
-            guard Calendar.current.isDate(booking.date, inSameDayAs: overviewDate),
+            guard CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate),
                   (booking.locationType == .project || booking.locationType == .smallWork) else { return nil }
             return booking.locationId
         }
         let subcontractorIds = subcontractorStore.bookings.compactMap { booking -> UUID? in
-            guard Calendar.current.isDate(booking.date, inSameDayAs: overviewDate),
+            guard CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate),
                   booking.status != .cancelled else { return nil }
             return booking.projectId
         }
@@ -322,6 +333,7 @@ struct DailyOverviewView: View {
     private var dateFormatter: DateFormatter {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEEE, d MMMM yyyy"
+        formatter.timeZone = CanonicalBusinessEngine.businessCalendar.timeZone
         return formatter
     }
     
@@ -438,7 +450,7 @@ struct DailyOverviewView: View {
                         Text(dateFormatter.string(from: overviewDate))
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Text(Calendar.current.isDateInToday(overviewDate) ? "Today · Tap to change" : "Tap to change")
+                        Text(CanonicalBusinessEngine.businessCalendar.isDateInToday(overviewDate) ? "Today · Tap to change" : "Tap to change")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.blue)
                     }
@@ -492,7 +504,7 @@ struct DailyOverviewView: View {
         let jobsCount = displayedProjectIds.count
         let people = glanceHeadlinePeopleCount
         let bar = teamLocationBarFractions
-        let isToday = Calendar.current.isDateInToday(overviewDate)
+        let isToday = CanonicalBusinessEngine.businessCalendar.isDateInToday(overviewDate)
         let glanceTitle = isToday ? "Today at a glance" : "Day at a glance"
 
         return ZStack(alignment: .topTrailing) {
@@ -1140,6 +1152,9 @@ struct DailyOverviewView: View {
                 }
             }
         }
+        .onAppear { coverOverviewDay() }
+        .onChange(of: selectedCalendarDay) { _, _ in coverOverviewDay() }
+        .onChange(of: displayDate) { _, _ in coverOverviewDay() }
         .sheet(isPresented: $showingPastBookings) {
             HistoricDailyOverviewView()
                 .environmentObject(bookingStore)
@@ -1570,7 +1585,7 @@ struct ProjectBookingCard: View {
             .filter { booking in
                 booking.locationId == project.id &&
                     (booking.locationType == .project || booking.locationType == .smallWork) &&
-                    Calendar.current.isDate(booking.date, inSameDayAs: day)
+                    CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: day)
             }
             .sorted { $0.minutesSortKey(policy: payrollTimePolicy) < $1.minutesSortKey(policy: payrollTimePolicy) }
     }
@@ -1579,7 +1594,7 @@ struct ProjectBookingCard: View {
         subcontractorStore.bookings
             .filter { booking in
                 booking.projectId == project.id &&
-                    Calendar.current.isDate(booking.date, inSameDayAs: day) &&
+                    CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: day) &&
                     booking.status != .cancelled
             }
             .sorted { $0.payrollMirrorBooking().minutesSortKey(policy: payrollTimePolicy) < $1.payrollMirrorBooking().minutesSortKey(policy: payrollTimePolicy) }

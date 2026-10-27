@@ -129,12 +129,37 @@ struct WarningsDetailView: View {
         return WarningsSortPreference.direction(userId: userId)
     }
 
+    /// A failed booking read: the list is not an all-clear, and no warning was worked out from partial data.
+    private func incompleteDataBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "wifi.exclamationmark")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .accessibilityIdentifier("warnings.incompleteData")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
                 warningsNavBar
+                if let incomplete = warningsService.incompleteDataMessage {
+                    incompleteDataBanner(incomplete)
+                }
                 Group {
                     if warningsService.activeWarnings.isEmpty {
-                        emptyState
+                        if warningsService.incompleteDataMessage == nil {
+                            emptyState
+                        } else {
+                            Spacer(minLength: 0)
+                        }
                     } else {
                         warningsScroll
                     }

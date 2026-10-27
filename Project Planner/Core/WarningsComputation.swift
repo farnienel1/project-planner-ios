@@ -469,10 +469,7 @@ enum WarningsComputation {
                     isActive: true,
                     qualificationExpiries: []
                 )
-                let clusters = overlappingClusters(dayBookings) { a, b in
-                    guard let ia = a.clashInterval, let ib = b.clashInterval else { return false }
-                    return intervalsOverlap(ia, ib)
-                }
+                let clusters = overlappingClusters(dayBookings) { $0.clashInterval }
                 for (clusterIndex, cluster) in clusters.enumerated() {
                     let sortedCluster = cluster.sorted { $0.id.uuidString < $1.id.uuidString }
                     let pairKey = sortedCluster.map(\.id.uuidString).joined(separator: "|")
@@ -522,9 +519,7 @@ enum WarningsComputation {
             )
             for (_, items) in managerPersonDays {
                 guard items.count > 1 else { continue }
-                let clusters = overlappingClusters(items) { a, b in
-                    scheduleIndex.managerPersonItemsOverlap(a, b)
-                }
+                let clusters = overlappingClusters(items) { $0.clashInterval }
                 for (clusterIndex, cluster) in clusters.enumerated() {
                     let sortedCluster = cluster.sorted { $0.sortKey < $1.sortKey }
                     let pairKey = sortedCluster.map(\.pairId).joined(separator: "|")
@@ -1380,51 +1375,23 @@ enum WarningsComputation {
         return .operative
     }
 
-    /// Connected components of overlapping items (one warning per person-day cluster).
+    /// One warning per person-day clash group: the rulebook's `overlappingIntervalGroups`, in its order,
+    /// so clash rows and their resolution keys number the same way on web and iOS.
     nonisolated private static func overlappingClusters<T>(
         _ items: [T],
-        overlap: (T, T) -> Bool
+        interval: (T) -> (Int, Int)?
     ) -> [[T]] {
-        let n = items.count
-        guard n >= 2 else { return [] }
-        var parent = Array(0..<n)
-        func find(_ i: Int) -> Int {
-            var x = i
-            while parent[x] != x { x = parent[x] }
-            var y = i
-            while parent[y] != y {
-                let next = parent[y]
-                parent[y] = x
-                y = next
-            }
-            return x
-        }
-        func union(_ a: Int, _ b: Int) {
-            let ra = find(a)
-            let rb = find(b)
-            if ra != rb { parent[ra] = rb }
-        }
-        var hasEdge = Array(repeating: false, count: n)
-        for i in 0..<n {
-            for j in (i + 1)..<n {
-                if overlap(items[i], items[j]) {
-                    union(i, j)
-                    hasEdge[i] = true
-                    hasEdge[j] = true
-                }
-            }
-        }
-        var groups: [Int: [T]] = [:]
-        for i in 0..<n where hasEdge[i] {
-            groups[find(i), default: []].append(items[i])
-        }
-        return groups.values.filter { $0.count >= 2 }
+        guard items.count >= 2 else { return [] }
+        let intervals: [CanonicalMinuteInterval?] = items.map { item in interval(item).map { CanonicalMinuteInterval($0) } }
+        guard let groups = CanonicalBusinessEngine.overlappingIntervalGroups(intervals) else { return [] }
+        return groups.map { group in group.compactMap { $0 < items.count ? items[$0] : nil } }
     }
 
     nonisolated private static func formatDay(_ day: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
+        formatter.timeZone = CanonicalBusinessEngine.businessCalendar.timeZone
         return formatter.string(from: day)
     }
 

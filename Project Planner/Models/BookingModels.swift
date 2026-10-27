@@ -32,6 +32,11 @@ struct Booking: Identifiable, Codable, Hashable {
     var bookingGroupId: String?
     var createdAt: Date
     var updatedAt: Date
+    /// The Firestore document id when `id.uuidString` would not spell it the same way (ids are case-sensitive).
+    var documentId: String? = nil
+
+    /// The document id under `organizations/{orgId}/bookings`.
+    var documentKey: String { documentId ?? id.uuidString }
     
     init(
         id: UUID = UUID(),
@@ -264,6 +269,18 @@ enum BookingStatus: String, CaseIterable, Identifiable, Codable {
         var map: [BookingStatus: Bool] = [:]
         for status in BookingStatus.allCases {
             if let answer = CanonicalBusinessEngine.bookingOccupiesDay(status.rawValue) { map[status] = answer }
+        }
+        return map
+    }()
+
+    /// The rulebook's `isOpenBookingStatus`: still on the job (Confirmed or Tentative). A job's active people
+    /// list uses this for subcontractor bookings, as web does; Completed and Cancelled are not open.
+    nonisolated var isOpen: Bool { Self.isOpenByStatus[self] ?? false }
+
+    private nonisolated static let isOpenByStatus: [BookingStatus: Bool] = {
+        var map: [BookingStatus: Bool] = [:]
+        for status in BookingStatus.allCases {
+            if let answer = CanonicalBusinessEngine.isOpenBookingStatus(status.rawValue) { map[status] = answer }
         }
         return map
     }()

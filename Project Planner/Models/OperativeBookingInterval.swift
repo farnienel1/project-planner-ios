@@ -98,7 +98,7 @@ enum OperativeBookingInterval {
             let end = intervals.map(\.1).max() ?? start
             let source = cluster.min(by: { $0.booking.createdAt < $1.booking.createdAt })?.booking ?? cluster[0].booking
             let endClock = end >= 24 * 60 ? end - 24 * 60 : end
-            let payable = Booking(
+            var payable = Booking(
                 id: source.id,
                 operativeId: source.operativeId,
                 projectId: source.projectId,
@@ -115,6 +115,8 @@ enum OperativeBookingInterval {
                 createdAt: source.createdAt,
                 updatedAt: source.updatedAt
             )
+            payable.operativeKey = source.operativeKey
+            payable.documentId = source.documentId
             result.append(PayCluster(payable: payable))
         }
         return result
@@ -188,18 +190,20 @@ extension Booking {
         ScheduleCoverageFormat.hours(paidBookedHours(policy: policy)) + "h"
     }
 
+    /// The multiplier `payrollHoursResult` pays this booking's outside hours at (override, weekend day, or weekday).
     func effectiveWeekdayOtMultiplier(policy: OrgPayrollTimePolicy = .default) -> Double {
-        PayrollTimePolicyCatalog.effectiveMultiplier(for: self, policy: policy)
+        payrollHoursResult(policy: policy).outsideMultiplier
     }
 
     func minutesSortKey(policy: OrgPayrollTimePolicy = .default) -> Int {
         OperativeBookingInterval.clashInterval(for: self, policy: policy)?.0 ?? 0
     }
 
+    /// Weekly-report day units (`reportDayValue`): weighted paid hours over the standard day, capped at 1.5.
     func reportDayValue(policy: OrgPayrollTimePolicy = .default) -> Double {
         let paidHrs = paidBookedHours(policy: policy)
-        let standard = max(policy.standardPaidHours, 0.01)
-        return min(1.5, paidHrs / standard)
+        // Nil only when the script did not run; bookings are then unreadable too.
+        return CanonicalBusinessEngine.reportDayValue(totalPaidHours: paidHrs, standardPaidHours: policy.standardPaidHours) ?? 0
     }
 
     func calendarBlock(on day: Date, policy: OrgPayrollTimePolicy = .default) -> (start: Date, end: Date) {
@@ -217,7 +221,7 @@ extension Booking {
 
     /// Wall-clock hours for this booking (explicit times or legacy slot mapped to the org day).
     /// An end before the start still counts as the next morning here: this is the Swift-only
-    /// overnight wall-hours rule (with `PayrollHoursEngine.overnightWallResult`), not the clash path.
+    /// overnight wall-hours rule (the rulebook's `payrollHoursResult` pays it the same way), not the clash path.
     func totalBookedHours(policy: OrgPayrollTimePolicy = .default) -> Double {
         if let s = workStartTime, let e = workEndTime,
            let span = ManagerScheduleInterval.clockSpanMinutes(start: s, end: e) {
