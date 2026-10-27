@@ -207,6 +207,8 @@ struct ProjectPlannerRootView: View {
     @EnvironmentObject private var subcontractorStore: SubcontractorStore
     @EnvironmentObject private var appSettings: AppSettingsStore
     @EnvironmentObject private var notificationService: NotificationService
+    @EnvironmentObject private var appLock: AppLockService
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
@@ -226,6 +228,40 @@ struct ProjectPlannerRootView: View {
     /// This cover is only for an organisation switch, after Home is already on screen.
     private var showSplash: Bool {
         firebaseBackend.isSwitchingOrganization
+    }
+
+    @State private var lockWindow = AppLockWindowPresenter()
+
+    /// The privacy cover hides bookings in the app switcher. Not while our own Face ID prompt is up,
+    /// which also makes the scene inactive.
+    private var lockOverlay: AppLockOverlay {
+        guard showMainExperience else { return .none }
+        if appLock.isLocked { return .locked }
+        if appLock.isEnabled && !appLock.isAuthenticating && scenePhase != .active { return .privacy }
+        return .none
+    }
+
+    /// Who the lock preference belongs to on this device.
+    private var lockOwnerID: String? {
+        if let uid = firebaseAuthUID, !uid.isEmpty { return uid }
+        #if DEBUG
+        if UITestingMode.isEnabled, let role = UITestingMode.autoLoginRole { return "uitest-\(role)" }
+        #endif
+        return nil
+    }
+
+    private func activateAppLockIfSignedIn() {
+        guard let owner = lockOwnerID else { return }
+        #if DEBUG
+        // UI test launches start unlocked unless a test asks for the lock.
+        if UITestingMode.isEnabled, !CommandLine.arguments.contains("-keepAppLock") {
+            UserDefaults.standard.removeObject(forKey: AppLockPolicy.enabledKey(uid: owner))
+        }
+        #endif
+        appLock.activate(uid: owner)
+        #if DEBUG
+        if CommandLine.arguments.contains("-showAppLockOffer") { appLock.forceSignInOfferForPreview() }
+        #endif
     }
 
     @ViewBuilder
@@ -248,6 +284,10 @@ struct ProjectPlannerRootView: View {
                 ContentView()
                     .id(contentShellEpoch)
             }
+                .sheet(isPresented: $appLock.showSignInOffer, onDismiss: appLock.dismissSignInOffer) {
+                    AppLockSignInOfferView()
+                        .environmentObject(appLock)
+                }
                 .environmentObject(firebaseBackend)
                 .environmentObject(smartCache)
                 .environmentObject(projectStore)
@@ -260,6 +300,7 @@ struct ProjectPlannerRootView: View {
                 .environmentObject(subcontractorStore)
                 .environmentObject(appSettings)
                 .environmentObject(notificationService)
+                .environmentObject(appLock)
                 .appColorScheme(appSettings.settings.colorScheme)
         }
     }
@@ -283,6 +324,23 @@ struct ProjectPlannerRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE home")
         }
+        .onChange(of: lockOverlay, initial: true) { _, overlay in
+            lockWindow.update(overlay) {
+                AppLockView()
+                    .environmentObject(appLock)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(userStore)
+            } privacy: {
+                AppPrivacyCover()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background: appLock.appDidEnterBackground()
+            case .active: appLock.appDidBecomeActive()
+            default: break
+            }
+        }
         .onChange(of: firebaseBackend.isAuthenticated) { _, signedIn in
             guard !signedIn else { return }
             #if DEBUG
@@ -295,10 +353,12 @@ struct ProjectPlannerRootView: View {
                 return
             }
             userStore.clearOnSignOut()
+            appLock.deactivate()
         }
         .onReceive(NotificationCenter.default.publisher(for: .firebaseAuthUIDChanged)) { note in
             if let uid = note.userInfo?["uid"] as? String, !uid.isEmpty {
                 firebaseAuthUID = uid
+                activateAppLockIfSignedIn()
                 print("🔥🔥🔥 DEBUG: RootView auth uid → \(uid)")
             } else {
                 if FirebaseApp.app() != nil, Auth.auth().currentUser != nil {
@@ -311,6 +371,7 @@ struct ProjectPlannerRootView: View {
                 #endif
                 firebaseAuthUID = nil
                 userStore.clearOnSignOut()
+                appLock.deactivate()
                 print("🔥🔥🔥 DEBUG: RootView auth uid cleared (signed out)")
             }
         }
@@ -335,6 +396,7 @@ struct ProjectPlannerRootView: View {
             if FirebaseApp.app() != nil {
                 firebaseAuthUID = firebaseAuthUID ?? Auth.auth().currentUser?.uid
             }
+            activateAppLockIfSignedIn()
             print("🔥🔥🔥 DEBUG: RootView onAppear — auth uid: \(firebaseAuthUID ?? "nil"), backend.isAuthenticated: \(firebaseBackend.isAuthenticated), showMain: \(showMainExperience), profileLoading: \(userStore.isHomeProfileLoading), defaultApp: \(FirebaseApp.app() != nil)")
 
             appDelegate.onPushToken = { token in

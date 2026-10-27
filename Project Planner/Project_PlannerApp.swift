@@ -267,6 +267,7 @@ struct Project_PlannerApp: App {
     @StateObject private var subcontractorStore: SubcontractorStore
     @StateObject private var appSettings: AppSettingsStore
     @StateObject private var notificationService: NotificationService
+    @ObservedObject private var appLock = AppLockService.shared
 
     init() {
         _ = FirebaseStartup.configureIfNeeded()
@@ -320,6 +321,7 @@ struct Project_PlannerApp: App {
                     .environmentObject(subcontractorStore)
                     .environmentObject(appSettings)
                     .environmentObject(notificationService)
+                    .environmentObject(appLock)
                     .frame(width: proxy.size.width, height: proxy.size.height)
             }
             .ignoresSafeArea()

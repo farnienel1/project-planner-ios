@@ -403,6 +403,8 @@ struct AuthenticationView: View {
                     email: trimmedEmail,
                     password: trimmedPassword
                 )
+                // Signed in with a password just now: don't lock straight away; offer the app lock instead.
+                AppLockService.shared.noteInteractiveSignIn()
                 if let uid = Auth.auth().currentUser?.uid, !uid.isEmpty {
                     NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
                 }

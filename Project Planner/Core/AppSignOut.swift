@@ -16,6 +16,7 @@ enum AppSignOut {
             print("🔥🔥🔥 DEBUG: Sign out error: \(error.localizedDescription)")
         }
         userStore.clearOnSignOut()
+        AppLockService.shared.deactivate()
         firebaseBackend.syncPublishedAuthFromAuthSession()
     }
 }

@@ -24,6 +24,7 @@ struct SettingsView: View {
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var appLock: AppLockService
     @Environment(\.dismiss) private var dismiss
     
     @State private var showingDiagnosticReport = false
@@ -280,6 +281,8 @@ struct SettingsView: View {
             .accessibilityIdentifier("settings.keyFill")
             .buttonStyle(.plain)
             Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            settingsHubAppLockRow
+            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
             NavigationLink {
                 SettingsNotificationsHubView(canConfigureMaterialCutOff: canConfigureMaterialCutOffNotifications)
                     .environmentObject(appSettings)
@@ -316,6 +319,48 @@ struct SettingsView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
         .appChromeCardContainer(cornerRadius: 18)
+    }
+
+    /// The switch shows the saved state; `setEnabled` asks for Face ID first and the switch springs back if that fails.
+    private var settingsHubAppLockRow: some View {
+        let name = appLock.biometry.displayName
+        let subtitle: String
+        if let message = appLock.lastError {
+            subtitle = message
+        } else if !appLock.deviceCanLock && !appLock.isEnabled {
+            subtitle = "Set a passcode on this iPhone to use this"
+        } else {
+            subtitle = appLock.isEnabled ? "Asks for \(name) after 30 minutes away" : "Ask for \(name) when opening the app"
+        }
+        return HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(ProjectWorksRevampColors.blue.opacity(0.12))
+                    .frame(width: 36, height: 36)
+                Image(systemName: appLock.biometry.systemImage)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Lock with \(name)")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                Text(subtitle)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            }
+            Spacer(minLength: 8)
+            Toggle("Lock with \(name)", isOn: Binding(
+                get: { appLock.isEnabled },
+                set: { wanted in Task { await appLock.setEnabled(wanted) } }
+            ))
+            .labelsHidden()
+            .disabled(appLock.isAuthenticating || (!appLock.deviceCanLock && !appLock.isEnabled))
+            .accessibilityIdentifier("settings.appLockToggle")
+        }
+        .padding(.vertical, 13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { appLock.refreshBiometry() }
     }
 
     private func settingsHubRow(
@@ -976,4 +1021,5 @@ struct SettingsView: View {
         .environmentObject(NotificationService())
         .environmentObject(UserStore())
         .environmentObject(AppSettingsStore())
+        .environmentObject(AppLockService())
 }
