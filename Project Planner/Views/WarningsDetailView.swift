@@ -8,14 +8,16 @@
 import SwiftUI
 
 private enum WarningsUI {
-    static let screenBg = ProjectWorksRevampColors.canvas
-    static let doneBlue = Color(red: 0.231, green: 0.373, blue: 0.639) // #3B5FA3
-    static let textPrimary = ProjectWorksRevampColors.ink
-    static let textBody = ProjectWorksRevampColors.ink
-    static let textMuted = ProjectWorksRevampColors.muted
-    static let blue = Color(red: 0.145, green: 0.388, blue: 0.922)
-    static let blueFrom = Color(red: 0.114, green: 0.306, blue: 0.847)
-    static let red = Color(red: 0.863, green: 0.149, blue: 0.149)
+    static let screenBg = PPColor.page
+    static let textPrimary = Color.primary
+    static let textBody = Color.primary
+    static let textMuted = Color.secondary
+    static let blue = PPColor.brand
+    static let red = PPColor.danger
+    /// Warning card header colours: red for high warnings, graphite for low ones.
+    static var highHeader: LinearGradient { PPFamily.alert.gradient }
+    static var lowHeader: LinearGradient { PPFamily.system.gradient }
+    static var footerFill: Color { PPColor.well }
     static let avatarPalette: [Color] = [
         Color(red: 0.173, green: 0.357, blue: 0.749),
         Color(red: 0.294, green: 0.478, blue: 0.361),
@@ -133,15 +135,17 @@ struct WarningsDetailView: View {
     private func incompleteDataBanner(_ message: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "wifi.exclamationmark")
-                .foregroundStyle(.orange)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(PPColor.warningAmber)
             Text(message)
                 .font(.footnote)
-                .foregroundStyle(.primary)
+                .foregroundStyle(Color.white.opacity(0.9))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(PPColor.onNavyFill))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .accessibilityIdentifier("warnings.incompleteData")
@@ -149,10 +153,16 @@ struct WarningsDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-                warningsNavBar
-                if let incomplete = warningsService.incompleteDataMessage {
-                    incompleteDataBanner(incomplete)
+                VStack(spacing: 0) {
+                    warningsNavBar
+                    if let incomplete = warningsService.incompleteDataMessage {
+                        incompleteDataBanner(incomplete)
+                            .padding(.bottom, 8)
+                    }
                 }
+                .frame(maxWidth: .infinity)
+                .background(PPColor.navy.ignoresSafeArea(edges: .top))
+                .environment(\.colorScheme, .dark)
                 Group {
                     if warningsService.activeWarnings.isEmpty {
                         if warningsService.incompleteDataMessage == nil {
@@ -264,24 +274,20 @@ struct WarningsDetailView: View {
         HStack(spacing: 12) {
             Button("Done") { dismiss() }
                 .accessibilityIdentifier("warnings.done")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(WarningsUI.doneBlue)
-                .padding(.horizontal, 16)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
                 .padding(.vertical, 7)
-                .background(ProjectWorksRevampColors.surface)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
-                .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
 
             Spacer(minLength: 0)
 
             VStack(spacing: 1) {
                 Text("Warnings")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(WarningsUI.textPrimary)
+                    .font(.headline)
+                    .foregroundStyle(.white)
                 Text(organisationSubtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(WarningsUI.textMuted)
+                    .font(.caption)
+                    .foregroundStyle(PPColor.onNavySecondary)
+                    .lineLimit(1)
             }
 
             Spacer(minLength: 0)
@@ -291,18 +297,13 @@ struct WarningsDetailView: View {
                     Group {
                         if isRefreshingWarnings {
                             ProgressView()
+                                .tint(.white)
                         } else {
                             Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(Color(red: 0.333, green: 0.333, blue: 0.333))
                         }
                     }
-                    .frame(width: 34, height: 34)
-                    .background(ProjectWorksRevampColors.surface)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
-                    .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
                 }
+                .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                 .accessibilityIdentifier("warnings.refresh")
                 .disabled(isRefreshingWarnings)
                 .accessibilityLabel("Refresh warnings")
@@ -312,19 +313,13 @@ struct WarningsDetailView: View {
                         presentedFullScreen = .settings
                     } label: {
                         Image(systemName: "gearshape")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.333, green: 0.333, blue: 0.333))
-                            .frame(width: 34, height: 34)
-                            .background(ProjectWorksRevampColors.surface)
-                            .clipShape(Circle())
-                            .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 0.5))
-                            .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 1)
                     }
+                    .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                     .accessibilityIdentifier("warnings.settings")
                     .accessibilityLabel("Warning settings")
                 }
             }
-            .frame(width: 76, alignment: .trailing)
+            .frame(width: 80, alignment: .trailing)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -332,82 +327,85 @@ struct WarningsDetailView: View {
 
     private var emptyState: some View {
         ScrollView {
-            VStack(spacing: 16) {
-                if isRefreshingWarnings {
-                    ProgressView()
-                        .controlSize(.large)
-                        .padding(.top, 32)
-                    Text("Scanning for warnings…")
-                        .font(.title3.weight(.semibold))
-                    Text("Keep this screen open until results appear.")
-                        .font(.subheadline)
-                        .foregroundStyle(WarningsUI.textMuted)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                } else if warningsService.hasCompletedLiveDetection {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 56))
-                        .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                    Text("No active warnings")
-                        .font(.title3.weight(.semibold))
-                    Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: materials and qualifications.")
-                        .font(.subheadline)
-                        .foregroundStyle(WarningsUI.textMuted)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                } else {
-                    Button(action: startManualRefresh) {
-                        Image(systemName: "arrow.clockwise.circle")
-                            .font(.system(size: 56))
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .frame(height: PPMetrics.headerBottomPadding)
+                    .ppNavyHeader()
+                VStack(spacing: 16) {
+                    if isRefreshingWarnings {
+                        ProgressView()
+                            .controlSize(.large)
+                            .padding(.top, 32)
+                        Text("Scanning for warnings…")
+                            .font(.system(.title3, design: .rounded).weight(.bold))
+                        Text("Keep this screen open until results appear.")
+                            .font(.subheadline)
                             .foregroundStyle(WarningsUI.textMuted)
-                    }
-                    .accessibilityIdentifier("warnings.arrowClockwiseCircle")
-                    .buttonStyle(.plain)
-                    .accessibilityHidden(true)
-                    Text("Check for warnings")
-                        .font(.title3.weight(.semibold))
-                    Text("Tap Refresh now, or the refresh icon at the top right. Results are saved so Home and Weekly Report stay fast.")
-                        .font(.subheadline)
-                        .foregroundStyle(WarningsUI.textMuted)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                    if let refreshMessage {
-                        Text(refreshMessage)
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(WarningsUI.red)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
-                    }
-                    // Device/TestFlight: `.borderedProminent` in this sheet does not receive taps
-                    // (the top-right plain refresh icon does). Use the same plain control.
-                    Button(action: startManualRefresh) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 16, weight: .semibold))
-                            Text("Refresh now")
-                                .font(.system(size: 17, weight: .semibold))
+                    } else if warningsService.hasCompletedLiveDetection {
+                        PPIconTile(symbol: "checkmark", family: .sites, size: 64, lifted: true)
+                        Text("No active warnings")
+                            .font(.system(.title3, design: .rounded).weight(.bold))
+                        Text("High: operative booking clashes and unbooked labour. Medium: manager/admin overlaps (tick for weekly report). Low: materials and qualifications.")
+                            .font(.subheadline)
+                            .foregroundStyle(WarningsUI.textMuted)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                    } else {
+                        Button(action: startManualRefresh) {
+                            PPIconTile(symbol: "arrow.clockwise", family: .system, size: 64, lifted: true)
                         }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                        .background(WarningsUI.blue)
-                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                        .contentShape(Rectangle())
+                        .accessibilityIdentifier("warnings.arrowClockwiseCircle")
+                        .buttonStyle(.plain)
+                        .accessibilityHidden(true)
+                        Text("Check for warnings")
+                            .font(.system(.title3, design: .rounded).weight(.bold))
+                        Text("Tap Refresh now, or the refresh icon at the top right. Results are saved so Home and Weekly Report stay fast.")
+                            .font(.subheadline)
+                            .foregroundStyle(WarningsUI.textMuted)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                        if let refreshMessage {
+                            Text(refreshMessage)
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(WarningsUI.red)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 24)
+                        }
+                        // Device/TestFlight: `.borderedProminent` in this sheet does not receive taps
+                        // (the top-right plain refresh icon does). Use the same plain control.
+                        Button(action: startManualRefresh) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.body.weight(.semibold))
+                                Text("Refresh now")
+                                    .font(.body.weight(.semibold))
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 15)
+                            .background(WarningsUI.blue)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .contentShape(Rectangle())
+                        }
+                        .accessibilityIdentifier("warnings.refresh2")
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 32)
+                        .padding(.top, 8)
+                        .disabled(isRefreshingWarnings)
+                        .accessibilityLabel("Refresh now")
+                        .highPriorityGesture(TapGesture().onEnded {
+                            startManualRefresh()
+                        })
                     }
-                    .accessibilityIdentifier("warnings.refresh2")
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 32)
-                    .padding(.top, 8)
-                    .disabled(isRefreshingWarnings)
-                    .accessibilityLabel("Refresh now")
-                    .highPriorityGesture(TapGesture().onEnded {
-                        startManualRefresh()
-                    })
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
+                .padding(.bottom, 32)
+                .ppContentSheet()
             }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 48)
-            .padding(.bottom, 32)
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -415,22 +413,30 @@ struct WarningsDetailView: View {
 
     private var warningsScroll: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
                 WarningsHeroCard(
                     activeCount: warningsService.warningCount,
                     highCount: warningsService.highCount,
                     mediumCount: warningsService.mediumCount,
                     lowCount: warningsService.lowCount
                 )
-                WarningsFilterChipsRow(selected: $filterChip, counts: filterCounts)
-                warningsSortControl
-                ForEach(filteredWarnings) { warning in
-                    warningCard(warning)
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.top, 8)
+                .padding(.bottom, PPMetrics.headerBottomPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .ppNavyHeader()
+
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    WarningsFilterChipsRow(selected: $filterChip, counts: filterCounts)
+                    warningsSortControl
+                    ForEach(filteredWarnings) { warning in
+                        warningCard(warning)
+                    }
                 }
+                .padding(.top, 20)
+                .padding(.bottom, 32)
+                .ppContentSheet()
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 4)
-            .padding(.bottom, 32)
         }
     }
 
@@ -462,7 +468,7 @@ struct WarningsDetailView: View {
     private var warningsSortControl: some View {
         HStack(spacing: 6) {
             Text("Sort")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(WarningsUI.textMuted)
             sortDirectionButton(title: "Oldest", direction: "oldest")
             sortDirectionButton(title: "Newest", direction: "newest")
@@ -478,15 +484,14 @@ struct WarningsDetailView: View {
             chooseSortDirection(direction)
         } label: {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(isOn ? Color.white : Color(red: 0.420, green: 0.447, blue: 0.502))
-                .padding(.horizontal, 13)
-                .padding(.vertical, 6)
-                .background(isOn ? Color(red: 0.110, green: 0.110, blue: 0.118) : Color.white)
-                .clipShape(Capsule())
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(isOn ? Color.white : Color.primary)
+                .padding(.horizontal, 14)
+                .frame(height: 32)
+                .background(Capsule().fill(isOn ? PPColor.navy : PPColor.card))
                 .overlay(
                     Capsule()
-                        .stroke(Color.black.opacity(0.10), lineWidth: isOn ? 0 : 0.5)
+                        .strokeBorder(Color(.separator), lineWidth: isOn ? 0 : 0.5)
                 )
         }
         .accessibilityIdentifier("warnings.sort.\(direction)")
@@ -657,32 +662,21 @@ struct WarningsDetailView: View {
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(warning.title)
-                    .font(.system(size: 17, weight: .heavy))
+                    .font(.headline)
                     .foregroundStyle(.white)
-                    .tracking(-0.2)
                 Spacer(minLength: 8)
                 WarningPriorityBadge(severity: .high)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 15)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.498, green: 0.114, blue: 0.114),
-                        Color(red: 0.600, green: 0.106, blue: 0.106),
-                        Color(red: 0.725, green: 0.110, blue: 0.110)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
+            .background(WarningsUI.highHeader)
 
             VStack(alignment: .leading, spacing: 0) {
                 Group {
                     if people.isEmpty {
                         Text(warning.message)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(WarningsUI.textBody)
                     } else {
                         (
@@ -690,7 +684,7 @@ struct WarningsDetailView: View {
                             + Text(dateText.isEmpty ? "this day" : dateText).fontWeight(.bold)
                             + Text(".")
                         )
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(WarningsUI.textBody)
                     }
                 }
@@ -700,33 +694,30 @@ struct WarningsDetailView: View {
                 ForEach(Array(people.enumerated()), id: \.offset) { index, person in
                     HStack(spacing: 10) {
                         Text(PlannerUIInitials.from(person.name))
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.caption.weight(.bold))
                             .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
+                            .frame(width: PPMetrics.menuIcon + 3, height: PPMetrics.menuIcon + 3)
                             .background(WarningsUI.avatarColor(for: person.name))
                             .clipShape(Circle())
                         Text(person.name)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(WarningsUI.textPrimary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         if let badge = person.badge {
                             Text(badge)
-                                .font(.system(size: 11, weight: .bold))
+                                .font(.caption.weight(.bold))
+                                .monospacedDigit()
                                 .foregroundStyle(WarningsUI.red)
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 3)
-                                .background(Color(red: 0.996, green: 0.949, blue: 0.949))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(Color(red: 0.996, green: 0.886, blue: 0.886), lineWidth: 1)
-                                )
+                                .background(WarningsUI.red.opacity(0.12))
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
                     }
                     .padding(.vertical, 9)
                     .overlay(alignment: .top) {
                         if index > 0 {
-                            Rectangle().fill(Color.black.opacity(0.06)).frame(height: 0.5)
+                            Rectangle().fill(Color(.separator)).frame(height: 0.5)
                         }
                     }
                 }
@@ -745,22 +736,16 @@ struct WarningsDetailView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "calendar.badge.plus")
-                                .font(.system(size: 16, weight: .semibold))
+                                .font(.body.weight(.semibold))
                             Text("Book labour for this day")
-                                .font(.system(size: 15, weight: .bold))
+                                .font(.body.weight(.bold))
                         }
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
-                        .background(
-                            LinearGradient(
-                                colors: [WarningsUI.blueFrom, WarningsUI.blue],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                        .shadow(color: WarningsUI.blue.opacity(0.28), radius: 12, x: 0, y: 3)
+                        .background(WarningsUI.blue)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .shadow(color: WarningsUI.blue.opacity(0.25), radius: 10, x: 0, y: 4)
                     }
                     .accessibilityIdentifier("warnings.calendarBadgePlus")
                     .buttonStyle(.plain)
@@ -771,7 +756,7 @@ struct WarningsDetailView: View {
                         openDayDate = warning.occurrenceDate.map(IdentifiableDay.init)
                     } label: {
                         Text("Open daily overview")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(WarningsUI.blue)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
@@ -780,7 +765,7 @@ struct WarningsDetailView: View {
                     .buttonStyle(.plain)
 
                     Rectangle()
-                        .fill(Color.black.opacity(0.10))
+                        .fill(Color(.separator))
                         .frame(width: 0.5)
                         .padding(.vertical, 8)
 
@@ -788,57 +773,44 @@ struct WarningsDetailView: View {
                         requestRemoveWarning(warning)
                     } label: {
                         Text("Dismiss")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.secondary)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                     }
                     .accessibilityIdentifier("warnings.dismiss")
                     .buttonStyle(.plain)
                 }
-                .background(ProjectWorksRevampColors.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(PPColor.card)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.black.opacity(0.10), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color(.separator), lineWidth: 0.5)
                 )
             }
             .padding(.horizontal, 14)
             .padding(.top, 13)
             .padding(.bottom, 14)
-            .background(Color(red: 0.980, green: 0.980, blue: 0.980))
+            .background(WarningsUI.footerFill)
             .overlay(alignment: .top) {
-                Rectangle().fill(Color.black.opacity(0.07)).frame(height: 0.5)
+                Rectangle().fill(Color(.separator)).frame(height: 0.5)
             }
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func annualLeaveCard(_ warning: Warning) -> some View {
         let detail = warning.annualLeave
         let isClash = detail?.kind == "leave_clash" || warning.severity == .high
         let headerColors: [Color] = isClash
-            ? [
-                Color(red: 0.498, green: 0.114, blue: 0.114),
-                Color(red: 0.600, green: 0.106, blue: 0.106),
-                Color(red: 0.725, green: 0.110, blue: 0.110)
-            ]
-            : [
-                Color(red: 0.478, green: 0.275, blue: 0.075),
-                Color(red: 0.620, green: 0.365, blue: 0.078)
-            ]
+            ? [PPFamily.alert.top, PPFamily.alert.bottom]
+            : [PPFamily.trade.top, PPFamily.trade.bottom]
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(warning.title)
-                    .font(.system(size: 17, weight: .heavy))
+                    .font(.headline)
                     .foregroundStyle(.white)
-                    .tracking(-0.2)
                 Spacer(minLength: 8)
                 WarningPriorityBadge(severity: warning.severity)
             }
@@ -846,17 +818,17 @@ struct WarningsDetailView: View {
             .padding(.vertical, 15)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                LinearGradient(colors: headerColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                LinearGradient(colors: headerColors, startPoint: .top, endPoint: .bottom)
             )
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(warning.message)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(WarningsUI.textBody)
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail, detail.missingHours > 0, !detail.missingRanges.isEmpty {
                     Text("Not booked: \(detail.missingRanges.joined(separator: ", ")) (\(formatMissingHours(detail.missingHours)))")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(WarningsUI.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -865,23 +837,18 @@ struct WarningsDetailView: View {
 
             Button { requestRemoveWarning(warning) } label: {
                 Text("Dismiss")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 14)
             .padding(.bottom, 14)
-            .background(Color(red: 0.980, green: 0.980, blue: 0.980))
+            .background(WarningsUI.footerFill)
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func formatMissingHours(_ hours: Double) -> String {
@@ -896,35 +863,26 @@ struct WarningsDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(warning.title)
-                    .font(.system(size: 17, weight: .heavy))
+                    .font(.headline)
                     .foregroundStyle(.white)
                 Spacer(minLength: 8)
                 WarningPriorityBadge(severity: .low)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 15)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.216, green: 0.255, blue: 0.318),
-                        Color(red: 0.290, green: 0.333, blue: 0.408)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
+            .background(WarningsUI.lowHeader)
 
             VStack(alignment: .leading, spacing: 10) {
                 Text(warning.message)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(WarningsUI.textBody)
                 if let m = warning.materialsCutoff {
                     Text("\(m.jobNumber) · \(m.siteName)")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(WarningsUI.textPrimary)
                 }
                 Text("Managers should confirm material lists with site teams.")
-                    .font(.system(size: 12))
+                    .font(.footnote)
                     .foregroundStyle(WarningsUI.textMuted)
             }
             .padding(16)
@@ -932,8 +890,8 @@ struct WarningsDetailView: View {
             HStack(spacing: 0) {
                 Button { requestRemoveWarning(warning) } label: {
                     Text("Dismiss")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
@@ -942,15 +900,10 @@ struct WarningsDetailView: View {
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 14)
-            .background(Color(red: 0.980, green: 0.980, blue: 0.980))
+            .background(WarningsUI.footerFill)
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func qualificationCard(_ warning: Warning) -> some View {
@@ -959,26 +912,17 @@ struct WarningsDetailView: View {
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(warning.title)
-                    .font(.system(size: 17, weight: .heavy))
+                    .font(.headline)
                     .foregroundStyle(.white)
                 Spacer(minLength: 8)
                 WarningPriorityBadge(severity: .low)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 15)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.216, green: 0.255, blue: 0.318),
-                        Color(red: 0.290, green: 0.333, blue: 0.408)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
+            .background(WarningsUI.lowHeader)
 
             Text(warning.message)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(WarningsUI.textBody)
                 .padding(16)
 
@@ -989,7 +933,7 @@ struct WarningsDetailView: View {
                             operativeUserToEdit = openUser
                         } label: {
                             Text("Open operative")
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(WarningsUI.blue)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
@@ -1000,8 +944,8 @@ struct WarningsDetailView: View {
                     if canDismiss {
                         Button { dismissExpiredQualification(warning) } label: {
                             Text("Dismiss")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.secondary)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
                         }
@@ -1011,16 +955,11 @@ struct WarningsDetailView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
-                .background(Color(red: 0.980, green: 0.980, blue: 0.980))
+                .background(WarningsUI.footerFill)
             }
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func openOperativeTarget(for warning: Warning) -> AppUser? {
@@ -1068,33 +1007,24 @@ struct WarningsDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(warning.title)
-                    .font(.system(size: 17, weight: .heavy))
+                    .font(.headline)
                     .foregroundStyle(.white)
                 Spacer(minLength: 8)
                 WarningPriorityBadge(severity: .low)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 15)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.216, green: 0.255, blue: 0.318),
-                        Color(red: 0.290, green: 0.333, blue: 0.408)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
+            .background(WarningsUI.lowHeader)
 
             Text(warning.message)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(WarningsUI.textBody)
                 .padding(16)
 
             Button { requestRemoveWarning(warning) } label: {
                 Text("Dismiss")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
             }
@@ -1102,15 +1032,10 @@ struct WarningsDetailView: View {
             .buttonStyle(.plain)
             .padding(.horizontal, 14)
             .padding(.bottom, 14)
-            .background(Color(red: 0.980, green: 0.980, blue: 0.980))
+            .background(WarningsUI.footerFill)
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
-        )
-        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func requestRemoveWarning(_ warning: Warning) {
@@ -1237,36 +1162,29 @@ private struct WarningDismissConfirmationSheet: View {
     let onCancel: () -> Void
     let onConfirm: () -> Void
 
-    private let accent = Color(red: 0.722, green: 0.196, blue: 0.196)
-    private let ink = Color(red: 0.110, green: 0.110, blue: 0.118)
-    private let muted = Color(red: 0.420, green: 0.447, blue: 0.502)
+    private let accent = PPColor.danger
+    private let ink = Color.primary
+    private let muted = Color.secondary
 
     var body: some View {
         VStack(spacing: 0) {
             Capsule()
-                .fill(Color.black.opacity(0.12))
+                .fill(Color(.tertiaryLabel))
                 .frame(width: 36, height: 5)
                 .padding(.top, 10)
                 .padding(.bottom, 18)
 
-            ZStack {
-                Circle()
-                    .fill(accent.opacity(0.12))
-                    .frame(width: 72, height: 72)
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(accent)
-            }
-            .padding(.bottom, 16)
+            PPIconTile(symbol: "exclamationmark.triangle.fill", family: .alert, size: 64, lifted: true)
+                .padding(.bottom, 16)
 
             Text("Dismiss this warning?")
-                .font(.system(size: 22, weight: .bold))
+                .font(.system(.title2, design: .rounded).weight(.bold))
                 .foregroundStyle(ink)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
 
             Text("Are you sure you would like to dismiss this warning? Any warnings that are dismissed will not reappear again.")
-                .font(.system(size: 15, weight: .medium))
+                .font(.subheadline)
                 .foregroundStyle(muted)
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
@@ -1275,20 +1193,20 @@ private struct WarningDismissConfirmationSheet: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 Text(warning.title)
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.headline)
                     .foregroundStyle(ink)
                 Text(warning.removalNotificationDetail)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline)
                     .foregroundStyle(muted)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "bell.badge.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(PPColor.brand)
                         .padding(.top, 1)
                     Text("All admins will get a notification with who dismissed it and what was dismissed. It also appears in the notification centre on Home.")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.footnote)
                         .foregroundStyle(muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1297,12 +1215,8 @@ private struct WarningDismissConfirmationSheet: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color(red: 0.969, green: 0.969, blue: 0.980))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.black.opacity(0.06), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous)
+                    .fill(PPColor.card)
             )
             .padding(.horizontal, 24)
             .padding(.top, 20)
@@ -1312,33 +1226,24 @@ private struct WarningDismissConfirmationSheet: View {
             VStack(spacing: 10) {
                 Button(action: onConfirm) {
                     Text("Dismiss permanently")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.body.weight(.bold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
-                        .background(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 0.722, green: 0.196, blue: 0.196),
-                                    Color(red: 0.620, green: 0.165, blue: 0.165)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .background(PPFamily.alert.gradient)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .accessibilityIdentifier("warningDismissConfirmation.dismissPermanently")
                 .buttonStyle(.plain)
 
                 Button(action: onCancel) {
                     Text("Keep warning")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(ink)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 13)
-                        .background(Color(red: 0.949, green: 0.949, blue: 0.969))
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .background(PPColor.card)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .accessibilityIdentifier("warningDismissConfirmation.keepWarning")
                 .buttonStyle(.plain)
@@ -1346,7 +1251,7 @@ private struct WarningDismissConfirmationSheet: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
         }
-        .background(ProjectWorksRevampColors.surface.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
     }
 }
 

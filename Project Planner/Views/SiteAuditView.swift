@@ -209,39 +209,58 @@ struct SiteAuditHubView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 14) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Site Audit")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(SiteAuditColors.text)
-                    Text("Capture site evidence, notes, and produce a polished shareable PDF.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(SiteAuditColors.textSecondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    PPNavyPageTitle(
+                        title: "Site Audit",
+                        subtitle: "Capture site evidence, notes, and produce a polished shareable PDF."
+                    )
+                    .padding(.horizontal, PPMetrics.screenGutter)
+                    .padding(.top, 12)
+                    .padding(.bottom, PPMetrics.headerBottomPadding)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .ppNavyHeader()
 
-                Button { showingCreate = true } label: {
-                    hubTile(icon: "plus", title: "New site audit", subtitle: "Start a new walkthrough", tint: SiteAuditColors.primary)
-                }
-                    .accessibilityIdentifier("siteAuditHub.button")
+                    VStack(alignment: .leading, spacing: 0) {
+                        PPGroupLabel(text: "Start")
+                        PPGroupedCard {
+                            Button { showingCreate = true } label: {
+                                hubTile(icon: "plus", title: "New site audit", subtitle: "Start a new walkthrough", family: .plan)
+                            }
+                                .accessibilityIdentifier("siteAuditHub.button")
+                                .buttonStyle(PPMenuRowButtonStyle())
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
 
-                Button { worksBrowserKind = .projects } label: {
-                    hubTile(icon: "folder.fill", title: "Projects", subtitle: "Browse audits by project", tint: SiteAuditColors.success)
-                }
-                    .accessibilityIdentifier("siteAuditHub.folderFill")
+                        PPGroupLabel(text: "Browse")
+                        PPGroupedCard {
+                            Button { worksBrowserKind = .projects } label: {
+                                hubTile(icon: "folder.fill", title: "Projects", subtitle: "Browse audits by project", family: .sites)
+                            }
+                                .accessibilityIdentifier("siteAuditHub.folderFill")
+                                .buttonStyle(PPMenuRowButtonStyle())
 
-                Button { worksBrowserKind = .smallWorks } label: {
-                    hubTile(icon: "wrench.and.screwdriver.fill", title: "Small works", subtitle: "Browse audits by small works job", tint: SiteAuditColors.purple)
-                }
-                    .accessibilityIdentifier("siteAuditHub.wrenchAndScrewdriverFill")
+                            PPRowDivider()
 
-                Spacer()
+                            Button { worksBrowserKind = .smallWorks } label: {
+                                hubTile(icon: "wrench.and.screwdriver.fill", title: "Small works", subtitle: "Browse audits by small works job", family: .trade)
+                            }
+                                .accessibilityIdentifier("siteAuditHub.wrenchAndScrewdriverFill")
+                                .buttonStyle(PPMenuRowButtonStyle())
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                    }
+                    .padding(.bottom, 28)
+                    .ppContentSheet()
+                }
             }
-            .padding(20)
-            .siteAuditScreenBackground()
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Site Audit")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }
+                .fontWeight(.semibold)
+                .foregroundStyle(.white)
                 .accessibilityIdentifier("siteAuditHub.done") } }
             .sheet(isPresented: $showingCreate) {
                 SiteAuditCreateFlowView()
@@ -262,25 +281,8 @@ struct SiteAuditHubView: View {
         }
     }
 
-    private func hubTile(icon: String, title: String, subtitle: String, tint: Color) -> some View {
-        SiteAuditCard {
-            HStack(spacing: 12) {
-                SiteAuditRowIconChip(systemName: icon, tint: tint, background: tint.opacity(0.12), size: 36)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(SiteAuditColors.text)
-                    Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(SiteAuditColors.textSecondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(SiteAuditColors.textDisabled)
-            }
-            .padding(14)
-        }
+    private func hubTile(icon: String, title: String, subtitle: String, family: PPFamily) -> some View {
+        PPMenuRowLabel(title: title, symbol: icon, family: family, subtitle: subtitle)
     }
 }
 
@@ -354,35 +356,42 @@ struct SiteAuditProjectsBrowserView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    filterChipsRow
-                    if filteredProjects.isEmpty {
-                        emptyStateView
-                    } else {
-                        LazyVStack(spacing: 10) {
-                            ForEach(filteredProjects) { project in
-                                Button {
-                                    selectedProject = project
-                                } label: {
-                                    ProjectDetailRowView(project: project)
-                                        .environmentObject(userStore)
-                                        .environmentObject(operativeStore)
+                VStack(alignment: .leading, spacing: 0) {
+                    browserNavyHeader
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        filterChipsRow
+                        if filteredProjects.isEmpty {
+                            emptyStateView
+                        } else {
+                            LazyVStack(spacing: 10) {
+                                ForEach(filteredProjects) { project in
+                                    Button {
+                                        selectedProject = project
+                                    } label: {
+                                        ProjectDetailRowView(project: project)
+                                            .environmentObject(userStore)
+                                            .environmentObject(operativeStore)
+                                    }
+                                    .accessibilityIdentifier("siteAuditProjectsBrowser.row.\(project.id)")
+                                    .buttonStyle(.plain)
                                 }
-                                .accessibilityIdentifier("siteAuditProjectsBrowser.row.\(project.id)")
-                                .buttonStyle(.plain)
                             }
+                            .padding(.bottom, 8)
                         }
-                        .padding(.bottom, 8)
                     }
+                    .padding(.top, 20)
+                    .padding(.bottom, 20)
+                    .ppContentSheet()
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 8)
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(kind.navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
-            .appChromeNavigationBarSurface()
+            .ppNavyNavigationBar()
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }
+                .fontWeight(.semibold)
+                .foregroundStyle(.white)
                 .accessibilityIdentifier("siteAuditProjectsBrowser.done") } }
             .sheet(item: $selectedProject) { project in
                 SiteAuditProjectAuditsView(project: project)
@@ -394,6 +403,31 @@ struct SiteAuditProjectsBrowserView: View {
             }
             .task { await loadAuthoredAuditProjectIds() }
         }
+    }
+
+    /// Navy header with the counts the filter chips already show.
+    private var browserNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PPOverviewTitle(
+                eyebrow: "Site audit",
+                count: "\(listCounts.all)",
+                countLabel: kind == .projects ? "projects" : "small works"
+            )
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(listCounts.active)", label: "Active")
+                PPStatDivider()
+                PPStat(value: "\(listCounts.upcoming)", label: "Upcoming")
+                PPStatDivider()
+                PPStat(value: "\(listCounts.completed)", label: "Completed")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 16)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     private var filterChipsRow: some View {
@@ -437,24 +471,28 @@ struct SiteAuditProjectsBrowserView: View {
 
     private var emptyStateView: some View {
         VStack(spacing: 12) {
-            Image(systemName: kind == .projects ? "folder" : "wrench.and.screwdriver")
-                .font(.system(size: 36))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+            PPIconTile(
+                symbol: kind == .projects ? "folder.fill" : "wrench.and.screwdriver.fill",
+                family: kind == .projects ? .sites : .trade,
+                size: 56,
+                lifted: true
+            )
             Text(emptyTitle)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .foregroundStyle(.primary)
             Text(
                 userStore.isOperativeMode()
                 ? "Shows \(kind == .projects ? "projects" : "small works") you are booked onto, plus any job where you previously submitted a site audit."
                 : "Try switching the filter to All."
             )
-            .font(.system(size: 13))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 36)
         .padding(.horizontal, 16)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func loadAuthoredAuditProjectIds() async {
@@ -1606,9 +1644,10 @@ struct SiteAuditAddItemView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
             }
-            .siteAuditScreenBackground()
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("New item")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     SiteAuditToolbarPill(title: "Cancel", filled: false) { dismiss() }
@@ -1774,61 +1813,72 @@ struct SiteAuditDetailView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if canEdit {
-                        SiteAuditAuditListCard(audit: displayAudit, onTap: { showingEdit = true })
-                            .accessibilityLabel("Edit audit details")
-                            .accessibilityHint("Opens the edit flow for this site audit")
-                    } else {
-                        SiteAuditAuditListCard(audit: displayAudit, showsChevron: false)
-                    }
-                    HStack(spacing: 8) {
-                        SiteAuditPrimaryButton(
-                            title: isPreparingSharePDF ? "Preparing…" : "Share",
-                            systemImage: "square.and.arrow.up",
-                            style: .primary
-                        ) {
-                            Task { await shareAuditPDF() }
-                        }
-                        .disabled(isPreparingSharePDF)
-                        .opacity(isPreparingSharePDF ? 0.7 : 1)
+                VStack(alignment: .leading, spacing: 0) {
+                    detailNavyHeader
+
+                    VStack(alignment: .leading, spacing: 14) {
                         if canEdit {
-                            SiteAuditPrimaryButton(title: "Edit Site Audit", systemImage: "square.and.pencil", style: .greyFilled) {
-                                showingEdit = true
+                            SiteAuditAuditListCard(audit: displayAudit, onTap: { showingEdit = true })
+                                .accessibilityLabel("Edit audit details")
+                                .accessibilityHint("Opens the edit flow for this site audit")
+                        } else {
+                            SiteAuditAuditListCard(audit: displayAudit, showsChevron: false)
+                        }
+                        HStack(spacing: 8) {
+                            SiteAuditPrimaryButton(
+                                title: isPreparingSharePDF ? "Preparing…" : "Share",
+                                systemImage: "square.and.arrow.up",
+                                style: .primary
+                            ) {
+                                Task { await shareAuditPDF() }
+                            }
+                            .disabled(isPreparingSharePDF)
+                            .opacity(isPreparingSharePDF ? 0.7 : 1)
+                            if canEdit {
+                                SiteAuditPrimaryButton(title: "Edit Site Audit", systemImage: "square.and.pencil", style: .greyFilled) {
+                                    showingEdit = true
+                                }
                             }
                         }
-                    }
-                    SiteAuditSectionLabel(title: "Summary")
-                    SiteAuditCard {
-                        VStack(spacing: 0) {
-                            summaryLine("Author", displayAudit.authorName)
+                        PPSectionHeader("Summary")
+                            .padding(.bottom, -14)
+                        PPGroupedCard {
+                            summaryLine("Author", displayAudit.authorName, symbol: "person.fill", family: .people)
                             if !displayAudit.customTitle.isEmpty {
                                 divider
-                                summaryLine("Title", displayAudit.customTitle)
+                                summaryLine("Title", displayAudit.customTitle, symbol: "textformat", family: .plan)
                             }
                             divider
-                            summaryLine("Date", displayAudit.date.formatted(date: .abbreviated, time: .omitted))
+                            summaryLine("Date", displayAudit.date.formatted(date: .abbreviated, time: .omitted), symbol: "calendar", family: .plan)
                             if let clientProject {
                                 divider
-                                summaryLine("Client", clientProject.client.name)
+                                summaryLine("Client", clientProject.client.name, symbol: "building.2.fill", family: .sites)
                             }
                         }
-                        .padding(.horizontal, 14)
+                        PPSectionHeader("Items") {
+                            Text("\(displayAudit.items.count)")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.bottom, -14)
+                        ForEach(Array(displayAudit.items.enumerated()), id: \.element.id) { index, item in
+                            itemCard(index: index + 1, item: item)
+                        }
                     }
-                    SiteAuditSectionLabel(title: "Items", suffix: "· \(displayAudit.items.count)")
-                    ForEach(Array(displayAudit.items.enumerated()), id: \.element.id) { index, item in
-                        itemCard(index: index + 1, item: item)
-                    }
+                    .padding(.top, 20)
+                    .padding(.bottom, 28)
+                    .ppContentSheet()
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
             }
-            .siteAuditScreenBackground()
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Audit detail")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("siteAuditDetail.done")
                 }
             }
@@ -1896,32 +1946,50 @@ struct SiteAuditDetailView: View {
         FileReportTarget(surface: "site_audit", parentId: displayAudit.id.uuidString, fileRef: url)
     }
 
-    private var divider: some View {
-        Rectangle().fill(SiteAuditColors.border).frame(height: 0.5)
+    /// Navy header: audit type, job and the author, date and item count the page already shows.
+    private var detailNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PPNavyPageTitle(
+                eyebrow: displayAudit.type.rawValue,
+                title: displayAudit.projectJobNumber,
+                subtitle: displayAudit.projectName
+            )
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    PPOnNavyPill(text: displayAudit.authorName, symbol: "person.fill")
+                    PPOnNavyPill(text: displayAudit.date.formatted(date: .abbreviated, time: .omitted), symbol: "calendar")
+                    PPOnNavyPill(text: "\(displayAudit.items.count) items", symbol: "cube.box")
+                }
+            }
+            .padding(.top, 14)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
-    private func summaryLine(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundStyle(SiteAuditColors.textSecondary)
-            Spacer()
-            Text(value)
-                .font(.system(size: 13, weight: .medium))
-        }
-        .padding(.vertical, 11)
+    private var divider: some View {
+        PPRowDivider()
+    }
+
+    private func summaryLine(_ label: String, _ value: String, symbol: String, family: PPFamily) -> some View {
+        PPDetailRowLabel(title: label, value: value, symbol: symbol, family: family)
     }
 
     private func itemCard(index: Int, item: SiteAuditItem) -> some View {
-        SiteAuditCard {
+        PPGroupedCard {
             VStack(alignment: .leading, spacing: 8) {
                 Text("\(index). \(item.title.isEmpty ? "Untitled" : item.title)")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.body.weight(.semibold))
                 if !item.location.isEmpty {
-                    Text(item.location).font(.system(size: 10)).foregroundStyle(SiteAuditColors.textSecondary)
+                    Label(item.location, systemImage: "mappin.and.ellipse")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
                 if !item.comments.isEmpty {
-                    Text(item.comments).font(.system(size: 11))
+                    Text(item.comments).font(.subheadline)
                 }
                 if let url = item.imageURL, let imageURL = URL(string: url) {
                     Button { selectedImageURL = url } label: {
@@ -1931,15 +1999,16 @@ struct SiteAuditDetailView: View {
                             default: SiteAuditColors.primaryTint
                             }
                         }
-                        .frame(height: 140)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .frame(height: 160)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .accessibilityIdentifier("siteAuditDetail.itemCard")
                     .buttonStyle(.plain)
                     .fileReportContextMenu(photoReportTarget(url), presented: $reportTarget)
                 }
             }
-            .padding(12)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
