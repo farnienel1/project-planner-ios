@@ -690,7 +690,7 @@ struct OperativeCustomHoursSheet: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 16)
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
 
             if let timeValidationBanner {
                 timeValidationBannerView(timeValidationBanner)
@@ -702,15 +702,18 @@ struct OperativeCustomHoursSheet: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: timeValidationBanner)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel", action: onCancel)
                     .accessibilityIdentifier("operativeCustomHours.cancel")
+                    .foregroundStyle(.white)
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { validateAndSave() }
                     .accessibilityIdentifier("operativeCustomHours.save")
                     .fontWeight(.semibold)
+                    .foregroundStyle(.white)
             }
         }
         .confirmationDialog(
@@ -758,12 +761,8 @@ struct OperativeCustomHoursSheet: View {
                 Spacer(minLength: 0)
             }
             .padding(10)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-            )
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         } else if let subtitle, !subtitle.isEmpty {
             Text(subtitle)
                 .font(.system(size: 11))
@@ -793,9 +792,9 @@ struct OperativeCustomHoursSheet: View {
     private var hoursCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("HOURS")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .tracking(0.4)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.8)
                 .padding(.leading, 4)
 
             HStack(spacing: 8) {
@@ -823,12 +822,8 @@ struct OperativeCustomHoursSheet: View {
             }
         }
         .padding(12)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var startHourBinding: Binding<Int> {
@@ -952,9 +947,9 @@ struct OperativeCustomHoursSheet: View {
                 }()
                 VStack(alignment: .leading, spacing: 4) {
                     Text("OVERTIME MULTIPLIER")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                        .tracking(0.4)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .tracking(0.8)
                     TextField(
                         "Optional — e.g. \(String(format: "%.1f", defaultMult))",
                         text: $otMultText
@@ -969,12 +964,8 @@ struct OperativeCustomHoursSheet: View {
             }
         }
         .padding(12)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var breakdownCard: some View {

@@ -30,12 +30,11 @@ struct CreateManagerView: View {
                 VStack(spacing: 20) {
                     // Header
                     VStack(spacing: 10) {
-                        Image(systemName: "person.crop.square.badge.plus")
-                            .font(.system(size: 60))
-                            .foregroundColor(.purple)
+                        PPIconTile(symbol: "person.crop.square.badge.plus", family: .people, size: 72, lifted: true)
+                            .padding(.bottom, 4)
                         
                         Text("Create New Manager")
-                            .font(.largeTitle)
+                            .font(.system(.largeTitle, design: .rounded))
                             .fontWeight(.bold)
                         
                         Text("Add a new manager to your organisation.")
@@ -82,12 +81,17 @@ struct CreateManagerView: View {
                             .textFieldStyle(.roundedBorder)
                             .lineLimit(3...6)
                     }
-                    .padding(.horizontal)
+                    .padding(16)
+                    .background(
+                        PPColor.card,
+                        in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous)
+                    )
+                    .padding(.horizontal, PPMetrics.screenGutter)
                     
                     // Error Message
                     if let errorMessage = errorMessage {
                         Text(errorMessage)
-                            .foregroundColor(.red)
+                            .foregroundColor(PPColor.danger)
                             .padding(.horizontal)
                     }
                     
@@ -97,10 +101,14 @@ struct CreateManagerView: View {
                     }
                     .accessibilityIdentifier("createManager.createManager")
                     .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(PPColor.brand)
                     .disabled(isLoading || !isFormValid)
                     .padding()
                 }
             }
+            .background(PPColor.page.ignoresSafeArea())
+            .ppNavyNavigationBar()
             .navigationTitle("New Manager")
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(true)

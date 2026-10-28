@@ -39,9 +39,10 @@ struct ScheduleSubcontractorView: View {
                 .padding(.top, 16)
                 .padding(.bottom, 84)
             }
-            .background(Color(.systemGroupedBackground))
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Schedule Sub Contractor")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: { dismiss() }) {
@@ -49,7 +50,8 @@ struct ScheduleSubcontractorView: View {
                             Image(systemName: "chevron.left")
                             Text("Back")
                         }
-                        .foregroundColor(Color.theme.primary)
+                        .foregroundStyle(.white)
+                        .fontWeight(.semibold)
                     }
                         .accessibilityIdentifier("scheduleSubcontractor.back")
                 }
@@ -104,7 +106,7 @@ struct ScheduleSubcontractorView: View {
     private var subbiesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Choose sub contractor")
-                .font(.title3)
+                .font(.system(.title3, design: .rounded))
                 .fontWeight(.bold)
             HStack {
                 Image(systemName: "magnifyingglass")
@@ -187,8 +189,8 @@ struct ScheduleSubcontractorView: View {
             }
         }
         .padding(16)
-        .background(ProjectWorksRevampColors.surface)
-        .cornerRadius(14)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var projectHeaderCard: some View {
@@ -255,14 +257,14 @@ struct ScheduleSubcontractorView: View {
             }
         }
         .padding(16)
-        .background(ProjectWorksRevampColors.surface)
-        .cornerRadius(14)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
     
     private var calendarSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Select Dates")
-                .font(.title3)
+                .font(.system(.title3, design: .rounded))
                 .fontWeight(.bold)
             HStack {
                 Button(action: { changeMonth(by: -1) }) {
@@ -287,8 +289,8 @@ struct ScheduleSubcontractorView: View {
             calendarGrid
         }
         .padding(16)
-        .background(ProjectWorksRevampColors.surface)
-        .cornerRadius(14)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
     
     private var quickSelectSection: some View {
@@ -358,14 +360,14 @@ struct ScheduleSubcontractorView: View {
             }
         }
         .padding(16)
-        .background(ProjectWorksRevampColors.surface)
-        .cornerRadius(14)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
     
     private var bookingSummarySection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Booking Summary")
-                .font(.title3)
+                .font(.system(.title3, design: .rounded))
                 .fontWeight(.bold)
             VStack(spacing: 10) {
                 HStack {
@@ -402,8 +404,8 @@ struct ScheduleSubcontractorView: View {
             .cornerRadius(10)
         }
         .padding(16)
-        .background(ProjectWorksRevampColors.surface)
-        .cornerRadius(14)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var bookingFooter: some View {
