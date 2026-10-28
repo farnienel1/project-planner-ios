@@ -349,6 +349,9 @@ enum RoleTestingPreset: String, CaseIterable, Identifiable {
 struct OrganizationUserRoster {
     var users: [AppUser]
     var claimedEmails: Set<String>?
+    /// Every listed `users` document id that was folded into another because they share an email,
+    /// mapped to the id that was kept (web `userIdAliases`, the input of `rosterAliasIdsFor`).
+    var userIdAliases: [String: String] = [:]
 }
 
 // MARK: - User roster segments (Manage Users, Managers, Operatives)

@@ -357,6 +357,16 @@ enum WarningsRefreshHelper {
         )
         let coverageStart = canonical.start
         let coverageEnd = canonical.end
+        // Bookings were downloaded from a start date fixed at launch, often before the organisation's
+        // warning settings arrived (so this week's Monday). An invoicing-period window can start earlier;
+        // its first days would then look empty and everyone would show as unbooked. Move the download
+        // back to the window start and reload. The booking-change notifications rerun this scan on full data.
+        if firebaseBackend.noteScheduleNeedsDate(coverageStart) {
+            NSLog("WARNINGS_SCAN_WAITING reason=bookings start after window start %@", CanonicalBusinessEngine.isoString(from: coverageStart))
+            bookingStore.loadData()
+            managerScheduleStore.loadData(force: true)
+            return
+        }
         let unbookedEnd = CanonicalBusinessEngine.unbookedLabourWindowEnd(
             coverageEnd: coverageEnd,
             clashLookaheadMode: warningDetection.clashLookaheadMode.rawValue,

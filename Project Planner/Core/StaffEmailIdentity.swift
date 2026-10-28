@@ -38,7 +38,15 @@ enum StaffEmailIdentity {
     static func account(forUserId id: String, in users: [AppUser]) -> AppUser? {
         let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return users.first { $0.id == trimmed || $0.sameEmailUserIds.contains(trimmed) }
+        // Own id, a same-email document folded into it, or a former invite id (`bookingIdsForAccount`).
+        // Ids compare without case, as `resolveBookingPerson` does.
+        if let exact = users.first(where: { $0.id == trimmed }) { return exact }
+        let key = trimmed.lowercased()
+        return users.first { user in
+            user.id.lowercased() == key
+                || user.sameEmailUserIds.contains { $0.lowercased() == key }
+                || user.formerUserIds.contains { $0.lowercased() == key }
+        }
     }
 
     static func operativeIds(sharing email: String?, in operatives: [Operative]) -> Set<UUID> {

@@ -153,7 +153,11 @@ extension Booking {
     /// Second line under the person’s name (daily overview / my schedule): clock-first, full-day phrasing, OT hint.
     func scheduleCoverageSubtitle(policy: OrgPayrollTimePolicy = .default) -> (text: String, emphasizedOvertime: Bool) {
         let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: date, policy: policy)
-        if OperativeBookingInterval.coversFullStandardDay(self, policy: policy) {
+        // "Full standard day" only when nothing runs past it. A 07:30–19:15 day covers the standard
+        // day too, but must show its clock times and overtime, as web does.
+        let hasCustomClock = !(workStartTime ?? "").isEmpty && !(workEndTime ?? "").isEmpty
+        let runsIntoOvertime = hasCustomClock && overtimeHoursBeyondPaidStandard(policy: policy) > 0.05
+        if OperativeBookingInterval.coversFullStandardDay(self, policy: policy), !runsIntoOvertime {
             if let start = timeline.standardWindowStart, let end = timeline.standardWindowEnd {
                 return ("Full standard day · \(start)–\(end)", false)
             }

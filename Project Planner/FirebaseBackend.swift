@@ -4750,10 +4750,18 @@ class FirebaseBackend: ObservableObject {
             }
         }
         let uniqueUsers = Array(byKey.values)
+        var userIdAliases: [String: String] = [:]
+        for user in users {
+            let emailKey = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = emailKey.isEmpty ? "id:\(user.id)" : emailKey
+            if let kept = byKey[key]?.id, kept != user.id {
+                userIdAliases[user.id] = kept
+            }
+        }
 
         print("🔥🔥🔥 DEBUG: Returning \(uniqueUsers.count) unique users")
         let claimedEmails: Set<String>? = memberIndex.emailClaimsLoaded ? Set(memberIndex.userIdByEmail.keys) : nil
-        return OrganizationUserRoster(users: uniqueUsers, claimedEmails: claimedEmails)
+        return OrganizationUserRoster(users: uniqueUsers, claimedEmails: claimedEmails, userIdAliases: userIdAliases)
     }
 
     /// One email stays one roster row. The signed-in account stays the id. A readable
