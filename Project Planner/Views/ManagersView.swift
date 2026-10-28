@@ -175,17 +175,17 @@ struct ManagersView: View {
         ) ?? []
         let segments = listed.map { CanonicalBusinessEngine.rosterSegment($0) }
         return ManagersRosterCounts(
-            listed: listed.count,
             active: segments.filter { $0 == UserRosterSegment.active.canonicalSegment }.count,
+            inactive: segments.filter { $0 == UserRosterSegment.inactive.canonicalSegment }.count,
             pending: segments.filter { $0 == UserRosterSegment.pending.canonicalSegment }.count
         )
     }
     
     private func managersStatsRow(_ counts: ManagersRosterCounts) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            PPStat(value: "\(counts.listed)", label: "In team")
-            PPStatDivider()
             PPStat(value: "\(counts.active)", label: "Active")
+            PPStatDivider()
+            PPStat(value: "\(counts.inactive)", label: "Inactive")
             PPStatDivider()
             PPStat(value: "\(counts.pending)", label: "Pending invite", highlight: counts.pending > 0)
         }
@@ -263,8 +263,8 @@ struct ManagersView: View {
 
 /// Numbers shown in the Managers navy header.
 private struct ManagersRosterCounts {
-    let listed: Int
     let active: Int
+    let inactive: Int
     let pending: Int
 }
 
