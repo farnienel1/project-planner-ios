@@ -59,52 +59,46 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 settingsHubProfileCard
-                    .padding(.top, 10)
 
-                settingsHubSectionTitle("Personal", sentenceCase: true)
-                settingsHubPersonalGroup
+                VStack(alignment: .leading, spacing: 0) {
+                    settingsHubSectionTitle("Personal")
+                    settingsHubPersonalGroup
 
-                if userStore.hasAdminAccess(), firebaseBackend.currentOrganization != nil {
-                    settingsHubSectionTitle("Company-wide", sentenceCase: true)
-                    settingsHubOrganisationPromoCard
-                    Text("Tap to manage how \(firebaseBackend.currentOrganization?.name ?? "your organisation") runs — affects everyone in your team.")
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                        .padding(.horizontal, 4)
-                        .padding(.top, 4)
-                        .padding(.bottom, 20)
+                    if userStore.hasAdminAccess(), firebaseBackend.currentOrganization != nil {
+                        settingsHubSectionTitle("Company-wide")
+                        settingsHubOrganisationPromoCard
+                        Text("Tap to manage how \(firebaseBackend.currentOrganization?.name ?? "your organisation") runs — affects everyone in your team.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 4)
+                            .padding(.top, 8)
+                    }
+
+                    settingsHubSectionTitle("Support & legal")
+                    settingsHubSupportGroup
+
+                    settingsHubSignOut
+
+                    PPVersionFooter(text: "Project Planner · v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")")
                 }
-
-                settingsHubSectionTitle("Support & legal")
-                settingsHubSupportGroup
-
-                settingsHubSignOut
-                    .padding(.top, 6)
-
-                Text("Project Planner · v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 14)
+                .padding(.bottom, 32)
+                .ppContentSheet()
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 32)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button(action: goBackFromSettings) {
                     Image(systemName: "chevron.left")
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                        .font(.system(size: 17, weight: .semibold))
                 }
-                    .accessibilityIdentifier("settings.back")
+                .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
+                .accessibilityIdentifier("settings.back")
             }
         }
         .navigationBarBackButtonHidden(true)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
         .alert("Sign Out", isPresented: $showingSignOutAlert) {
             Button("Cancel", role: .cancel) { }
                 .accessibilityIdentifier("settings.cancel")
@@ -164,57 +158,42 @@ struct SettingsView: View {
         return nil
     }
 
-    private func settingsHubSectionTitle(_ text: String, sentenceCase: Bool = false) -> some View {
-        Text(sentenceCase ? text : text.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .tracking(0.4)
-            .padding(.leading, 4)
-            .padding(.top, 20)
-            .padding(.bottom, 10)
+    private func settingsHubSectionTitle(_ text: String) -> some View {
+        PPGroupLabel(text: text)
     }
 
+    /// Home-style navy header: avatar, name, organisation and role.
     private var settingsHubProfileCard: some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [ProjectWorksRevampColors.pinRoseFg, Color(red: 0.76, green: 0.33, blue: 0.47)],
+                            colors: [PPColor.glow, PPColor.brand],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
-                    .frame(width: 56, height: 56)
+                    .frame(width: 64, height: 64)
                 Text(settingsHubInitials)
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.system(.title2, design: .rounded))
+                    .fontWeight(.bold)
                     .foregroundStyle(.white)
             }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(settingsHubDisplayName)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                Text(settingsHubOrgLine)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+            .overlay(Circle().strokeBorder(PPColor.onNavyStroke, lineWidth: 1))
+            VStack(alignment: .leading, spacing: 6) {
+                PPNavyPageTitle(title: settingsHubDisplayName, subtitle: settingsHubOrgLine)
                 if let badge = settingsHubRoleBadge {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.shield.fill")
-                            .font(.system(size: 10, weight: .medium))
-                        Text(badge.text)
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundStyle(badge.fg)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(badge.bg)
-                    .clipShape(Capsule())
+                    PPOnNavyPill(text: badge.text, symbol: "checkmark.shield.fill")
                 }
             }
             Spacer(minLength: 0)
         }
-        .padding(16)
-        .appChromeCardContainer(cornerRadius: 18)
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     private var settingsHubPersonalGroup: some View {
@@ -226,15 +205,14 @@ struct SettingsView: View {
             } label: {
                 settingsHubRow(
                     icon: "building.2.fill",
-                    iconBg: ProjectWorksRevampColors.blue.opacity(0.12),
-                    iconFg: ProjectWorksRevampColors.blue,
+                    family: .plan,
                     title: "Switch organisation",
                     subtitle: settingsHubOrgLine
                 )
             }
             .accessibilityIdentifier("settings.building2Fill")
-            .buttonStyle(.plain)
-            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            .buttonStyle(PPMenuRowButtonStyle())
+            PPRowDivider()
             NavigationLink {
                 SettingsProfileDetailView()
                     .environmentObject(firebaseBackend)
@@ -242,47 +220,44 @@ struct SettingsView: View {
             } label: {
                 settingsHubRow(
                     icon: "person.fill",
-                    iconBg: ProjectWorksRevampColors.blue.opacity(0.12),
-                    iconFg: ProjectWorksRevampColors.blue,
+                    family: .people,
                     title: "My profile",
                     subtitle: "Name, photo, contact details"
                 )
             }
             .accessibilityIdentifier("settings.personFill")
-            .buttonStyle(.plain)
-            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            .buttonStyle(PPMenuRowButtonStyle())
+            PPRowDivider()
             NavigationLink {
                 AppearanceSettingsView()
                     .environmentObject(appSettings)
             } label: {
                 settingsHubRow(
                     icon: "circle.lefthalf.filled",
-                    iconBg: Color.primary.opacity(0.08),
-                    iconFg: ProjectWorksRevampColors.ink,
+                    family: .system,
                     title: "Appearance",
                     subtitle: appSettings.settings.theme.displayName
                 )
             }
             .accessibilityIdentifier("settings.circleLefthalfFilled")
-            .buttonStyle(.plain)
-            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            .buttonStyle(PPMenuRowButtonStyle())
+            PPRowDivider()
             NavigationLink {
                 ChangePasswordView()
                     .environmentObject(firebaseBackend)
             } label: {
                 settingsHubRow(
                     icon: "key.fill",
-                    iconBg: ProjectWorksRevampColors.jobTypePillBg,
-                    iconFg: ProjectWorksRevampColors.jobTypePillInk,
+                    family: .people,
                     title: "Sign-in & password",
                     subtitle: "Email, password, security"
                 )
             }
             .accessibilityIdentifier("settings.keyFill")
-            .buttonStyle(.plain)
-            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            .buttonStyle(PPMenuRowButtonStyle())
+            PPRowDivider()
             settingsHubAppLockRow
-            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            PPRowDivider()
             NavigationLink {
                 SettingsNotificationsHubView(canConfigureMaterialCutOff: canConfigureMaterialCutOffNotifications)
                     .environmentObject(appSettings)
@@ -291,15 +266,14 @@ struct SettingsView: View {
             } label: {
                 settingsHubRow(
                     icon: "bell.fill",
-                    iconBg: ProjectWorksRevampColors.pinRoseBg,
-                    iconFg: ProjectWorksRevampColors.pinRoseFg,
+                    family: .trade,
                     title: "My notifications",
                     subtitle: "Choose which reminders you receive"
                 )
             }
             .accessibilityIdentifier("settings.navigationLink")
-            .buttonStyle(.plain)
-            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            .buttonStyle(PPMenuRowButtonStyle())
+            PPRowDivider()
             NavigationLink {
                 DeleteMyAccountView()
                     .environmentObject(firebaseBackend)
@@ -307,18 +281,16 @@ struct SettingsView: View {
             } label: {
                 settingsHubRow(
                     icon: "trash.fill",
-                    iconBg: ProjectWorksRevampColors.requiredPillBg,
-                    iconFg: ProjectWorksRevampColors.requiredPillFg,
+                    family: .alert,
                     title: "Delete my account",
                     subtitle: "Permanently delete your login"
                 )
             }
             .accessibilityIdentifier("settings.deleteMyAccount")
-            .buttonStyle(.plain)
+            .buttonStyle(PPMenuRowButtonStyle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 4)
-        .appChromeCardContainer(cornerRadius: 18)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     /// The switch shows the saved state; `setEnabled` asks for Face ID first and the switch springs back if that fails.
@@ -332,22 +304,16 @@ struct SettingsView: View {
         } else {
             subtitle = appLock.isEnabled ? "Asks for \(name) after 30 minutes away" : "Ask for \(name) when opening the app"
         }
-        return HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(ProjectWorksRevampColors.blue.opacity(0.12))
-                    .frame(width: 36, height: 36)
-                Image(systemName: appLock.biometry.systemImage)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
-            }
-            VStack(alignment: .leading, spacing: 2) {
+        return HStack(spacing: 13) {
+            PPIconTile(symbol: appLock.biometry.systemImage, family: .system, size: PPMetrics.menuIcon)
+            VStack(alignment: .leading, spacing: 1) {
                 Text("Lock with \(name)")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .font(.body)
+                    .foregroundStyle(.primary)
                 Text(subtitle)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             Toggle("Lock with \(name)", isOn: Binding(
@@ -358,43 +324,19 @@ struct SettingsView: View {
             .disabled(appLock.isAuthenticating || (!appLock.deviceCanLock && !appLock.isEnabled))
             .accessibilityIdentifier("settings.appLockToggle")
         }
-        .padding(.vertical, 13)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 64)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { appLock.refreshBiometry() }
     }
 
     private func settingsHubRow(
         icon: String,
-        iconBg: Color,
-        iconFg: Color,
+        family: PPFamily,
         title: String,
         subtitle: String
     ) -> some View {
-        HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(iconBg)
-                    .frame(width: 36, height: 36)
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(iconFg)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                Text(subtitle)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            Spacer(minLength: 8)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
-        }
-        .padding(.vertical, 13)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+        PPMenuRowLabel(title: title, symbol: icon, family: family, subtitle: subtitle)
     }
 
     private var settingsHubOrganisationPromoCard: some View {
@@ -410,34 +352,30 @@ struct SettingsView: View {
                 .environmentObject(projectStore)
                 .environmentObject(managerScheduleStore)
         } label: {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(0.18))
-                        .frame(width: 36, height: 36)
-                    Image(systemName: "building.2.fill")
-                        .font(.system(size: 18, weight: .medium))
+            HStack(spacing: 13) {
+                PPIconTile(symbol: "building.2.fill", family: .plan, size: PPMetrics.chipIcon + 6)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Organisation Settings Hub")
+                        .font(.headline)
                         .foregroundStyle(.white)
+                    Text(settingsHubOrgLine)
+                        .font(.footnote)
+                        .foregroundStyle(PPColor.onNavySecondary)
                 }
-                Text("Organisation Settings Hub")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.75))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(PPColor.onNavySecondary)
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background(
-                LinearGradient(
-                    colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+            .padding(.vertical, 16)
+            .background(PPNavyBackdrop())
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous)
+                    .strokeBorder(PPColor.onNavyHairline, lineWidth: 0.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .shadow(color: ProjectWorksRevampColors.blue.opacity(0.18), radius: 10, x: 0, y: 4)
+            .contentShape(Rectangle())
         }
         .accessibilityIdentifier("settings.building2Fill2")
         .buttonStyle(.plain)
@@ -450,59 +388,39 @@ struct SettingsView: View {
             } label: {
                 settingsHubRow(
                     icon: "questionmark.circle.fill",
-                    iconBg: ProjectWorksRevampColors.activeGreen.opacity(0.15),
-                    iconFg: ProjectWorksRevampColors.activeGreen,
+                    family: .sites,
                     title: "Help & support",
                     subtitle: "Get in touch, browse FAQs"
                 )
             }
             .accessibilityIdentifier("settings.questionmarkCircleFill")
-            .buttonStyle(.plain)
-            Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+            .buttonStyle(PPMenuRowButtonStyle())
+            PPRowDivider()
             NavigationLink {
                 PrivacyPolicyView(isAcceptanceRequired: .constant(false))
             } label: {
                 settingsHubRow(
                     icon: "doc.text.fill",
-                    iconBg: AppAdaptiveColor.dynamic(
-                        light: AppAdaptiveColor.rgb(0.95, 0.95, 0.96),
-                        dark: AppAdaptiveColor.rgb(0.145, 0.157, 0.196)
-                    ),
-                    iconFg: ProjectWorksRevampColors.muted,
+                    family: .system,
                     title: "Privacy & terms",
                     subtitle: "Legal information"
                 )
             }
             .accessibilityIdentifier("settings.docTextFill")
-            .buttonStyle(.plain)
+            .buttonStyle(PPMenuRowButtonStyle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 4)
-        .appChromeCardContainer(cornerRadius: 18)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var settingsHubSignOut: some View {
         Button {
             showingSignOutAlert = true
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .font(.system(size: 15, weight: .medium))
-                Text("Sign out")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.requiredPillBg, lineWidth: 0.5)
-            )
+            Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
         }
         .accessibilityIdentifier("settings.rectanglePortraitAndArrowRight")
-        .buttonStyle(.plain)
+        .buttonStyle(PPSignOutButtonStyle())
     }
     
     private var manualLinkSheet: some View {
