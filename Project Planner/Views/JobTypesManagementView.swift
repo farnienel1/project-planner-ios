@@ -7,72 +7,88 @@ struct JobTypesManagementView: View {
     
     var body: some View {
         NavigationView {
-            VStack {
-                if projectStore.jobTypes.isEmpty {
-                    VStack(spacing: 20) {
-                        Image(systemName: "folder.fill")
-                            .font(.system(size: 60))
-                            .foregroundColor(.gray)
-                        
-                        Text("No Job Types Added Yet")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        Text("Add job types that you can assign to your projects. These will appear as options when creating or editing projects.")
-                            .font(.body)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                        
-                        Text("Recommended: Create job types like 'CAT A', 'CAT B', 'Small Works', 'Maintenance', or any custom types you use.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                            .padding(.top, 4)
-                        
-                        Button("Add Your First Job Type") {
-                            showingAddJobType = true
-                        }
-                        .accessibilityIdentifier("jobTypesManagement.addYourFirstJobType")
-                        .buttonStyle(.borderedProminent)
-                    }
-                    .padding()
-                } else {
-                    List {
-                        ForEach(projectStore.jobTypes.sorted(), id: \.self) { jobType in
-                            HStack {
-                                Image(systemName: "folder.fill")
-                                    .foregroundColor(.purple)
-                                Text(jobType)
-                                    .font(.body)
-                                Spacer()
+            VStack(spacing: 0) {
+                jobTypesNavyHeader
+
+                VStack(spacing: 0) {
+                    if projectStore.jobTypes.isEmpty {
+                        VStack(spacing: 16) {
+                            PPIconTile(symbol: "folder.fill", family: .people, size: PPMetrics.quickActionIcon, lifted: true)
+
+                            Text("No Job Types Added Yet")
+                                .font(.system(.title2, design: .rounded))
+                                .fontWeight(.bold)
+                                .multilineTextAlignment(.center)
+
+                            Text("Add job types that you can assign to your projects. These will appear as options when creating or editing projects.")
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+
+                            Text("Recommended: Create job types like 'CAT A', 'CAT B', 'Small Works', 'Maintenance', or any custom types you use.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+
+                            Button("Add Your First Job Type") {
+                                showingAddJobType = true
                             }
-                            .padding(.vertical, 4)
+                            .accessibilityIdentifier("jobTypesManagement.addYourFirstJobType")
+                            .ppProminentCapsule()
+                            .padding(.top, 4)
                         }
-                        .onDelete(perform: deleteJobType)
+                        .padding(20)
+                        .frame(maxWidth: .infinity)
+                        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                        .padding(.top, 20)
+
+                        Spacer(minLength: 0)
+                    } else {
+                        PPGroupLabel(text: "Job types")
+                        List {
+                            ForEach(projectStore.jobTypes.sorted(), id: \.self) { jobType in
+                                HStack(spacing: 13) {
+                                    PPIconTile(symbol: "folder.fill", family: .people, size: PPMetrics.menuIcon)
+                                    Text(jobType)
+                                        .font(.body)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                }
+                                .padding(.vertical, 6)
+                                .listRowBackground(PPColor.card)
+                            }
+                            .onDelete(perform: deleteJobType)
+                        }
+                        .listStyle(PlainListStyle())
+                        .scrollContentBackground(.hidden)
+                        .background(PPColor.card)
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                        .padding(.bottom, 16)
                     }
-                    .listStyle(PlainListStyle())
                 }
-                
-                Spacer()
+                .frame(maxHeight: .infinity, alignment: .top)
+                .ppContentSheet()
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Job Types Management")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: { dismiss() }) {
                         Image(systemName: "xmark")
-                            .foregroundColor(.blue)
                     }
-                        .accessibilityIdentifier("jobTypesManagement.close")
+                    .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
+                    .accessibilityIdentifier("jobTypesManagement.close")
                 }
-                
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Add Job Type") {
                         showingAddJobType = true
                     }
-                        .accessibilityIdentifier("jobTypesManagement.addJobType")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+                    .accessibilityIdentifier("jobTypesManagement.addJobType")
                 }
             }
             .sheet(isPresented: $showingAddJobType) {
@@ -81,7 +97,27 @@ struct JobTypesManagementView: View {
             }
         }
     }
-    
+
+    /// Home-style navy header with the number of job types already loaded.
+    private var jobTypesNavyHeader: some View {
+        let count = projectStore.jobTypes.count
+        return VStack(alignment: .leading, spacing: 8) {
+            PPOverviewTitle(
+                eyebrow: "Your job types",
+                count: "\(count)",
+                countLabel: count == 1 ? "job type" : "job types"
+            )
+            Text("Options shown when you create or edit a project.")
+                .font(.footnote)
+                .foregroundStyle(PPColor.onNavySecondary)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
     private func deleteJobType(at offsets: IndexSet) {
         let jobTypesArray = projectStore.jobTypes.sorted()
         for index in offsets {
