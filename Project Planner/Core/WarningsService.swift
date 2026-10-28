@@ -599,7 +599,13 @@ class WarningsService: ObservableObject {
     /// Approve a booking clash so it is noted on the weekly report.
     func approveWarning(_ warning: Warning) {
         guard warning.requiresWeeklyReportApproval else { return }
-        resolutionStore.approve(warning.resolutionKey)
+        resolutionStore.approve(warning)
+        refreshActiveFromGenerated()
+        WarningsRefreshHelper.postWarningsCountDidChange()
+    }
+
+    /// Approvals and accepted clashes loaded from Firestore (web or another phone) hide their warnings now.
+    func reapplyResolutions() {
         refreshActiveFromGenerated()
         WarningsRefreshHelper.postWarningsCountDidChange()
     }
@@ -613,7 +619,7 @@ class WarningsService: ObservableObject {
     private func uniqueActive(_ warnings: [Warning]) -> [Warning] {
         var seen = Set<String>()
         return warnings.filter { warning in
-            resolutionStore.shouldShowActive(warning.resolutionKey) && seen.insert(warning.resolutionKey).inserted
+            resolutionStore.shouldShowActive(warning) && seen.insert(warning.resolutionKey).inserted
         }
     }
 

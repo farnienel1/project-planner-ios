@@ -460,6 +460,8 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// Other `users` document ids for this email. The roster shows one row. Bookings stored
     /// on a dropped id still belong to this person.
     var sameEmailUserIds: [String] = []
+    /// `users/{uid}.updatedAt`. `rosterPeople` keeps the newer of two same-email documents of equal standing.
+    var documentUpdatedAt: Date? = nil
     /// `users/{uid}.name` as stored. Roster classification passes it to the packed script. A user save does not write it.
     var documentName: String = ""
     /// `users/{uid}.displayName` as stored. Roster classification passes it to the packed script. A user save does not write it.
@@ -592,7 +594,7 @@ extension AppUser {
         case annualLeaveEnabled, annualLeaveDaysPerYear, annualLeaveYearStartMonth, annualLeaveYearEndMonth
         case annualLeaveCarriesOver, annualLeaveYearAllowance, annualLeaveYearAllowanceKey
         case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
-        case documentName, documentDisplayName, formerUserIds
+        case documentName, documentDisplayName, formerUserIds, documentUpdatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -636,6 +638,7 @@ extension AppUser {
         utrNumber = try container.decodeIfPresent(String.self, forKey: .utrNumber)
         placedByManagersRecord = try container.decodeIfPresent(Bool.self, forKey: .placedByManagersRecord) ?? false
         sameEmailUserIds = try container.decodeIfPresent([String].self, forKey: .sameEmailUserIds) ?? []
+        documentUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .documentUpdatedAt)
         documentName = try container.decodeIfPresent(String.self, forKey: .documentName) ?? ""
         documentDisplayName = try container.decodeIfPresent(String.self, forKey: .documentDisplayName) ?? ""
         formerUserIds = try container.decodeIfPresent([String].self, forKey: .formerUserIds) ?? []
@@ -681,6 +684,7 @@ extension AppUser {
         // vatNumber / utrNumber are not encoded, so no local cache holds tax identifiers.
         try container.encode(placedByManagersRecord, forKey: .placedByManagersRecord)
         try container.encode(sameEmailUserIds, forKey: .sameEmailUserIds)
+        try container.encodeIfPresent(documentUpdatedAt, forKey: .documentUpdatedAt)
         try container.encode(documentName, forKey: .documentName)
         try container.encode(documentDisplayName, forKey: .documentDisplayName)
         try container.encode(formerUserIds, forKey: .formerUserIds)
