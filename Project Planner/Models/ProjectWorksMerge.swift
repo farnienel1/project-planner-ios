@@ -35,10 +35,18 @@ enum ProjectWorksMerge {
         return Array(byJob.values)
     }
 
-    /// Every job document, once. Two documents may share a job number (web keeps both, and bookings
-    /// point at either), so a job number is not an identity here.
+    /// Every job document, once: `workDocuments` (placeholders and exact duplicate ids out; two
+    /// documents may share a job number, and bookings point at either, so both stay).
     static func uniqueWorks(_ projects: [Project]) -> [Project] {
-        uniqueById(projects)
+        let rows: [[String: Any]] = projects.map { ["id": $0.id.uuidString, "jobNumber": $0.jobNumber] }
+        guard let kept = CanonicalBusinessEngine.workDocuments(projects: rows, smallWorks: []) else {
+            return uniqueById(projects)
+        }
+        var byId: [String: Project] = [:]
+        for project in projects where byId[project.id.uuidString] == nil {
+            byId[project.id.uuidString] = project
+        }
+        return kept.compactMap { ($0["id"] as? String).flatMap { byId[$0] } }
     }
 
     /// Merge one collection (projects or small works) without letting an empty/failed

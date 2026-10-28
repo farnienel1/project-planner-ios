@@ -510,54 +510,79 @@ enum WarningsComputation {
 
         if input.warningDetection.detectClashes {
             var processedMgrClash: Set<String> = []
-            let managerPersonDays = scheduleIndex.managerPersonDayItems(
+            func appendManagerClash(_ sortedCluster: [WarningsScheduleIndex.ManagerPersonDayItem], userId: String, resolutionKey: String) {
+                let user = usersById[userId]
+                let kind = clashPersonKind(for: user)
+                let person = user?.displayName ?? userId
+                let day = sortedCluster[0].date
+                let entries = sortedCluster.map { $0.timelineEntry(projectsById: projectById) }
+                let window = WarningTimelineMath.fitWindow(entries: entries)
+                let analysis = WarningTimelineMath.analyse(entries: entries, window: window)
+                let overlapMin = analysis.minutes
+                let (summary, detail) = formatOverlapSummary(minutes: overlapMin)
+                let place = WarningTimelineMath.placeWord(entries.count)
+                let isLocationClash = entries.contains { isOtherLocation($0.locationLabel) }
+                generated.append(Warning(
+                    resolutionKey: resolutionKey,
+                    type: .managerLocationClash,
+                    title: kind.bookingClashTitle,
+                    message: "\(person) is booked in \(place) places on \(formatDay(day)). Approve if it's intentional and it'll be noted on the weekly report.",
+                    severity: .medium,
+                    occurrenceDate: day,
+                    managerClash: Warning.ManagerClashWarningDetails(
+                        userId: userId,
+                        personName: person,
+                        date: day,
+                        bookingAId: sortedCluster[0].bookingId,
+                        bookingBId: sortedCluster[1].bookingId,
+                        entryA: entries[0],
+                        entryB: entries[1],
+                        overlapMinutes: overlapMin,
+                        overlapSummary: summary,
+                        overlapDetail: detail,
+                        isLocationClash: isLocationClash,
+                        personKind: kind,
+                        entries: entries
+                    )
+                ))
+            }
+
+            // `managerClashGroups` decides who each booking belongs to (`personDayItems`, through
+            // `resolveBookingPerson`), which bookings overlap, and the resolution key. Web asks the same.
+            if let groups = scheduleIndex.canonicalManagerClashGroups(
+                input,
                 operativeBookings: coverageBookings,
                 managerBookings: coverageManagerBookings,
-                usersById: usersById,
-                managerAdminUserIds: managerAdminUserIds,
-                people: bookingPeople
-            )
-            for (_, items) in managerPersonDays {
-                guard items.count > 1 else { continue }
-                let clusters = overlappingClusters(items) { $0.clashInterval }
-                for (clusterIndex, cluster) in clusters.enumerated() {
-                    let sortedCluster = cluster.sorted { $0.sortKey < $1.sortKey }
-                    let pairKey = sortedCluster.map(\.pairId).joined(separator: "|")
-                    guard processedMgrClash.insert(pairKey).inserted else { continue }
-                    let user = usersById[sortedCluster[0].userId]
-                    let kind = clashPersonKind(for: user)
-                    let person = user?.displayName ?? sortedCluster[0].userId
-                    let day = sortedCluster[0].date
-                    let entries = sortedCluster.map { $0.timelineEntry(projectsById: projectById) }
-                    let window = WarningTimelineMath.fitWindow(entries: entries)
-                    let analysis = WarningTimelineMath.analyse(entries: entries, window: window)
-                    let overlapMin = analysis.minutes
-                    let (summary, detail) = formatOverlapSummary(minutes: overlapMin)
-                    let place = WarningTimelineMath.placeWord(entries.count)
-                    let isLocationClash = entries.contains { isOtherLocation($0.locationLabel) }
-                    generated.append(Warning(
-                        resolutionKey: "mgr-clash-\(sortedCluster[0].userId)-\(day.timeIntervalSince1970)-\(clusterIndex)",
-                        type: .managerLocationClash,
-                        title: kind.bookingClashTitle,
-                        message: "\(person) is booked in \(place) places on \(formatDay(day)). Approve if it's intentional and it'll be noted on the weekly report.",
-                        severity: .medium,
-                        occurrenceDate: day,
-                        managerClash: Warning.ManagerClashWarningDetails(
-                            userId: sortedCluster[0].userId,
-                            personName: person,
-                            date: day,
-                            bookingAId: sortedCluster[0].bookingId,
-                            bookingBId: sortedCluster[1].bookingId,
-                            entryA: entries[0],
-                            entryB: entries[1],
-                            overlapMinutes: overlapMin,
-                            overlapSummary: summary,
-                            overlapDetail: detail,
-                            isLocationClash: isLocationClash,
-                            personKind: kind,
-                            entries: entries
+                managerAdminUserIds: managerAdminUserIds
+            ) {
+                for group in groups {
+                    guard group.items.count > 1 else { continue }
+                    appendManagerClash(group.items, userId: group.userId, resolutionKey: group.resolutionKey)
+                }
+            } else {
+                let managerPersonDays = scheduleIndex.managerPersonDayItems(
+                    operativeBookings: coverageBookings,
+                    managerBookings: coverageManagerBookings,
+                    usersById: usersById,
+                    managerAdminUserIds: managerAdminUserIds,
+                    people: bookingPeople
+                )
+                for (_, items) in managerPersonDays {
+                    guard items.count > 1 else { continue }
+                    let clusters = overlappingClusters(items) { $0.clashInterval }
+                    for (clusterIndex, cluster) in clusters.enumerated() {
+                        let sortedCluster = cluster.sorted { $0.sortKey < $1.sortKey }
+                        let pairKey = sortedCluster.map(\.pairId).joined(separator: "|")
+                        guard processedMgrClash.insert(pairKey).inserted else { continue }
+                        let userId = sortedCluster[0].userId
+                        let dayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(sortedCluster[0].date)
+                            ?? "\(sortedCluster[0].date.timeIntervalSince1970)"
+                        appendManagerClash(
+                            sortedCluster,
+                            userId: userId,
+                            resolutionKey: "mgr-clash-\(userId)-\(dayKey)-\(clusterIndex)"
                         )
-                    ))
+                    }
                 }
             }
         }
@@ -873,6 +898,9 @@ enum WarningsComputation {
         func finished(_ person: [String: Any]) -> Bool {
             (person["passwordSet"] as? Bool) == true && (person["isActive"] as? Bool) == true
         }
+        func folded(_ person: [String: Any]) -> Bool {
+            (person[WarningsComputation.rosterFoldedIdMarker] as? Bool) == true
+        }
         let excluded = Set(excludedUserIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
         var groups: [String: [[String: Any]]] = [:]
         for person in people {
@@ -885,7 +913,10 @@ enum WarningsComputation {
         for email in groups.keys.sorted() {
             let finishedAccounts = groups[email]?.filter(finished) ?? []
             let visible = finishedAccounts.filter { !excluded.contains(text($0["id"])) }
-            let pool = visible.isEmpty ? finishedAccounts : visible
+            let candidates = visible.isEmpty ? finishedAccounts : visible
+            // The account `rosterPeople` kept is the person key; a folded id only when nothing else is left.
+            let kept = candidates.filter { !folded($0) }
+            let pool = kept.isEmpty ? candidates : kept
             let winner = pool.min { text($0["id"]) < text($1["id"]) }
             if let winner {
                 ordered.append(winner)
@@ -895,8 +926,15 @@ enum WarningsComputation {
         for person in people where !placed.contains(text(person["id"])) {
             ordered.append(person)
         }
-        return ordered
+        return ordered.map { person in
+            var row = person
+            row.removeValue(forKey: WarningsComputation.rosterFoldedIdMarker)
+            return row
+        }
     }
+
+    /// Marks a people row that is a folded same-email id, only while ordering; never sent to the script.
+    nonisolated static let rosterFoldedIdMarker = "__rosterFoldedId"
 
     /// Daily Overview and Book labour for one London day. Same people, bookings, and stored exclusion ids as the warning scan.
     @MainActor
@@ -933,6 +971,8 @@ enum WarningsComputation {
             for alias in user.sameEmailUserIds where !alias.isEmpty && alias != user.id {
                 var copy = row
                 copy["id"] = alias
+                // A folded same-email id (`rosterPeople`): it never wins the person key over the kept account.
+                copy[WarningsComputation.rosterFoldedIdMarker] = true
                 peopleRows.append(copy)
             }
         }
@@ -1135,6 +1175,8 @@ enum WarningsComputation {
             for alias in user.sameEmailUserIds where !alias.isEmpty && alias != user.id {
                 var copy = row
                 copy["id"] = alias
+                // A folded same-email id (`rosterPeople`): it never wins the person key over the kept account.
+                copy[WarningsComputation.rosterFoldedIdMarker] = true
                 peopleRows.append(copy)
             }
         }
@@ -1761,6 +1803,85 @@ private struct WarningsScheduleIndex {
             )
         }
         return map
+    }
+
+    fileprivate struct CanonicalManagerClash {
+        let userId: String
+        let items: [ManagerPersonDayItem]
+        let resolutionKey: String
+    }
+
+    /// `managerClashGroups` over this scan's bookings. Nil when the script did not answer.
+    fileprivate nonisolated func canonicalManagerClashGroups(
+        _ input: WarningsComputationSnapshot,
+        operativeBookings: [WarningsComputationSnapshot.OperativeBookingSnapshot],
+        managerBookings: [WarningsComputationSnapshot.ManagerBookingSnapshot],
+        managerAdminUserIds: Set<String>
+    ) -> [CanonicalManagerClash]? {
+        func dayKey(_ date: Date) -> String {
+            CanonicalBusinessEngine.dayKeyInOrganizationZone(date) ?? ""
+        }
+        let policy = input.payrollTimePolicy
+        let payload: [String: Any] = [
+            "managerIds": Array(managerAdminUserIds).sorted(),
+            "people": [
+                "accounts": input.users.map { user -> [String: Any] in
+                    [
+                        "id": user.id,
+                        "email": user.emailLowercased,
+                        "formerIds": user.formerUserIds,
+                        "aliasIds": user.sameEmailUserIds
+                    ]
+                },
+                "operatives": input.operatives.map { ["id": $0.id.uuidString, "email": $0.emailLowercased] }
+            ],
+            "day": [
+                "standardDayStart": policy.standardDayStart,
+                "standardDayEnd": policy.standardDayEnd,
+                "breakWindowStart": policy.breakWindowStart,
+                "breakWindowEnd": policy.breakWindowEnd
+            ],
+            "managerBookings": managerBookings.map { booking -> [String: Any] in
+                [
+                    "id": booking.id.uuidString,
+                    "userId": booking.userId,
+                    "dayKey": dayKey(booking.dayStart),
+                    "timeSlot": booking.timeSlot,
+                    "workStartTime": booking.workStart ?? NSNull(),
+                    "workEndTime": booking.workEnd ?? NSNull()
+                ]
+            },
+            "operativeBookings": operativeBookings.map { booking -> [String: Any] in
+                [
+                    "id": booking.id.uuidString,
+                    "operativeId": Booking.storedOperativeId(for: booking.operativeId),
+                    "dayKey": dayKey(booking.dayStart),
+                    "timeSlot": booking.timeSlot,
+                    "workStartTime": booking.workStart ?? NSNull(),
+                    "workEndTime": booking.workEnd ?? NSNull(),
+                    "status": booking.isActiveStatus ? "Confirmed" : "Cancelled"
+                ]
+            }
+        ]
+        guard let groups = CanonicalBusinessEngine.managerClashGroups(payload) else { return nil }
+        return groups.compactMap { group in
+            guard let userId = group["userId"] as? String,
+                  let resolutionKey = group["resolutionKey"] as? String,
+                  let rows = group["items"] as? [[String: Any]] else { return nil }
+            let items: [ManagerPersonDayItem] = rows.compactMap { row in
+                guard let kind = row["kind"] as? String, let index = row["index"] as? Int else { return nil }
+                if kind == "manager", managerBookings.indices.contains(index) {
+                    let booking = managerBookings[index]
+                    return ManagerPersonDayItem(userId: userId, date: booking.dayStart, managerBooking: booking, operativeBooking: nil)
+                }
+                if kind == "operative", operativeBookings.indices.contains(index) {
+                    let booking = operativeBookings[index]
+                    return ManagerPersonDayItem(userId: userId, date: booking.dayStart, managerBooking: nil, operativeBooking: booking)
+                }
+                return nil
+            }
+            return CanonicalManagerClash(userId: userId, items: items, resolutionKey: resolutionKey)
+        }
     }
 
     nonisolated func managerPersonItemsOverlap(_ a: ManagerPersonDayItem, _ b: ManagerPersonDayItem) -> Bool {

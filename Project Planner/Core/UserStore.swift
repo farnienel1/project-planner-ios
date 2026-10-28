@@ -605,35 +605,13 @@ class UserStore: ObservableObject {
     }
 
     /// Two `users` documents can share an email. The Managers list must show that person once.
+    /// Same rule as the roster load: `rosterPeople` through `FirebaseBackend.foldRosterBySameEmail`.
     private func collapseRosterByEmail(_ users: [AppUser]) -> [AppUser] {
-        var byKey: [String: AppUser] = [:]
-        for user in users {
-            let emailKey = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            let key = emailKey.isEmpty ? "id:\(user.id)" : emailKey
-            if let existing = byKey[key] {
-                if rosterDocumentRank(user) > rosterDocumentRank(existing) {
-                    var chosen = user
-                    if existing.placedByManagersRecord { chosen.placedByManagersRecord = true }
-                    byKey[key] = chosen
-                } else if user.placedByManagersRecord {
-                    var kept = existing
-                    kept.placedByManagersRecord = true
-                    byKey[key] = kept
-                }
-            } else {
-                byKey[key] = user
-            }
+        let folded = FirebaseBackend.foldRosterBySameEmail(users)
+        for (alias, kept) in folded.aliases where organizationUserIdAliases[alias] != kept {
+            organizationUserIdAliases[alias] = kept
         }
-        return Array(byKey.values)
-    }
-
-    private func rosterDocumentRank(_ user: AppUser) -> Int {
-        var rank = 0
-        if user.passwordSet { rank += 4 }
-        if user.appearsOnManagersList || user.appearsOnOperativesList || user.appearsOnAdminsList { rank += 2 }
-        if !user.firstName.isEmpty || !user.surname.isEmpty { rank += 1 }
-        if user.isActive { rank += 1 }
-        return rank
+        return folded.users
     }
     
     /// Call when the user signs out so deleted/other-org users don't persist in the UI.

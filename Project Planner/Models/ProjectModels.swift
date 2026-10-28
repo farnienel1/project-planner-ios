@@ -200,7 +200,11 @@ struct Project: Identifiable, Codable, Hashable {
     
     /// Calendar-day status. A job whose end date is today stays Active until tomorrow —
     /// matching web (`completes today` is still live work).
+    /// `workStatusOn` today in the organisation's zone (web uses the same function).
     var status: ProjectStatus {
+        if let canonical = ProjectStatusRulebook.status(isLive: isLive, start: startDate, end: endDate, on: Date()) {
+            return canonical
+        }
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let start = cal.startOfDay(for: startDate)

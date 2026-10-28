@@ -4298,6 +4298,7 @@ class FirebaseBackend: ObservableObject {
         parsed.documentName = data["name"] as? String ?? ""
         parsed.documentDisplayName = data["displayName"] as? String ?? ""
         parsed.formerUserIds = CanonicalBusinessEngine.parseFormerUserIds(data["formerUserIds"]) ?? []
+        parsed.documentUpdatedAt = (data["updatedAt"] as? Timestamp)?.dateValue()
         return parsed
     }
     
@@ -4733,35 +4734,75 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: Added user to list: \(user.email) (\(user.firstName) \(user.surname)) role=\(user.role.rawValue) admin=\(user.appearsOnAdminsList) manager=\(user.appearsOnManagersList) operative=\(user.appearsOnOperativesList) passwordSet=\(user.passwordSet) active=\(user.isActive)")
         }
 
-        // Same email, two documents: keep the account they actually sign in with.
-        // An empty email must not collapse every nameless document into one row.
-        var byKey: [String: AppUser] = [:]
-        for user in users {
-            let emailKey = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            let key = emailKey.isEmpty ? "id:\(user.id)" : emailKey
-            if let existing = byKey[key] {
-                let chosen = Self.collapsedRosterUser(existing, user)
-                if chosen.id != existing.id {
-                    print("🔥🔥🔥 DEBUG: Preferring user doc \(chosen.id) over \(existing.id) for \(key)")
-                }
-                byKey[key] = chosen
-            } else {
-                byKey[key] = user
-            }
-        }
-        let uniqueUsers = Array(byKey.values)
-        var userIdAliases: [String: String] = [:]
-        for user in users {
-            let emailKey = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            let key = emailKey.isEmpty ? "id:\(user.id)" : emailKey
-            if let kept = byKey[key]?.id, kept != user.id {
-                userIdAliases[user.id] = kept
-            }
-        }
+        // Same email, two documents: one person. `rosterPeople` decides which document is kept
+        // (admin, signed in, newer, active, rank, lower id) and lists the folded ids, as web does.
+        let (uniqueUsers, userIdAliases) = Self.foldRosterBySameEmail(users)
 
         print("🔥🔥🔥 DEBUG: Returning \(uniqueUsers.count) unique users")
         let claimedEmails: Set<String>? = memberIndex.emailClaimsLoaded ? Set(memberIndex.userIdByEmail.keys) : nil
         return OrganizationUserRoster(users: uniqueUsers, claimedEmails: claimedEmails, userIdAliases: userIdAliases)
+    }
+
+    /// `rosterPeople` over the parsed documents. Swift only carries the other document's manager-list
+    /// placement and readable trade onto the kept one. Falls back to `collapsedRosterUser` when the
+    /// script did not answer, so the roster is never empty for that reason.
+    static func foldRosterBySameEmail(_ users: [AppUser]) -> (users: [AppUser], aliases: [String: String]) {
+        let documents: [[String: Any]] = users.map { user in
+            [
+                "id": user.id,
+                "email": user.email,
+                "passwordSet": user.passwordSet,
+                "isActive": user.isActive,
+                "firstName": user.firstName,
+                "surname": user.surname,
+                "admin": user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin,
+                "listed": user.appearsOnAdminsList || user.appearsOnManagersList || user.appearsOnOperativesList,
+                "updatedAtMs": user.documentUpdatedAt.map { ($0.timeIntervalSince1970 * 1000).rounded() } ?? NSNull(),
+                "formerUserIds": user.formerUserIds,
+                "sameEmailUserIds": user.sameEmailUserIds
+            ]
+        }
+        guard let result = CanonicalBusinessEngine.rosterPeople(documents) else {
+            var byKey: [String: AppUser] = [:]
+            var order: [String] = []
+            for user in users {
+                let emailKey = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = emailKey.isEmpty ? "id:\(user.id)" : emailKey
+                if let existing = byKey[key] {
+                    byKey[key] = collapsedRosterUser(existing, user)
+                } else {
+                    byKey[key] = user
+                    order.append(key)
+                }
+            }
+            let kept = order.compactMap { byKey[$0] }
+            var aliases: [String: String] = [:]
+            for person in kept {
+                for folded in person.sameEmailUserIds { aliases[folded] = person.id }
+            }
+            return (kept, aliases)
+        }
+        var byId: [String: AppUser] = [:]
+        for user in users where byId[user.id] == nil { byId[user.id] = user }
+        var kept: [AppUser] = []
+        for row in result.people {
+            guard let id = row["id"] as? String, var person = byId[id] else { continue }
+            person.sameEmailUserIds = row["sameEmailUserIds"] as? [String] ?? person.sameEmailUserIds
+            person.formerUserIds = row["formerUserIds"] as? [String] ?? person.formerUserIds
+            for folded in person.sameEmailUserIds {
+                guard let other = byId[folded] else { continue }
+                if !person.placedByManagersRecord && other.placedByManagersRecord {
+                    person.placedByManagersRecord = true
+                }
+                if StaffEmailIdentity.reportTrade(for: person) == "General",
+                   StaffEmailIdentity.reportTrade(for: other) != "General" {
+                    person.tradeTypePreset = other.tradeTypePreset
+                    person.tradeTypeCustom = other.tradeTypeCustom
+                }
+            }
+            kept.append(person)
+        }
+        return (kept, result.userIdAliases)
     }
 
     /// One email stays one roster row. The signed-in account stays the id. A readable
@@ -7160,6 +7201,14 @@ class FirebaseBackend: ObservableObject {
             reference: now
         )
         let week = WeekRange.from(start: now)
+        // `bookingLoadStart`: the earlier of the warning window and this week, as web loads.
+        if let warningKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(bounds.start),
+           let weekKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(week.start),
+           let start = CanonicalBusinessEngine.bookingLoadStart(loadedFromDayKey: nil, neededDayKeys: [weekKey, warningKey]),
+           let startKey = start.startDayKey,
+           let day = CanonicalBusinessEngine.date(fromDayKey: startKey) {
+            return day
+        }
         return LaunchStartupPolicy.launchBookingLowerBound(warningStart: bounds.start, weekStart: week.start)
     }
 
@@ -7174,6 +7223,15 @@ class FirebaseBackend: ObservableObject {
         if scheduleHistoryIsFull { return false }
         prepareLaunchScheduleQueryIfNeeded()
         guard let current = scheduleHistoryStart else { return false }
+        // `bookingLoadStart` decides whether this day is outside the download and where it now starts.
+        if let loadedKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(current),
+           let neededKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(date),
+           let start = CanonicalBusinessEngine.bookingLoadStart(loadedFromDayKey: loadedKey, neededDayKeys: [neededKey]) {
+            guard start.reload, let key = start.startDayKey,
+                  let day = CanonicalBusinessEngine.date(fromDayKey: key) else { return false }
+            scheduleHistoryStart = day
+            return true
+        }
         let day = Calendar.current.startOfDay(for: date)
         guard day < current else { return false }
         scheduleHistoryStart = day

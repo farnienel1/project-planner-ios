@@ -3028,6 +3028,112 @@ nonisolated enum CanonicalBusinessEngine {
         return decodeExpression(type, "ProjectPlannerCanonical[\(json)]")
     }
 
+    // MARK: - Call by name (JSON in, JSON out)
+
+    /// Calls `ProjectPlannerCanonical[name](...arguments)` and returns its JSON result: a dictionary,
+    /// array, string, number, `Bool`, or `NSNull` for `null`. Nil when the script did not run or threw.
+    /// The shared parity fixture (`CanonicalParityFixture.json`) and the typed wrappers below use it.
+    static func callJSON(_ function: String, arguments: [Any]) -> Any? {
+        guard let nameJSON = jsonFragment(function),
+              JSONSerialization.isValidJSONObject(arguments),
+              let argsData = try? JSONSerialization.data(withJSONObject: arguments),
+              let argsJSON = String(data: argsData, encoding: .utf8),
+              let value = evaluate(
+                "(function(){var f=ProjectPlannerCanonical[\(nameJSON)];if(typeof f!=='function')return undefined;var r=f.apply(null,\(argsJSON));return JSON.stringify(r===undefined?null:r);})()"
+              ),
+              value.isString,
+              let text = value.toString(),
+              let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+            return nil
+        }
+        return object
+    }
+
+    // MARK: - One pipeline (roster, download start, jobs, person-day items, clashes, resolutions)
+
+    /// `rosterPeople`: one row per kept `users` document (folded same-email ids in `sameEmailUserIds`),
+    /// and `userIdAliases`, every folded id → the id kept for that email.
+    static func rosterPeople(_ users: [[String: Any]]) -> (people: [[String: Any]], userIdAliases: [String: String])? {
+        guard let result = callJSON("rosterPeople", arguments: [users]) as? [String: Any],
+              let people = result["people"] as? [[String: Any]] else { return nil }
+        return (people, result["userIdAliases"] as? [String: String] ?? [:])
+    }
+
+    /// `bookingLoadStart`: the first day to download bookings from, and whether that moved the download back.
+    /// `startDayKey` nil means the whole collection.
+    static func bookingLoadStart(
+        loadedFromDayKey: String?,
+        fullHistory: Bool = false,
+        neededDayKeys: [String]
+    ) -> (startDayKey: String?, reload: Bool)? {
+        let input: [String: Any] = [
+            "loadedFromDayKey": loadedFromDayKey ?? NSNull(),
+            "fullHistory": fullHistory,
+            "neededDayKeys": neededDayKeys
+        ]
+        guard let row = callJSON("bookingLoadStart", arguments: [input]) as? [String: Any] else { return nil }
+        return (row["startDayKey"] as? String, (row["reload"] as? Bool) ?? false)
+    }
+
+    /// `workDocuments`: every job document from both collections, placeholders and exact duplicate ids removed.
+    static func workDocuments(projects: [[String: Any]], smallWorks: [[String: Any]]) -> [[String: Any]]? {
+        callJSON("workDocuments", arguments: [projects, smallWorks]) as? [[String: Any]]
+    }
+
+    /// `workStatusOn`: `active`, `upcoming`, `completed`, or `inactive` on `dayKey`.
+    static func workStatusOn(isLive: Bool, startDayKey: String, endDayKey: String, dayKey: String) -> String? {
+        let job: [String: Any] = ["isLive": isLive, "startDayKey": startDayKey, "endDayKey": endDayKey]
+        return callJSON("workStatusOn", arguments: [job, dayKey]) as? String
+    }
+
+    /// `isWorkLiveOn`: the job runs on `dayKey`.
+    static func isWorkLiveOn(isLive: Bool, startDayKey: String, endDayKey: String, dayKey: String) -> Bool? {
+        let job: [String: Any] = ["isLive": isLive, "startDayKey": startDayKey, "endDayKey": endDayKey]
+        return callJSON("isWorkLiveOn", arguments: [job, dayKey]) as? Bool
+    }
+
+    /// `personDayItems`: every manager and operative booking of each manager or admin, per person and day.
+    static func personDayItems(_ input: [String: Any]) -> [[String: Any]]? {
+        callJSON("personDayItems", arguments: [input]) as? [[String: Any]]
+    }
+
+    /// `managerClashGroups`: person-days whose bookings overlap, with `pairKey`, `bookingAId`, `bookingBId`, `resolutionKey`.
+    static func managerClashGroups(_ input: [String: Any]) -> [[String: Any]]? {
+        callJSON("managerClashGroups", arguments: [input]) as? [[String: Any]]
+    }
+
+    /// `clashPairKey`: the two pair ids sorted and joined; the `acceptedBookingClashes` document id.
+    static func clashPairKey(_ a: String, _ b: String) -> String? {
+        callJSON("clashPairKey", arguments: [a, b]) as? String
+    }
+
+    /// `isClashAccepted`: a saved `acceptedBookingClashes` row covers these two bookings.
+    static func isClashAccepted(_ a: String, _ b: String, accepted: [[String: Any]]) -> Bool? {
+        callJSON("isClashAccepted", arguments: [a, b, accepted]) as? Bool
+    }
+
+    /// `acceptedClashWriteFields`: the `acceptedBookingClashes` document to write (add `acceptedAt` as a Timestamp).
+    /// Nil when the script refused it (same booking twice, no signed-in user) or did not run.
+    static func acceptedClashWriteFields(bookingAId: String, bookingBId: String, acceptedByUserId: String) -> (documentId: String, fields: [String: Any])? {
+        let input: [String: Any] = ["bookingAId": bookingAId, "bookingBId": bookingBId, "acceptedByUserId": acceptedByUserId]
+        return documentWrite(callJSON("acceptedClashWriteFields", arguments: [input]))
+    }
+
+    /// `warningResolutionWriteFields`: the `warningResolutions` document to write (add `resolvedAt` as a Timestamp).
+    /// Nil when the key cannot be a document id, the status is unknown, or the script did not run.
+    static func warningResolutionWriteFields(resolutionKey: String, status: String, resolvedByUserId: String) -> (documentId: String, fields: [String: Any])? {
+        let input: [String: Any] = ["resolutionKey": resolutionKey, "status": status, "resolvedByUserId": resolvedByUserId]
+        return documentWrite(callJSON("warningResolutionWriteFields", arguments: [input]))
+    }
+
+    private static func documentWrite(_ result: Any?) -> (documentId: String, fields: [String: Any])? {
+        guard let row = result as? [String: Any],
+              let documentId = row["documentId"] as? String, !documentId.isEmpty,
+              let fields = row["fields"] as? [String: Any] else { return nil }
+        return (documentId, fields)
+    }
+
     // MARK: - Call plumbing
 
     struct CanonicalSessionOrganizationChoice: Codable, Equatable, Sendable {
