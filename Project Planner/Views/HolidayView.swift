@@ -208,6 +208,19 @@ struct HolidayView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            VStack(alignment: .leading, spacing: 18) {
+                                PPNavyPageTitle(title: "Annual leave")
+                                if showsTeamTab {
+                                    leavePageTabs
+                                }
+                            }
+                            .padding(.horizontal, PPMetrics.screenGutter)
+                            .padding(.top, 16)
+                            .padding(.bottom, PPMetrics.headerBottomPadding)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .ppNavyHeader()
+
                             VStack(alignment: .leading, spacing: 20) {
                                 if let msg = holidayStore.errorMessage, !msg.isEmpty {
                                     VStack(alignment: .leading, spacing: 8) {
@@ -223,14 +236,9 @@ struct HolidayView: View {
                                         .accessibilityIdentifier("leave.retry2")
                                         .buttonStyle(.bordered)
                                     }
-                                    .padding(12)
+                                    .padding(14)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color(.secondarySystemBackground))
-                                    .cornerRadius(10)
-                                }
-
-                                if showsTeamTab {
-                                    leavePageTabs
+                                    .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
                                 }
 
                                 if leavePage == .team && showsTeamTab {
@@ -238,13 +246,14 @@ struct HolidayView: View {
                                 } else {
                                     myLeavePage
                                 }
+                            }
+                            .padding(.top, 20)
+                            .padding(.bottom, 28)
+                            .ppContentSheet()
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 16)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(HolidayChrome.canvas)
+                    .background(PPColor.page)
                     .refreshable {
                         if userStore.isOperativeMode() {
                             operativeStore.loadData()
@@ -256,9 +265,10 @@ struct HolidayView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(HolidayChrome.canvas)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Annual leave")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .navigationBarBackButtonHidden(true)
             .toolbar {
                 if !isManagingTeamLeave {
@@ -271,7 +281,7 @@ struct HolidayView: View {
                             }
                         }) {
                             Image(systemName: "chevron.left")
-                                .foregroundStyle(HolidayChrome.accent)
+                                .foregroundStyle(.white)
                                 .font(.system(size: 17, weight: .semibold))
                         }
                         .accessibilityIdentifier("leave.back")
@@ -479,7 +489,7 @@ struct HolidayView: View {
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("Remove booking")
                             }
-                            .listRowBackground(Color.white)
+                            .listRowBackground(PPColor.card)
                         }
                     }
                 } footer: {
@@ -489,7 +499,7 @@ struct HolidayView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(HolidayChrome.canvas)
+            .background(PPColor.page)
             .navigationTitle("Booked annual leave")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -508,8 +518,8 @@ struct HolidayView: View {
             pageTab("Team", page: .team, badge: approverPendingRequests.count)
         }
         .padding(4)
-        .background(AnnualLeavePalette.soft)
-        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .background(Capsule().fill(PPColor.onNavyFill))
+        .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
     }
 
     private func pageTab(_ title: String, page: AnnualLeavePage, badge: Int?) -> some View {
@@ -528,12 +538,11 @@ struct HolidayView: View {
                         .clipShape(Capsule())
                 }
             }
-            .font(.subheadline.weight(.bold))
-            .foregroundStyle(leavePage == page ? AnnualLeavePalette.ink : AnnualLeavePalette.ink2)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(leavePage == page ? PPColor.navy : Color.white.opacity(0.75))
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(leavePage == page ? AnnualLeavePalette.card : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.vertical, 9)
+            .background(Capsule().fill(leavePage == page ? Color.white : Color.clear))
         }
         .accessibilityIdentifier("leave.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
@@ -546,7 +555,7 @@ struct HolidayView: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text("Book time off")
-                    .font(.title3.weight(.bold))
+                    .font(.system(.title3, design: .rounded).weight(.bold))
                 Text(isRequestMode
                      ? "Tap the days you want. Each day can be a full day, morning, or afternoon. Your line manager approves the request."
                      : "Tap the days you want. Each day can be a full day, morning, or afternoon. These book straight onto your allowance.")
@@ -577,28 +586,33 @@ struct HolidayView: View {
         let ring = people > 0 ? min(1, Double(away) / Double(people)) : 0
         return VStack(alignment: .leading, spacing: 12) {
             Text("TEAM · \(annualLeaveSummary?.leaveYearLabel ?? "This leave year")")
-                .font(.footnote.weight(.heavy))
-                .padding(.horizontal, 11)
-                .padding(.vertical, 4)
-                .background(Color.white.opacity(0.2))
-                .clipShape(Capsule())
+                .font(.caption.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .background(Capsule().fill(PPColor.onNavyFill))
+                .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(away)")
-                        .font(.largeTitle.weight(.heavy))
+                        .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                        .monospacedDigit()
                     Text("away today")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(PPColor.onNavySecondary)
                 }
                 .foregroundStyle(.white)
                 Spacer(minLength: 0)
                 ZStack {
-                    Circle().stroke(Color.white.opacity(0.28), lineWidth: 8)
+                    Circle().stroke(PPColor.onNavyFill, lineWidth: 8)
                     Circle()
                         .trim(from: 0, to: ring)
                         .stroke(style: StrokeStyle(lineWidth: 8, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(
+                            LinearGradient(colors: [PPColor.glow, .white], startPoint: .top, endPoint: .bottom)
+                        )
                     Text(soon == 1 ? "1 soon" : "\(soon) soon")
                         .font(.caption.weight(.heavy))
                         .foregroundStyle(.white)
@@ -614,33 +628,34 @@ struct HolidayView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LinearGradient(
-                colors: [AnnualLeavePalette.blue, AnnualLeavePalette.blue.opacity(0.72)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .background(PPNavyBackdrop())
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        .environment(\.colorScheme, .dark)
     }
 
     private func teamHeroTile(_ value: String, _ title: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(.title3.weight(.heavy))
-            Text(title).font(.footnote.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.7)
+            Text(value)
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(PPColor.onNavyCaption)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
         }
-        .foregroundStyle(.white)
         .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
         .padding(10)
-        .background(Color.white.opacity(0.17))
-        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(PPColor.onNavyFill))
+        .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
     }
 
     private var teamWaitingSection: some View {
         let requests = approverPendingRequests
         return VStack(alignment: .leading, spacing: 8) {
             Text("Waiting for you")
-                .font(.title3.weight(.bold))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             if requests.isEmpty {
                 Text("Nothing is waiting for you. New leave requests and cancellation requests from your team will appear here.")
                     .font(.subheadline)
@@ -649,8 +664,8 @@ struct HolidayView: View {
                     .padding(22)
                     .frame(maxWidth: .infinity)
                     .background(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .strokeBorder(AnnualLeavePalette.line, style: StrokeStyle(lineWidth: 1, dash: [5]))
+                        RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous)
+                            .strokeBorder(Color(.separator), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     )
             } else {
                 ForEach(requests) { request in
@@ -734,8 +749,8 @@ struct HolidayView: View {
             }
         }
         .padding(14)
-        .background(AnnualLeavePalette.card)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(isCancellation ? AnnualLeavePalette.violet : AnnualLeavePalette.amber)
@@ -746,7 +761,7 @@ struct HolidayView: View {
     private var teamAwayCalendarSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Who is off, and when")
-                .font(.title3.weight(.bold))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             Text("Initials show on each day, so a clash is obvious before you approve it.")
                 .font(.footnote)
                 .foregroundStyle(AnnualLeavePalette.ink3)
@@ -804,12 +819,8 @@ struct HolidayView: View {
                 }
             }
             .padding(14)
-            .background(AnnualLeavePalette.card)
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(AnnualLeavePalette.line, lineWidth: 1)
-            )
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
     }
 
@@ -864,11 +875,11 @@ struct HolidayView: View {
     private var teamPeopleSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Your team")
-                .font(.title3.weight(.bold))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             TextField("Search name or trade", text: $teamSearch)
                 .accessibilityIdentifier("leave.searchNameOrTrade")
                 .padding(12)
-                .background(AnnualLeavePalette.card)
+                .background(PPColor.card)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             HStack {
                 Picker("Sort by", selection: $teamSort) {
@@ -920,11 +931,10 @@ struct HolidayView: View {
         let balance = teamBalance(for: person)
         return HStack(spacing: 11) {
             Text(initials(from: person.displayName))
-                .font(.subheadline.weight(.heavy))
-                .foregroundStyle(AnnualLeavePalette.leave)
+                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                .foregroundStyle(.white)
                 .frame(width: 38, height: 38)
-                .background(AnnualLeavePalette.leaveTint)
-                .clipShape(Circle())
+                .background(PPFamily.people.gradient, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(person.displayName)
                     .font(.body.weight(.semibold))
@@ -958,12 +968,8 @@ struct HolidayView: View {
                 .foregroundStyle(AnnualLeavePalette.ink3)
         }
         .padding(12)
-        .background(AnnualLeavePalette.card)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(AnnualLeavePalette.line, lineWidth: 1)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private var teamPeople: [AnnualLeavePerson] {
@@ -1131,15 +1137,15 @@ struct HolidayView: View {
         let spans = AnnualLeaveDateFormat.displaySpans(from: upcoming, calendar: calendar)
         return VStack(alignment: .leading, spacing: 8) {
             Text("Upcoming leave")
-                .font(.title3.weight(.bold))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             if spans.isEmpty {
                 Text("Approved and pending leave from today onwards will show here, grouped by the days you booked.")
                     .font(.subheadline)
                     .foregroundStyle(AnnualLeavePalette.ink3)
                     .padding(18)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(AnnualLeavePalette.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .background(PPColor.card)
+                    .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
             } else {
                 ForEach(spans) { span in
                     HolidayRowView(
@@ -1159,7 +1165,7 @@ struct HolidayView: View {
             .sorted { $0.startDate > $1.startDate }
         return VStack(alignment: .leading, spacing: 8) {
             Text("Your requests")
-                .font(.title3.weight(.bold))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             Text("These are waiting on your line manager, including cancellations.")
                 .font(.footnote)
                 .foregroundStyle(AnnualLeavePalette.ink3)
@@ -1169,8 +1175,8 @@ struct HolidayView: View {
                     .foregroundStyle(AnnualLeavePalette.ink3)
                     .padding(18)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(AnnualLeavePalette.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .background(PPColor.card)
+                    .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
             } else {
                 ForEach(mine) { request in
                     HolidayRowView(booking: request)
@@ -1357,13 +1363,8 @@ struct HolidayView: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(ProjectWorksRevampColors.surface)
-                .shadow(color: Color.black.opacity(0.04), radius: 8, y: 2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(HolidayChrome.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous)
+                .fill(PPColor.card)
         )
     }
 
@@ -2114,8 +2115,8 @@ struct HolidayRowView: View {
             Spacer(minLength: 0)
         }
         .padding(14)
-        .background(AnnualLeavePalette.card)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(statusColor)
@@ -2210,8 +2211,7 @@ struct HolidayRequestRowView: View {
             }
         }
         .padding(12)
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .alert("Annual Leave Overlap", isPresented: $showConflicts) {
             Button("OK", role: .cancel) {}
                 .accessibilityIdentifier("holidayRequestRow.ok")
