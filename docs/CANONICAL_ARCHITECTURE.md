@@ -129,3 +129,20 @@ A window that only has the web repo may change `lib/canonical`. `npm run build:c
 A workspace with both repositories changes the TypeScript, rebuilds, and commits both generated scripts in the same phase.
 
 The full description of what is shared and how a switch works is `docs/CANONICAL_ARCHITECTURE.md` in `project-planner-web`.
+
+## One pipeline: who, which days, which jobs, and decisions
+
+Before any rule runs, both apps answer four questions with the rulebook, not their own code:
+
+- **Who is one person.** `rosterPeople` folds `users` documents that share an email. The kept document is chosen by admin, then signed in (`passwordSet`), then the newer `updatedAt`, then active, then `rosterDocumentRank`, then the lower id. Folded ids go on the kept person as `sameEmailUserIds`, and the roster keeps `userIdAliases`. `FirebaseBackend.foldRosterBySameEmail` is the only iOS caller; `UserStore` re-applies the aliases whenever `organizationUsers` is replaced.
+- **Which days are downloaded.** `bookingLoadStart` gives the first day to download bookings, manager bookings and subcontractor bookings from (`FirebaseBackend.launchScheduleLowerBound` and `noteScheduleNeedsDate`). A warning window that starts earlier moves it back and reloads before the scan.
+- **Which documents are jobs.** `workDocuments`: every `projects` and `smallWorks` document except the legacy placeholder, de-duplicated by id only (two jobs may share a job number). `Project.status` is `workStatusOn` (`ProjectStatusRulebook`, cached per inputs).
+- **Manager and admin clashes.** `managerClashGroups` (over `personDayItems`) decides whose booking it is (`resolveBookingPerson`), which bookings overlap, and the resolution key `mgr-clash-{userId}-{dayKey}-{index}`. Older second-based keys are moved to the day key when loaded.
+
+Decisions are stored in Firestore, shared with web:
+
+- `organizations/{orgId}/warningResolutions/{resolutionKey}` (`warningResolutionWriteFields` plus `resolvedAt`) for approve and dismiss. Unapprove deletes it.
+- `organizations/{orgId}/acceptedBookingClashes/{clashPairKey}` (`acceptedClashWriteFields` plus `acceptedAt`) when a clash is approved. A clash `isClashAccepted` hides is not shown on iOS.
+- `WarningResolutionStore` keeps a UserDefaults copy as the fallback while the rule is not deployed or the phone is offline. A refused write never drops a local key.
+
+`ProjectPlannerTests/CanonicalParityFixture.json` is web's `lib/canonical/parity-fixture.json`, copied with each packed script. `CanonicalParityFixtureTests` runs every case through `CanonicalBusinessEngine.callJSON` and must match exactly, the same check web runs.

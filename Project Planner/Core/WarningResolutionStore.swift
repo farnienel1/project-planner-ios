@@ -2,11 +2,18 @@
 //  WarningResolutionStore.swift
 //  Project Planner
 //
-//  Persists admin approvals/dismissals for warnings (clash approve → weekly report).
+//  Approvals and dismissals for warnings (clash approve → weekly report). Firestore is the record,
+//  shared with web: `organizations/{orgId}/warningResolutions/{resolutionKey}` through the rulebook's
+//  `warningResolutionWriteFields`, and clash approvals in `acceptedBookingClashes` through
+//  `acceptedClashWriteFields` / `isClashAccepted`. UserDefaults stays as the fallback while the
+//  Firestore rule is not deployed or the phone is offline; a local key is never dropped because a
+//  write failed.
 //
 
 import Foundation
 import Combine
+import FirebaseAuth
+import FirebaseFirestore
 
 @MainActor
 final class WarningResolutionStore: ObservableObject {
@@ -14,6 +21,9 @@ final class WarningResolutionStore: ObservableObject {
 
     @Published private(set) var approvedResolutionKeys: Set<String> = []
     @Published private(set) var dismissedResolutionKeys: Set<String> = []
+    /// `acceptedBookingClashes` rows (`id`, `bookingAId`, `bookingBId`), from web or this phone.
+    @Published private(set) var acceptedClashes: [[String: Any]] = []
+    private var remoteLoadOrganizationId: String?
 
     private let defaults: UserDefaults
     private let legacyApprovedKey = "warning_resolution_approved_v1"
@@ -59,8 +69,61 @@ final class WarningResolutionStore: ObservableObject {
             }
             defaults.set(true, forKey: legacyMigratedKey)
         }
-        approvedResolutionKeys = Set(defaults.stringArray(forKey: approvedKey) ?? [])
-        dismissedResolutionKeys = Set(defaults.stringArray(forKey: dismissedKey) ?? [])
+        approvedResolutionKeys = Set((defaults.stringArray(forKey: approvedKey) ?? []).map(Self.migratedResolutionKey))
+        dismissedResolutionKeys = Set((defaults.stringArray(forKey: dismissedKey) ?? []).map(Self.migratedResolutionKey))
+        acceptedClashes = []
+        Task { await loadRemote(organizationId: organizationId) }
+    }
+
+    /// Older manager-clash keys carried the day as seconds (`mgr-clash-{user}-{1792623600.0}-{i}`);
+    /// `managerClashGroups` keys it by day (`mgr-clash-{user}-{2026-10-22}-{i}`).
+    nonisolated static func migratedResolutionKey(_ key: String) -> String {
+        guard key.hasPrefix("mgr-clash-"),
+              let match = key.range(of: #"-(\d{9,}(?:\.\d+)?)-(\d+)$"#, options: .regularExpression) else {
+            return key
+        }
+        let tail = key[match].dropFirst()
+        let parts = tail.split(separator: "-")
+        guard parts.count == 2, let seconds = Double(parts[0]),
+              let dayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(Date(timeIntervalSince1970: seconds)) else {
+            return key
+        }
+        return String(key[..<match.lowerBound]) + "-\(dayKey)-\(parts[1])"
+    }
+
+    /// Reads both collections for this organisation and merges them over the local keys.
+    /// A refused read (rule not deployed yet) leaves the local keys as they are.
+    func loadRemote(organizationId: String) async {
+        remoteLoadOrganizationId = organizationId
+        let org = Firestore.firestore().collection("organizations").document(organizationId)
+        if let snapshot = try? await org.collection("warningResolutions").getDocuments(),
+           self.organizationId == organizationId {
+            for doc in snapshot.documents {
+                let data = doc.data()
+                let key = (data["resolutionKey"] as? String) ?? doc.documentID
+                switch (data["status"] as? String)?.lowercased() {
+                case "approved": approvedResolutionKeys.insert(key)
+                case "dismissed": dismissedResolutionKeys.insert(key)
+                default: continue
+                }
+            }
+            persistApproved()
+            persistDismissed()
+        }
+        if let snapshot = try? await org.collection("acceptedBookingClashes").getDocuments(),
+           self.organizationId == organizationId {
+            acceptedClashes = snapshot.documents.map { doc in
+                let data = doc.data()
+                return [
+                    "id": doc.documentID,
+                    "bookingAId": (data["bookingAId"] as? String) ?? "",
+                    "bookingBId": (data["bookingBId"] as? String) ?? ""
+                ]
+            }
+        }
+        if self.organizationId == organizationId {
+            WarningsService.shared.reapplyResolutions()
+        }
     }
 
     func isApproved(_ resolutionKey: String) -> Bool {
@@ -75,14 +138,77 @@ final class WarningResolutionStore: ObservableObject {
         !isApproved(resolutionKey) && !isDismissed(resolutionKey)
     }
 
+    /// Also hides a clash whose two bookings were approved on web (`isClashAccepted`).
+    func shouldShowActive(_ warning: Warning) -> Bool {
+        guard shouldShowActive(warning.resolutionKey) else { return false }
+        guard let pair = Self.clashBookingIds(warning), !acceptedClashes.isEmpty else { return true }
+        return CanonicalBusinessEngine.isClashAccepted(pair.a, pair.b, accepted: acceptedClashes) != true
+    }
+
+    nonisolated static func clashBookingIds(_ warning: Warning) -> (a: String, b: String)? {
+        if let clash = warning.managerClash {
+            return (clash.bookingAId.uuidString, clash.bookingBId.uuidString)
+        }
+        if let clash = warning.operativeClash {
+            return (clash.bookingAId.uuidString, clash.bookingBId.uuidString)
+        }
+        return nil
+    }
+
     func approve(_ resolutionKey: String) {
         approvedResolutionKeys.insert(resolutionKey)
         persistApproved()
+        writeResolution(resolutionKey, status: "approved")
+    }
+
+    /// A clash approval is also the `acceptedBookingClashes` row web reads.
+    func approve(_ warning: Warning) {
+        approve(warning.resolutionKey)
+        guard let pair = Self.clashBookingIds(warning),
+              let organizationId,
+              let uid = Auth.auth().currentUser?.uid,
+              let write = CanonicalBusinessEngine.acceptedClashWriteFields(
+                bookingAId: pair.a,
+                bookingBId: pair.b,
+                acceptedByUserId: uid
+              ) else { return }
+        var fields = write.fields
+        fields["acceptedAt"] = Timestamp(date: Date())
+        acceptedClashes.append(["id": write.documentId, "bookingAId": pair.a, "bookingBId": pair.b])
+        Firestore.firestore().collection("organizations").document(organizationId)
+            .collection("acceptedBookingClashes").document(write.documentId)
+            .setData(fields) { error in
+                if let error {
+                    print("🔥🔥🔥 DEBUG: acceptedBookingClashes write failed (kept on this phone): \(error.localizedDescription)")
+                }
+            }
     }
 
     func dismiss(_ resolutionKey: String) {
         dismissedResolutionKeys.insert(resolutionKey)
         persistDismissed()
+        writeResolution(resolutionKey, status: "dismissed")
+    }
+
+    /// `warningResolutionWriteFields` → `warningResolutions/{resolutionKey}`. Until the rule is deployed the
+    /// write is refused; the key stays on this phone and the next approval or dismissal tries again.
+    private func writeResolution(_ resolutionKey: String, status: String) {
+        guard let organizationId,
+              let uid = Auth.auth().currentUser?.uid,
+              let write = CanonicalBusinessEngine.warningResolutionWriteFields(
+                resolutionKey: resolutionKey,
+                status: status,
+                resolvedByUserId: uid
+              ) else { return }
+        var fields = write.fields
+        fields["resolvedAt"] = Timestamp(date: Date())
+        Firestore.firestore().collection("organizations").document(organizationId)
+            .collection("warningResolutions").document(write.documentId)
+            .setData(fields) { error in
+                if let error {
+                    print("🔥🔥🔥 DEBUG: warningResolutions write failed (kept on this phone): \(error.localizedDescription)")
+                }
+            }
     }
 
     /// Previously pruned day-scoped unbooked dismissals outside the scan window, which made
@@ -95,6 +221,19 @@ final class WarningResolutionStore: ObservableObject {
     func unapprove(_ resolutionKey: String) {
         approvedResolutionKeys.remove(resolutionKey)
         persistApproved()
+        guard let organizationId,
+              let write = CanonicalBusinessEngine.warningResolutionWriteFields(
+                resolutionKey: resolutionKey,
+                status: "approved",
+                resolvedByUserId: Auth.auth().currentUser?.uid ?? ""
+              ) else { return }
+        Firestore.firestore().collection("organizations").document(organizationId)
+            .collection("warningResolutions").document(write.documentId)
+            .delete { error in
+                if let error {
+                    print("🔥🔥🔥 DEBUG: warningResolutions delete failed: \(error.localizedDescription)")
+                }
+            }
     }
 
     private func persistApproved() {
