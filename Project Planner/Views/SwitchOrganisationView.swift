@@ -47,18 +47,18 @@ struct SwitchOrganisationView: View {
 
                 if let errorMessage, !errorMessage.isEmpty {
                     Text(errorMessage)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.footnote.weight(.medium))
                         .foregroundStyle(Color.red)
                         .padding(.top, 12)
                 }
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, PPMetrics.screenGutter)
             .padding(.bottom, 28)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Switch organisation")
         .navigationBarTitleDisplayMode(.inline)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
         .onAppear {
             paintKnownCompanies()
         }
@@ -74,53 +74,53 @@ struct SwitchOrganisationView: View {
     private var introCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Work across teams")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Color.primary)
             Text("Choose which organisation you want to use in the app. Your schedule, projects, and settings will update to match.")
-                .font(.system(size: 12))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .font(.footnote)
+                .foregroundStyle(Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .appChromeCardContainer(cornerRadius: 16)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var webSetupNote: some View {
         Text("New organisations are set up using the Project Planner web app, which can be reached at www.projectplanner.us.")
-            .font(.system(size: 12))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
+            .font(.footnote)
+            .foregroundStyle(Color.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ProjectWorksRevampColors.jobTypePillBg)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(PPColor.well)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
             .allowsHitTesting(false)
     }
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("No organisations found")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Color.primary)
             Text("If you were invited to another organisation, pull to refresh or sign out and sign in again.")
-                .font(.system(size: 12))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .font(.footnote)
+                .foregroundStyle(Color.secondary)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .appChromeCardContainer(cornerRadius: 16)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         .padding(.top, 16)
     }
 
     private func sectionTitle(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .tracking(0.4)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(Color.secondary)
+            .tracking(0.8)
             .padding(.leading, 4)
-            .padding(.top, 20)
-            .padding(.bottom, 10)
+            .padding(.top, 22)
+            .padding(.bottom, 8)
     }
 
     private var membershipList: some View {
@@ -128,13 +128,13 @@ struct SwitchOrganisationView: View {
             ForEach(memberships) { membership in
                 membershipRow(membership)
                 if membership.id != memberships.last?.id {
-                    Divider().background(ProjectWorksRevampColors.border).padding(.leading, 62)
+                    Divider().background(Color(.separator)).padding(.leading, PPMetrics.menuIcon + 13)
                 }
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
         .padding(.vertical, 4)
-        .appChromeCardContainer(cornerRadius: 18)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func membershipRow(_ membership: OrgMembershipSummary) -> some View {
@@ -145,19 +145,12 @@ struct SwitchOrganisationView: View {
             guard !isCurrent, !isSwitching, canEnter else { return }
             Task { await switchToOrganisation(membership) }
         } label: {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(isCurrent ? ProjectWorksRevampColors.blue.opacity(0.14) : ProjectWorksRevampColors.jobTypePillBg)
-                        .frame(width: 36, height: 36)
-                    Image(systemName: "building.2.fill")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(isCurrent ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.jobTypePillInk)
-                }
+            HStack(spacing: 13) {
+                PPIconTile(symbol: "building.2.fill", family: isCurrent ? .plan : .system)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(membership.name)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.body)
+                        .foregroundStyle(Color.primary)
                         .multilineTextAlignment(.leading)
                     HStack(spacing: 6) {
                         Text(membership.roleDisplayName)
@@ -176,12 +169,12 @@ struct SwitchOrganisationView: View {
                                 .clipShape(Capsule())
                         }
                     }
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.secondary)
                     if !membership.subscriptionHasAccess {
                         Text(SubscriptionLapsedCopy.phrase)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -192,21 +185,21 @@ struct SwitchOrganisationView: View {
                 } else if isCurrent {
                     Text("Active")
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .foregroundStyle(PPColor.brand)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(ProjectWorksRevampColors.blue.opacity(0.12))
+                        .background(PPColor.brand.opacity(0.12))
                         .clipShape(Capsule())
                 } else if !membership.subscriptionHasAccess {
                     EmptyView()
                 } else if !membership.isActive {
                     Image(systemName: "lock.fill")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.red.opacity(0.8))
                 } else {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color(.tertiaryLabel))
                 }
             }
             .padding(.vertical, 13)

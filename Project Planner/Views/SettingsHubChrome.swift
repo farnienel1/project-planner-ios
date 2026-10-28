@@ -11,12 +11,13 @@ import UIKit
 enum SettingsHubChrome {
     static func sectionTitle(_ text: String, sentenceCase: Bool = false) -> some View {
         Text(sentenceCase ? text : text.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .tracking(0.4)
-            .padding(.leading, 4)
-            .padding(.top, 6)
+            .font(.footnote.weight(.semibold))
+            .tracking(sentenceCase ? 0 : 0.8)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            .padding(.top, 14)
             .padding(.bottom, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     static func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
@@ -24,25 +25,25 @@ enum SettingsHubChrome {
             content()
         }
         .padding(.horizontal, 14)
-        .background(ProjectWorksRevampColors.card)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         .padding(.bottom, 8)
     }
 
     static func footer(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 4)
             .padding(.bottom, 12)
     }
 
     static func divider() -> some View {
-        Divider().overlay(ProjectWorksRevampColors.border)
+        Rectangle()
+            .fill(Color(.separator))
+            .frame(height: 0.5)
+            .accessibilityHidden(true)
     }
 
     static func row(
@@ -52,30 +53,37 @@ enum SettingsHubChrome {
         title: String,
         subtitle: String
     ) -> some View {
-        HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(iconBg)
-                    .frame(width: 36, height: 36)
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(iconFg)
-            }
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 13) {
+            Image(systemName: icon)
+                .font(.system(size: PPMetrics.menuIcon * 0.44, weight: .semibold))
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(.white)
+                .frame(width: PPMetrics.menuIcon, height: PPMetrics.menuIcon)
+                .background(
+                    LinearGradient(colors: [iconFg.opacity(0.82), iconFg], startPoint: .top, endPoint: .bottom),
+                    in: RoundedRectangle(cornerRadius: PPMetrics.menuIcon * 0.29, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: PPMetrics.menuIcon * 0.29, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
+                )
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .font(.body)
+                    .foregroundStyle(.primary)
                 Text(subtitle)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 13)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
         .contentShape(Rectangle())
     }
 
@@ -88,13 +96,12 @@ enum SettingsHubChrome {
                         .scaleEffect(0.8)
                 }
                 Text(isSaving ? "Saving…" : title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.body.weight(.semibold))
                     .foregroundStyle(.white)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(ProjectWorksRevampColors.blue)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(PPColor.brand)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .accessibilityIdentifier("settingsHubChrome.saving")
         .buttonStyle(.plain)
@@ -108,9 +115,9 @@ private struct SettingsHubFormChromeModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollContentBackground(.hidden)
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
-            .appChromeNavigationBarSurface()
+            .ppNavyNavigationBar()
     }
 }
 
@@ -137,8 +144,8 @@ struct SettingsStickySaveBar: View {
             Text(isDirty
                  ? "Save your changes, or they will be lost if you leave."
                  : "Changes are only saved when you press Save.")
-                .font(.system(size: 12.5))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Button(action: action) {
                 HStack(spacing: 8) {
@@ -147,30 +154,29 @@ struct SettingsStickySaveBar: View {
                             .progressViewStyle(CircularProgressViewStyle(tint: isDirty ? .white : saveInk))
                     }
                     Text(isSaving ? "Saving…" : title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.body.weight(.semibold))
                 }
                 .foregroundStyle(isDirty ? Color.white : saveInk)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(isDirty ? ProjectWorksRevampColors.blue : saveFill)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .background(isDirty ? PPColor.brand : saveFill)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             .buttonStyle(.plain)
             .disabled(!isDirty || isSaving)
             .accessibilityIdentifier("settingsStickySaveBar.save")
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, PPMetrics.screenGutter)
         .padding(.top, 10)
         .padding(.bottom, 12)
         .background(.ultraThinMaterial)
     }
 
     private var saveFill: Color {
-        Color(red: 0.82, green: 0.84, blue: 0.87)
+        PPColor.well
     }
 
     private var saveInk: Color {
-        Color(red: 0.42, green: 0.45, blue: 0.50)
+        Color(.secondaryLabel)
     }
 }
 
@@ -221,9 +227,8 @@ private struct SettingsUnsavedLeaveModifier: ViewModifier {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: requestLeave) {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
                     }
+                    .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                     .accessibilityIdentifier("settingsUnsavedLeave.back")
                 }
             }

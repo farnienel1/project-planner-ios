@@ -31,8 +31,8 @@ struct DeleteMyAccountView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(Array(consequences.enumerated()), id: \.offset) { index, line in
                             Text("\(index + 1). \(line)")
-                                .font(.system(size: 13))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                                .font(.subheadline)
+                                .foregroundStyle(Color.primary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -48,7 +48,7 @@ struct DeleteMyAccountView: View {
                                 .autocorrectionDisabled()
                                 .accessibilityIdentifier("deleteMyAccount.confirmation")
                         }
-                        Divider().overlay(ProjectWorksRevampColors.border)
+                        Divider().overlay(Color(.separator))
                         labeledField("Current password") {
                             CustomSecureField(title: "Current password", text: $password)
                         }
@@ -58,8 +58,8 @@ struct DeleteMyAccountView: View {
 
                 if let message {
                     Text(message)
-                        .font(.system(size: 13))
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .font(.subheadline)
+                        .foregroundStyle(PPColor.danger)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 4)
                         .padding(.bottom, 8)
@@ -74,13 +74,12 @@ struct DeleteMyAccountView: View {
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                             }
                             Text(isDeleting ? "Deleting…" : "Delete my account")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.body.weight(.semibold))
                         }
                         .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(ProjectWorksRevampColors.requiredPillFg)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .frame(maxWidth: .infinity, minHeight: 52)
+                        .background(PPColor.danger)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .disabled(isDeleting)
@@ -90,17 +89,17 @@ struct DeleteMyAccountView: View {
             }
             .padding(16)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Delete your account?")
         .navigationBarTitleDisplayMode(.inline)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
     }
 
     private func labeledField<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.primary)
             content()
         }
         .padding(.vertical, 8)

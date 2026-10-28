@@ -10,10 +10,10 @@ import SwiftUI
 // MARK: - Palette (TSX reference)
 
 private enum WorkingHoursPalette {
-    static let canvas = ProjectWorksRevampColors.canvas
+    static let canvas = PPColor.page
     static let cardBorder = ProjectWorksRevampColors.searchBorder
-    static let ink = ProjectWorksRevampColors.ink
-    static let muted = ProjectWorksRevampColors.muted
+    static let ink = Color.primary
+    static let muted = Color.secondary
     static let indigo = Color(red: 0.310, green: 0.275, blue: 0.898) // #4f46e5
     static let amber = Color(red: 0.851, green: 0.467, blue: 0.024) // #d97706
     static let rose = Color(red: 0.882, green: 0.114, blue: 0.282) // #e11d48
@@ -118,7 +118,7 @@ struct OrganisationWorkingHoursView: View {
                 }
 
                 Text("Changes apply to new timesheet entries from today. Existing approved timesheets aren't recalculated.")
-                    .font(.system(size: 11.5))
+                    .font(.caption)
                     .foregroundStyle(Color(.systemGray))
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
@@ -127,11 +127,10 @@ struct OrganisationWorkingHoursView: View {
                     .padding(.bottom, 100)
             }
         }
-        .background(WorkingHoursPalette.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(WorkingHoursPalette.canvas.opacity(0.92), for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button {
@@ -142,19 +141,19 @@ struct OrganisationWorkingHoursView: View {
                     }
                 } label: {
                     Text("Cancel")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(WorkingHoursPalette.ink)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
                 }
                     .accessibilityIdentifier("organisationWorkingHours.cancel")
             }
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
                     Text("Working hours")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(WorkingHoursPalette.ink)
+                        .font(.headline)
+                        .foregroundStyle(.white)
                     Text("Organisation default")
-                        .font(.system(size: 11))
-                        .foregroundStyle(WorkingHoursPalette.muted)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(PPColor.onNavySecondary)
                 }
             }
         }
@@ -193,7 +192,7 @@ struct OrganisationWorkingHoursView: View {
 
     private var introText: some View {
         Text("These rules apply across the firm and decide how hours are costed on every timesheet — set the standard week, then how Saturday and Sunday are treated.")
-            .font(.system(size: 13))
+            .font(.subheadline)
             .foregroundStyle(WorkingHoursPalette.muted)
             .lineSpacing(2)
             .fixedSize(horizontal: false, vertical: true)
@@ -227,7 +226,7 @@ struct OrganisationWorkingHoursView: View {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(Color(red: 0.063, green: 0.725, blue: 0.506))
             Text("Working hours saved. New bookings will use these rules.")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Color(red: 0.047, green: 0.459, blue: 0.294))
         }
         .padding(14)
@@ -245,7 +244,7 @@ struct OrganisationWorkingHoursView: View {
     private var weekAtAGlanceCard: some View {
         workingHoursCard {
             Text("WEEK AT A GLANCE")
-                .font(.system(size: 11, weight: .bold))
+                .font(.caption.weight(.bold))
                 .foregroundStyle(WorkingHoursPalette.muted)
                 .tracking(1.2)
                 .padding(.bottom, 2)
@@ -302,11 +301,11 @@ struct OrganisationWorkingHoursView: View {
                 .frame(width: 8, height: 8)
                 .padding(.top, 4)
             Text(label)
-                .font(.system(size: 12.5, weight: .bold))
+                .font(.footnote.weight(.bold))
                 .foregroundStyle(Color(red: 0.2, green: 0.255, blue: 0.333))
                 .frame(width: 64, alignment: .leading)
             Text(text)
-                .font(.system(size: 12.5))
+                .font(.footnote)
                 .foregroundStyle(WorkingHoursPalette.muted)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -332,11 +331,11 @@ struct OrganisationWorkingHoursView: View {
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Lunch break")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.body.weight(.semibold))
                         Text(draft.breakPaid
                              ? "Paid — counts toward hours worked"
                              : "Unpaid — deducted from paid hours")
-                            .font(.system(size: 12))
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
@@ -421,7 +420,7 @@ struct OrganisationWorkingHoursView: View {
                     Spacer(minLength: 0)
                     Text("21:00")
                 }
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(WorkingHoursPalette.muted)
                 .padding(.top, 2)
 
@@ -439,7 +438,7 @@ struct OrganisationWorkingHoursView: View {
                 .padding(.top, 8)
             } else {
                 Text("Enter valid 24h times to see the day.")
-                    .font(.system(size: 13))
+                    .font(.subheadline)
                     .foregroundStyle(WorkingHoursPalette.muted)
             }
         }
@@ -451,7 +450,7 @@ struct OrganisationWorkingHoursView: View {
                 .fill(color)
                 .frame(width: 10, height: 10)
             Text(text)
-                .font(.system(size: 12.5))
+                .font(.footnote)
                 .foregroundStyle(WorkingHoursPalette.ink)
         }
     }
@@ -487,7 +486,7 @@ struct OrganisationWorkingHoursView: View {
                             .foregroundStyle(WorkingHoursPalette.amber)
                     }
                     Text("Choose how a Saturday shift is paid — a fixed-length day on a defined window, or every hour worked at the multiplier.")
-                        .font(.system(size: 13))
+                        .font(.subheadline)
                         .foregroundStyle(Color(.systemGray))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -610,7 +609,7 @@ struct OrganisationWorkingHoursView: View {
                             .foregroundStyle(WorkingHoursPalette.rose)
                     }
                     Text("Sunday is usually the simplest rule of the week — most firms either pay every hour at a flat multiplier, or pay a fixed day regardless of hours worked.")
-                        .font(.system(size: 13))
+                        .font(.subheadline)
                         .foregroundStyle(Color(.systemGray))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -618,9 +617,9 @@ struct OrganisationWorkingHoursView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Same setup as Saturday")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.body.weight(.semibold))
                         Text("Mirror Saturday's pay rules on Sunday")
-                            .font(.system(size: 12))
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -690,7 +689,7 @@ struct OrganisationWorkingHoursView: View {
                                 .tint(.white)
                         } else {
                             Text("Save")
-                                .font(.system(size: 14, weight: .bold))
+                                .font(.body.weight(.bold))
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -709,7 +708,7 @@ struct OrganisationWorkingHoursView: View {
                     showingScheduleSheet = true
                 } label: {
                     Text("Schedule")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.body.weight(.bold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
@@ -729,7 +728,7 @@ struct OrganisationWorkingHoursView: View {
                     clearDraft()
                 } label: {
                     Text("Clear")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.body.weight(.bold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
@@ -756,13 +755,8 @@ struct OrganisationWorkingHoursView: View {
             content()
         }
         .padding(16)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func sectionLabel(color: Color, title: String) -> some View {
@@ -771,7 +765,7 @@ struct OrganisationWorkingHoursView: View {
                 .fill(color)
                 .frame(width: 6, height: 6)
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .bold))
+                .font(.caption.weight(.bold))
                 .foregroundStyle(WorkingHoursPalette.muted)
                 .tracking(1.1)
         }
@@ -787,7 +781,7 @@ struct OrganisationWorkingHoursView: View {
     private func timeFieldColumn(label: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(WorkingHoursPalette.muted)
             WorkingHoursTimeField(text: text)
         }
@@ -797,7 +791,7 @@ struct OrganisationWorkingHoursView: View {
     private func stepperRow(label: String, value: Binding<Double>, step: Double, min: Double, max: Double, suffix: String) -> some View {
         HStack {
             Text(label)
-                .font(.system(size: 13, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(WorkingHoursPalette.muted)
             Spacer()
             WorkingHoursStepper(value: value, step: step, min: min, max: max, suffix: suffix)
@@ -816,10 +810,10 @@ struct OrganisationWorkingHoursView: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.body.weight(.semibold))
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 12))
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -832,10 +826,10 @@ struct OrganisationWorkingHoursView: View {
     private func tintedInfoBox(text: String, tint: Color) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text("ⓘ")
-                .font(.system(size: 13))
+                .font(.subheadline)
                 .foregroundStyle(tint)
             Text(text)
-                .font(.system(size: 12))
+                .font(.footnote)
                 .foregroundStyle(tint.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -861,11 +855,11 @@ struct OrganisationWorkingHoursView: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 HStack {
                     Text(row.0)
-                        .font(.system(size: 13))
+                        .font(.subheadline)
                         .foregroundStyle(WorkingHoursPalette.muted)
                     Spacer()
                     Text(row.1)
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.body.weight(.bold))
                         .foregroundStyle(WorkingHoursPalette.ink)
                 }
                 .padding(.vertical, 10)
@@ -878,7 +872,7 @@ struct OrganisationWorkingHoursView: View {
             }
             HStack {
                 Text(footerLabel)
-                    .font(.system(size: 13.5, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(accent.opacity(0.9))
                 Spacer()
                 Text(footerValue)
@@ -916,18 +910,24 @@ struct OrganisationWorkingHoursView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Schedule change")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showingScheduleSheet = false }
                         .accessibilityIdentifier("organisationWorkingHours.cancel2")
+                        .tint(.white)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Schedule") {
                         Task { await saveScheduled() }
                     }
                     .accessibilityIdentifier("organisationWorkingHours.schedule2")
+                    .font(.body.weight(.semibold))
+                    .tint(.white)
                     .disabled(!isFormValid || isSaving)
                 }
             }
@@ -1144,7 +1144,7 @@ private struct WorkingHoursSegmentedPicker: View {
                     selection.wrappedValue = option.0
                 } label: {
                     Text(option.1)
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.footnote.weight(.semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 7)
                         .background(selection.wrappedValue == option.0 ? Color(.systemBackground) : Color.clear)
@@ -1206,7 +1206,7 @@ private struct WorkingHoursStepper: View {
             .buttonStyle(.plain)
 
             Text(displayValue)
-                .font(.system(size: 13.5, weight: .bold))
+                .font(.subheadline.weight(.bold))
                 .monospacedDigit()
                 .frame(minWidth: 52)
 
@@ -1250,7 +1250,7 @@ private struct WorkingHoursMultiplierField: View {
                 .accessibilityIdentifier("workingHoursMultiplierField.textField")
                 .keyboardType(.decimalPad)
                 .multilineTextAlignment(.center)
-                .font(.system(size: 15, weight: .bold))
+                .font(.body.weight(.bold))
                 .foregroundStyle(accent)
                 .frame(width: 56)
                 .padding(.vertical, 8)
@@ -1261,7 +1261,7 @@ private struct WorkingHoursMultiplierField: View {
                         .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
                 )
             Text("x")
-                .font(.system(size: 13, weight: .bold))
+                .font(.subheadline.weight(.bold))
                 .foregroundStyle(Color(red: 0.580, green: 0.639, blue: 0.722))
         }
     }
@@ -1278,7 +1278,7 @@ private struct WorkingHoursTimeField: View {
                 .accessibilityIdentifier("workingHoursTimeField.n0730")
                 .keyboardType(.numbersAndPunctuation)
                 .multilineTextAlignment(.center)
-                .font(.system(size: 15, weight: .bold))
+                .font(.body.weight(.bold))
                 .monospacedDigit()
                 .focused($focused)
                 .onSubmit { commit() }
@@ -1286,7 +1286,7 @@ private struct WorkingHoursTimeField: View {
                     if !isFocused { commit() }
                 }
             Image(systemName: "clock")
-                .font(.system(size: 13))
+                .font(.subheadline)
                 .foregroundStyle(Color(.systemGray3))
         }
         .padding(.horizontal, 12)

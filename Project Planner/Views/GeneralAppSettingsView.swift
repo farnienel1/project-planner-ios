@@ -12,24 +12,19 @@ struct GeneralAppSettingsView: View {
                         MyScheduleGeneralOptionsView()
                             .environmentObject(appSettings)
                     } label: {
-                        HStack(spacing: 12) {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(ProjectWorksRevampColors.blue.opacity(0.12))
-                                .frame(width: 30, height: 30)
-                                .overlay(
-                                    Image(systemName: "calendar.badge.clock")
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                                )
+                        HStack(spacing: 13) {
+                            PPIconTile(symbol: "calendar.badge.clock", family: .plan)
                             Text("My Schedule")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                                .font(.body)
+                                .foregroundStyle(Color.primary)
                             Spacer()
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
                         }
                         .padding(.vertical, 11)
+                        .frame(minHeight: 54)
+                        .contentShape(Rectangle())
                     }
                     .accessibilityIdentifier("generalAppSettings.calendarBadgeClock")
                     .buttonStyle(.plain)
@@ -37,12 +32,12 @@ struct GeneralAppSettingsView: View {
             }
             .padding(16)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("General")
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-        .appChromeNavigationBarSurface()
+        .background(PPColor.page.ignoresSafeArea())
+        .ppNavyNavigationBar()
     }
 }
 
@@ -63,8 +58,8 @@ struct MyScheduleGeneralOptionsView: View {
             VStack(alignment: .leading, spacing: 0) {
                 SettingsHubChrome.card {
                     Text("My Schedule: Add or remove admin/manager additional options within My Schedule. Office, Working From Home and Site Survey have been included as standard.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.secondary)
                         .padding(.vertical, 12)
                 }
 
@@ -83,15 +78,15 @@ struct MyScheduleGeneralOptionsView: View {
                         ForEach(Array(draft.customItems.enumerated()), id: \.offset) { index, item in
                             HStack {
                                 Text(item)
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(Color.primary)
                                 Spacer()
                                 Button(role: .destructive) {
                                     deleteCustomItem(at: index)
                                 } label: {
                                     Image(systemName: "trash")
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                                        .font(.subheadline)
+                                        .foregroundStyle(PPColor.danger)
                                 }
                                 .accessibilityIdentifier("myScheduleGeneralOptions.row.\(index).delete")
                                 .buttonStyle(.plain)
@@ -106,12 +101,12 @@ struct MyScheduleGeneralOptionsView: View {
             }
             .padding(16)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("My Schedule")
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-        .appChromeNavigationBarSurface()
+        .background(PPColor.page.ignoresSafeArea())
+        .ppNavyNavigationBar()
         .safeAreaInset(edge: .bottom) {
             SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
                 Task { await save() }
@@ -135,6 +130,7 @@ struct MyScheduleGeneralOptionsView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                    .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                     .accessibilityIdentifier("myScheduleGeneralOptions.add")
             }
         }
@@ -153,11 +149,11 @@ struct MyScheduleGeneralOptionsView: View {
     private func scheduleToggle(_ title: String, isOn: Binding<Bool>) -> some View {
         Toggle(isOn: isOn) {
             Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.primary)
         }
         .accessibilityIdentifier("myScheduleGeneralOptions.\(AccessibilityID.token(title))")
-        .tint(ProjectWorksRevampColors.blue)
+        .tint(PPColor.brand)
         .padding(.vertical, 11)
     }
     

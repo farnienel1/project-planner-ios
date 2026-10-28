@@ -52,17 +52,17 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Applies to new users only")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.primary)
                     Text("These settings apply only when adding new manager/operative users. Existing users keep their current annual leave values unless an admin/manager edits their profile.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(ProjectWorksRevampColors.blueTint)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(PPColor.brand.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                 .padding(.bottom, 8)
 
                 SettingsHubChrome.sectionTitle("Allowance", sentenceCase: true)
@@ -71,11 +71,11 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Days per year")
-                                .font(.system(size: 14.5, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(Color.primary)
                             Text("Half days are allowed, e.g. 25.5")
-                                .font(.system(size: 13))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .font(.subheadline)
+                                .foregroundStyle(Color.secondary)
                         }
                         Spacer(minLength: 12)
                         HStack(spacing: 4) {
@@ -83,12 +83,12 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                                 .accessibilityIdentifier("organisationAnnualLeaveDefaults.daysPerYear")
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
-                                .font(.system(size: 15, weight: .bold))
+                                .font(.body.weight(.bold))
                                 .frame(width: 72)
                                 .disabled(isSaving)
                             Text("days")
-                                .font(.system(size: 13.5, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.secondary)
                         }
                     }
                     .padding(.vertical, 12)
@@ -100,27 +100,27 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                     HStack(alignment: .bottom, spacing: 10) {
                         monthMenu("Starts", selection: $startMonth)
                         Text("→")
-                            .font(.system(size: 15))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .font(.body)
+                            .foregroundStyle(Color.secondary)
                             .padding(.bottom, 10)
                         monthMenu("Ends", selection: $endMonth)
                     }
                     .padding(.top, 12)
                     Text("Leave year: \(leaveYearSummary)")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.primary)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(ProjectWorksRevampColors.grayTint)
+                        .background(PPColor.well)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .padding(.vertical, 12)
                     Toggle(isOn: $carriesOver) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Carry unused days into next leave year")
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(.body.weight(.semibold))
                             Text("Unused allowance from the previous leave year is added to this year’s balance (after booked and pending time in that year).")
-                                .font(.system(size: 12))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .font(.footnote)
+                                .foregroundStyle(Color.secondary)
                         }
                     }
                     .accessibilityIdentifier("organisationAnnualLeaveDefaults.carryUnusedDays")
@@ -133,12 +133,12 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                 SettingsHubChrome.card {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Region")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Color.secondary)
                             .padding(.top, 12)
                         Text("Syncs with the web app and applies organisation-wide.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .font(.footnote)
+                            .foregroundStyle(Color.secondary)
                         Picker("Region", selection: $bankHolidayRegionId) {
                             ForEach(BankHolidayRegionDirectory.pickerRegions(), id: \.group) { group in
                                 Section(group.group) {
@@ -150,14 +150,14 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                         }
                         .accessibilityIdentifier("organisationAnnualLeaveDefaults.region")
                         .pickerStyle(.menu)
-                        .font(.system(size: 13, weight: .medium))
-                        .tint(ProjectWorksRevampColors.blue)
+                        .font(.subheadline.weight(.medium))
+                        .tint(PPColor.brand)
                         Text("Currently set to \(selectedRegionTitle)")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .font(.footnote)
+                            .foregroundStyle(Color.primary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(ProjectWorksRevampColors.grayTint)
+                            .background(PPColor.well)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .padding(.bottom, 12)
                     }
@@ -165,8 +165,8 @@ struct OrganisationAnnualLeaveDefaultsView: View {
 
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 12))
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .font(.footnote)
+                        .foregroundStyle(PPColor.danger)
                         .padding(.horizontal, 4)
                         .padding(.bottom, 8)
                 }
@@ -174,10 +174,10 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             }
             .padding(16)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Annual leave")
         .navigationBarTitleDisplayMode(.inline)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
         .safeAreaInset(edge: .bottom) {
             SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
                 Task { await save() }
@@ -226,8 +226,8 @@ struct OrganisationAnnualLeaveDefaultsView: View {
     private func monthMenu(_ title: String, selection: Binding<Int>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(Color.secondary)
             Picker(title, selection: selection) {
                 ForEach(1...12, id: \.self) { month in
                     Text(monthNames[month - 1]).tag(month)
@@ -236,7 +236,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             .accessibilityIdentifier("organisationAnnualLeaveDefaults.\(AccessibilityID.token(title))")
             .pickerStyle(.menu)
             .disabled(isSaving)
-            .tint(ProjectWorksRevampColors.blue)
+            .tint(PPColor.brand)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

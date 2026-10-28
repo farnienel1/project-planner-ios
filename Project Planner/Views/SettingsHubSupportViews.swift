@@ -86,8 +86,11 @@ private struct SettingsProfileSheetsModifier: ViewModifier {
                         .disabled(isLinking || manualLinkOrganizationId.isEmpty)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Manual link")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -96,6 +99,8 @@ private struct SettingsProfileSheetsModifier: ViewModifier {
                         linkError = nil
                     }
                         .accessibilityIdentifier("settingsProfileSheetsModifier.cancel2")
+                        .font(.body.weight(.semibold))
+                        .tint(.white)
                 }
             }
         }
@@ -128,10 +133,10 @@ struct SettingsProfileDetailView: View {
 
     private var billingColors: SensitiveFieldColors {
         SensitiveFieldColors(
-            primary: ProjectWorksRevampColors.ink,
-            secondary: ProjectWorksRevampColors.muted,
-            accent: ProjectWorksRevampColors.blue,
-            destructive: ProjectWorksRevampColors.requiredPillFg
+            primary: Color.primary,
+            secondary: Color.secondary,
+            accent: PPColor.brand,
+            destructive: PPColor.danger
         )
     }
 
@@ -148,10 +153,10 @@ struct SettingsProfileDetailView: View {
 
     var body: some View {
         profileScroll
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("My profile")
             .navigationBarTitleDisplayMode(.inline)
-            .appChromeNavigationBarSurface()
+            .ppNavyNavigationBar()
             .safeAreaInset(edge: .bottom) {
                 SettingsStickySaveBar(isDirty: isDirty, isSaving: isSavingBillingDetails) {
                     Task { await saveBillingDetails() }
@@ -189,11 +194,11 @@ struct SettingsProfileDetailView: View {
                         profileAvatar
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Profile photo")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.primary)
                             Text("Used across Home and Settings")
-                                .font(.system(size: 11))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .font(.caption)
+                                .foregroundStyle(Color.secondary)
                         }
                         Spacer()
                         if isUploadingProfilePhoto {
@@ -203,8 +208,8 @@ struct SettingsProfileDetailView: View {
                                 showingProfilePhotoSourcePicker = true
                             }
                             .accessibilityIdentifier("settingsProfileDetail.change")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(PPColor.brand)
                         }
                     }
                     .padding(.vertical, 12)
@@ -223,7 +228,7 @@ struct SettingsProfileDetailView: View {
                             CanonicalBusinessEngine.displayOrganizationName(org.name) ?? org.name
                         )
                     } else {
-                        profileValueRow("Organisation", "Not linked", valueColor: ProjectWorksRevampColors.requiredPillFg)
+                        profileValueRow("Organisation", "Not linked", valueColor: PPColor.danger)
                     }
                     if let dayRate = userStore.currentUser?.dayRate {
                         SettingsHubChrome.divider()
@@ -261,8 +266,8 @@ struct SettingsProfileDetailView: View {
                         SettingsHubChrome.divider()
                         if let billingSaveMessage {
                             Text(billingSaveMessage)
-                                .font(.system(size: 11))
-                                .foregroundStyle(billingSaveMessage.contains("saved") ? ProjectWorksRevampColors.activeGreen : ProjectWorksRevampColors.requiredPillFg)
+                                .font(.caption)
+                                .foregroundStyle(billingSaveMessage.contains("saved") ? ProjectWorksRevampColors.activeGreen : PPColor.danger)
                                 .padding(.bottom, 8)
                         }
                     }
@@ -275,8 +280,8 @@ struct SettingsProfileDetailView: View {
                             showingManualLinkSheet = true
                         }
                         .accessibilityIdentifier("settingsProfileDetail.linkOrganisationManually")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(PPColor.brand)
                         .padding(.vertical, 12)
                         .buttonStyle(.plain)
                     }
@@ -287,14 +292,14 @@ struct SettingsProfileDetailView: View {
         }
     }
 
-    private func profileValueRow(_ title: String, _ value: String, valueColor: Color = ProjectWorksRevampColors.muted) -> some View {
+    private func profileValueRow(_ title: String, _ value: String, valueColor: Color = Color.secondary) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.primary)
             Spacer()
             Text(value)
-                .font(.system(size: 13))
+                .font(.subheadline)
                 .foregroundStyle(valueColor)
                 .multilineTextAlignment(.trailing)
         }
@@ -320,11 +325,11 @@ struct SettingsProfileDetailView: View {
                     image.resizable().scaledToFill()
                 default:
                     Circle()
-                        .fill(ProjectWorksRevampColors.blue.opacity(0.2))
+                        .fill(PPColor.brand.opacity(0.2))
                         .overlay(
                             Text(PlannerUIInitials.from(displayName))
                                 .font(.headline)
-                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                                .foregroundStyle(PPColor.brand)
                         )
                 }
             }
@@ -332,12 +337,12 @@ struct SettingsProfileDetailView: View {
             .clipShape(Circle())
         } else {
             Circle()
-                .fill(ProjectWorksRevampColors.blue.opacity(0.2))
+                .fill(PPColor.brand.opacity(0.2))
                 .frame(width: 52, height: 52)
                 .overlay(
                     Text(PlannerUIInitials.from(displayName))
                         .font(.headline)
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .foregroundStyle(PPColor.brand)
                 )
         }
     }
@@ -423,8 +428,8 @@ struct SettingsNotificationsHubView: View {
                 if preferenceKeys.isEmpty {
                     SettingsHubChrome.card {
                         Text("Notification options for this account are managed by your organisation.")
-                            .font(.system(size: 13))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .font(.subheadline)
+                            .foregroundStyle(Color.secondary)
                             .padding(.vertical, 12)
                     }
                 } else {
@@ -433,11 +438,11 @@ struct SettingsNotificationsHubView: View {
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(preferenceCopy(for: key).title)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(Color.primary)
                                     Text(preferenceCopy(for: key).subtitle)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                                        .font(.caption)
+                                        .foregroundStyle(Color.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                                 Spacer(minLength: 8)
@@ -449,7 +454,7 @@ struct SettingsNotificationsHubView: View {
                                 ))
                                 .accessibilityIdentifier("settingsNotificationsHub.row.\(key).toggle")
                                 .labelsHidden()
-                                .tint(ProjectWorksRevampColors.blue)
+                                .tint(PPColor.brand)
                             }
                             .padding(.vertical, 11)
                             if index < preferenceKeys.count - 1 {
@@ -462,10 +467,10 @@ struct SettingsNotificationsHubView: View {
             }
             .padding(16)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("My notifications")
         .navigationBarTitleDisplayMode(.inline)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
         .safeAreaInset(edge: .bottom) {
             SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
                 Task { await save() }
