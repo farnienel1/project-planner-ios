@@ -35,8 +35,10 @@ enum ProjectWorksMerge {
         return Array(byJob.values)
     }
 
+    /// Every job document, once. Two documents may share a job number (web keeps both, and bookings
+    /// point at either), so a job number is not an identity here.
     static func uniqueWorks(_ projects: [Project]) -> [Project] {
-        dedupeByJobNumber(uniqueById(projects))
+        uniqueById(projects)
     }
 
     /// Merge one collection (projects or small works) without letting an empty/failed

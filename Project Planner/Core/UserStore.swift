@@ -17,7 +17,12 @@ class UserStore: ObservableObject {
     @Published var currentUser: AppUser?
     /// When set, tab visibility and `can*` helpers use a simulated role. Identity and Firestore still use `currentUser`.
     @Published var roleTestingPreset: RoleTestingPreset?
-    @Published var organizationUsers: [AppUser] = []
+    @Published var organizationUsers: [AppUser] = [] {
+        didSet { restampSameEmailAliasesIfNeeded() }
+    }
+    /// Folded same-email `users` document id → the id the roster kept, from the last roster load.
+    /// Bookings saved under the folded id (often the person's sign-in uid) must count for the kept person.
+    private(set) var organizationUserIdAliases: [String: String] = [:]
     /// Document ids of `organizations/{orgId}/userEmails/{email}` from the last successful roster read.
     /// Nil when that read has not completed or failed. People lists pass this into `listedRosterUsers`.
     @Published var organizationUserEmailClaims: Set<String>?
@@ -455,6 +460,7 @@ class UserStore: ObservableObject {
                 return
             }
             organizationUserEmailClaims = roster.claimedEmails
+            organizationUserIdAliases = roster.userIdAliases
             let sortedUsers = listed.sorted { user1, user2 in
                 if user1.isSuperAdmin != user2.isSuperAdmin {
                     return user1.isSuperAdmin
@@ -465,8 +471,9 @@ class UserStore: ObservableObject {
             organizationUsers = published
             // Empty is stored only when this load ended with nobody. People the server could not
             // confirm as gone stay in `published`, so a short fetch cannot wipe the saved roster.
+            // Save the list with its same-email ids put back, so a cold start still matches bookings.
             RosterRetention.save(
-                published,
+                organizationUsers,
                 organizationId: requestedOrganizationId,
                 allowEmpty: published.isEmpty
             )
@@ -487,6 +494,37 @@ class UserStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ROSTER_KEPT on-screen count=\(organizationUsers.count) after fetch error")
             }
         }
+    }
+
+    #if DEBUG
+    /// Unit tests: the alias map a roster load would set.
+    func applyRosterAliasesForTesting(_ aliases: [String: String]) {
+        organizationUserIdAliases = aliases
+        restampSameEmailAliasesIfNeeded()
+    }
+    #endif
+
+    /// Puts every folded same-email id back on the person it was folded into. Several paths replace
+    /// people in `organizationUsers` (cache restore, healing, profile edits); none may lose these ids,
+    /// or bookings under them stop counting for that person on Daily Overview, warnings, the weekly
+    /// report, and timesheets (`bookingIdsForAccount` / `resolveBookingPerson` read them as `aliasIds`).
+    private func restampSameEmailAliasesIfNeeded() {
+        guard !organizationUserIdAliases.isEmpty else { return }
+        var foldedByKept: [String: Set<String>] = [:]
+        for (folded, kept) in organizationUserIdAliases {
+            foldedByKept[kept, default: []].insert(folded)
+        }
+        var changed = false
+        var users = organizationUsers
+        for index in users.indices {
+            guard let folded = foldedByKept[users[index].id] else { continue }
+            let merged = Set(users[index].sameEmailUserIds).union(folded).subtracting([users[index].id])
+            if merged != Set(users[index].sameEmailUserIds) {
+                users[index].sameEmailUserIds = merged.sorted()
+                changed = true
+            }
+        }
+        if changed { organizationUsers = users }
     }
 
     /// A short Firestore query must not delete managers or operatives who were already on the list.
