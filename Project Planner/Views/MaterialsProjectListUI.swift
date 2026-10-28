@@ -190,10 +190,9 @@ struct MaterialsDraftSendBanner: View {
             }
             .foregroundStyle(.white)
             .padding(14)
-            .background(
-                PPNavyBackdrop()
-                    .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
-            )
+            .background(PPNavyBackdrop())
+            // Clip the whole banner: the backdrop's glow is a fixed 300pt circle and would spill over the list.
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
         .accessibilityIdentifier("materialsDraftSendBanner.paperplaneFill")
         .buttonStyle(PPPressableButtonStyle())

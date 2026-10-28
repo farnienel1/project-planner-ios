@@ -57,6 +57,12 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
                 loaded.talks = ToolboxTalkLibrary.bundledTalks()
                 loaded.updatedAt = Date()
                 try await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
+            } else {
+                // A project whose stored list already holds a few talks (an issued talk, an upload) never got
+                // the rest of the library. Show the missing library talks too; stored talks stay first and
+                // untouched, and nothing is written back.
+                let storedIds = Set(loaded.talks.map(\.id))
+                loaded.talks += ToolboxTalkLibrary.bundledTalks().filter { !storedIds.contains($0.id) }
             }
             data = loaded
         } catch {
