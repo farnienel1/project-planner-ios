@@ -30,85 +30,82 @@ struct VariationsListView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(project.jobNumber.isEmpty ? project.siteName : VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName))
-                        .font(.subheadline)
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                    Text("Variations add up on a project, so capturing the materials and labour is key.")
-                        .font(.footnote)
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-
+                VStack(alignment: .leading, spacing: 0) {
                     summaryCard
 
-                    Picker("Status", selection: $filter) {
-                        Text("All \(store.visibleVariations.count)").tag(VariationListFilter.all)
-                        Text("Open \(count(for: .open))").tag(VariationListFilter.open)
-                        Text("Submitted \(count(for: .submitted))").tag(VariationListFilter.submitted)
-                        Text("Closed \(count(for: .closed))").tag(VariationListFilter.closed)
-                    }
-                    .accessibilityIdentifier("variationsList.status")
-                    .pickerStyle(.segmented)
-
-                    if let status = filter.status {
-                        Text(status.definition)
-                            .font(.footnote)
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(ProjectWorksRevampColors.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-
-                    if filteredVariations.isEmpty {
-                        ContentUnavailableView(
-                            "No variations",
-                            systemImage: "plus.rectangle.on.folder",
-                            description: Text("Variations add up on a project, so capturing the materials and labour is key.")
-                        )
-                        .padding(.top, 24)
-                    } else {
-                        ForEach(filteredVariations) { variation in
-                            NavigationLink {
-                                VariationDetailView(project: project, variationId: variation.id, store: store)
-                            } label: {
-                                variationCard(variation)
-                            }
-                            .accessibilityIdentifier("variationsList.row.\(variation.id)")
-                            .buttonStyle(.plain)
+                    VStack(alignment: .leading, spacing: 14) {
+                        Picker("Status", selection: $filter) {
+                            Text("All \(store.visibleVariations.count)").tag(VariationListFilter.all)
+                            Text("Open \(count(for: .open))").tag(VariationListFilter.open)
+                            Text("Submitted \(count(for: .submitted))").tag(VariationListFilter.submitted)
+                            Text("Closed \(count(for: .closed))").tag(VariationListFilter.closed)
                         }
-                    }
+                        .accessibilityIdentifier("variationsList.status")
+                        .pickerStyle(.segmented)
+                        .padding(.top, 16)
 
-                    Color.clear.frame(height: canEditContent ? 88 : 16)
+                        if let status = filter.status {
+                            Text(status.definition)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(PPColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+
+                        if filteredVariations.isEmpty {
+                            ContentUnavailableView(
+                                "No variations",
+                                systemImage: "plus.rectangle.on.folder",
+                                description: Text("Variations add up on a project, so capturing the materials and labour is key.")
+                            )
+                            .padding(.top, 24)
+                        } else {
+                            ForEach(filteredVariations) { variation in
+                                NavigationLink {
+                                    VariationDetailView(project: project, variationId: variation.id, store: store)
+                                } label: {
+                                    variationCard(variation)
+                                }
+                                .accessibilityIdentifier("variationsList.row.\(variation.id)")
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        Color.clear.frame(height: canEditContent ? 88 : 16)
+                    }
+                    .ppContentSheet()
                 }
-                .padding(16)
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
 
             if canEditContent {
                 VStack {
-                    LinearGradient(colors: [Color.clear, ProjectWorksRevampColors.canvas], startPoint: .top, endPoint: .bottom)
+                    LinearGradient(colors: [Color.clear, PPColor.page], startPoint: .top, endPoint: .bottom)
                         .frame(height: 24)
                     Button {
                         editingVariation = nil
                         showingEditor = true
                     } label: {
-                        Text("Add variation")
+                        Label("Add variation", systemImage: "plus")
                             .font(.headline)
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .background(ProjectWorksRevampColors.blue)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .padding(.vertical, 15)
+                            .background(PPColor.brand, in: Capsule())
+                            .shadow(color: PPColor.brand.opacity(0.28), radius: 10, x: 0, y: 5)
                     }
+                    .buttonStyle(PPPressableButtonStyle())
                     .accessibilityIdentifier("variationsList.addVariation")
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
                 }
-                .background(ProjectWorksRevampColors.canvas.opacity(0.92).ignoresSafeArea(edges: .bottom))
+                .background(PPColor.page.opacity(0.92).ignoresSafeArea(edges: .bottom))
             }
         }
         .navigationTitle("Variations")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .toolbar {
             if store.tracker.enabled {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -116,6 +113,8 @@ struct VariationsListView: View {
                         VariationTrackerReadOnlyView(store: store, parentName: VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName))
                     } label: {
                         Text("Tracker")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.white)
                     }
                         .accessibilityIdentifier("variationsList.tracker")
                 }
@@ -163,18 +162,28 @@ struct VariationsListView: View {
         store.visibleVariations.filter { $0.status == status }.count
     }
 
+    /// Navy header: parent name, intro line, and the same counts / hours / status bar the summary card showed.
     private var summaryCard: some View {
         let open = Double(count(for: .open))
         let submitted = Double(count(for: .submitted))
         let closed = Double(count(for: .closed))
         let total = max(open + submitted + closed, 1)
         let hours = store.visibleVariations.reduce(0) { $0 + $1.totalLabourHours }
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                summaryStat(title: "Variations", value: "\(store.visibleVariations.count)")
-                Spacer()
-                summaryStat(title: "Hours logged", value: String(format: hours.truncatingRemainder(dividingBy: 1) == 0 ? "%.0f" : "%.1f", hours))
+        return VStack(alignment: .leading, spacing: 0) {
+            PPNavyPageTitle(
+                eyebrow: project.jobNumber.isEmpty ? project.siteName : VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName),
+                title: "Variations",
+                subtitle: "Variations add up on a project, so capturing the materials and labour is key."
+            )
+
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(store.visibleVariations.count)", label: "Variations")
+                PPStatDivider()
+                PPStat(value: String(format: hours.truncatingRemainder(dividingBy: 1) == 0 ? "%.0f" : "%.1f", hours), label: "Hours logged")
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 18)
+
             GeometryReader { geo in
                 HStack(spacing: 0) {
                     Rectangle().fill(Color.orange).frame(width: geo.size.width * CGFloat(open / total))
@@ -182,36 +191,31 @@ struct VariationsListView: View {
                     Rectangle().fill(Color.red).frame(width: geo.size.width * CGFloat(closed / total))
                 }
             }
-            .frame(height: 10)
+            .frame(height: 6)
+            .background(Capsule().fill(PPColor.onNavyFill))
             .clipShape(Capsule())
+            .padding(.top, 16)
+
             HStack(spacing: 12) {
                 legend(color: .orange, title: "Open \(Int(open))")
                 legend(color: .green, title: "Submitted \(Int(submitted))")
                 legend(color: .red, title: "Closed \(Int(closed))")
             }
-            .font(.caption2)
+            .font(.caption)
+            .padding(.top, 10)
         }
-        .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-
-    private func summaryStat(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-            Text(value)
-                .font(.title2.weight(.bold))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     private func legend(color: Color, title: String) -> some View {
         HStack(spacing: 4) {
             Circle().fill(color).frame(width: 8, height: 8)
             Text(title)
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -243,16 +247,16 @@ struct VariationsListView: View {
                 statusTag(variation.status)
             }
             Text(variation.heading.isEmpty ? "Untitled variation" : variation.heading)
-                .font(.headline)
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.system(.headline, design: .rounded))
+                .foregroundStyle(.primary)
             if let recentRenumber {
                 Text(recentRenumber)
                     .font(.caption)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .foregroundStyle(.secondary)
             }
             Text(variation.description)
                 .font(.subheadline)
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .foregroundStyle(.secondary)
                 .lineLimit(2)
             HStack(spacing: 8) {
                 chip("\(formatHours(variation.totalLabourHours)) hrs")
@@ -272,11 +276,11 @@ struct VariationsListView: View {
             }
             Text("Raised by \(variation.createdByName) · \(variation.createdAt.formatted(date: .abbreviated, time: .omitted))")
                 .font(.caption2)
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .foregroundStyle(.secondary)
         }
-        .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(16)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .opacity(variation.status.listOpacity)
         .saturation(variation.status == .open ? 1 : 0.85)
     }
@@ -304,8 +308,7 @@ struct VariationsListView: View {
             .font(.caption)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(Color(.systemGray6))
-            .clipShape(Capsule())
+            .background(PPColor.well, in: Capsule())
     }
 
     private func formatHours(_ value: Double) -> String {

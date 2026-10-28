@@ -292,20 +292,19 @@ struct VariationEditorSheet: View {
             .background(VariationFormColors.bg.ignoresSafeArea())
             .navigationTitle(existing == nil ? "New variation" : "Edit variation")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(VariationFormColors.bg, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .accessibilityIdentifier("variationEditor.cancel")
                         .fontWeight(.semibold)
-                        .foregroundStyle(VariationFormColors.blue)
+                        .foregroundStyle(.white)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
                         .accessibilityIdentifier("variationEditor.save")
                         .fontWeight(.semibold)
-                        .foregroundStyle(VariationFormColors.blue)
+                        .foregroundStyle(.white)
                         .disabled(!canSave)
                         .opacity(canSave ? 1 : 0.42)
                 }
@@ -1035,6 +1034,7 @@ struct VariationEditorSheet: View {
             .searchable(text: $tradeQuery, prompt: "Search trades")
             .navigationTitle("All trades")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .safeAreaInset(edge: .bottom) { customTradeFooter }
             .onAppear { tradeQuery = "" }
         }
