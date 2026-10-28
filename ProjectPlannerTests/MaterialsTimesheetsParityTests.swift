@@ -80,9 +80,9 @@ final class MaterialsTimesheetsParityTests: XCTestCase {
         var manager = user(id: "mgr-1", role: .manager, permissions: UserPermissions(manager: true))
         manager.permissions.wholesalersOrderHistory = false
         let operative = user(id: "op-1", role: .operative, permissions: UserPermissions(operativeMode: true))
-        XCTAssertTrue(CanonicalBusinessEngine.isStaffAccount(UserStore.staffAccountRole(for: admin)))
-        XCTAssertTrue(CanonicalBusinessEngine.isStaffAccount(UserStore.staffAccountRole(for: manager)))
-        XCTAssertFalse(CanonicalBusinessEngine.isStaffAccount(UserStore.staffAccountRole(for: operative)))
+        XCTAssertTrue(CanonicalBusinessEngine.canViewMaterialOrderHistory(UserStore.staffAccountRole(for: admin)))
+        XCTAssertTrue(CanonicalBusinessEngine.canViewMaterialOrderHistory(UserStore.staffAccountRole(for: manager)))
+        XCTAssertFalse(CanonicalBusinessEngine.canViewMaterialOrderHistory(UserStore.staffAccountRole(for: operative)))
     }
 
     // MARK: - Wholesaler contact mobile (web `phone`)
