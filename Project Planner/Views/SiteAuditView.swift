@@ -572,6 +572,8 @@ struct SiteAuditProjectAuditsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("siteAuditProjectAudits.done")
                 }
             }
@@ -785,9 +787,10 @@ struct SiteAuditCreateFlowView: View {
             }
             .navigationTitle(flowNavigationTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    SiteAuditToolbarPill(title: "Back", filled: false) {
+                    SiteAuditToolbarPill(title: "Back", filled: false, onNavy: true) {
                         if step == 1 { dismiss() }
                         else if step == 2 { step = 1 }
                         else { step = 2 }
@@ -797,23 +800,25 @@ struct SiteAuditCreateFlowView: View {
                     if step == 2 {
                         VStack(spacing: 0) {
                             Text("\(selectedType.rawValue) ›")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(SiteAuditColors.textSecondary)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(PPColor.onNavySecondary)
                             Text("Items · \(items.count)")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.subheadline.weight(.semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(Color.white)
                         }
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if step == 1 {
-                        SiteAuditToolbarPill(title: "Next", filled: true, disabled: !canGoNext) { step = 2 }
+                        SiteAuditToolbarPill(title: "Next", filled: true, disabled: !canGoNext, onNavy: true) { step = 2 }
                     } else if step == 2 {
                         if isEditing {
-                            SiteAuditToolbarPill(title: isSubmitting ? "Saving…" : "Save", filled: true, disabled: items.isEmpty || isSubmitting) {
+                            SiteAuditToolbarPill(title: isSubmitting ? "Saving…" : "Save", filled: true, disabled: items.isEmpty || isSubmitting, onNavy: true) {
                                 submitAudit()
                             }
                         } else {
-                            SiteAuditToolbarPill(title: "Preview", filled: true, disabled: items.isEmpty) { step = 3 }
+                            SiteAuditToolbarPill(title: "Preview", filled: true, disabled: items.isEmpty, onNavy: true) { step = 3 }
                         }
                     }
                 }
@@ -1366,85 +1371,79 @@ private struct SiteAuditSubmitSuccessView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
-                    VStack(spacing: 14) {
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [SiteAuditColors.success, Color(red: 0.176, green: 0.639, blue: 0.490)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(width: 78, height: 78)
-                            .overlay {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 36, weight: .semibold))
-                                    .foregroundStyle(.white)
-                            }
-                            .shadow(color: SiteAuditColors.success.opacity(0.25), radius: 16, y: 8)
+                    VStack(spacing: 10) {
+                        PPIconTile(symbol: "checkmark", family: .sites, size: 78, lifted: true)
+                            .padding(.bottom, 6)
 
                         Text(headline)
-                            .font(.system(size: 19, weight: .medium))
+                            .font(.system(.title2, design: .rounded))
+                            .fontWeight(.bold)
+                            .multilineTextAlignment(.center)
                         Text(subtitle)
-                            .font(.system(size: 12))
+                            .font(.subheadline)
                             .foregroundStyle(SiteAuditColors.textSecondary)
+                            .multilineTextAlignment(.center)
                     }
-                    .padding(.vertical, 22)
+                    .padding(.top, 28)
+                    .padding(.bottom, 24)
 
                     SiteAuditCard {
-                        HStack(spacing: 11) {
+                        HStack(spacing: 13) {
                             pdfThumbnail
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: 3) {
                                 Text(fileName)
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(.subheadline.weight(.semibold))
                                     .lineLimit(1)
                                 Text("\(itemCount) item\(itemCount == 1 ? "" : "s")\(fileSizeLabel.isEmpty ? "" : " · \(fileSizeLabel)") · just now")
-                                    .font(.system(size: 10))
+                                    .font(.footnote)
                                     .foregroundStyle(SiteAuditColors.textSecondary)
                             }
+                            Spacer(minLength: 0)
                         }
-                        .padding(12)
+                        .padding(14)
                     }
-                    .padding(.bottom, 14)
+                    .padding(.bottom, 16)
 
                     SiteAuditPrimaryButton(title: "Share PDF", systemImage: "square.and.arrow.up", style: .success) {
                         showShareSheet = true
                     }
-                    .padding(.bottom, 7)
+                    .padding(.bottom, 10)
 
                     if let pdfURL {
                         ShareLink(item: pdfURL) {
                             Text("Download")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.subheadline.weight(.semibold))
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
+                                .padding(.vertical, 13)
                                 .foregroundStyle(SiteAuditColors.primary)
-                                .background(ProjectWorksRevampColors.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .background(PPColor.card)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                                         .strokeBorder(SiteAuditColors.primary, lineWidth: 1)
                                 )
                         }
                         .accessibilityIdentifier("siteAuditSubmitSuccess.download")
-                        .padding(.bottom, 7)
+                        .padding(.bottom, 10)
                     }
 
                     SiteAuditPrimaryButton(title: "Done", style: .secondary, action: onDone)
                         .padding(.bottom, 22)
 
                     Text("Tap Done to return to audits list")
-                        .font(.system(size: 10))
+                        .font(.footnote)
                         .foregroundStyle(SiteAuditColors.textDisabled)
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.bottom, 24)
             }
             .siteAuditScreenBackground()
             .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    SiteAuditIconCircleButton(systemName: "xmark", action: onDone)
+                    SiteAuditIconCircleButton(systemName: "xmark", onNavy: true, action: onDone)
                 }
             }
             .sheet(isPresented: $showShareSheet) {
@@ -1455,11 +1454,11 @@ private struct SiteAuditSubmitSuccessView: View {
 
     private var pdfThumbnail: some View {
         ZStack(alignment: .bottom) {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(ProjectWorksRevampColors.surface)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(PPColor.page)
                 .frame(width: 44, height: 52)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .strokeBorder(SiteAuditColors.borderStrong, lineWidth: 1)
                 )
             Text("PDF")
@@ -1518,9 +1517,9 @@ struct SiteAuditProjectPickerView: View {
                 }
                 .accessibilityIdentifier("siteAuditProjectPicker.jobType")
                 .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 8)
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -1572,12 +1571,15 @@ struct SiteAuditProjectPickerView: View {
                     }
                 }
             }
-            .background(WorksDashboardPalette.bg.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(showingSmallWorks ? "Small Works" : "Projects")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Close") { dismiss() }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("siteAuditProjectPicker.close")
                 }
             }
@@ -1607,7 +1609,7 @@ struct SiteAuditAddItemView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     SiteAuditSectionLabel(title: "Photo")
                     photoBlock
-                    HStack(spacing: 6) {
+                    HStack(spacing: 10) {
                         secondaryPhotoButton("Retake", icon: "camera.fill") { showingCamera = true }
                         secondaryPhotoButton("Library", icon: "photo.on.rectangle.angled") { showingLibrary = true }
                     }
@@ -1618,14 +1620,14 @@ struct SiteAuditAddItemView: View {
                             fieldBlock("Title", required: true) {
                                 TextField("Front courtyard", text: $draft.title)
                                     .accessibilityIdentifier("siteAuditAddItem.frontCourtyard")
-                                    .font(.system(size: 13, weight: .medium))
+                                    .font(.body)
                             }
                             divider
                             fieldBlock("Comments", required: false) {
                                 TextField("Notes…", text: $draft.comments, axis: .vertical)
                                     .accessibilityIdentifier("siteAuditAddItem.notes")
                                     .lineLimit(3...6)
-                                    .font(.system(size: 12))
+                                    .font(.body)
                             }
                             divider
                             assigneeRow
@@ -1633,7 +1635,7 @@ struct SiteAuditAddItemView: View {
                             fieldBlock("Location tag", required: false) {
                                 TextField("e.g. Front entrance courtyard", text: $draft.location)
                                     .accessibilityIdentifier("siteAuditAddItem.eGFrontEntranceCourtyard")
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(.body)
                             }
                             divider
                             annotationsRow
@@ -1650,10 +1652,10 @@ struct SiteAuditAddItemView: View {
             .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    SiteAuditToolbarPill(title: "Cancel", filled: false) { dismiss() }
+                    SiteAuditToolbarPill(title: "Cancel", filled: false, onNavy: true) { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    SiteAuditToolbarPill(title: "Save", filled: true, disabled: !canSave) {
+                    SiteAuditToolbarPill(title: "Save", filled: true, disabled: !canSave, onNavy: true) {
                         onSubmit(draft)
                         dismiss()
                     }
@@ -1684,7 +1686,7 @@ struct SiteAuditAddItemView: View {
                         Image(systemName: "camera.fill")
                             .font(.title2)
                         Text("Add photo")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.subheadline.weight(.semibold))
                     }
                     .foregroundStyle(SiteAuditColors.primary)
                 }
@@ -1692,35 +1694,35 @@ struct SiteAuditAddItemView: View {
             }
             .frame(maxWidth: .infinity)
             .aspectRatio(4 / 3, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
     }
 
     private var assigneeRow: some View {
-        HStack(spacing: 10) {
-            SiteAuditRowIconChip(systemName: "person.fill", tint: SiteAuditColors.pink, background: SiteAuditColors.pinkTint, size: 26)
+        HStack(spacing: 13) {
+            SiteAuditRowIconChip(systemName: "person.fill", tint: SiteAuditColors.pink, background: SiteAuditColors.pinkTint, size: PPMetrics.menuIcon)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Assignee")
-                    .font(.system(size: 10))
+                    .font(.footnote)
                     .foregroundStyle(SiteAuditColors.textSecondary)
                 TextField("Name", text: $draft.assignee)
                     .accessibilityIdentifier("siteAuditAddItem.name")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.body)
             }
         }
         .padding(.vertical, 11)
     }
 
     private var annotationsRow: some View {
-        HStack(spacing: 10) {
-            SiteAuditRowIconChip(systemName: "pencil.tip", tint: SiteAuditColors.warn, background: SiteAuditColors.warnTint, size: 26)
+        HStack(spacing: 13) {
+            SiteAuditRowIconChip(systemName: "pencil.tip", tint: SiteAuditColors.warn, background: SiteAuditColors.warnTint, size: PPMetrics.menuIcon)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Annotations")
-                    .font(.system(size: 10))
+                    .font(.footnote)
                     .foregroundStyle(SiteAuditColors.textSecondary)
                 TextField("Notes on photo", text: $draft.annotations)
                     .accessibilityIdentifier("siteAuditAddItem.notesOnPhoto")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.body)
                     .foregroundStyle(SiteAuditColors.primary)
             }
         }
@@ -1737,7 +1739,7 @@ struct SiteAuditAddItemView: View {
                 Text(label)
                 if required { Text("*").foregroundStyle(SiteAuditColors.danger) }
             }
-            .font(.system(size: 10))
+            .font(.footnote)
             .foregroundStyle(SiteAuditColors.textSecondary)
             content()
         }
@@ -1750,15 +1752,12 @@ struct SiteAuditAddItemView: View {
                 Image(systemName: icon)
                 Text(title)
             }
-            .font(.system(size: 11))
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(SiteAuditColors.primary)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
+            .padding(.vertical, 11)
             .background(SiteAuditColors.card)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(SiteAuditColors.borderStrong, lineWidth: 0.5)
-            )
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .accessibilityIdentifier("siteAuditAddItem.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
