@@ -39,8 +39,7 @@ struct SendToWholesalerView: View {
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.blue)
-                            .cornerRadius(10)
+                            .background(PPFamily.plan.gradient, in: Capsule())
                     }
                     .accessibilityIdentifier("sendToWholesaler.sendForQuote")
                     .disabled(selectedMaterials.isEmpty || selectedContacts.isEmpty || isSending)
@@ -54,14 +53,13 @@ struct SendToWholesalerView: View {
                             .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.green)
-                            .cornerRadius(10)
+                            .background(PPFamily.sites.gradient, in: Capsule())
                     }
                     .accessibilityIdentifier("sendToWholesaler.sendOrder")
                     .disabled(selectedMaterials.isEmpty || selectedContacts.isEmpty || isSending)
                 }
                 .padding()
-                .background(Color(.systemGroupedBackground))
+                .background(PPColor.page)
                 
                 Form {
                     Section {
@@ -153,15 +151,19 @@ struct SendToWholesalerView: View {
                         }
                     }
                 }
+                .scrollContentBackground(.hidden)
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Send to Wholesaler")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         isPresented = false
                     }
-                        .accessibilityIdentifier("sendToWholesaler.cancel")
+                    .foregroundStyle(.white)
+                    .accessibilityIdentifier("sendToWholesaler.cancel")
                 }
             }
             .alert("Could not send", isPresented: Binding(

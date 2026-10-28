@@ -184,16 +184,19 @@ struct MaterialsAddWithCatalogueSheet: View {
                 }
                 .padding(16)
             }
-            .background(MaterialsOrderingTheme.pageBackground)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(existingMaterial == nil ? "Add material" : "Edit material")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("materialsAddWithCatalogue.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
+                        .fontWeight(.semibold)
                         .accessibilityIdentifier("materialsAddWithCatalogue.save")
                         .disabled(!canSave || isSaving)
                 }
@@ -293,8 +296,9 @@ struct MaterialsAddWithCatalogueSheet: View {
     @ViewBuilder
     private var materialSection: some View {
         Text("MATERIAL")
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(MaterialsOrderingTheme.muted)
+            .font(.footnote.weight(.semibold))
+            .tracking(0.8)
+            .foregroundStyle(.secondary)
         if let item = selectedCatalogue {
             matchedCard(item)
         } else {
@@ -305,10 +309,10 @@ struct MaterialsAddWithCatalogueSheet: View {
                     .accessibilityIdentifier("materialsAddWithCatalogue.searchCatalogueOrTypeCustom")
                     .font(.system(size: 13, weight: .medium))
             }
-            .padding(10)
-            .background(MaterialsOrderingTheme.cardBackground)
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(MaterialsOrderingTheme.primary, lineWidth: 1.5))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(12)
+            .background(PPColor.card)
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(PPColor.brand, lineWidth: 1.5))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
@@ -378,9 +382,9 @@ struct MaterialsAddWithCatalogueSheet: View {
                 .background(MaterialsOrderingTheme.successTint)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
         }
-        .padding(12)
-        .background(MaterialsOrderingTheme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(14)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private var suggestionsList: some View {
@@ -411,7 +415,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                 HStack(spacing: 10) {
                     Image(systemName: "plus")
                         .frame(width: 26, height: 26)
-                        .background(Color(red: 0.949, green: 0.953, blue: 0.961))
+                        .background(PPColor.well)
                         .clipShape(RoundedRectangle(cornerRadius: 7))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Use “\(query)” as custom item")
@@ -428,8 +432,8 @@ struct MaterialsAddWithCatalogueSheet: View {
             .accessibilityIdentifier("materialsAddWithCatalogue.add")
             .buttonStyle(.plain)
         }
-        .background(MaterialsOrderingTheme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .shadow(color: Color.black.opacity(0.08), radius: 10, y: 4)
     }
 
@@ -482,8 +486,9 @@ struct MaterialsAddWithCatalogueSheet: View {
     private var customDetailsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("ITEM DETAILS")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(MaterialsOrderingTheme.muted)
+                .font(.footnote.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
             if selectedCatalogue == nil {
                 HStack(spacing: 4) {
                     Text("Item name")
@@ -578,8 +583,9 @@ struct MaterialsAddWithCatalogueSheet: View {
     private var dateRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("DATE NEEDED")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(MaterialsOrderingTheme.muted)
+                .font(.footnote.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
             DatePicker("", selection: $neededDate, displayedComponents: .date)
                 .accessibilityIdentifier("materialsAddWithCatalogue.datePicker")
                 .labelsHidden()
@@ -592,8 +598,9 @@ struct MaterialsAddWithCatalogueSheet: View {
     private var notesRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("NOTES · OPTIONAL")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(MaterialsOrderingTheme.muted)
+                .font(.footnote.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
             TextField("e.g. for Level 3 plant room", text: $notes, axis: .vertical)
                 .accessibilityIdentifier("materialsAddWithCatalogue.eGForLevel3Plant")
                 .lineLimit(2...4)

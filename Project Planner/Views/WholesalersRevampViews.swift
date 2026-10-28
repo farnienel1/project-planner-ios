@@ -8,10 +8,11 @@
 import SwiftUI
 
 enum WholesalersTheme {
-    static let indigo = ProjectWorksRevampColors.jobTypePillInk
-    static let indigoDeep = Color(red: 0.392, green: 0.361, blue: 0.843)
-    static let pageBackground = ProjectWorksRevampColors.canvas
-    static let card = ProjectWorksRevampColors.surface
+    // PP "people" family (indigo) and PP surfaces.
+    static let indigo = PPFamily.people.top
+    static let indigoDeep = PPFamily.people.bottom
+    static let pageBackground = PPColor.page
+    static let card = PPColor.card
     static let ink = ProjectWorksRevampColors.ink
     static let inkSoft = ProjectWorksRevampColors.muted
     static let inkMut = ProjectWorksRevampColors.muted
@@ -65,25 +66,29 @@ struct WholesalersListContent: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(spacing: 0) {
                 summaryBanner
-                addWholesalerButton
-                searchField
-                if filtered.isEmpty {
-                    emptyState
-                } else {
-                    ForEach(filtered) { wholesaler in
-                        NavigationLink(value: wholesaler.id) {
-                            WholesalerListCard(wholesaler: wholesaler)
+                VStack(alignment: .leading, spacing: 14) {
+                    addWholesalerButton
+                    searchField
+                    if filtered.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(filtered) { wholesaler in
+                            NavigationLink(value: wholesaler.id) {
+                                WholesalerListCard(wholesaler: wholesaler)
+                            }
+                            .accessibilityIdentifier("wholesalersListContent.row.\(wholesaler.id)")
+                            .buttonStyle(PPPressableButtonStyle())
                         }
-                        .accessibilityIdentifier("wholesalersListContent.row.\(wholesaler.id)")
-                        .buttonStyle(.plain)
                     }
                 }
+                .padding(.top, 18)
+                .padding(.bottom, 24)
+                .ppContentSheet()
             }
-            .padding(16)
         }
-        .background(WholesalersTheme.pageBackground)
+        .background(PPColor.page.ignoresSafeArea())
         .navigationDestination(for: UUID.self) { wholesalerId in
             if let wholesaler = wholesalers.first(where: { $0.id == wholesalerId }) {
                 WholesalerDetailView(
@@ -99,6 +104,7 @@ struct WholesalersListContent: View {
         }
         .navigationTitle("Wholesalers")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button("Done") {
@@ -110,17 +116,14 @@ struct WholesalersListContent: View {
                 }
                 .accessibilityIdentifier("wholesalersListContent.done")
                 .fontWeight(.semibold)
+                .foregroundStyle(.white)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingAdd = true } label: {
                     Image(systemName: "plus")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(Color(red: 0.145, green: 0.388, blue: 0.922))
-                        .clipShape(Circle())
                 }
-                    .accessibilityIdentifier("wholesalersListContent.add")
+                .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
+                .accessibilityIdentifier("wholesalersListContent.add")
             }
         }
         .sheet(isPresented: $showingAdd) {
@@ -163,51 +166,39 @@ struct WholesalersListContent: View {
     }
 
     private var addWholesalerButton: some View {
-        Button { showingAdd = true } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                Text("Add wholesaler")
-                    .font(.system(size: 15, weight: .bold))
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+        PPGroupedCard {
+            Button { showingAdd = true } label: {
+                PPMenuRowLabel(title: "Add wholesaler", symbol: "plus", family: .people)
             }
-            .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(WholesalersTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(WholesalersTheme.border, lineWidth: 0.8)
-            )
+            .accessibilityIdentifier("wholesalersListContent.plusCircleFill")
+            .buttonStyle(PPMenuRowButtonStyle())
         }
-        .accessibilityIdentifier("wholesalersListContent.plusCircleFill")
-        .buttonStyle(.plain)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
+    /// Home-style navy header with the counts the old banner showed.
     private var summaryBanner: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("YOUR WHOLESALERS")
-                .font(.system(size: 10.5, weight: .heavy))
-                .tracking(0.8)
-                .foregroundStyle(Color.white.opacity(0.88))
-            Text("\(wholesalers.count) Wholesaler\(wholesalers.count == 1 ? "" : "s") · \(totalContacts) Contact\(totalContacts == 1 ? "" : "s")")
-                .font(.system(size: 21, weight: .heavy))
-                .foregroundStyle(.white)
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top) {
+                Text("YOUR WHOLESALERS")
+                    .font(.caption2.weight(.semibold))
+                    .tracking(1.1)
+                    .foregroundStyle(PPColor.onNavySecondary)
+                Spacer()
+                PPIconTile(symbol: "building.2.fill", family: .people, size: PPMetrics.quickCreateIcon)
+            }
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(wholesalers.count)", label: "Wholesaler\(wholesalers.count == 1 ? "" : "s")")
+                PPStatDivider()
+                PPStat(value: "\(totalContacts)", label: "Contact\(totalContacts == 1 ? "" : "s")")
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(
-            LinearGradient(
-                colors: [WholesalersTheme.indigoDeep, WholesalersTheme.indigo],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: WholesalersTheme.indigo.opacity(0.3), radius: 12, y: 6)
+        .ppNavyHeader()
     }
 
     private var searchField: some View {
@@ -221,44 +212,34 @@ struct WholesalersListContent: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(WholesalersTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .stroke(WholesalersTheme.border, lineWidth: 0.8)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var emptyState: some View {
         VStack(spacing: 14) {
-            Image(systemName: "building.2.fill")
-                .font(.system(size: 28))
-                .foregroundStyle(WholesalersTheme.indigo)
-                .frame(width: 54, height: 54)
-                .background(WholesalersTheme.chipIndigoBg)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+            PPIconTile(symbol: "building.2.fill", family: .people, size: PPMetrics.quickActionIcon, lifted: true)
             Text("No wholesalers yet")
-                .font(.system(size: 16, weight: .heavy))
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.bold)
             Text("Add your first wholesaler to send material orders and quote requests from your projects.")
-                .font(.system(size: 13))
-                .foregroundStyle(WholesalersTheme.inkMut)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button { showingAdd = true } label: {
                 Text("+ Add Wholesaler")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.body.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(Color(red: 0.145, green: 0.388, blue: 0.922))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .background(PPColor.brand, in: Capsule())
             }
-                .accessibilityIdentifier("wholesalersListContent.addWholesaler")
+            .accessibilityIdentifier("wholesalersListContent.addWholesaler")
+            .buttonStyle(PPPressableButtonStyle())
         }
         .padding(24)
         .frame(maxWidth: .infinity)
-        .background(WholesalersTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .shadow(color: .black.opacity(0.04), radius: 8, y: 2)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func openMail(for wholesaler: Wholesaler, quote: Bool) {
@@ -279,14 +260,12 @@ private struct WholesalerListCard: View {
                     .font(.system(size: 18, weight: .heavy))
                     .foregroundStyle(.white)
                     .frame(width: 48, height: 48)
-                    .background(
-                        LinearGradient(colors: [WholesalersTheme.indigoDeep, WholesalersTheme.indigo], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 13))
+                    .background(PPFamily.people.gradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 48 * 0.29, style: .continuous))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(wholesaler.name)
-                        .font(.system(size: 16, weight: .heavy))
-                        .foregroundStyle(WholesalersTheme.ink)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
                     HStack(spacing: 8) {
                         if let trade = wholesaler.trade?.trimmingCharacters(in: .whitespacesAndNewlines), !trade.isEmpty {
                             Text(trade)
@@ -309,8 +288,8 @@ private struct WholesalerListCard: View {
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(WholesalersTheme.inkMut)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
             .padding(16)
 
@@ -347,13 +326,13 @@ private struct WholesalerListCard: View {
                         }
                         .padding(.vertical, 10)
                         .padding(.horizontal, 12)
-                        .background(ProjectWorksRevampColors.canvas)
-                        .clipShape(RoundedRectangle(cornerRadius: 11))
+                        .background(PPColor.well)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     if wholesaler.contacts.count > 2 {
                         Text("+\(wholesaler.contacts.count - 2) more contacts")
                             .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
+                            .foregroundStyle(PPColor.brand)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 4)
                     }
@@ -362,9 +341,8 @@ private struct WholesalerListCard: View {
                 .padding(.bottom, 16)
             }
         }
-        .background(WholesalersTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .shadow(color: .black.opacity(0.05), radius: 8, y: 2)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 }
 
@@ -391,26 +369,32 @@ struct WholesalerDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(spacing: 0) {
                 heroCard
-                quickActions
-                contactsSection
-                detailsSection
-                if !recentActivity.isEmpty {
-                    activitySection
+                VStack(alignment: .leading, spacing: 14) {
+                    quickActions
+                    contactsSection
+                    detailsSection
+                    if !recentActivity.isEmpty {
+                        activitySection
+                    }
                 }
+                .padding(.top, 18)
+                .padding(.bottom, 24)
+                .ppContentSheet()
             }
-            .padding(16)
         }
-        .background(WholesalersTheme.pageBackground)
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Wholesaler")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingEdit = true } label: {
                     Image(systemName: "square.and.pencil")
                 }
-                    .accessibilityIdentifier("wholesalerDetail.edit")
+                .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
+                .accessibilityIdentifier("wholesalerDetail.edit")
             }
         }
         .sheet(isPresented: $showingEdit) {
@@ -439,36 +423,37 @@ struct WholesalerDetailView: View {
         }
     }
 
+    /// Home-style navy header. Same name, subtitle and stats the old hero card showed.
     private var heroCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 13) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 13) {
                 Text(WholesalerFormatting.monogram(for: wholesaler.name))
-                    .font(.system(size: 20, weight: .heavy))
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .frame(width: 54, height: 54)
-                    .background(Color.white.opacity(0.18))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(wholesaler.name)
-                        .font(.system(size: 18, weight: .heavy))
-                    Text(subtitleLine)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.white.opacity(0.88))
-                }
+                    .background(PPFamily.people.gradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 54 * 0.29, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 54 * 0.29, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
+                    )
+                PPNavyPageTitle(title: wholesaler.name, subtitle: subtitleLine)
             }
-            HStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
                 statTile(value: "\(stats.orders)", label: "Total orders")
+                PPStatDivider()
                 statTile(value: "\(wholesaler.contacts.count)", label: "Contacts")
+                PPStatDivider()
                 statTile(value: WholesalerActivity.relativeLastOrder(stats.lastOrder), label: "Last order")
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
         .foregroundStyle(.white)
-        .padding(18)
-        .background(
-            LinearGradient(colors: [WholesalersTheme.indigoDeep, WholesalersTheme.indigo], startPoint: .topLeading, endPoint: .bottomTrailing)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .shadow(color: WholesalersTheme.indigo.opacity(0.3), radius: 12, y: 6)
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     private var subtitleLine: String {
@@ -480,55 +465,40 @@ struct WholesalerDetailView: View {
         return parts.isEmpty ? "Wholesaler" : parts.joined(separator: " · ")
     }
 
+    /// PPStat look, with the value kept to one line (the last-order text can be long).
     private func statTile(value: String, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(value)
-                .font(.system(size: 18, weight: .heavy))
+                .font(.system(.title2, design: .rounded))
+                .fontWeight(.bold)
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
             Text(label)
-                .font(.system(size: 10.5))
-                .foregroundStyle(Color.white.opacity(0.88))
+                .font(.caption)
+                .foregroundStyle(PPColor.onNavyCaption)
+                .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 9)
-        .padding(.horizontal, 11)
-        .background(Color.white.opacity(0.13))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     @ViewBuilder
     private var quickActions: some View {
         if userStore.canViewWholesalerOrderHistory() {
-            Button { showingSendHistory = true } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.706, green: 0.325, blue: 0.035))
-                        .frame(width: 40, height: 40)
-                        .background(WholesalersTheme.chipAmberBg)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Quote & order history")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(WholesalersTheme.ink)
-                        Text("Search sends across all projects and small works")
-                            .font(.system(size: 12))
-                            .foregroundStyle(WholesalersTheme.inkMut)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(WholesalersTheme.inkMut)
+            PPGroupedCard {
+                Button { showingSendHistory = true } label: {
+                    PPMenuRowLabel(
+                        title: "Quote & order history",
+                        symbol: "clock.arrow.circlepath",
+                        family: .trade,
+                        subtitle: "Search sends across all projects and small works"
+                    )
                 }
-                .padding(14)
-                .background(WholesalersTheme.card)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(WholesalersTheme.border, lineWidth: 0.8)
-                )
+                .accessibilityIdentifier("wholesalerDetail.clockArrowCirclepath")
+                .buttonStyle(PPMenuRowButtonStyle())
             }
-            .accessibilityIdentifier("wholesalerDetail.clockArrowCirclepath")
-            .buttonStyle(.plain)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
     }
 
@@ -559,8 +529,10 @@ struct WholesalerDetailView: View {
     private var contactsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("CONTACTS · \(wholesaler.contacts.count)")
-                .font(.system(size: 11, weight: .heavy))
-                .foregroundStyle(WholesalersTheme.inkMut)
+                .font(.footnote.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
             VStack(spacing: 0) {
                 if wholesaler.contacts.isEmpty {
                     Text("Add your first contact in Edit.")
@@ -594,10 +566,10 @@ struct WholesalerDetailView: View {
                                 openMail(contact: contact)
                             } label: {
                                 Image(systemName: "envelope.fill")
-                                    .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
-                                    .frame(width: 30, height: 30)
-                                    .background(WholesalersTheme.chipBlueBg)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .foregroundStyle(PPColor.brand)
+                                    .frame(width: 32, height: 32)
+                                    .background(PPColor.brand.opacity(0.12))
+                                    .clipShape(Circle())
                             }
                             .accessibilityIdentifier("wholesalerDetail.row.\(contact.id).envelopeFill")
                             .disabled(contact.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -610,34 +582,31 @@ struct WholesalerDetailView: View {
                     }
                 }
             }
-            .background(WholesalersTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: 18))
-            .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
     }
 
     private var detailsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("DETAILS")
-                .font(.system(size: 11, weight: .heavy))
-                .foregroundStyle(WholesalersTheme.inkMut)
+                .font(.footnote.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
             VStack(spacing: 0) {
                 if let address = wholesaler.address?.trimmingCharacters(in: .whitespacesAndNewlines), !address.isEmpty {
                     detailRow(icon: "mappin.and.ellipse", tint: WholesalersTheme.chipBlueBg, title: "Address", value: address)
                 }
                 if let account = wholesaler.accountNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !account.isEmpty {
                     HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "archivebox.fill")
-                            .foregroundStyle(WholesalersTheme.inkSoft)
-                            .frame(width: 30, height: 30)
-                            .background(WholesalersTheme.chipGreenBg)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        PPIconTile(symbol: "archivebox.fill", family: .system, size: PPMetrics.menuIcon)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("ACCOUNT NUMBER")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(WholesalersTheme.inkMut)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                             Text(account)
-                                .font(.system(size: 14.5, weight: .bold))
+                                .font(.body.weight(.semibold))
                         }
                         Spacer(minLength: 0)
                         Button {
@@ -652,25 +621,26 @@ struct WholesalerDetailView: View {
                     .padding(.horizontal, 16)
                 }
             }
-            .background(WholesalersTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: 18))
-            .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
     }
 
     private var activitySection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("RECENT ACTIVITY")
-                .font(.system(size: 11, weight: .heavy))
-                .foregroundStyle(WholesalersTheme.inkMut)
+                .font(.footnote.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
             VStack(spacing: 0) {
                 ForEach(recentActivity) { record in
                     HStack(spacing: 12) {
-                        Image(systemName: record.requestType == .quote ? "doc.text.fill" : "paperplane.fill")
-                            .foregroundStyle(record.requestType == .quote ? WholesalersTheme.green : Color(red: 0.145, green: 0.388, blue: 0.922))
-                            .frame(width: 30, height: 30)
-                            .background(record.requestType == .quote ? WholesalersTheme.chipGreenBg : WholesalersTheme.chipBlueBg)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        PPIconTile(
+                            symbol: record.requestType == .quote ? "doc.text.fill" : "paperplane.fill",
+                            family: record.requestType == .quote ? .sites : .plan,
+                            size: PPMetrics.menuIcon
+                        )
                         VStack(alignment: .leading, spacing: 2) {
                             Text("\(record.requestTypeLabel) · \(record.itemCountLabel)")
                                 .font(.system(size: 13, weight: .bold))
@@ -697,26 +667,22 @@ struct WholesalerDetailView: View {
                     }
                 }
             }
-            .background(WholesalersTheme.card)
-            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
     }
 
     @ViewBuilder
     private func detailRow(icon: String, tint: Color, title: String, value: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon)
-                .foregroundStyle(WholesalersTheme.inkSoft)
-                .frame(width: 30, height: 30)
-                .background(tint)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            PPIconTile(symbol: icon, family: .sites, size: PPMetrics.menuIcon)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title.uppercased())
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(WholesalersTheme.inkMut)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Text(value)
-                    .font(.system(size: 14.5, weight: .bold))
-                    .foregroundStyle(WholesalersTheme.ink)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
             }
             Spacer(minLength: 0)
         }
@@ -725,7 +691,7 @@ struct WholesalerDetailView: View {
     }
 
     private func contactAvatar(_ contact: WholesalerContact, index: Int) -> some View {
-        let colors: [Color] = [WholesalersTheme.indigo, WholesalersTheme.green, Color(red: 0.145, green: 0.388, blue: 0.922), Color(red: 0.706, green: 0.325, blue: 0.035)]
+        let colors: [Color] = [WholesalersTheme.indigo, WholesalersTheme.green, PPColor.brand, Color(red: 0.706, green: 0.325, blue: 0.035)]
         return Text(String(contact.name.prefix(1)).uppercased())
             .font(.system(size: 13, weight: .bold))
             .foregroundStyle(.white)
@@ -850,8 +816,8 @@ struct WholesalerSendHistoryView: View {
                     LazyVStack(spacing: 10) {
                         if filteredRecords.isEmpty {
                             Text("No \(selectedTab.rawValue.lowercased()) match your filters")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(WholesalersTheme.inkMut)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.secondary)
                                 .padding(.top, 40)
                         } else {
                             ForEach(filteredRecords) { record in
@@ -862,12 +828,15 @@ struct WholesalerSendHistoryView: View {
                     .padding(16)
                 }
             }
-            .background(WholesalersTheme.pageBackground)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("\(wholesaler.name) history")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("wholesalerSendHistory.close")
                 }
             }
@@ -883,8 +852,8 @@ struct WholesalerSendHistoryView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Filters")
-                    .font(.system(size: 11, weight: .heavy))
-                    .foregroundStyle(WholesalersTheme.inkMut)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 Spacer()
                 if useDateFilter || jobFilter != "All jobs" || orderedByFilter != "Anyone" || !materialSearch.isEmpty {
                     Button("Clear") {
@@ -946,11 +915,10 @@ struct WholesalerSendHistoryView: View {
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(WholesalersTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(WholesalersTheme.border, lineWidth: 0.8))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     @ViewBuilder
@@ -966,7 +934,7 @@ struct WholesalerSendHistoryView: View {
                     HStack {
                         Text(isQuote ? "QUOTE" : "ORDER")
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(isQuote ? WholesalersTheme.green : Color(red: 0.145, green: 0.388, blue: 0.922))
+                            .foregroundStyle(isQuote ? WholesalersTheme.green : PPColor.brand)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(isQuote ? WholesalersTheme.chipGreenBg : WholesalersTheme.chipBlueBg)
@@ -1011,8 +979,8 @@ struct WholesalerSendHistoryView: View {
                 .padding(.bottom, 12)
             }
         }
-        .background(WholesalersTheme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private func jobLabel(for project: Project) -> String {
@@ -1087,8 +1055,8 @@ struct WholesalerEditorSheet: View {
                         editorField(icon: "mappin.and.ellipse", tint: WholesalersTheme.chipBlueBg, label: "Address · optional", text: $address, required: false)
                         editorField(icon: "archivebox.fill", tint: WholesalersTheme.chipGreenBg, label: "Account number · optional", text: $accountNumber, required: false)
                     }
-                    .background(WholesalersTheme.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .background(PPColor.card)
+                    .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
 
                     sectionHeader("STAFF / CONTACTS · \(contacts.count)")
                     VStack(spacing: 8) {
@@ -1110,14 +1078,14 @@ struct WholesalerEditorSheet: View {
                                 Text("Add contact")
                                     .font(.system(size: 14, weight: .bold))
                             }
-                            .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
+                            .foregroundStyle(PPColor.brand)
                         }
                         .accessibilityIdentifier("wholesalerEditor.add")
                         .padding(.top, 4)
                     }
                     .padding(12)
-                    .background(WholesalersTheme.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .background(PPColor.card)
+                    .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
 
                     if isEdit {
                         Button(role: .destructive) { showingDeleteConfirmation = true } label: {
@@ -1128,9 +1096,8 @@ struct WholesalerEditorSheet: View {
                             .font(.system(size: 15, weight: .bold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
-                            .background(WholesalersTheme.card)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.red.opacity(0.35), lineWidth: 1))
+                            .background(PPColor.card)
+                            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                         }
                         .accessibilityIdentifier("wholesalerEditor.delete")
                         .padding(.top, 8)
@@ -1138,16 +1105,18 @@ struct WholesalerEditorSheet: View {
                 }
                 .padding(16)
             }
-            .background(WholesalersTheme.pageBackground)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(isEdit ? "Edit Wholesaler" : "Add Wholesaler")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { isPresented = false }
                         .accessibilityIdentifier("wholesalerEditor.cancel")
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(Color(.systemGray6))
+                        .background(PPColor.onNavyFill)
                         .clipShape(Capsule())
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -1157,7 +1126,7 @@ struct WholesalerEditorSheet: View {
                         .disabled(!canSave || isSaving)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 6)
-                        .background(canSave ? Color(red: 0.145, green: 0.388, blue: 0.922) : Color.gray.opacity(0.35))
+                        .background(canSave ? PPColor.brand : PPColor.onNavyFill)
                         .foregroundStyle(.white)
                         .clipShape(Capsule())
                 }
@@ -1240,7 +1209,7 @@ struct WholesalerEditorSheet: View {
                         }
                         .accessibilityIdentifier("wholesalerEditor.makePrimary")
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color(red: 0.145, green: 0.388, blue: 0.922))
+                        .foregroundStyle(PPColor.brand)
                     }
                 }
                 Menu {
@@ -1259,8 +1228,8 @@ struct WholesalerEditorSheet: View {
             }
         }
         .padding(12)
-        .background(ProjectWorksRevampColors.canvas)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .background(PPColor.well)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func setPrimary(contactId: UUID) {
@@ -1282,9 +1251,10 @@ struct WholesalerEditorSheet: View {
 
     private func sectionHeader(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11, weight: .heavy))
-            .foregroundStyle(WholesalersTheme.inkMut)
-            .padding(.horizontal, 2)
+            .font(.footnote.weight(.semibold))
+            .tracking(0.8)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
     }
 
     @ViewBuilder

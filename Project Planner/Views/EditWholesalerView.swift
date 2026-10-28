@@ -58,7 +58,7 @@ struct EditWholesalerView: View {
                             Image(systemName: "plus.circle.fill")
                             Text("Add contact")
                         }
-                        .foregroundColor(.blue)
+                        .foregroundColor(PPColor.brand)
                     }
                         .accessibilityIdentifier("editWholesaler.plusCircleFill")
                 }
@@ -70,7 +70,7 @@ struct EditWholesalerView: View {
                         HStack {
                             Spacer()
                             Text("Delete Wholesaler")
-                                .foregroundColor(.red)
+                                .foregroundColor(PPColor.danger)
                             Spacer()
                         }
                     }
@@ -78,19 +78,24 @@ struct EditWholesalerView: View {
                     .disabled(isDeleting)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Edit Wholesaler")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         isPresented = false
                     }
-                        .accessibilityIdentifier("editWholesaler.cancel")
+                    .foregroundStyle(.white)
+                    .accessibilityIdentifier("editWholesaler.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
                         saveWholesaler()
                     }
+                    .fontWeight(.semibold)
                     .accessibilityIdentifier("editWholesaler.save")
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
                 }

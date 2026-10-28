@@ -93,14 +93,18 @@ struct EditMaterialView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Edit Material")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         isPresented = false
                     }
-                        .accessibilityIdentifier("editMaterial.cancel")
+                    .foregroundStyle(.white)
+                    .accessibilityIdentifier("editMaterial.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
@@ -110,6 +114,7 @@ struct EditMaterialView: View {
                             showingPermissionAlert = true
                         }
                     }
+                    .fontWeight(.semibold)
                     .accessibilityIdentifier("editMaterial.save")
                     .disabled(materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving || !canManageMaterial)
                 }

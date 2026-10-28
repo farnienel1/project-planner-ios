@@ -72,12 +72,14 @@ struct MaterialsSendListSheet: View {
                 }
                 footerBar
             }
-            .background(MaterialsOrderingTheme.pageBackground)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Send list")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { isPresented = false }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("materialsSendList.cancel")
                 }
             }
@@ -230,16 +232,17 @@ struct MaterialsSendListSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             }
         }
-        .padding(11)
-        .background(MaterialsOrderingTheme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(14)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private var wholesalerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("WHOLESALERS · \(selectedContactIds.count) selected")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(MaterialsOrderingTheme.muted)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
             VStack(spacing: 0) {
                 ForEach(wholesalers) { wholesaler in
                     wholesalerGroupRow(wholesaler: wholesaler)
@@ -248,8 +251,8 @@ struct MaterialsSendListSheet: View {
                     }
                 }
             }
-            .background(MaterialsOrderingTheme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
     }
 
@@ -265,9 +268,9 @@ struct MaterialsSendListSheet: View {
                     Text(String(wholesaler.name.prefix(2)).uppercased())
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.white)
-                        .frame(width: 28, height: 28)
+                        .frame(width: PPMetrics.menuIcon, height: PPMetrics.menuIcon)
                         .background(MaterialsOrderingTheme.primaryGradient)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.menuIcon * 0.29, style: .continuous))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(wholesaler.name)
                             .font(.system(size: 12, weight: .medium))
@@ -309,7 +312,7 @@ struct MaterialsSendListSheet: View {
             else { selectedContactIds.insert(contact.id) }
         } label: {
             HStack(spacing: 10) {
-                Color.clear.frame(width: 28, height: 28)
+                Color.clear.frame(width: PPMetrics.menuIcon, height: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(contact.name)
                         .font(.system(size: 12, weight: .medium))
@@ -334,8 +337,9 @@ struct MaterialsSendListSheet: View {
     private var oneOffSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("ONE-OFF EMAIL · not saved to wholesalers")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(MaterialsOrderingTheme.muted)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
             ForEach(oneOffRecipients) { recipient in
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -351,9 +355,9 @@ struct MaterialsSendListSheet: View {
                     }
                         .accessibilityIdentifier("materialsSendList.row.\(recipient.id).close")
                 }
-                .padding(10)
-                .background(MaterialsOrderingTheme.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .padding(12)
+                .background(PPColor.card)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             VStack(spacing: 8) {
                 TextField("Name (for email greeting)", text: $newRecipientName)
@@ -374,9 +378,9 @@ struct MaterialsSendListSheet: View {
                 .accessibilityIdentifier("materialsSendList.add")
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .padding(10)
-            .background(MaterialsOrderingTheme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(12)
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
@@ -413,6 +417,7 @@ struct MaterialsSendListSheet: View {
                 }
                 .accessibilityIdentifier("materialsSendList.quote")
                 .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
                 .tint(MaterialsOrderingTheme.primary)
                 Button { beginSend(type: .order) } label: {
                     Label("Order", systemImage: "paperplane.fill")
@@ -420,6 +425,7 @@ struct MaterialsSendListSheet: View {
                 }
                 .accessibilityIdentifier("materialsSendList.order")
                 .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
                 .tint(MaterialsOrderingTheme.success)
             }
             .disabled(selectedMaterialIds.isEmpty || recipientCount == 0 || isSending)
@@ -432,6 +438,7 @@ struct MaterialsSendListSheet: View {
                 }
                 .accessibilityIdentifier("materialsSendList.whatsApp")
                 .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
                 .tint(MaterialsOrderingTheme.success)
                 .disabled(selectedMaterialIds.isEmpty || isSending)
                 Text("Opens WhatsApp with the message prepared. You press Send there — this does not mark the list as sent.")
@@ -442,8 +449,8 @@ struct MaterialsSendListSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(MaterialsOrderingTheme.cardBackground)
-        .overlay(Rectangle().frame(height: 0.5).foregroundStyle(MaterialsOrderingTheme.border), alignment: .top)
+        .background(PPColor.card.ignoresSafeArea(edges: .bottom))
+        .overlay(Rectangle().frame(height: 0.5).foregroundStyle(Color(.separator)), alignment: .top)
     }
 
     /// Selected wholesaler contacts, then one-off recipients (web `buildRecipientSnapshots`).
@@ -683,10 +690,10 @@ struct MaterialRequiredDeliveryEditor: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(showsCard ? 12 : 0)
+        .padding(showsCard ? 14 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(showsCard ? MaterialsOrderingTheme.cardBackground : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: CGFloat(showsCard ? 12 : 0)))
+        .background(showsCard ? PPColor.card : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: CGFloat(showsCard ? PPMetrics.rowCardRadius : 0), style: .continuous))
         .environment(\.calendar, londonCalendar)
         .environment(\.timeZone, londonCalendar.timeZone)
         .onAppear(perform: fillDefaultIfEmpty)
@@ -779,17 +786,21 @@ private struct MaterialsResendIncludeExcludeSheet: View {
                 }
                 .padding(20)
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Review materials")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("materialsResendIncludeExclude.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Continue") {
                         onContinue(selectedMaterialIds)
                     }
+                    .fontWeight(.semibold)
                     .accessibilityIdentifier("materialsResendIncludeExclude.continue")
                     .disabled(selectedMaterialIds.isEmpty)
                 }
@@ -879,9 +890,9 @@ private struct MaterialsResendIncludeExcludeSheet: View {
                 .accessibilityLabel(isExcluded ? "Include \(item.material)" : "Exclude \(item.material)")
             }
         }
-        .padding(12)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(14)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -897,22 +908,23 @@ private struct MaterialsSendConfirmationView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 56))
-                        .foregroundStyle(MaterialsOrderingTheme.success)
+                    PPIconTile(symbol: "checkmark", family: .sites, size: PPMetrics.quickActionIcon, lifted: true)
                     Text(confirmation.requestType == .quote ? "Quote sent" : "Order placed")
-                        .font(.title2.weight(.semibold))
+                        .font(.system(.title2, design: .rounded))
+                        .fontWeight(.bold)
                     Text("Sent to \(confirmation.recipientCount) recipients · \(confirmation.itemCount) items")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Button("Done", action: onDone)
                         .accessibilityIdentifier("materialsSendConfirmation.done")
                         .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
                         .tint(MaterialsOrderingTheme.success)
                         .padding(.top, 12)
                 }
                 .padding(24)
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
         }
     }
