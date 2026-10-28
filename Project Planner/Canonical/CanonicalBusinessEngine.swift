@@ -2351,6 +2351,11 @@ nonisolated enum CanonicalBusinessEngine {
         decode(Bool.self, function: "isStaffAccount", arguments: [role]) ?? false
     }
 
+    /// Job quote and order history: every admin and manager, never operative mode, not the Wholesalers toggle.
+    static func canViewMaterialOrderHistory(_ role: CanonicalStaffAccountRole) -> Bool {
+        decode(Bool.self, function: "canViewMaterialOrderHistory", arguments: [role]) ?? false
+    }
+
     static func seesEveryJob(_ role: CanonicalStaffAccountRole) -> Bool {
         decode(Bool.self, function: "seesEveryJob", arguments: [role]) ?? false
     }

@@ -158,32 +158,30 @@ struct ProjectDetailView: View {
     
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 0) {
                 detailHeroCard
-                sectionHeading("Manage")
-                overviewTiles
-                sectionHeading("Details")
-                detailSummaryCard
+                VStack(alignment: .leading, spacing: 0) {
+                    PPSectionHeader("Manage")
+                    overviewTiles
+                    PPSectionHeader("Details")
+                    detailSummaryCard
+                }
+                .padding(.bottom, 28)
+                .ppContentSheet()
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle(detailRootTitle)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
+        .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button(action: { dismiss() }) {
                     Image(systemName: "chevron.left")
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                        .font(.system(size: 17, weight: .semibold))
-                        .frame(width: 36, height: 36)
-                        .background(ProjectWorksRevampColors.surface)
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                 }
-                    .accessibilityIdentifier("projectDetail.back")
+                .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
+                .accessibilityIdentifier("projectDetail.back")
             }
             if canEditCurrentWorkItem {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -191,13 +189,8 @@ struct ProjectDetailView: View {
                         showingEditProject = true
                     } label: {
                         Image(systemName: "ellipsis")
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                            .font(.system(size: 18, weight: .medium))
-                            .frame(width: 36, height: 36)
-                            .background(ProjectWorksRevampColors.surface)
-                            .clipShape(Circle())
-                            .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                     }
+                    .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                     .accessibilityIdentifier("projectDetail.edit")
                     .accessibilityLabel("Edit project details")
                 }
@@ -324,83 +317,56 @@ struct ProjectDetailView: View {
         project.jobType == .smallWorks ? "Small work" : "Project"
     }
 
-    private func sectionHeading(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .tracking(0.4)
-            .padding(.leading, 4)
-    }
-
-    private var primaryGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color.theme.primary(for: appSettings.settings.colorScheme),
-                ProjectWorksRevampColors.blueLight
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
+    /// Home-style navy header: job number, type, status, site, and timeline progress.
     private var detailHeroCard: some View {
         let pct = WorksListProgress.fraction(for: project)
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Text(project.jobNumber)
-                            .font(.system(size: 22, weight: .medium))
-                            .foregroundStyle(.white)
-                            .tracking(-0.3)
-                        if let pill = heroJobTypePillText {
-                            Text(pill)
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.white.opacity(0.22))
-                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                                .tracking(0.3)
-                        }
-                    }
-                    Text(project.siteName)
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.9))
-                }
+        let daysLeft = heroDaysLeftStat
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 8) {
+                PPNavyPageTitle(
+                    eyebrow: project.client.name,
+                    title: project.jobNumber,
+                    subtitle: project.siteName
+                )
                 Spacer(minLength: 8)
                 heroStatusPill
             }
-
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.white.opacity(0.22))
-                        .frame(height: 5)
-                    Capsule()
-                        .fill(Color.white)
-                        .frame(width: max(6, geo.size.width * CGFloat(pct)), height: 5)
-                }
+            if let pill = heroJobTypePillText {
+                PPOnNavyPill(text: pill)
+                    .padding(.top, 10)
             }
-            .frame(height: 5)
-            .padding(.top, 2)
 
-            HStack {
-                Text("\(WorksListProgress.percentDisplay(for: project))% complete")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                Spacer()
-                Text(daysLeftCaption)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
+            PPOnNavyProgressBar(fraction: pct)
+                .padding(.top, 18)
+
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(WorksListProgress.percentDisplay(for: project))%", label: "Complete")
+                PPStatDivider()
+                PPStat(value: daysLeft.value, label: daysLeft.label)
+                PPStatDivider()
+                PPStat(value: "\(openTasksCount)", label: openTasksCount == 1 ? "Open task" : "Open tasks")
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 16)
         }
-        .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(primaryGradient)
-        )
+        .ppNavyHeader()
+    }
+
+    /// The days-left caption split into a big number and a label for the header stats.
+    private var heroDaysLeftStat: (value: String, label: String) {
+        switch project.status {
+        case .completed, .inactive:
+            return ("—", daysLeftCaption)
+        default:
+            let cal = Calendar.current
+            let d = cal.dateComponents([.day], from: cal.startOfDay(for: Date()), to: cal.startOfDay(for: project.endDate)).day ?? 0
+            if d < 0 { return ("—", daysLeftCaption) }
+            return ("\(d)", d == 1 ? "Day left" : "Days left")
+        }
     }
 
     private var heroJobTypePillText: String? {
@@ -412,18 +378,7 @@ struct ProjectDetailView: View {
     }
 
     private var heroStatusPill: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(Color.white)
-                .frame(width: 5, height: 5)
-            Text(project.status.rawValue)
-                .font(.system(size: 10, weight: .medium))
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(Color.white.opacity(0.18))
-        .clipShape(Capsule())
+        PPOnNavyPill(text: project.status.rawValue, showsDot: true)
     }
 
     private var daysLeftCaption: String {
@@ -459,51 +414,25 @@ struct ProjectDetailView: View {
     }
 
     private var detailSummaryCard: some View {
-        VStack(spacing: 0) {
-            summaryRow(
-                icon: "building.2.fill",
-                title: "Client",
-                value: project.client.name,
-                iconTint: ProjectWorksRevampColors.blue,
-                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984)
-            )
-            Divider().overlay(ProjectWorksRevampColors.border)
-            summaryRow(
-                icon: "person.fill.checkmark",
-                title: "Manager",
-                value: managerDisplayName,
-                iconTint: Color(red: 0.325, green: 0.29, blue: 0.718),
-                iconBackground: ProjectWorksRevampColors.jobTypePillBg
-            )
-            Divider().overlay(ProjectWorksRevampColors.border)
-            summaryRow(
-                icon: "calendar",
-                title: "Timeline",
-                value: timelineDetailSummary,
-                iconTint: ProjectWorksRevampColors.upcomingAmber,
-                iconBackground: Color(red: 0.98, green: 0.933, blue: 0.855)
-            )
-            Divider().overlay(ProjectWorksRevampColors.border)
-            let desc = project.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            summaryMultilineRow(
-                icon: "text.alignleft",
+        let desc = project.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return PPGroupedCard {
+            PPDetailRowLabel(title: "Client", value: project.client.name, symbol: "building.2.fill", family: .plan)
+            PPRowDivider()
+            PPDetailRowLabel(title: "Manager", value: managerDisplayName, symbol: "person.fill.checkmark", family: .people)
+            PPRowDivider()
+            PPDetailRowLabel(title: "Timeline", value: timelineDetailSummary, symbol: "calendar", family: .trade)
+            PPRowDivider()
+            PPDetailRowLabel(
                 title: "Description",
                 value: desc.isEmpty ? "No description added" : desc,
-                valueColor: desc.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.ink,
-                iconTint: ProjectWorksRevampColors.blue,
-                iconBackground: Color(red: 0.902, green: 0.945, blue: 0.984)
+                symbol: "text.alignleft",
+                family: .system,
+                valueColor: desc.isEmpty ? Color.secondary : Color.primary,
+                multiline: true
             )
-            Divider().overlay(ProjectWorksRevampColors.border)
+            PPRowDivider()
             detailsLocationButton
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 4)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
     }
 
     /// Tappable Location control inside Details — opens the existing map / Apple Maps / Google Maps page.
@@ -511,37 +440,17 @@ struct ProjectDetailView: View {
         Button {
             showingLocationPage = true
         } label: {
-            HStack(alignment: .center, spacing: 12) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(red: 0.902, green: 0.945, blue: 0.984))
-                    .frame(width: 30, height: 30)
-                    .overlay(
-                        Image(systemName: "mappin.and.ellipse")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
-                    )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Location")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                    Text(locationDisplayText.isEmpty ? "Address, map and directions" : locationDisplayText)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                        .lineLimit(2)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
-            }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 10)
-            .background(Color(red: 0.902, green: 0.945, blue: 0.984).opacity(0.55))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            PPDetailRowLabel(
+                title: "Location",
+                value: locationDisplayText.isEmpty ? "Address, map and directions" : locationDisplayText,
+                symbol: "mappin.and.ellipse",
+                family: .sites,
+                valueColor: PPColor.brand,
+                showsChevron: true
+            )
         }
         .accessibilityIdentifier("projectDetail.location")
-        .buttonStyle(.plain)
-        .padding(.vertical, 6)
+        .buttonStyle(PPMenuRowButtonStyle())
         .accessibilityLabel("Location")
         .accessibilityHint("Opens the site location page with map and directions")
         .navigationDestination(isPresented: $showingLocationPage) {
@@ -559,60 +468,6 @@ struct ProjectDetailView: View {
         let f = DateFormatter()
         f.dateFormat = "dd MMM yy"
         return "\(f.string(from: project.startDate)) – \(f.string(from: project.endDate))"
-    }
-
-    private func summaryRow(icon: String, title: String, value: String, iconTint: Color, iconBackground: Color) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(iconBackground)
-                .frame(width: 30, height: 30)
-                .overlay(
-                    Image(systemName: icon)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(iconTint)
-                )
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 11))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text(value)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 11)
-    }
-
-    private func summaryMultilineRow(
-        icon: String,
-        title: String,
-        value: String,
-        valueColor: Color,
-        iconTint: Color,
-        iconBackground: Color
-    ) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(iconBackground)
-                .frame(width: 30, height: 30)
-                .overlay(
-                    Image(systemName: icon)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(iconTint)
-                )
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 11))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text(value)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(valueColor)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 11)
     }
 
     private var overviewTiles: some View {
@@ -637,7 +492,7 @@ struct ProjectDetailView: View {
             return tiles
         }()
 
-        return LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+        return LazyVGrid(columns: PPQuickActionGrid.columns, spacing: PPQuickActionGrid.rowSpacing) {
             ForEach(availableTiles) { tile in
                 Button {
                     openedManageTile = tile
@@ -645,7 +500,7 @@ struct ProjectDetailView: View {
                     manageTileContents(for: tile)
                 }
                 .accessibilityIdentifier("projectDetail.row.\(tile.id)")
-                .buttonStyle(.plain)
+                .buttonStyle(PPPressableButtonStyle())
             }
         }
         .navigationDestination(item: $openedManageTile) { tile in
@@ -654,42 +509,12 @@ struct ProjectDetailView: View {
     }
 
     private func manageTileContents(for tile: DetailTile) -> some View {
-        VStack(spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(tileIconBackground(for: tile))
-                    .frame(width: 36, height: 36)
-                Image(systemName: tile.icon)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(tileIconForeground(for: tile))
-            }
-            .overlay(alignment: .topTrailing) {
-                if let badge = manageTileBadgeCount(for: tile), badge > 0 {
-                    Text("\(badge)")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.white)
-                        .frame(minWidth: 14, minHeight: 14)
-                        .padding(.horizontal, 3)
-                        .background(manageTileBadgeColor(for: tile))
-                        .clipShape(Capsule())
-                        .offset(x: 6, y: -5)
-                }
-            }
-            Text(tile.rawValue)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 14)
-        .padding(.horizontal, 6)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+        PPManageTileLabel(
+            title: tile.rawValue,
+            symbol: tile.icon,
+            family: tileFamily(for: tile),
+            badge: manageTileBadgeCount(for: tile),
+            badgeColor: manageTileBadgeColor(for: tile)
         )
     }
 
@@ -730,41 +555,22 @@ struct ProjectDetailView: View {
 
     private func manageTileBadgeColor(for tile: DetailTile) -> Color {
         switch tile {
-        case .scheduling: return Color(red: 0.639, green: 0.176, blue: 0.176)
-        default: return ProjectWorksRevampColors.blue
+        case .scheduling: return PPColor.danger
+        default: return PPColor.brand
         }
     }
 
-    private func tileIconBackground(for tile: DetailTile) -> Color {
+    /// Icon colour family for each Manage tile (Home's quick-action families).
+    private func tileFamily(for tile: DetailTile) -> PPFamily {
         switch tile {
-        case .scheduling: return Color(red: 0.902, green: 0.945, blue: 0.984)
-        case .visibility: return ProjectWorksRevampColors.jobTypePillBg
-        case .tasks: return Color(red: 0.882, green: 0.961, blue: 0.933)
-        case .materials: return Color(red: 0.98, green: 0.933, blue: 0.855)
-        case .healthSafety: return Color(red: 0.89, green: 0.98, blue: 0.95)
-        case .deadlines: return ProjectWorksRevampColors.blueTint
-        case .siteAudit: return Color(red: 0.98, green: 0.925, blue: 0.906)
-        case .variations: return Color(red: 0.93, green: 0.96, blue: 0.9)
-        case .location: return Color(red: 0.984, green: 0.918, blue: 0.941)
-        case .activeUsers: return Color(red: 0.902, green: 0.945, blue: 0.984)
+        case .scheduling, .deadlines: return .plan
+        case .tasks, .healthSafety, .location: return .sites
+        case .visibility, .activeUsers: return .people
+        case .materials, .variations: return .trade
+        case .siteAudit: return .system
         }
     }
 
-    private func tileIconForeground(for tile: DetailTile) -> Color {
-        switch tile {
-        case .scheduling: return ProjectWorksRevampColors.blue
-        case .visibility: return Color(red: 0.325, green: 0.29, blue: 0.718)
-        case .tasks: return ProjectWorksRevampColors.activeGreen
-        case .materials: return ProjectWorksRevampColors.upcomingAmber
-        case .healthSafety: return Color(red: 0.07, green: 0.62, blue: 0.47)
-        case .deadlines: return ProjectWorksRevampColors.blue
-        case .siteAudit: return Color(red: 0.6, green: 0.235, blue: 0.114)
-        case .variations: return Color(red: 0.2, green: 0.55, blue: 0.32)
-        case .location: return Color(red: 0.6, green: 0.208, blue: 0.337)
-        case .activeUsers: return ProjectWorksRevampColors.blue
-        }
-    }
-    
     @ViewBuilder
     private func tileDestination(for tile: DetailTile) -> some View {
         switch tile {

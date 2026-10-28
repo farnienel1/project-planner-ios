@@ -218,11 +218,10 @@ struct OperativeMaterialsPanel: View {
             .sorted { $0.addedAt > $1.addedAt }
     }
 
-    /// Admins and managers only, never operative mode (`isStaffAccount`; web adds `canViewMaterialOrderHistory`).
-    /// Not the Wholesalers toggle.
+    /// Admins and managers only, never operative mode (`canViewMaterialOrderHistory`). Not the Wholesalers toggle.
     private var canViewQuoteOrderHistory: Bool {
         guard let user = userStore.displayUser else { return false }
-        return CanonicalBusinessEngine.isStaffAccount(UserStore.staffAccountRole(for: user))
+        return CanonicalBusinessEngine.canViewMaterialOrderHistory(UserStore.staffAccountRole(for: user))
     }
 
     var body: some View {

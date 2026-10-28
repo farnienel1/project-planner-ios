@@ -81,219 +81,207 @@ struct OrganisationSettingsHubView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 orgHeroCard
-                    .padding(.top, 8)
 
-                hubSectionTitle("Identity")
-                hubCard {
-                    hubNavRow(
-                        icon: "building.fill",
-                        iconBg: ProjectWorksRevampColors.blue.opacity(0.12),
-                        iconFg: ProjectWorksRevampColors.blue,
-                        title: "Company details",
-                        subtitle: "Name, logo, address"
-                    ) {
-                        showingCompanyDetails = true
-                    }
-                    Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
-                    NavigationLink {
-                        OrganisationCurrencyView()
-                            .environmentObject(firebaseBackend)
-                    } label: {
-                        hubRowLabel(
-                            icon: "sterlingsign.circle.fill",
-                            iconBg: ProjectWorksRevampColors.upcomingAmber.opacity(0.18),
-                            iconFg: ProjectWorksRevampColors.upcomingAmber,
-                            title: "Currency",
-                            subtitle: currencySubtitle
-                        )
-                    }
-                    .accessibilityIdentifier("organisationSettingsHub.sterlingsignCircleFill")
-                    .buttonStyle(.plain)
-                }
-
-                hubSectionTitle("Defaults for new operatives")
-                hubCard {
-                    NavigationLink {
-                        OrganisationWorkingHoursView()
-                            .environmentObject(firebaseBackend)
-                    } label: {
-                        hubRowLabel(
-                            icon: "clock.fill",
-                            iconBg: ProjectWorksRevampColors.jobTypePillBg,
-                            iconFg: ProjectWorksRevampColors.jobTypePillInk,
-                            title: "Working hours & overtime",
-                            subtitle: hoursSubtitle
-                        )
-                    }
-                    .accessibilityIdentifier("organisationSettingsHub.clockFill")
-                    .buttonStyle(.plain)
-                    Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
-                    NavigationLink {
-                        OrganisationAnnualLeaveDefaultsView()
-                            .environmentObject(firebaseBackend)
-                    } label: {
-                        hubRowLabel(
-                            icon: "beach.umbrella.fill",
-                            iconBg: ProjectWorksRevampColors.endDateBg,
-                            iconFg: ProjectWorksRevampColors.endDateFg,
-                            title: "Annual leave",
-                            subtitle: annualLeaveDefaultsSubtitle
-                        )
-                    }
-                    .accessibilityIdentifier("organisationSettingsHub.beachUmbrellaFill")
-                    .buttonStyle(.plain)
-                }
-
-                hubSectionTitle("Booking & scheduling")
-                hubCard {
-                    NavigationLink {
-                        MyScheduleGeneralOptionsView()
-                            .environmentObject(appSettings)
-                    } label: {
-                        hubRowLabel(
-                            icon: "calendar.badge.clock",
-                            iconBg: ProjectWorksRevampColors.pinRoseBg,
-                            iconFg: ProjectWorksRevampColors.pinRoseFg,
-                            title: "Schedule options",
-                            subtitle: scheduleOptionsSubtitle
-                        )
-                    }
-                    .accessibilityIdentifier("organisationSettingsHub.calendarBadgeClock")
-                    .buttonStyle(.plain)
-                    Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
-                    NavigationLink {
-                        OrganisationWarningsSettingsView()
-                            .environmentObject(firebaseBackend)
-                            .environmentObject(operativeStore)
-                            .environmentObject(bookingStore)
-                            .environmentObject(projectStore)
-                            .environmentObject(managerScheduleStore)
-                            .environmentObject(userStore)
-                            .environmentObject(holidayStore)
-                            .environmentObject(appSettings)
-                    } label: {
-                        hubRowLabel(
-                            icon: "exclamationmark.triangle.fill",
-                            iconBg: ProjectWorksRevampColors.requiredPillBg.opacity(0.35),
-                            iconFg: ProjectWorksRevampColors.requiredPillFg,
-                            title: "Warnings",
-                            subtitle: "Change and alter warning defaults"
-                        )
-                    }
-                    .accessibilityIdentifier("organisationSettingsHub.exclamationmarkTriangleFill")
-                    .buttonStyle(.plain)
-                    Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 54)
-                    NavigationLink {
-                        OrganisationMaterialCutOffSettingsView()
-                            .environmentObject(appSettings)
-                            .environmentObject(notificationService)
-                    } label: {
-                        hubRowLabel(
-                            icon: "bell.badge.fill",
-                            iconBg: ProjectWorksRevampColors.upcomingAmber.opacity(0.18),
-                            iconFg: ProjectWorksRevampColors.upcomingAmber,
-                            title: "Material cut-off",
-                            subtitle: materialReminderSubtitle
-                        )
-                    }
-                    .accessibilityIdentifier("organisationSettingsHub.bellBadgeFill")
-                    .buttonStyle(.plain)
-                }
-
-                hubSectionTitle("Payment runs & timesheets", sentenceCase: true)
-                hubCard {
-                    NavigationLink {
-                        OrganisationInvoicingSettingsView()
-                            .environmentObject(firebaseBackend)
-                    } label: {
-                        hubRowLabel(
-                            icon: "doc.text.fill",
-                            iconBg: ProjectWorksRevampColors.blue.opacity(0.12),
-                            iconFg: ProjectWorksRevampColors.blue,
-                            title: "Payment runs & timesheets",
-                            subtitle: invoicingSubtitle
-                        )
-                    }
-                    .accessibilityIdentifier("organisationSettingsHub.docTextFill")
-                    .buttonStyle(.plain)
-                }
-
-                hubSectionTitle("Team")
-                hubCard {
-                    NavigationLink {
-                        ManageUsersView()
-                            .environmentObject(userStore)
-                            .environmentObject(bookingStore)
-                            .environmentObject(operativeStore)
-                            .environmentObject(holidayStore)
-                            .environmentObject(firebaseBackend)
-                            .environmentObject(notificationService)
-                    } label: {
-                        hubRowLabel(
-                            icon: "person.3.fill",
-                            iconBg: ProjectWorksRevampColors.activeGreen.opacity(0.15),
-                            iconFg: ProjectWorksRevampColors.activeGreen,
-                            title: "Roles & permissions",
-                            subtitle: roleCountsSubtitle
-                        )
-                    }
-                    .accessibilityIdentifier("organisationSettingsHub.person3Fill")
-                    .buttonStyle(.plain)
-                }
-
-                hubSectionTitle("Danger zone")
-                hubCard(border: ProjectWorksRevampColors.requiredPillBg) {
-                    Button {
-                        showingDeleteInfo = true
-                    } label: {
-                        HStack(spacing: 12) {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(ProjectWorksRevampColors.requiredPillBg)
-                                .frame(width: 30, height: 30)
-                                .overlay(
-                                    Image(systemName: "trash.fill")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                                )
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Delete Organisation and Cancel Project Planner Membership")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Text("Permanent · cannot be undone")
-                                    .font(.system(size: 11, weight: .regular))
-                                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
+                VStack(alignment: .leading, spacing: 0) {
+                    hubSectionTitle("Identity")
+                    hubCard {
+                        hubNavRow(
+                            icon: "building.fill",
+                            family: .plan,
+                            title: "Company details",
+                            subtitle: "Name, logo, address"
+                        ) {
+                            showingCompanyDetails = true
                         }
-                        .padding(.vertical, 11)
+                        PPRowDivider()
+                        NavigationLink {
+                            OrganisationCurrencyView()
+                                .environmentObject(firebaseBackend)
+                        } label: {
+                            hubRowLabel(
+                                icon: "sterlingsign.circle.fill",
+                                family: .trade,
+                                title: "Currency",
+                                subtitle: currencySubtitle
+                            )
+                        }
+                        .accessibilityIdentifier("organisationSettingsHub.sterlingsignCircleFill")
+                        .buttonStyle(PPMenuRowButtonStyle())
                     }
-                    .accessibilityIdentifier("organisationSettingsHub.delete")
-                    .buttonStyle(.plain)
+
+                    hubSectionTitle("Defaults for new operatives")
+                    hubCard {
+                        NavigationLink {
+                            OrganisationWorkingHoursView()
+                                .environmentObject(firebaseBackend)
+                        } label: {
+                            hubRowLabel(
+                                icon: "clock.fill",
+                                family: .plan,
+                                title: "Working hours & overtime",
+                                subtitle: hoursSubtitle
+                            )
+                        }
+                        .accessibilityIdentifier("organisationSettingsHub.clockFill")
+                        .buttonStyle(PPMenuRowButtonStyle())
+                        PPRowDivider()
+                        NavigationLink {
+                            OrganisationAnnualLeaveDefaultsView()
+                                .environmentObject(firebaseBackend)
+                        } label: {
+                            hubRowLabel(
+                                icon: "beach.umbrella.fill",
+                                family: .sites,
+                                title: "Annual leave",
+                                subtitle: annualLeaveDefaultsSubtitle
+                            )
+                        }
+                        .accessibilityIdentifier("organisationSettingsHub.beachUmbrellaFill")
+                        .buttonStyle(PPMenuRowButtonStyle())
+                    }
+
+                    hubSectionTitle("Booking & scheduling")
+                    hubCard {
+                        NavigationLink {
+                            MyScheduleGeneralOptionsView()
+                                .environmentObject(appSettings)
+                        } label: {
+                            hubRowLabel(
+                                icon: "calendar.badge.clock",
+                                family: .plan,
+                                title: "Schedule options",
+                                subtitle: scheduleOptionsSubtitle
+                            )
+                        }
+                        .accessibilityIdentifier("organisationSettingsHub.calendarBadgeClock")
+                        .buttonStyle(PPMenuRowButtonStyle())
+                        PPRowDivider()
+                        NavigationLink {
+                            OrganisationWarningsSettingsView()
+                                .environmentObject(firebaseBackend)
+                                .environmentObject(operativeStore)
+                                .environmentObject(bookingStore)
+                                .environmentObject(projectStore)
+                                .environmentObject(managerScheduleStore)
+                                .environmentObject(userStore)
+                                .environmentObject(holidayStore)
+                                .environmentObject(appSettings)
+                        } label: {
+                            hubRowLabel(
+                                icon: "exclamationmark.triangle.fill",
+                                family: .alert,
+                                title: "Warnings",
+                                subtitle: "Change and alter warning defaults"
+                            )
+                        }
+                        .accessibilityIdentifier("organisationSettingsHub.exclamationmarkTriangleFill")
+                        .buttonStyle(PPMenuRowButtonStyle())
+                        PPRowDivider()
+                        NavigationLink {
+                            OrganisationMaterialCutOffSettingsView()
+                                .environmentObject(appSettings)
+                                .environmentObject(notificationService)
+                        } label: {
+                            hubRowLabel(
+                                icon: "bell.badge.fill",
+                                family: .trade,
+                                title: "Material cut-off",
+                                subtitle: materialReminderSubtitle
+                            )
+                        }
+                        .accessibilityIdentifier("organisationSettingsHub.bellBadgeFill")
+                        .buttonStyle(PPMenuRowButtonStyle())
+                    }
+
+                    hubSectionTitle("Payment runs & timesheets", sentenceCase: true)
+                    hubCard {
+                        NavigationLink {
+                            OrganisationInvoicingSettingsView()
+                                .environmentObject(firebaseBackend)
+                        } label: {
+                            hubRowLabel(
+                                icon: "doc.text.fill",
+                                family: .plan,
+                                title: "Payment runs & timesheets",
+                                subtitle: invoicingSubtitle
+                            )
+                        }
+                        .accessibilityIdentifier("organisationSettingsHub.docTextFill")
+                        .buttonStyle(PPMenuRowButtonStyle())
+                    }
+
+                    hubSectionTitle("Team")
+                    hubCard {
+                        NavigationLink {
+                            ManageUsersView()
+                                .environmentObject(userStore)
+                                .environmentObject(bookingStore)
+                                .environmentObject(operativeStore)
+                                .environmentObject(holidayStore)
+                                .environmentObject(firebaseBackend)
+                                .environmentObject(notificationService)
+                        } label: {
+                            hubRowLabel(
+                                icon: "person.3.fill",
+                                family: .people,
+                                title: "Roles & permissions",
+                                subtitle: roleCountsSubtitle
+                            )
+                        }
+                        .accessibilityIdentifier("organisationSettingsHub.person3Fill")
+                        .buttonStyle(PPMenuRowButtonStyle())
+                    }
+
+                    hubSectionTitle("Danger zone")
+                    hubCard(border: PPColor.danger.opacity(0.35)) {
+                        Button {
+                            showingDeleteInfo = true
+                        } label: {
+                            HStack(spacing: 13) {
+                                PPIconTile(symbol: "trash.fill", family: .alert, size: PPMetrics.menuIcon)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("Delete Organisation and Cancel Project Planner Membership")
+                                        .font(.body)
+                                        .foregroundStyle(PPColor.danger)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Text("Permanent · cannot be undone")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 64)
+                            .contentShape(Rectangle())
+                        }
+                        .accessibilityIdentifier("organisationSettingsHub.delete")
+                        .buttonStyle(PPMenuRowButtonStyle())
+                    }
                 }
+                .padding(.bottom, 28)
+                .ppContentSheet()
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 28)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Organisation")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 0) {
                     Text("Settings ›")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(PPColor.onNavySecondary)
                     Text("Organisation")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.headline)
+                        .foregroundStyle(.white)
                 }
             }
         }
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
         .sheet(isPresented: $showingCompanyDetails) {
             CompanyDetailsEditView()
                 .environmentObject(firebaseBackend)
@@ -306,83 +294,71 @@ struct OrganisationSettingsHubView: View {
         }
     }
 
+    /// Home-style navy header: company badge, name, country, owner and start date.
     private var orgHeroCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .fill(Color.white.opacity(0.18))
-                        .frame(width: 54, height: 50)
-                    Text(orgInitials)
-                        .font(.system(size: orgInitials.count >= 3 ? 12 : 15, weight: .medium))
-                        .minimumScaleFactor(0.7)
-                        .lineLimit(1)
-                        .foregroundStyle(.white)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(CanonicalBusinessEngine.displayOrganizationName(org?.name) ?? (org?.name ?? ""))
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.white)
-                    Text("\(countryLabel) · Company")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.88))
-                }
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 14) {
+                Text(orgInitials)
+                    .font(.system(orgInitials.count >= 3 ? .headline : .title2, design: .rounded))
+                    .fontWeight(.bold)
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+                    .foregroundStyle(.white)
+                    .frame(width: 60, height: 60)
+                    .background(PPFamily.plan.gradient, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 17, style: .continuous)
+                            .strokeBorder(PPColor.onNavyStroke, lineWidth: 1)
+                    )
+                PPNavyPageTitle(
+                    title: CanonicalBusinessEngine.displayOrganizationName(org?.name) ?? (org?.name ?? ""),
+                    subtitle: "\(countryLabel) · Company"
+                )
                 Spacer(minLength: 0)
             }
-            Rectangle()
-                .fill(Color.white.opacity(0.2))
-                .frame(height: 0.5)
             HStack(spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [ProjectWorksRevampColors.pinRoseFg, Color(red: 0.76, green: 0.33, blue: 0.47)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 26, height: 26)
-                    Text(PlannerUIInitials.from(ownerLine.name))
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.white)
-                }
-                .overlay(Circle().stroke(Color.white.opacity(0.4), lineWidth: 1.5))
-                VStack(alignment: .leading, spacing: 0) {
+                Text(PlannerUIInitials.from(ownerLine.name))
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(PPFamily.people.gradient, in: Circle())
+                    .overlay(Circle().strokeBorder(PPColor.onNavyStroke, lineWidth: 1))
+                VStack(alignment: .leading, spacing: 1) {
                     Text("OWNER & SUPER ADMIN")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .tracking(0.3)
+                        .font(.caption2.weight(.semibold))
+                        .tracking(1.1)
+                        .foregroundStyle(PPColor.onNavySecondary)
                     HStack(spacing: 4) {
                         Text(ownerLine.name)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                         if ownerLine.isYou {
                             Text("· you")
-                                .font(.system(size: 10, weight: .regular))
-                                .foregroundStyle(.white.opacity(0.75))
+                                .font(.footnote)
+                                .foregroundStyle(PPColor.onNavySecondary)
                         }
                     }
+                    .lineLimit(1)
                 }
-                Spacer()
-                Text(shortCreatedLabel)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.95))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.18))
-                    .clipShape(Capsule())
+                Spacer(minLength: 8)
+                PPOnNavyPill(text: shortCreatedLabel)
             }
-        }
-        .padding(16)
-        .background(
-            LinearGradient(
-                colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(PPColor.onNavyFill)
             )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
+            )
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     private var shortCreatedLabel: String {
@@ -454,106 +430,43 @@ struct OrganisationSettingsHubView: View {
         }
     }
     private func hubSectionTitle(_ t: String, sentenceCase: Bool = false) -> some View {
-        Text(sentenceCase ? t : t.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .tracking(0.4)
-            .padding(.leading, 4)
-            .padding(.top, 18)
-            .padding(.bottom, 8)
+        PPGroupLabel(text: t)
     }
 
-    private func hubCard(border: Color = ProjectWorksRevampColors.border, @ViewBuilder content: () -> some View) -> some View {
+    private func hubCard(border: Color? = nil, @ViewBuilder content: () -> some View) -> some View {
         VStack(spacing: 0) {
             content()
         }
-        .padding(.horizontal, 14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        .overlay {
+            if let border {
+                RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous)
+                    .strokeBorder(border, lineWidth: 1)
+            }
+        }
     }
 
     private func hubNavRow(
         icon: String,
-        iconBg: Color,
-        iconFg: Color,
+        family: PPFamily,
         title: String,
         subtitle: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            hubRowLabel(icon: icon, iconBg: iconBg, iconFg: iconFg, title: title, subtitle: subtitle)
+            hubRowLabel(icon: icon, family: family, title: title, subtitle: subtitle)
         }
         .accessibilityIdentifier("organisationSettingsHub.\(AccessibilityID.token(title))")
-        .buttonStyle(.plain)
-    }
-
-    private func hubChevronRow(
-        icon: String,
-        iconBg: Color,
-        iconFg: Color,
-        title: String,
-        subtitle: String
-    ) -> some View {
-        HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(iconBg)
-                .frame(width: 30, height: 30)
-                .overlay(
-                    Image(systemName: icon)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(iconFg)
-                )
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text(subtitle)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-            }
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
-        }
-        .padding(.vertical, 11)
+        .buttonStyle(PPMenuRowButtonStyle())
     }
 
     private func hubRowLabel(
         icon: String,
-        iconBg: Color,
-        iconFg: Color,
+        family: PPFamily,
         title: String,
         subtitle: String
     ) -> some View {
-        HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(iconBg)
-                .frame(width: 30, height: 30)
-                .overlay(
-                    Image(systemName: icon)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(iconFg)
-                )
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                Text(subtitle)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
-        }
-        .padding(.vertical, 11)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+        PPMenuRowLabel(title: title, symbol: icon, family: family, subtitle: subtitle)
     }
 }

@@ -101,11 +101,10 @@ struct AdminManagerMaterialsView: View {
         return materials.filter { calendar.isDate(calendar.startOfDay(for: $0.date), inSameDayAs: day) }
     }
 
-    /// Admins and managers only, never operative mode (`isStaffAccount`; web adds `canViewMaterialOrderHistory`).
-    /// Not the Wholesalers toggle.
+    /// Admins and managers only, never operative mode (`canViewMaterialOrderHistory`). Not the Wholesalers toggle.
     private var canViewQuoteOrderHistory: Bool {
         guard let user = userStore.displayUser else { return false }
-        return CanonicalBusinessEngine.isStaffAccount(UserStore.staffAccountRole(for: user))
+        return CanonicalBusinessEngine.canViewMaterialOrderHistory(UserStore.staffAccountRole(for: user))
     }
 
     private var dayHeader: some View {
