@@ -73,7 +73,7 @@ struct ManageUsersView: View {
                         ScrollView {
                             manageUsersScrollContent
                         }
-                        .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+                        .background(PPColor.page.ignoresSafeArea())
                     } else {
                         // Only admins can manage users – hide content from everyone else
                         manageUsersAccessDeniedView
@@ -84,23 +84,24 @@ struct ManageUsersView: View {
                     ScrollView {
                         manageUsersScrollContent
                     }
-                    .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+                    .background(PPColor.page.ignoresSafeArea())
                     .refreshable {
                         await userStore.loadOrganizationUsers()
                     }
                 }
             }
-            .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(isManagerOperativeManagement && !userStore.canManageUsers() ? "Manage Operatives" : "Manage Users")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") {
                         dismiss()
                     }
                     .accessibilityIdentifier("manageUsers.done")
-                    .font(.system(size: 17))
-                    .foregroundStyle(ManageUserProfilePalette.listBlue)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
                 }
                 
                 if userStore.canManageUsers() {
@@ -110,7 +111,7 @@ struct ManageUsersView: View {
                         }
                         .accessibilityIdentifier("manageUsers.add")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(ManageUserProfilePalette.listBlue)
+                        .foregroundStyle(.white)
                     }
                 }
             }
@@ -229,7 +230,32 @@ struct ManageUsersView: View {
     // MARK: - Revamped list (matches manage-users-iphone.html / ManageUsers.tsx)
 
     private var manageUsersScrollContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            manageUsersNavyHeader
+
+            VStack(alignment: .leading, spacing: 14) {
+                manageUsersListHeader
+                manageUsersCardList
+                if userStore.canManageUsers() {
+                    manageUsersFooterLinks
+                }
+            }
+            .padding(.top, 18)
+            .padding(.bottom, 40)
+            .ppContentSheet()
+        }
+    }
+
+    /// Home-style navy header: the people count the list already shows, then the existing role tabs, status chips and search.
+    private var manageUsersNavyHeader: some View {
         VStack(alignment: .leading, spacing: 14) {
+            PPOverviewTitle(
+                eyebrow: manageUsersHeaderEyebrow,
+                count: "\(filteredUsers.count)",
+                countLabel: rosterSegment.title.lowercased()
+            )
+            .padding(.bottom, 4)
+
             if userStore.canManageUsers() {
                 manageUsersRoleSegment
                 manageUsersStatusChips
@@ -239,26 +265,28 @@ struct ManageUsersView: View {
                 manageUsersSearchBar
                 manageUsersStatusChips
             }
-            manageUsersListHeader
-            manageUsersCardList
-            if userStore.canManageUsers() {
-                manageUsersFooterLinks
-            }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, PPMetrics.screenGutter)
         .padding(.top, 14)
-        .padding(.bottom, 40)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
+    /// Header caption only. Manage Operatives always lists operatives (same tab rule as `filteredUsers`).
+    private var manageUsersHeaderEyebrow: String {
+        userStore.canManageUsers() ? roleSectionTitle : "Operatives"
     }
 
     private var manageUsersRoleSegment: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 4) {
             manageUsersRoleButton(title: "Admins", tab: 0)
             manageUsersRoleButton(title: "Managers", tab: 1)
             manageUsersRoleButton(title: "Operatives", tab: 2)
         }
-        .padding(2)
-        .background(ManageUserProfilePalette.segmentedBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(4)
+        .background(Capsule(style: .continuous).fill(PPColor.onNavyFill))
+        .overlay(Capsule(style: .continuous).strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
     }
 
     private func manageUsersRoleButton(title: String, tab: Int) -> some View {
@@ -266,15 +294,15 @@ struct ManageUsersView: View {
             withAnimation(.easeInOut(duration: 0.2)) { selectedTab = tab }
         } label: {
             Text(title)
-                .font(.system(size: 13.5, weight: .semibold))
-                .foregroundStyle(selectedTab == tab ? ManageUserProfilePalette.textPrimary : ManageUserProfilePalette.textPrimary.opacity(0.8))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(selectedTab == tab ? PPColor.navy : Color.white.opacity(0.82))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                .padding(.vertical, 9)
                 .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    Capsule(style: .continuous)
                         .fill(selectedTab == tab ? Color.white : Color.clear)
-                        .shadow(color: selectedTab == tab ? Color.black.opacity(0.08) : .clear, radius: 2, y: 1)
                 )
+                .contentShape(Capsule(style: .continuous))
         }
         .accessibilityIdentifier("manageUsers.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
@@ -291,27 +319,27 @@ struct ManageUsersView: View {
                     HStack(spacing: 6) {
                         Text(segment.title)
                         Text("\(count)")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.caption2.weight(.bold))
+                            .monospacedDigit()
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
                             .background(
                                 Capsule(style: .continuous)
-                                    .fill(selected ? Color.white.opacity(0.25) : Color.black.opacity(0.07))
+                                    .fill(selected ? PPColor.navy.opacity(0.10) : Color.white.opacity(0.12))
                             )
                     }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(selected ? Color.white : ManageUserProfilePalette.textSecondary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(selected ? PPColor.navy : Color.white.opacity(0.85))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                     .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(selected ? ManageUserProfilePalette.listBlue : Color.white)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(selected ? Color.white : PPColor.onNavyFill)
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(selected ? ManageUserProfilePalette.listBlue : ProjectWorksRevampColors.searchBorder, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(selected ? Color.clear : PPColor.onNavyStroke, lineWidth: 0.5)
                     )
-                    .shadow(color: selected ? ManageUserProfilePalette.listBlue.opacity(0.25) : .clear, radius: 4, y: 2)
                 }
                 .accessibilityIdentifier("manageUsers.row.\(segment.id)")
                 .buttonStyle(.plain)
@@ -323,7 +351,7 @@ struct ManageUsersView: View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(ManageUserProfilePalette.listBlue)
+                .foregroundStyle(PPColor.onNavySecondary)
             TextField(searchPlaceholder, text: $searchText)
                 .accessibilityIdentifier("manageUsers.\(AccessibilityID.token(searchPlaceholder))")
                 .font(.system(size: 16))
@@ -336,7 +364,7 @@ struct ManageUsersView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 16))
-                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .foregroundStyle(PPColor.onNavySecondary)
                 }
                 .accessibilityIdentifier("manageUsers.clearSearch")
                 .buttonStyle(.plain)
@@ -345,13 +373,12 @@ struct ManageUsersView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .foregroundStyle(.white)
+        .background(PPColor.onNavyFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(ManageUserProfilePalette.cardBorder, lineWidth: 0.5)
+                .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
         )
-        .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
     }
 
     private var searchPlaceholder: String {
@@ -368,14 +395,15 @@ struct ManageUsersView: View {
     private var manageUsersListHeader: some View {
         HStack {
             Text(roleSectionTitle.uppercased())
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                .tracking(0.5)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.8)
             Spacer()
             if !filteredUsers.isEmpty {
                 Text("\(filteredUsers.count) \(filteredUsers.count == 1 ? "person" : "people")")
-                    .font(.system(size: 13))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .font(.footnote)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 4)
@@ -386,7 +414,7 @@ struct ManageUsersView: View {
         if filteredUsers.isEmpty {
             manageUsersEmptyCard
         } else {
-            LazyVStack(spacing: 11) {
+            LazyVStack(spacing: 10) {
                 ForEach(filteredUsers) { user in
                     ManageUserRowView(user: user, showAdminBadge: selectedTab == 1 && (user.permissions.adminAccess || user.isSuperAdmin)) {
                         guard user.isStoredUserDocument else { return }
@@ -410,47 +438,48 @@ struct ManageUsersView: View {
     }
 
     private var manageUsersEmptyCard: some View {
-        VStack(spacing: 16) {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(ProjectWorksRevampColors.surface)
-                .frame(width: 64, height: 64)
-                .overlay {
-                    Image(systemName: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "person.3.fill" : "magnifyingglass")
-                        .font(.system(size: 28))
-                        .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.45))
-                }
-                .shadow(color: Color.black.opacity(0.05), radius: 3, y: 1)
+        VStack(spacing: 14) {
+            PPIconTile(
+                symbol: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "person.3.fill" : "magnifyingglass",
+                family: .people,
+                size: PPMetrics.quickActionIcon,
+                lifted: true
+            )
             if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("No matches for “\(searchText.trimmingCharacters(in: .whitespacesAndNewlines))”")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .font(.system(.title3, design: .rounded))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
                 Text("Try another spelling, first name, surname, or email.")
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.75))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 260)
             } else {
                 Text("No \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased())")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .font(.system(.title3, design: .rounded))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
                 Text(
                     userStore.canManageUsers()
                     ? "There are no \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased()) right now. Try another filter or add someone new."
                     : "There are no \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased()) right now. Ask an admin if someone is missing."
                 )
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.75))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 260)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 56)
+        .padding(.vertical, 36)
+        .padding(.horizontal, 20)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var manageUsersFooterLinks: some View {
-        VStack(spacing: 10) {
+        PPGroupedCard {
             Button {
                 dismiss()
                 NotificationCenter.default.post(
@@ -459,18 +488,13 @@ struct ManageUsersView: View {
                     userInfo: ["tab": 3]
                 )
             } label: {
-                Label("View on Operatives page", systemImage: "person.3.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
+                PPMenuRowLabel(title: "View on Operatives page", symbol: "person.3.fill", family: .people)
             }
             .accessibilityIdentifier("manageUsers.dismissmanageusersandselecttab")
-            .buttonStyle(.plain)
-            .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
-            .background(ManageUserProfilePalette.chipPurpleBg)
-            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .buttonStyle(PPMenuRowButtonStyle())
 
             if userStore.hasAdminAccess() {
+                PPRowDivider()
                 Button {
                     dismiss()
                     NotificationCenter.default.post(
@@ -479,18 +503,13 @@ struct ManageUsersView: View {
                         userInfo: ["tab": 4]
                     )
                 } label: {
-                    Label("View on Managers page", systemImage: "person.badge.key.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 13)
+                    PPMenuRowLabel(title: "View on Managers page", symbol: "person.badge.key.fill", family: .people)
                 }
                 .accessibilityIdentifier("manageUsers.dismissmanageusersandselecttab2")
-                .buttonStyle(.plain)
-                .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
-                .background(ManageUserProfilePalette.chipPurpleBg)
-                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .buttonStyle(PPMenuRowButtonStyle())
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         .padding(.top, 8)
     }
 
@@ -537,17 +556,15 @@ struct ManageUsersView: View {
     // MARK: - Access Denied (non-admins)
     
     private var manageUsersAccessDeniedView: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 18) {
             Spacer()
-            Image(systemName: "lock.shield.fill")
-                .font(.system(size: 56))
-                .foregroundColor(.secondary)
+            PPIconTile(symbol: "lock.shield.fill", family: .system, size: PPMetrics.quickActionIcon, lifted: true)
             Text("Manage Users")
-                .font(.title2)
+                .font(.system(.title2, design: .rounded))
                 .fontWeight(.bold)
             Text("Only users with admin access can manage users. If you need access, ask an administrator.")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
             Spacer()
@@ -561,18 +578,16 @@ struct ManageUsersView: View {
         VStack(spacing: 24) {
             Spacer()
             
-            Image(systemName: "person.3")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
+            PPIconTile(symbol: "person.3.fill", family: .people, size: PPMetrics.quickActionIcon, lifted: true)
             
             VStack(spacing: 8) {
                 Text("No Users Yet")
-                    .font(.title2)
+                    .font(.system(.title2, design: .rounded))
                     .fontWeight(.bold)
                 
                 Text("Add your first user to get started")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
             
             if userStore.canManageUsers() {
@@ -580,8 +595,7 @@ struct ManageUsersView: View {
                 showingAddUser = true
             }
             .accessibilityIdentifier("manageUsers.addFirstUser")
-            .buttonStyle(.borderedProminent)
-            .tint(.indigo)
+            .ppProminentCapsule()
             }
             
             Spacer()
@@ -835,12 +849,12 @@ struct ManageUserRowView: View {
                     avatarView
                     VStack(alignment: .leading, spacing: 2) {
                         Text(user.fullName.isEmpty ? user.email : user.fullName)
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
                         Text(user.email)
-                            .font(.system(size: 13))
-                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
@@ -851,8 +865,8 @@ struct ManageUserRowView: View {
                             signUpActionButton
                         }
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Color(red: 0xC4 / 255, green: 0xC4 / 255, blue: 0xCC / 255))
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
                     }
                 }
                 if !badges.isEmpty {
@@ -862,14 +876,10 @@ struct ManageUserRowView: View {
                         .padding(.top, 12)
                 }
             }
-            .padding(15)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.black.opacity(0.02), lineWidth: 0.5)
-            )
-            .shadow(color: Color.black.opacity(0.04), radius: 2, y: 1)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
         .accessibilityIdentifier("manageUserRow.chevronRight")
         .buttonStyle(.plain)
@@ -887,20 +897,19 @@ struct ManageUserRowView: View {
     }
 
     private var avatarView: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: avatarGradientColors,
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: 46, height: 46)
-            Text(userInitials)
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.white)
-        }
+        Text(userInitials)
+            .font(.system(size: 16, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: 46, height: 46)
+            .background(avatarFamily.gradient, in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
+    }
+
+    /// Same role order as the old avatar colours: operative, then admin, then everyone else.
+    private var avatarFamily: PPFamily {
+        if user.permissions.operativeMode { return .sites }
+        if user.permissions.adminAccess || user.isSuperAdmin { return .people }
+        return .plan
     }
 
     private var userInitials: String {
@@ -911,16 +920,6 @@ struct ManageUserRowView: View {
             return String(user.email.prefix(2)).uppercased()
         }
         return combined
-    }
-
-    private var avatarGradientColors: [Color] {
-        if user.permissions.operativeMode {
-            return [Color(red: 0x16 / 255, green: 0xA3 / 255, blue: 0x4A / 255), Color(red: 0x0D / 255, green: 0x94 / 255, blue: 0x88 / 255)]
-        }
-        if user.permissions.adminAccess || user.isSuperAdmin {
-            return [Color(red: 0x4F / 255, green: 0x46 / 255, blue: 0xE5 / 255), Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255)]
-        }
-        return [Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255), Color(red: 0x3B / 255, green: 0x82 / 255, blue: 0xF6 / 255)]
     }
 
     private struct RowBadge: Identifiable {
@@ -2062,9 +2061,10 @@ struct EditUserView: View {
         } message: {
             Text(UserRoleTransitionPolicy.adminAccessLockedUntilAccountTypeChanges)
         }
-        .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle(editNavigationTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .toolbar { editUserToolbarContent }
     }
 
