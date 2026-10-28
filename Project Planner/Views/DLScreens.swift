@@ -51,18 +51,27 @@ struct DLDeadlinesScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            navBar
+            VStack(alignment: .leading, spacing: 0) {
+                navBar
+
+                DLNavyContextHeader(
+                    contextName: contextName,
+                    contextRef: contextRef,
+                    contextKind: contextKind,
+                    total: "\(store.scopedItems.count)",
+                    met: "\(store.completeCount)",
+                    overdue: "\(store.overdueCount)",
+                    overdueHighlighted: store.overdueCount > 0,
+                    progress: store.completionRatio,
+                    meta: "\(store.completeCount) of \(store.scopedItems.count) deadlines met"
+                )
+            }
+            .padding(.bottom, PPMetrics.headerBottomPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .ppNavyHeader()
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
-                    HSContextHero(title: contextName,
-                                  reference: contextRef,
-                                  kind: contextKind,
-                                  progress: store.completionRatio,
-                                  meta: "\(store.completeCount) of \(store.scopedItems.count) deadlines met")
-                        .hsGutter()
-                        .padding(.top, 6)
-
                     statGrid
                     riskBanner
                     weekRail
@@ -76,9 +85,11 @@ struct DLDeadlinesScreen: View {
 
                     Color.clear.frame(height: 26)
                 }
+                .padding(.top, 4)
             }
+            .modifier(DLDeadlinesContentSheet())
         }
-        .hsScreen()
+        .background(PPColor.page.ignoresSafeArea())
         .navigationBarHidden(true)
         .sheet(item: $openItem) { item in
             DLDeadlineDetailSheet(
@@ -125,24 +136,16 @@ struct DLDeadlinesScreen: View {
                     mode = (mode == .list) ? .timeline : .list
                 } label: {
                     Image(systemName: mode == .list ? "chart.bar.doc.horizontal" : "list.bullet")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(HS.teal)
-                        .frame(width: 34, height: 34)
-                        .background(HS.tealBg)
-                        .clipShape(Circle())
                 }
+                    .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                     .accessibilityIdentifier("dlDeadlinesScreen.chartBarDocHorizontal")
                 if canManage {
                     Button {
                         HSHaptic.tap(); showingAdd = true
                     } label: {
                         Image(systemName: "plus")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(HS.onAccent)
-                            .frame(width: 34, height: 34)
-                            .background(HS.teal)
-                            .clipShape(Circle())
                     }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("dlDeadlinesScreen.add")
                 }
             }
@@ -411,16 +414,13 @@ struct DLDeadlineDetailSheet: View {
                         showingEdit = true
                     } label: {
                         Image(systemName: "pencil")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(HS.teal)
-                            .frame(width: 34, height: 34)
-                            .background(HS.tealBg)
-                            .clipShape(Circle())
                     }
+                    .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                     .accessibilityIdentifier("dlDeadlineDetail.editDeadline")
                     .accessibilityLabel("Edit deadline")
                 }
             }
+            .modifier(DLNavyBand())
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
@@ -438,6 +438,7 @@ struct DLDeadlineDetailSheet: View {
                     Color.clear.frame(height: 20)
                 }
             }
+            .modifier(DLDeadlinesContentSheet())
 
             if canManage {
                 HSBottomBar {
@@ -465,7 +466,7 @@ struct DLDeadlineDetailSheet: View {
                 }
             }
         }
-        .hsScreen()
+        .background(PPColor.page.ignoresSafeArea())
         .onAppear { percent = live.progressPercent }
         .sheet(isPresented: $showReschedule) {
             DLRescheduleSheet(item: live, store: store, authorName: authorName)
@@ -779,6 +780,7 @@ struct DLRescheduleSheet: View {
                      subtitle: item.title,
                      onBack: { dismiss() },
                      backSymbol: "xmark") { EmptyView() }
+                .modifier(DLNavyBand())
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
@@ -858,6 +860,7 @@ struct DLRescheduleSheet: View {
                     Color.clear.frame(height: 20)
                 }
             }
+            .modifier(DLDeadlinesContentSheet())
 
             HSBottomBar {
                 VStack(spacing: 8) {
@@ -884,7 +887,7 @@ struct DLRescheduleSheet: View {
                 }
             }
         }
-        .hsScreen()
+        .background(PPColor.page.ignoresSafeArea())
     }
 
     private func dateBlock(label: String, date: Date, tint: Color) -> some View {
@@ -1002,6 +1005,7 @@ struct DLEditDeadlineScreen: View {
                      subtitle: contextKind,
                      onBack: { dismiss() },
                      backSymbol: "xmark") { EmptyView() }
+                .modifier(DLNavyBand())
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
@@ -1014,6 +1018,7 @@ struct DLEditDeadlineScreen: View {
                     Color.clear.frame(height: 20)
                 }
             }
+            .modifier(DLDeadlinesContentSheet())
 
             HSBottomBar {
                 VStack(spacing: 8) {
@@ -1036,7 +1041,7 @@ struct DLEditDeadlineScreen: View {
                 }
             }
         }
-        .hsScreen()
+        .background(PPColor.page.ignoresSafeArea())
         .sheet(isPresented: $showingAuditPicker) {
             DLSiteAuditAttachSheet(
                 audits: siteAudits,
@@ -1417,60 +1422,64 @@ struct DLSiteAuditAttachSheet: View {
                      subtitle: "One per deadline",
                      onBack: { dismiss() },
                      backSymbol: "xmark") { EmptyView() }
+                .modifier(DLNavyBand())
 
-            if audits.isEmpty {
-                HSEmptyState(icon: "clipboard",
-                             title: "No site audits yet",
-                             message: "Create a site audit on this job first, then attach it here.")
-                    .hsGutter()
-                    .padding(.top, 24)
-                Spacer()
-            } else {
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 10) {
-                        ForEach(audits) { audit in
-                            let selected = selectedId == audit.id
-                            HStack(alignment: .center, spacing: 10) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack(spacing: 6) {
-                                        Text(audit.typeLabel)
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundStyle(HS.ink)
-                                        Text(audit.title)
-                                            .font(.system(size: 13, weight: .bold))
-                                            .foregroundStyle(HS.ink)
-                                            .hsNoClip(2)
+            VStack(spacing: 0) {
+                if audits.isEmpty {
+                    HSEmptyState(icon: "clipboard",
+                                 title: "No site audits yet",
+                                 message: "Create a site audit on this job first, then attach it here.")
+                        .hsGutter()
+                        .padding(.top, 24)
+                    Spacer()
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 10) {
+                            ForEach(audits) { audit in
+                                let selected = selectedId == audit.id
+                                HStack(alignment: .center, spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 6) {
+                                            Text(audit.typeLabel)
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundStyle(HS.ink)
+                                            Text(audit.title)
+                                                .font(.system(size: 13, weight: .bold))
+                                                .foregroundStyle(HS.ink)
+                                                .hsNoClip(2)
+                                        }
+                                        Text(audit.jobLine)
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(HS.slate)
+                                            .hsNoClip(1)
+                                        Text("\(audit.authorName) · \(audit.itemCount) items · \(DLFormat.day(audit.date))")
+                                            .font(.system(size: 11.5))
+                                            .foregroundStyle(HS.slate2)
+                                            .hsNoClip(1)
                                     }
-                                    Text(audit.jobLine)
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(HS.slate)
-                                        .hsNoClip(1)
-                                    Text("\(audit.authorName) · \(audit.itemCount) items · \(DLFormat.day(audit.date))")
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(HS.slate2)
-                                        .hsNoClip(1)
+                                    Spacer(minLength: 8)
+                                    Button {
+                                        HSHaptic.select()
+                                        selectedId = selected ? nil : audit.id
+                                    } label: {
+                                        Image(systemName: selected ? "checkmark.circle.fill" : "plus.circle.fill")
+                                            .font(.system(size: 28, weight: .semibold))
+                                            .foregroundStyle(selected ? HS.teal : HS.slate2)
+                                    }
+                                    .accessibilityIdentifier("dlSiteAuditAttach.row.\(audit.id)")
+                                    .buttonStyle(HSPressStyle())
+                                    .accessibilityLabel(selected ? "Remove site audit" : "Attach site audit")
                                 }
-                                Spacer(minLength: 8)
-                                Button {
-                                    HSHaptic.select()
-                                    selectedId = selected ? nil : audit.id
-                                } label: {
-                                    Image(systemName: selected ? "checkmark.circle.fill" : "plus.circle.fill")
-                                        .font(.system(size: 28, weight: .semibold))
-                                        .foregroundStyle(selected ? HS.teal : HS.slate2)
-                                }
-                                .accessibilityIdentifier("dlSiteAuditAttach.row.\(audit.id)")
-                                .buttonStyle(HSPressStyle())
-                                .accessibilityLabel(selected ? "Remove site audit" : "Attach site audit")
+                                .hsCard()
                             }
-                            .hsCard()
                         }
+                        .hsGutter()
+                        .padding(.top, 8)
+                        .padding(.bottom, 24)
                     }
-                    .hsGutter()
-                    .padding(.top, 8)
-                    .padding(.bottom, 24)
                 }
             }
+            .modifier(DLDeadlinesContentSheet())
 
             HSBottomBar {
                 Button {
@@ -1483,7 +1492,86 @@ struct DLSiteAuditAttachSheet: View {
                 .buttonStyle(HSFilledButton(tone: .teal))
             }
         }
-        .hsScreen()
+        .background(PPColor.page.ignoresSafeArea())
+    }
+}
+
+// =====================================================================
+// MARK: - Navy header + light sheet (visual only, Deadlines screens)
+// =====================================================================
+
+/// Site name, job number and kind (as the old context hero showed) plus the
+/// deadline counts the screen already computes. Labels only, no actions.
+private struct DLNavyContextHeader: View {
+    let contextName: String
+    let contextRef: String
+    let contextKind: String
+    let total: String
+    let met: String
+    let overdue: String
+    let overdueHighlighted: Bool
+    let progress: Double
+    let meta: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                PPNavyPageTitle(
+                    eyebrow: "\(contextRef) · \(contextKind)",
+                    title: contextName
+                )
+                Spacer(minLength: 8)
+                PPIconTile(symbol: "calendar.badge.clock", family: .plan, size: 40)
+            }
+
+            HStack(alignment: .top, spacing: 14) {
+                PPStat(value: total, label: "Deadlines")
+                PPStatDivider()
+                PPStat(value: met, label: "Met")
+                PPStatDivider()
+                PPStat(value: overdue, label: "Overdue", highlight: overdueHighlighted)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                PPOnNavyProgressBar(fraction: progress)
+                Text(meta)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(PPColor.onNavySecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 4)
+    }
+}
+
+/// Navy strip behind a sub-screen's existing HSNavBar, so the light sheet below
+/// slides over it like the main Deadlines page. Visual only.
+private struct DLNavyBand: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.bottom, PPMetrics.contentOverlap)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .ppNavyHeader()
+    }
+}
+
+/// Light rounded sheet that slides up over the navy header (Home / H&S style). Visual only.
+private struct DLDeadlinesContentSheet: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(PPColor.page)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: PPMetrics.contentCornerRadius,
+                    topTrailingRadius: PPMetrics.contentCornerRadius,
+                    style: .continuous
+                )
+            )
+            .padding(.top, -PPMetrics.contentOverlap)
     }
 }
 
