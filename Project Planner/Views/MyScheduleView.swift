@@ -107,13 +107,61 @@ fileprivate func mergedDaySegments(
     return DayHoursSegmentTotals(totalPaidHours: paidSum, early: early, mid: mid, late: late, otReported: ot)
 }
 
-fileprivate func myScheduleLocationStripeColor(_ t: ManagerLocationType) -> Color {
+/// Icon tile colour family per location type (Midnight design). Display only.
+fileprivate func myScheduleLocationFamily(_ t: ManagerLocationType) -> PPFamily {
     switch t {
-    case .office: return ProjectWorksRevampColors.blue
-    case .workingFromHome: return Color(red: 0.325, green: 0.29, blue: 0.718)
-    case .siteSurvey: return ProjectWorksRevampColors.upcomingAmber
-    case .project, .smallWork: return ProjectWorksRevampColors.activeGreen
-    case .custom: return ProjectWorksRevampColors.muted
+    case .office: return .plan
+    case .workingFromHome: return .people
+    case .siteSurvey: return .trade
+    case .project, .smallWork: return .sites
+    case .custom: return .system
+    }
+}
+
+/// Icon tile symbol per location type (Midnight design). Display only.
+fileprivate func myScheduleLocationSymbol(_ t: ManagerLocationType) -> String {
+    switch t {
+    case .office: return "building.2.fill"
+    case .workingFromHome: return "house.fill"
+    case .siteSurvey: return "mappin.and.ellipse"
+    case .project: return "hammer.fill"
+    case .smallWork: return "wrench.and.screwdriver.fill"
+    case .custom: return "mappin"
+    }
+}
+
+/// Small amber pill (OT, Annual Leave) that reads in light and dark mode.
+fileprivate struct MyScheduleAmberPill: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(PPFamily.trade.bottom)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(PPFamily.trade.top.opacity(0.16), in: Capsule())
+    }
+}
+
+/// Small uppercase caption used above groups of rows on the light sheet.
+fileprivate struct MyScheduleCaption: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .tracking(0.8)
+            .textCase(.uppercase)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+    }
+}
+
+/// Rounded card surface on the light sheet (same look as the Daily overview cards).
+fileprivate extension View {
+    func myScheduleCard(cornerRadius: CGFloat = PPMetrics.cardRadius) -> some View {
+        background(PPColor.card, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
@@ -165,7 +213,8 @@ fileprivate func operativeBookingClockSubtitle(_ b: Booking, day: Date, policy: 
 }
 
 fileprivate struct MyScheduleBookingStripeRow: View {
-    let stripeColor: Color
+    let family: PPFamily
+    let symbol: String
     let title: String
     let subtitle: String
     let otChip: String?
@@ -174,70 +223,69 @@ fileprivate struct MyScheduleBookingStripeRow: View {
     var onDelete: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            Rectangle()
-                .fill(stripeColor)
-                .frame(width: 4)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 10) {
-                    Button {
-                        onEdit?()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(title)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text(subtitle)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 13) {
+                PPIconTile(symbol: symbol, family: family, size: PPMetrics.menuIcon)
+                Button {
+                    onEdit?()
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(subtitle)
+                            .font(.footnote)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(onEdit == nil)
-                    .accessibilityIdentifier("myScheduleBookingStripe.open")
-                    if let otChip {
-                        Text(otChip)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.522, green: 0.310, blue: 0.043))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color(red: 0.98, green: 0.933, blue: 0.855))
-                            .clipShape(Capsule())
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                if showActions, onEdit != nil || onDelete != nil {
-                    HStack(spacing: 16) {
-                        if let onEdit {
-                            Button("Edit", action: onEdit)
-                                .accessibilityIdentifier("myScheduleBookingStripe.edit")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.blue)
-                                .buttonStyle(.plain)
-                        }
-                        Spacer(minLength: 0)
-                        if let onDelete {
-                            Button(action: onDelete) {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                            }
-                            .accessibilityIdentifier("myScheduleBookingStripe.delete")
-                            .buttonStyle(.plain)
-                        }
-                    }
+                .buttonStyle(.plain)
+                .disabled(onEdit == nil)
+                .accessibilityIdentifier("myScheduleBookingStripe.open")
+                if let otChip {
+                    MyScheduleAmberPill(text: otChip)
                 }
             }
-            .padding(12)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            if showActions, onEdit != nil || onDelete != nil {
+                Rectangle()
+                    .fill(Color(.separator))
+                    .frame(height: 0.5)
+                    .padding(.leading, 14 + PPMetrics.menuIcon + 13)
+                    .accessibilityHidden(true)
+                HStack(spacing: 16) {
+                    if let onEdit {
+                        Button(action: onEdit) {
+                            Text("Edit")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(PPColor.brand)
+                        }
+                        .accessibilityIdentifier("myScheduleBookingStripe.edit")
+                        .buttonStyle(.plain)
+                    }
+                    Spacer(minLength: 0)
+                    if let onDelete {
+                        Button(action: onDelete) {
+                            Image(systemName: "trash")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 32, height: 32)
+                                .contentShape(Rectangle())
+                        }
+                        .accessibilityIdentifier("myScheduleBookingStripe.delete")
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.leading, 14 + PPMetrics.menuIcon + 13)
+                .padding(.trailing, 10)
+                .padding(.vertical, 4)
+            }
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .myScheduleCard(cornerRadius: PPMetrics.rowCardRadius)
     }
 }
 
@@ -248,48 +296,43 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
     let onSelectDay: () -> Void
     private let cal = Calendar.current
 
+    /// Sits on the navy header (Daily overview style): round ‹ › buttons either side of a big date.
     var body: some View {
-        HStack {
+        HStack(alignment: .center, spacing: 10) {
             Button(action: onPrev) {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
             }
             .accessibilityIdentifier("myScheduleDayNavigatorCard.back")
-            .buttonStyle(.plain)
+            .buttonStyle(PPOnNavyCircleButtonStyle())
             Button(action: onSelectDay) {
-                VStack(spacing: 2) {
-                    Text(dayTitle)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                VStack(alignment: .leading, spacing: 2) {
                     Text(cal.isDateInToday(day) ? "Today · Tap to pick a day" : "Tap to pick a day")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(PPColor.onNavySecondary)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(dayTitle)
+                            .font(.system(.title2, design: .rounded))
+                            .fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                        Image(systemName: "calendar")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(PPColor.onNavySecondary)
+                    }
                 }
-                .frame(maxWidth: .infinity, minHeight: 44)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .accessibilityIdentifier("myScheduleDayNavigatorCard.todayTapToPickADay")
-            .buttonStyle(.plain)
+            .buttonStyle(PPPressableButtonStyle())
             Button(action: onNext) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
             }
             .accessibilityIdentifier("myScheduleDayNavigatorCard.chevronRight")
-            .buttonStyle(.plain)
+            .buttonStyle(PPOnNavyCircleButtonStyle())
         }
-        .padding(12)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
     }
 
     private var dayTitle: String {
@@ -311,118 +354,107 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
         PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
     }
 
+    private static let leaveGradient = LinearGradient(
+        colors: [Color(red: 0.60, green: 0.24, blue: 0.11), Color(red: 0.78, green: 0.40, blue: 0.27)],
+        startPoint: .leading,
+        endPoint: .trailing
+    )
+
+    private var hourTicks: some View {
+        HStack {
+            ForEach(["6:00", "9:00", "12:00", "15:00", "18:00"], id: \.self) { t in
+                Text(t)
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
     @ViewBuilder
     var body: some View {
         if let annualLeaveLabel, !annualLeaveLabel.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .center, spacing: 13) {
+                    PPIconTile(symbol: "sun.max.fill", family: .trade, size: PPMetrics.menuIcon)
+                    VStack(alignment: .leading, spacing: 1) {
                         Text("Total hours")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
                         Text("Standard \(timeline.standardWindowStart ?? policy.standardDayStart)–\(timeline.standardWindowEnd ?? policy.standardDayEnd)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .font(.footnote)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
-                    Text("Annual Leave")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.62, green: 0.24, blue: 0.11))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color(red: 0.98, green: 0.933, blue: 0.855))
-                        .clipShape(Capsule())
+                    MyScheduleAmberPill(text: "Annual Leave")
                 }
                 GeometryReader { geo in
                     let w = geo.size.width
                     ZStack(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
+                            .fill(PPColor.well)
                         switch annualLeaveTimeSlot ?? .fullDay {
                         case .fullDay:
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [Color(red: 0.60, green: 0.24, blue: 0.11), Color(red: 0.78, green: 0.40, blue: 0.27)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
+                                .fill(Self.leaveGradient)
                                 .frame(width: w)
                         case .morning:
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [Color(red: 0.60, green: 0.24, blue: 0.11), Color(red: 0.78, green: 0.40, blue: 0.27)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
+                                .fill(Self.leaveGradient)
                                 .frame(width: w * 0.5)
                         case .afternoon:
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [Color(red: 0.60, green: 0.24, blue: 0.11), Color(red: 0.78, green: 0.40, blue: 0.27)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
+                                .fill(Self.leaveGradient)
                                 .frame(width: w * 0.5)
                                 .offset(x: w * 0.5)
                         }
                     }
                     .overlay(alignment: .center) {
                         Text(annualLeaveLabel)
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.white)
                     }
                 }
                 .frame(height: 28)
-                HStack {
-                    ForEach(["6:00", "9:00", "12:00", "15:00", "18:00"], id: \.self) { t in
-                        Text(t)
-                            .font(.system(size: 9))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                            .frame(maxWidth: .infinity)
-                    }
-                }
+                hourTicks
             }
             .padding(14)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-            )
+            .myScheduleCard()
         } else {
             let ot = segments.otReported
             let paidSum = segments.totalPaidHours
             let paidStd = policy.standardPaidHours
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .center, spacing: 13) {
+                    PPIconTile(symbol: "clock.fill", family: .plan, size: PPMetrics.menuIcon)
+                    VStack(alignment: .leading, spacing: 1) {
                         Text("Total hours")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
                         Text("Standard \(timeline.standardWindowStart ?? policy.standardDayStart)–\(timeline.standardWindowEnd ?? policy.standardDayEnd) · \(ScheduleCoverageFormat.hours(paidStd)) hrs")
-                            .font(.system(size: 11))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .font(.footnote)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
                     }
                     Spacer(minLength: 8)
                     VStack(alignment: .trailing, spacing: 2) {
-                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
                             Text(ScheduleCoverageFormat.hours(paidSum))
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                                .font(.system(.title2, design: .rounded))
+                                .fontWeight(.bold)
+                                .monospacedDigit()
+                                .foregroundStyle(.primary)
                             Text("hrs")
-                                .font(.system(size: 11))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                         if ot > 0.05 {
                             Text("+\(ScheduleCoverageFormat.hours(ot)) overtime")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(Color(red: 0.522, green: 0.310, blue: 0.043))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(PPFamily.trade.bottom)
                         }
                     }
                 }
@@ -432,32 +464,20 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                     workIntervals: workIntervals,
                     centerLabel: paidSum > 0.05 ? "\(ScheduleCoverageFormat.hours(paidSum))h" : nil
                 )
-                HStack {
-                    ForEach(["6:00", "9:00", "12:00", "15:00", "18:00"], id: \.self) { t in
-                        Text(t)
-                            .font(.system(size: 9))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                            .frame(maxWidth: .infinity)
-                    }
-                }
+                hourTicks
                 if policy.unpaidBreakMinutes > 0, !policy.breakPaid, workIntervals.contains(where: { !$0.breakRemoved }) {
                     HStack(spacing: 6) {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(Color(red: 0.98, green: 0.65, blue: 0.15))
                             .frame(width: 14, height: 4)
                         Text("\(policy.unpaidBreakMinutes)-minute unpaid break (\(policy.breakWindowStart)–\(policy.breakWindowEnd))")
-                            .font(.system(size: 10))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
             .padding(14)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-            )
+            .myScheduleCard()
         }
     }
 }
@@ -577,32 +597,33 @@ struct MyScheduleView: View {
                         .environmentObject(holidayStore)
                 } else {
                     VStack(spacing: 16) {
-                        Image(systemName: "lock.fill")
-                            .font(.largeTitle)
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                        PPIconTile(symbol: "lock.fill", family: .system, size: PPMetrics.quickActionIcon, lifted: true)
                         Text("Office and site attendance booking is only available to administrators and managers.")
-                            .font(.system(size: 15, weight: .regular))
+                            .font(.body)
                             .multilineTextAlignment(.center)
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal)
                     }
                     .padding(24)
+                    .frame(maxWidth: .infinity)
+                    .myScheduleCard()
+                    .padding(.horizontal, PPMetrics.screenGutter)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .appChromeCardContainer()
-                    .padding(.horizontal, 18)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("My Schedule")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
                         .accessibilityIdentifier("mySchedule.done")
+                        .fontWeight(.semibold)
+                        .tint(.white)
                 }
             }
-            .appChromeNavigationBarSurface()
+            .ppNavyNavigationBar()
         }
         .onAppear {
             managerScheduleStore.loadData()
@@ -1430,9 +1451,11 @@ struct ManagerScheduleContentView: View {
                     dayButton(date: date)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, PPMetrics.screenGutter)
         }
         .padding(.vertical, 10)
+        // Runs edge to edge across the navy header.
+        .padding(.horizontal, -PPMetrics.screenGutter)
     }
 
     private func dayButton(date: Date) -> some View {
@@ -1440,39 +1463,39 @@ struct ManagerScheduleContentView: View {
         let isMultiSelected = selectedDates.contains(calendar.startOfDay(for: date))
         let hasBooking = hasScheduleDot(on: date)
         let hasAnnualLeave = annualLeaveDisplayLabel(on: date) != nil
+        let tileShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
         return Button(action: { selectedDate = date }) {
             VStack(spacing: 4) {
                 Text(dayLabel(date))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : ProjectWorksRevampColors.muted)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(isSelected ? PPColor.navy.opacity(0.65) : PPColor.onNavySecondary)
                 Text("\(calendar.component(.day, from: date))")
-                    .font(.system(size: 22, weight: isSelected ? .bold : .regular))
-                    .foregroundStyle(isSelected ? Color.white : ProjectWorksRevampColors.ink)
+                    .font(.system(.title2, design: .rounded))
+                    .fontWeight(isSelected ? Font.Weight.bold : Font.Weight.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(isSelected ? PPColor.navy : Color.white)
                 HStack(spacing: 3) {
                     if hasAnnualLeave {
                         Circle()
-                            .fill(isSelected ? Color.white : Color.orange)
+                            .fill(PPFamily.trade.top)
                             .frame(width: 6, height: 6)
                     }
                     if hasBooking {
                         Circle()
-                            .fill(isSelected ? Color.white.opacity(hasAnnualLeave ? 0.85 : 1) : ProjectWorksRevampColors.blue)
+                            .fill(PPColor.glow)
                             .frame(width: 6, height: 6)
                     }
                 }
                 .frame(height: 6)
             }
             .frame(width: 48, height: 64)
-            .background(isSelected ? ProjectWorksRevampColors.blue : Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(tileShape.fill(isSelected ? Color.white : PPColor.onNavyFill))
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(
-                        isSelected ? ProjectWorksRevampColors.blue : (isMultiSelected ? ProjectWorksRevampColors.jobTypePillInk : ProjectWorksRevampColors.border),
-                        lineWidth: isSelected ? 2 : (isMultiSelected ? 2 : 0.5)
-                    )
+                tileShape.strokeBorder(
+                    isMultiSelected ? PPColor.glow : PPColor.onNavyStroke,
+                    lineWidth: isMultiSelected ? 2 : 0.5
+                )
             )
-            .shadow(color: isSelected ? ProjectWorksRevampColors.blue.opacity(0.28) : .clear, radius: 4, x: 0, y: 2)
         }
         .accessibilityIdentifier("managerScheduleContent.day2")
         .buttonStyle(PlainButtonStyle())
@@ -1504,20 +1527,87 @@ struct ManagerScheduleContentView: View {
             showAddBookingSheet = true
         } label: {
             Text("+ Add booking")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.blue)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(PPColor.brand)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(ProjectWorksRevampColors.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(
+                    PPColor.card,
+                    in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous)
+                )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(style: StrokeStyle(lineWidth: 1.2, dash: [5, 4]))
-                        .foregroundStyle(ProjectWorksRevampColors.border)
+                    RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous)
+                        .strokeBorder(PPColor.brand.opacity(0.45), style: StrokeStyle(lineWidth: 1.2, dash: [5, 4]))
                 )
         }
         .accessibilityIdentifier("managerScheduleContent.addBooking2")
-        .buttonStyle(.plain)
+        .buttonStyle(PPPressableButtonStyle())
+    }
+
+    /// Navy header (Daily overview style): day navigator, the day's numbers, then the multi-day controls.
+    private func managerNavyHeader(
+        day: Date,
+        bookingCount: Int,
+        paidHours: Double,
+        daysBookedInWeek: Int
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MyScheduleDayNavigatorCard(
+                day: day,
+                onPrev: { shiftSelectedDay(by: -1) },
+                onNext: { shiftSelectedDay(by: 1) },
+                onSelectDay: { showingDayPicker = true }
+            )
+
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(bookingCount)", label: bookingCount == 1 ? "Booking" : "Bookings")
+                PPStatDivider()
+                PPStat(value: ScheduleCoverageFormat.hours(paidHours), label: "Total hrs")
+                PPStatDivider()
+                PPStat(value: "\(daysBookedInWeek)/\(weekDates.count)", label: "Days booked this week")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 18)
+
+            HStack(spacing: 8) {
+                Button {
+                    isMultiDaySelectionEnabled.toggle()
+                    if isMultiDaySelectionEnabled {
+                        selectedDates = [calendar.startOfDay(for: day)]
+                    } else {
+                        selectedDates = []
+                    }
+                } label: {
+                    PPOnNavyPill(
+                        text: isMultiDaySelectionEnabled ? "Booking \(max(selectedDates.count, 1)) days" : "Book more than one day",
+                        symbol: isMultiDaySelectionEnabled ? "checkmark.circle.fill" : "calendar"
+                    )
+                }
+                .accessibilityIdentifier("managerScheduleContent.bookingDays")
+                .buttonStyle(PPPressableButtonStyle())
+                Spacer()
+                if isMultiDaySelectionEnabled {
+                    Button {
+                        selectedDates = []
+                    } label: {
+                        PPOnNavyPill(text: "Clear", symbol: "xmark")
+                    }
+                    .accessibilityIdentifier("managerScheduleContent.clear")
+                    .buttonStyle(PPPressableButtonStyle())
+                }
+            }
+            .padding(.top, 18)
+
+            if isMultiDaySelectionEnabled {
+                dayStrip
+                    .padding(.top, 4)
+            }
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     private func dayContent(for day: Date) -> some View {
@@ -1527,43 +1617,22 @@ struct ManagerScheduleContentView: View {
         let holidayBookings = myHolidayBookings(on: day)
         let annualLeaveLabel = annualLeaveDisplayLabel(on: day)
         let annualLeaveSlotForDay = annualLeaveTimeSlot(on: day)
+        let segments = mergedDaySegments(manager: bookings, operative: operativeBookings, day: day, policy: policy)
+        let daysBookedInWeek = weekDates.filter { hasScheduleDot(on: $0) }.count
         return ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                    MyScheduleDayNavigatorCard(
-                        day: day,
-                        onPrev: { shiftSelectedDay(by: -1) },
-                        onNext: { shiftSelectedDay(by: 1) },
-                        onSelectDay: { showingDayPicker = true }
-                    )
-                    HStack {
-                        Button(isMultiDaySelectionEnabled ? "Booking \(max(selectedDates.count, 1)) days" : "Book more than one day") {
-                            isMultiDaySelectionEnabled.toggle()
-                            if isMultiDaySelectionEnabled {
-                                selectedDates = [calendar.startOfDay(for: day)]
-                            } else {
-                                selectedDates = []
-                            }
-                        }
-                        .accessibilityIdentifier("managerScheduleContent.bookingDays")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                        .buttonStyle(.plain)
-                        Spacer()
-                        if isMultiDaySelectionEnabled {
-                            Button("Clear") { selectedDates = [] }
-                                .accessibilityIdentifier("managerScheduleContent.clear")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                                .buttonStyle(.plain)
-                        }
-                    }
-                    if isMultiDaySelectionEnabled {
-                        dayStrip
-                    }
+            VStack(alignment: .leading, spacing: 0) {
+                managerNavyHeader(
+                    day: day,
+                    bookingCount: bookings.count + operativeBookings.count,
+                    paidHours: segments.totalPaidHours,
+                    daysBookedInWeek: daysBookedInWeek
+                )
+
+                VStack(alignment: .leading, spacing: 0) {
                     MyScheduleTodaysHoursCard(
                         day: day,
                         policy: policy,
-                        segments: mergedDaySegments(manager: bookings, operative: operativeBookings, day: day, policy: policy),
+                        segments: segments,
                         workIntervals: ScheduleHoursTimelineSupport.workIntervals(
                             manager: bookings,
                             operative: operativeBookings,
@@ -1572,93 +1641,90 @@ struct ManagerScheduleContentView: View {
                         annualLeaveLabel: annualLeaveLabel,
                         annualLeaveTimeSlot: annualLeaveSlotForDay
                     )
+                    .padding(.top, 20)
 
-                if !holidayBookings.isEmpty {
-                    Section {
-                        ForEach(holidayBookings) { holiday in
-                            Button {
-                                NotificationCenter.default.post(name: NSNotification.Name("openHoliday"), object: nil)
-                            } label: {
-                                HStack {
-                                    Label("Annual Leave", systemImage: "sun.max.fill")
-                                        .font(.subheadline)
-                                        .foregroundColor(.orange)
-                                    Spacer()
-                                    Text(holiday.timeSlot == .fullDay ? "Full Day" : holiday.timeSlot.rawValue)
-                                        .font(.caption)
-                                        .foregroundColor(.orange)
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(.orange.opacity(0.8))
+                    if !holidayBookings.isEmpty {
+                        PPSectionHeader("Annual leave")
+                        PPGroupedCard {
+                            ForEach(holidayBookings) { holiday in
+                                Button {
+                                    NotificationCenter.default.post(name: NSNotification.Name("openHoliday"), object: nil)
+                                } label: {
+                                    PPMenuRowLabel(
+                                        title: "Annual Leave",
+                                        symbol: "sun.max.fill",
+                                        family: .trade,
+                                        detail: holiday.timeSlot == .fullDay ? "Full Day" : holiday.timeSlot.rawValue
+                                    )
                                 }
-                                .padding(.vertical, 4)
+                                .accessibilityIdentifier("managerScheduleContent.row.\(holiday.id).openholiday")
+                                .buttonStyle(PPMenuRowButtonStyle())
+                                if holiday.id != holidayBookings.last?.id {
+                                    PPRowDivider()
+                                }
                             }
-                            .accessibilityIdentifier("managerScheduleContent.row.\(holiday.id).openholiday")
-                            .buttonStyle(.plain)
                         }
-                    } header: {
-                        Text("Annual leave")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                     }
-                }
 
-                Section {
-                    if bookings.isEmpty && operativeBookings.isEmpty {
-                        Text("No bookings for this day.")
-                            .font(.system(size: 15))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                    PPSectionHeader("Bookings")
+                    VStack(alignment: .leading, spacing: 10) {
+                        if bookings.isEmpty && operativeBookings.isEmpty {
+                            HStack(spacing: 13) {
+                                PPIconTile(symbol: "calendar", family: .system, size: PPMetrics.menuIcon)
+                                Text("No bookings for this day.")
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    } else if !bookings.isEmpty {
-                        ForEach(bookings) { b in
-                            bookingRow(b: b)
+                            .myScheduleCard(cornerRadius: PPMetrics.rowCardRadius)
+                        } else if !bookings.isEmpty {
+                            ForEach(bookings) { b in
+                                bookingRow(b: b)
+                            }
+                        }
+                        dashedAddBookingButton()
+                            .padding(.top, 4)
+                    }
+
+                    if !operativeBookings.isEmpty {
+                        PPSectionHeader("Project / small works")
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(operativeBookings) { b in
+                                let p = projectStore.projects.first(where: { $0.id == b.projectId }) ??
+                                    projectStore.smallWorks.first(where: { $0.id == b.projectId })
+                                MyScheduleBookingStripeRow(
+                                    family: .sites,
+                                    symbol: "hammer.fill",
+                                    title: p.map { "\($0.jobNumber) \($0.siteName)" } ?? "Project booking",
+                                    subtitle: operativeBookingClockSubtitle(b, day: day, policy: policy),
+                                    otChip: operativeBookingOtChipText(b, policy: policy),
+                                    showActions: true,
+                                    onEdit: {
+                                        operativeBookingEditTarget = b
+                                    },
+                                    onDelete: {
+                                        Task { await bookingStore.deleteBooking(b) }
+                                    }
+                                )
+                            }
                         }
                     }
-                    dashedAddBookingButton()
-                    .padding(.top, 4)
-                } header: {
-                    Text("Bookings")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                        .textCase(.uppercase)
-                        .tracking(0.4)
-                }
 
-                if !operativeBookings.isEmpty {
-                    Section {
-                        ForEach(operativeBookings) { b in
-                            let p = projectStore.projects.first(where: { $0.id == b.projectId }) ??
-                                projectStore.smallWorks.first(where: { $0.id == b.projectId })
-                            MyScheduleBookingStripeRow(
-                                stripeColor: ProjectWorksRevampColors.activeGreen,
-                                title: p.map { "\($0.jobNumber) \($0.siteName)" } ?? "Project booking",
-                                subtitle: operativeBookingClockSubtitle(b, day: day, policy: policy),
-                                otChip: operativeBookingOtChipText(b, policy: policy),
-                                showActions: true,
-                                onEdit: {
-                                    operativeBookingEditTarget = b
-                                },
-                                onDelete: {
-                                    Task { await bookingStore.deleteBooking(b) }
-                                }
-                            )
-                        }
-                    } header: {
-                        Text("Project / small works")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                            .textCase(.uppercase)
-                            .tracking(0.4)
-                    }
+                    Text("Tap + Add booking to choose company locations, projects, or small works.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.top, 20)
+                        .padding(.bottom, 12)
+                    addManagerWeekToCalendarButton
                 }
-
-                Text("Tap + Add booking to choose company locations, projects, or small works.")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .padding(.horizontal, 2)
-                addManagerWeekToCalendarButton
+                .padding(.bottom, 28)
+                .ppContentSheet()
             }
-            .padding()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1666,7 +1732,8 @@ struct ManagerScheduleContentView: View {
     private func bookingRow(b: ManagerSiteBooking) -> some View {
         let p = payrollPolicy(for: b.date)
         return MyScheduleBookingStripeRow(
-            stripeColor: myScheduleLocationStripeColor(b.locationType),
+            family: myScheduleLocationFamily(b.locationType),
+            symbol: myScheduleLocationSymbol(b.locationType),
             title: locationNameString(for: b),
             subtitle: managerBookingClockSubtitle(b, day: b.date, policy: p),
             otChip: managerBookingOtChipText(b, policy: p),
@@ -1885,13 +1952,14 @@ struct ManagerScheduleContentView: View {
             }
         } label: {
             Label("Add this week to Calendar", systemImage: "calendar.badge.plus")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
         }
         .accessibilityIdentifier("managerScheduleContent.noBookingsThisWeekToAdd")
         .buttonStyle(.borderedProminent)
-        .tint(ProjectWorksRevampColors.blue)
+        .buttonBorderShape(.roundedRectangle(radius: PPMetrics.rowCardRadius))
+        .tint(PPColor.brand)
         .padding(.top, 4)
     }
 }
@@ -2601,12 +2669,11 @@ struct OperativeScheduleContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            weekNavigation
             weekContent
             addToCalendarButton
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .alert("Calendar", isPresented: .constant(addToCalendarMessage != nil)) {
             Button("OK") { addToCalendarMessage = nil }
                 .accessibilityIdentifier("operativeScheduleContent.ok")
@@ -2622,35 +2689,33 @@ struct OperativeScheduleContentView: View {
         }
     }
 
+    /// Sits on the navy header (Daily overview style): round ‹ › buttons either side of the week range.
     private var weekNavigation: some View {
-        HStack {
+        HStack(alignment: .center, spacing: 10) {
             Button(action: { moveWeek(-1) }) {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .frame(width: 44, height: 44)
             }
             .accessibilityIdentifier("operativeScheduleContent.back")
-            .buttonStyle(.plain)
-            Spacer()
-            Text(weekRangeText)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-            Spacer()
+            .buttonStyle(PPOnNavyCircleButtonStyle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(calendar.isDate(weekStart, equalTo: Date(), toGranularity: .weekOfYear) ? "This week" : "Week")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(PPColor.onNavySecondary)
+                Text(weekRangeText)
+                    .font(.system(.title2, design: .rounded))
+                    .fontWeight(.bold)
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: { moveWeek(1) }) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .frame(width: 44, height: 44)
             }
             .accessibilityIdentifier("operativeScheduleContent.chevronRight")
-            .buttonStyle(.plain)
+            .buttonStyle(PPOnNavyCircleButtonStyle())
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .appChromeCardContainer()
-        .padding(.horizontal, 16)
-        .padding(.top, 10)
     }
 
     private var weekRangeText: String {
@@ -2671,14 +2736,49 @@ struct OperativeScheduleContentView: View {
 
     private var weekContent: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                ForEach(weekDates, id: \.self) { date in
-                    dayRow(date: date)
+            VStack(alignment: .leading, spacing: 0) {
+                operativeNavyHeader
+
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    ForEach(weekDates, id: \.self) { date in
+                        dayRow(date: date)
+                    }
                 }
+                .padding(.top, 20)
+                .padding(.bottom, 20)
+                .ppContentSheet()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
+    }
+
+    /// Navy header (Daily overview style): week navigator, then the week's numbers from the rows already loaded.
+    private var operativeNavyHeader: some View {
+        let bookings = myBookingsThisWeek
+        let attendance = myManagerAttendanceThisWeek
+        let bookingCount = bookings.count + attendance.count
+        let daysBooked = weekDates.filter { date in
+            bookings.contains { calendar.isDate($0.date, inSameDayAs: date) } ||
+                attendance.contains { calendar.isDate($0.date, inSameDayAs: date) }
+        }.count
+        let leaveDays = weekDates.filter { holidayCoversDay($0) }.count
+        return VStack(alignment: .leading, spacing: 0) {
+            weekNavigation
+
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(daysBooked)/\(weekDates.count)", label: "Days booked")
+                PPStatDivider()
+                PPStat(value: "\(bookingCount)", label: bookingCount == 1 ? "Booking" : "Bookings")
+                PPStatDivider()
+                PPStat(value: "\(leaveDays)", label: leaveDays == 1 ? "Day on leave" : "Days on leave")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 18)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     private func dayRow(date: Date) -> some View {
@@ -2690,19 +2790,47 @@ struct OperativeScheduleContentView: View {
         let annualLeaveSlotForDay = approvedHolidayTimeSlot(on: date)
         let f = DateFormatter()
         f.dateFormat = "EEEE, d MMM"
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(f.string(from: date))
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+        let weekdayFormatter = DateFormatter()
+        weekdayFormatter.dateFormat = "EEE"
+        let isToday = calendar.isDateInToday(date)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                PPCalendarStub(
+                    weekday: weekdayFormatter.string(from: date),
+                    day: "\(calendar.component(.day, from: date))"
+                )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(f.string(from: date))
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    if isToday {
+                        Text("Today")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(PPColor.brand)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
             if isOnHoliday {
-                Label("Annual Leave", systemImage: "sun.max.fill")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.endDateFg)
+                HStack(spacing: 13) {
+                    PPIconTile(symbol: "sun.max.fill", family: .trade, size: PPMetrics.menuIcon)
+                    Text("Annual Leave")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .myScheduleCard(cornerRadius: PPMetrics.rowCardRadius)
             }
             if dayBookings.isEmpty && dayManagerBookings.isEmpty && !isOnHoliday {
                 Text("No bookings")
-                    .font(.system(size: 14))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .myScheduleCard(cornerRadius: PPMetrics.rowCardRadius)
             } else {
                 if !dayBookings.isEmpty || !dayManagerBookings.isEmpty {
                     MyScheduleTodaysHoursCard(
@@ -2719,17 +2847,14 @@ struct OperativeScheduleContentView: View {
                     )
                 }
                 if !dayManagerBookings.isEmpty {
-                    Text("Your attendance")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                        .tracking(0.35)
-                        .textCase(.uppercase)
+                    MyScheduleCaption(text: "Your attendance")
                         .padding(.top, 4)
                 }
                 ForEach(dayManagerBookings) { b in
                     let title = managerSelfBookingTitle(b)
                     MyScheduleBookingStripeRow(
-                        stripeColor: myScheduleLocationStripeColor(b.locationType),
+                        family: myScheduleLocationFamily(b.locationType),
+                        symbol: myScheduleLocationSymbol(b.locationType),
                         title: title,
                         subtitle: managerBookingClockSubtitle(b, day: date, policy: policy),
                         otChip: managerBookingOtChipText(b, policy: policy),
@@ -2738,11 +2863,7 @@ struct OperativeScheduleContentView: View {
                 }
                 if !dayBookings.isEmpty {
                     if !dayManagerBookings.isEmpty {
-                        Text("On-site bookings")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                            .tracking(0.35)
-                            .textCase(.uppercase)
+                        MyScheduleCaption(text: "On-site bookings")
                             .padding(.top, 6)
                     }
                     ForEach(dayBookings) { b in
@@ -2750,7 +2871,8 @@ struct OperativeScheduleContentView: View {
                             projectStore.smallWorks.first(where: { $0.id == b.projectId })
                         let title = project.map { "\($0.jobNumber) \($0.siteName)" } ?? "Scheduled work"
                         MyScheduleBookingStripeRow(
-                            stripeColor: ProjectWorksRevampColors.activeGreen,
+                            family: .sites,
+                            symbol: "hammer.fill",
                             title: title,
                             subtitle: operativeBookingClockSubtitle(b, day: date, policy: policy),
                             otChip: operativeBookingOtChipText(b, policy: policy),
@@ -2760,9 +2882,7 @@ struct OperativeScheduleContentView: View {
                 }
             }
         }
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .appChromeCardContainer()
     }
 
     private var weekExportEvents: [ScheduleCalendarEvent] {
@@ -2799,13 +2919,14 @@ struct OperativeScheduleContentView: View {
             }
         } label: {
             Label("Add this week to Calendar", systemImage: "calendar.badge.plus")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
         }
         .accessibilityIdentifier("operativeScheduleContent.noBookingsThisWeekToAdd")
         .buttonStyle(.borderedProminent)
-        .tint(ProjectWorksRevampColors.blue)
+        .buttonBorderShape(.roundedRectangle(radius: PPMetrics.rowCardRadius))
+        .tint(PPColor.brand)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
     }
