@@ -142,7 +142,10 @@ Before any rule runs, both apps answer four questions with the rulebook, not the
 Decisions are stored in Firestore, shared with web:
 
 - `organizations/{orgId}/warningResolutions/{resolutionKey}` (`warningResolutionWriteFields` plus `resolvedAt`) for approve and dismiss. Unapprove deletes it.
-- `organizations/{orgId}/acceptedBookingClashes/{clashPairKey}` (`acceptedClashWriteFields` plus `acceptedAt`) when a clash is approved. A clash `isClashAccepted` hides is not shown on iOS.
+- `organizations/{orgId}/acceptedBookingClashes/{clashPairKey}` (`acceptedClashWriteFields` plus `acceptedAt`) when a clash is approved.
+- Reading them back: `WarningResolutionStore.loadRemote` passes the `warningResolutions` documents to `resolvedWarningKeys` (approved or dismissed, any case). `shouldShowActive` asks `isWarningActive`, so a key resolved on any device, or a clash whose pair is in `acceptedBookingClashes`, is not active on either app. Every active warning list in `WarningsService` uses it.
+- The weekly report lists as "Ticked" a clash approved on either app, or one whose pair was accepted and not dismissed (`WarningResolutionStore.isTicked`, which asks `isWarningActive` about the pair).
+- Known gap: iOS operative-clash keys (`op-clash-{UUID}-{epoch}`) and materials keys (`materials-{UUID}-{epoch}`) do not match web's keys, so a removal of those two kinds by key does not cross apps yet. Operative clashes still match through the accepted pair.
 - `WarningResolutionStore` keeps a UserDefaults copy as the fallback while the rule is not deployed or the phone is offline. A refused write never drops a local key.
 
 `ProjectPlannerTests/CanonicalParityFixture.json` is web's `lib/canonical/parity-fixture.json`, copied with each packed script. `CanonicalParityFixtureTests` runs every case through `CanonicalBusinessEngine.callJSON` and must match exactly, the same check web runs.

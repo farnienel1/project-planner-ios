@@ -98,17 +98,28 @@ final class WarningResolutionStore: ObservableObject {
         let org = Firestore.firestore().collection("organizations").document(organizationId)
         if let snapshot = try? await org.collection("warningResolutions").getDocuments(),
            self.organizationId == organizationId {
-            for doc in snapshot.documents {
+            let records: [[String: Any]] = snapshot.documents.map { doc in
                 let data = doc.data()
-                let key = (data["resolutionKey"] as? String) ?? doc.documentID
-                switch (data["status"] as? String)?.lowercased() {
-                case "approved": approvedResolutionKeys.insert(key)
-                case "dismissed": dismissedResolutionKeys.insert(key)
-                default: continue
-                }
+                return [
+                    "id": doc.documentID,
+                    "resolutionKey": (data["resolutionKey"] as? String) ?? "",
+                    "status": (data["status"] as? String) ?? ""
+                ]
             }
-            persistApproved()
-            persistDismissed()
+            // The rulebook decides which keys are hidden. The approved ones are kept apart only so the
+            // weekly report can list them as "Ticked"; every other resolved key is a dismissal.
+            let approvedRecords = records.filter {
+                ($0["status"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "approved"
+            }
+            if let resolved = CanonicalBusinessEngine.resolvedWarningKeys(records),
+               let approved = CanonicalBusinessEngine.resolvedWarningKeys(approvedRecords) {
+                approvedResolutionKeys.formUnion(approved)
+                dismissedResolutionKeys.formUnion(Set(resolved).subtracting(approved))
+                persistApproved()
+                persistDismissed()
+            } else {
+                print("🔥🔥🔥 DEBUG: resolvedWarningKeys did not run; keeping this phone's warning keys")
+            }
         }
         if let snapshot = try? await org.collection("acceptedBookingClashes").getDocuments(),
            self.organizationId == organizationId {
@@ -134,15 +145,42 @@ final class WarningResolutionStore: ObservableObject {
         dismissedResolutionKeys.contains(resolutionKey)
     }
 
+    /// `isWarningActive` for a warning known only by its key (approved or dismissed on any device).
     func shouldShowActive(_ resolutionKey: String) -> Bool {
-        !isApproved(resolutionKey) && !isDismissed(resolutionKey)
+        isActive(resolutionKey: resolutionKey, pair: nil)
     }
 
-    /// Also hides a clash whose two bookings were approved on web (`isClashAccepted`).
+    /// `isWarningActive`: also hides a clash whose two bookings were accepted on web or this phone.
     func shouldShowActive(_ warning: Warning) -> Bool {
-        guard shouldShowActive(warning.resolutionKey) else { return false }
-        guard let pair = Self.clashBookingIds(warning), !acceptedClashes.isEmpty else { return true }
-        return CanonicalBusinessEngine.isClashAccepted(pair.a, pair.b, accepted: acceptedClashes) != true
+        isActive(resolutionKey: warning.resolutionKey, pair: Self.clashBookingIds(warning))
+    }
+
+    /// Weekly report "Ticked": approved here or on web, or a clash pair accepted in `acceptedBookingClashes`
+    /// that was not dismissed. Accepted pairs are the ones `isWarningActive` hides for their bookings.
+    func isTicked(_ warning: Warning) -> Bool {
+        if isApproved(warning.resolutionKey) { return true }
+        guard !isDismissed(warning.resolutionKey), let pair = Self.clashBookingIds(warning) else { return false }
+        return CanonicalBusinessEngine.isWarningActive(
+            resolutionKey: warning.resolutionKey,
+            bookingAId: pair.a,
+            bookingBId: pair.b,
+            resolvedKeys: [],
+            acceptedClashes: acceptedClashes
+        ) == false
+    }
+
+    /// Passes only this row's own key as `resolvedKeys` (the rule is a membership test), so the script is
+    /// not handed every resolution for every warning. If the script did not run, a resolved key still hides.
+    private func isActive(resolutionKey: String, pair: (a: String, b: String)?) -> Bool {
+        let resolved = isApproved(resolutionKey) || isDismissed(resolutionKey)
+        let active = CanonicalBusinessEngine.isWarningActive(
+            resolutionKey: resolutionKey,
+            bookingAId: pair?.a,
+            bookingBId: pair?.b,
+            resolvedKeys: resolved ? [resolutionKey] : [],
+            acceptedClashes: pair == nil ? [] : acceptedClashes
+        )
+        return active ?? !resolved
     }
 
     nonisolated static func clashBookingIds(_ warning: Warning) -> (a: String, b: String)? {
