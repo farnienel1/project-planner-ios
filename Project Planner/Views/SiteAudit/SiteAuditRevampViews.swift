@@ -61,69 +61,93 @@ struct SiteAuditProjectListView: View {
         return "Last submitted \(rel) by \(latest.authorName)"
     }
 
+    /// Title-only navy header shown while the list loads, so the page doesn't jump when it arrives.
+    private var loadingNavyHeader: some View {
+        PPNavyPageTitle(
+            eyebrow: "This project",
+            title: project.jobNumber,
+            subtitle: project.siteName
+        )
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
     var body: some View {
         Group {
             if isLoading {
-                ProgressView("Loading site audits...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 0) {
+                    loadingNavyHeader
+                    ProgressView("Loading site audits...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .ppContentSheet()
+                }
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 0) {
                         SiteAuditProjectHero(
+                            jobNumber: project.jobNumber,
+                            siteName: project.siteName,
                             auditCount: audits.count,
                             photoCount: photoCount,
                             lastSubmittedLine: lastSubmittedLine
                         )
 
-                        SiteAuditFilterChipsRow(chips: chipLabels, selectedIndex: selectedChipIndex)
+                        VStack(alignment: .leading, spacing: 12) {
+                            SiteAuditFilterChipsRow(chips: chipLabels, selectedIndex: selectedChipIndex)
 
-                        if filteredAudits.isEmpty {
-                            SiteAuditCard {
-                                VStack(spacing: 8) {
-                                    Image(systemName: "doc.text.magnifyingglass")
-                                        .font(.title2)
-                                        .foregroundStyle(SiteAuditColors.textDisabled)
+                            if filteredAudits.isEmpty {
+                                VStack(spacing: 12) {
+                                    PPIconTile(symbol: "doc.text.magnifyingglass", family: .system, size: 56, lifted: true)
                                     Text("No site audits")
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.system(.title3, design: .rounded).weight(.bold))
+                                        .foregroundStyle(.primary)
                                     Text("Create your first audit for this project.")
-                                        .font(.caption)
-                                        .foregroundStyle(SiteAuditColors.textSecondary)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
                                         .multilineTextAlignment(.center)
                                 }
                                 .frame(maxWidth: .infinity)
-                                .padding(24)
-                            }
-                        } else {
-                            ForEach(filteredAudits) { audit in
-                                Button { onSelect(audit) } label: {
-                                    SiteAuditAuditListCard(audit: audit)
+                                .padding(.vertical, 36)
+                                .padding(.horizontal, 16)
+                                .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                            } else {
+                                ForEach(filteredAudits) { audit in
+                                    Button { onSelect(audit) } label: {
+                                        SiteAuditAuditListCard(audit: audit)
+                                    }
+                                    .accessibilityIdentifier("siteAuditProjectList.row.\(audit.id)")
+                                    .buttonStyle(PPPressableButtonStyle())
                                 }
-                                .accessibilityIdentifier("siteAuditProjectList.row.\(audit.id)")
-                                .buttonStyle(.plain)
                             }
                         }
+                        .padding(.top, 20)
+                        .padding(.bottom, 28)
+                        .ppContentSheet()
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 24)
                 }
             }
         }
-        .siteAuditScreenBackground()
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Site audits")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 0) {
                     Text(project.jobNumber)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(SiteAuditColors.textSecondary)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(PPColor.onNavySecondary)
                     Text("Site audits")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.white)
                 }
             }
             if showsCreateButton {
                 ToolbarItem(placement: .topBarTrailing) {
-                    SiteAuditIconCircleButton(systemName: "plus", primary: true, action: onCreate)
+                    SiteAuditIconCircleButton(systemName: "plus", primary: true, onNavy: true, action: onCreate)
                 }
             }
         }
@@ -163,42 +187,44 @@ struct SiteAuditAuditListCard: View {
 
     private var cardContent: some View {
         SiteAuditCard {
-            HStack(alignment: .top, spacing: 10) {
-                SiteAuditRowIconChip(systemName: style.icon, tint: style.accent, background: style.tint, size: 36)
-                VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 13) {
+                SiteAuditRowIconChip(systemName: style.icon, tint: style.accent, background: style.tint, size: 40)
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(audit.type.rawValue)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(SiteAuditColors.text)
                         SiteAuditPill(text: style.pillLabel, style: pillStyle)
                         if dashedCreate {
                             SiteAuditPill(text: "Draft", style: .draft)
                         }
                     }
                     Text("\(audit.projectJobNumber) \(audit.projectName)")
-                        .font(.system(size: 11))
+                        .font(.subheadline)
                         .foregroundStyle(SiteAuditColors.textSecondary)
                         .multilineTextAlignment(.leading)
-                    HStack(spacing: 9) {
+                    HStack(spacing: 10) {
                         Label(audit.authorName, systemImage: "person.fill")
                         Label("\(audit.items.count) items", systemImage: "cube.box")
                     }
-                    .font(.system(size: 10))
+                    .font(.footnote)
                     .foregroundStyle(SiteAuditColors.textSecondary)
                     .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 if showsChevron {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.footnote.weight(.semibold))
                         .foregroundStyle(SiteAuditColors.textDisabled)
                         .accessibilityHidden(onTap == nil)
                 }
             }
-            .padding(12)
+            .padding(14)
         }
         .overlay {
             if dashedCreate {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous)
                     .strokeBorder(SiteAuditColors.textDisabled, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
             }
         }
@@ -221,7 +247,7 @@ struct SiteAuditDetailsStepView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 SiteAuditSectionLabel(title: "Type")
                 SiteAuditTypePickerGrid(selected: $selectedType)
 
@@ -240,7 +266,7 @@ struct SiteAuditDetailsStepView: View {
                         ) {
                             TextField("Author", text: $authorName)
                                 .accessibilityIdentifier("siteAuditDetailsStep.author")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.body)
                         }
                         divider
                         detailFieldRow(
@@ -256,6 +282,7 @@ struct SiteAuditDetailsStepView: View {
                         }
                     }
                     .padding(.horizontal, 14)
+                    .padding(.vertical, 2)
                 }
 
                 if canManageVisibility {
@@ -267,25 +294,27 @@ struct SiteAuditDetailsStepView: View {
                                     systemName: "eye.fill",
                                     tint: SiteAuditColors.success,
                                     background: SiteAuditColors.successTint,
-                                    size: 30
+                                    size: PPMetrics.menuIcon
                                 )
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Visible to operatives")
-                                        .font(.system(size: 12, weight: .medium))
+                                        .font(.body)
                                     Text("Ops working on this job can view it")
-                                        .font(.system(size: 10))
+                                        .font(.footnote)
                                         .foregroundStyle(SiteAuditColors.textSecondary)
                                 }
                             }
                         }
                         .accessibilityIdentifier("siteAuditDetailsStep.eyeFill")
                         .tint(SiteAuditColors.primary)
-                        .padding(12)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
+            .padding(.horizontal, PPMetrics.screenGutter)
+            .padding(.top, 12)
+            .padding(.bottom, 28)
         }
         .siteAuditScreenBackground()
     }
@@ -315,12 +344,15 @@ struct SiteAuditDetailsStepView: View {
         ) {
             TextField("e.g. Plant room snags", text: $customTitle)
                 .accessibilityIdentifier("siteAuditDetailsStep.eGPlantRoomSnags")
-                .font(.system(size: 13, weight: .medium))
+                .font(.body)
         }
     }
 
     private var divider: some View {
-        Rectangle().fill(SiteAuditColors.border).frame(height: 0.5)
+        Rectangle()
+            .fill(SiteAuditColors.border)
+            .frame(height: 0.5)
+            .padding(.leading, PPMetrics.menuIcon + 13)
     }
 
     private func detailFieldRow<Content: View>(
@@ -330,17 +362,18 @@ struct SiteAuditDetailsStepView: View {
         label: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        HStack(alignment: .top, spacing: 11) {
-            SiteAuditRowIconChip(systemName: icon, tint: iconTint, background: iconBg)
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .center, spacing: 13) {
+            SiteAuditRowIconChip(systemName: icon, tint: iconTint, background: iconBg, size: PPMetrics.menuIcon)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(label)
-                    .font(.system(size: 11))
+                    .font(.footnote)
                     .foregroundStyle(SiteAuditColors.textSecondary)
                 content()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 11)
+        .frame(minHeight: 60)
     }
 
     private func detailRow<Accessory: View>(
@@ -352,26 +385,26 @@ struct SiteAuditDetailsStepView: View {
         showChevron: Bool = false,
         @ViewBuilder accessory: () -> Accessory
     ) -> some View {
-        HStack(alignment: .top, spacing: 11) {
-            SiteAuditRowIconChip(systemName: icon, tint: iconTint, background: iconBg)
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .center, spacing: 13) {
+            SiteAuditRowIconChip(systemName: icon, tint: iconTint, background: iconBg, size: PPMetrics.menuIcon)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(label)
-                    .font(.system(size: 11))
+                    .font(.footnote)
                     .foregroundStyle(SiteAuditColors.textSecondary)
                 Text(value)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.body)
                     .foregroundStyle(value == "Select Project/Small Works" ? SiteAuditColors.textSecondary : SiteAuditColors.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if showChevron {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(SiteAuditColors.textDisabled)
-                    .padding(.top, 14)
             }
         }
         .padding(.vertical, 11)
+        .frame(minHeight: 60)
     }
 }
 
@@ -395,22 +428,23 @@ struct SiteAuditItemsStepView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     SiteAuditCard {
-                        HStack(spacing: 10) {
-                            SiteAuditRowIconChip(systemName: style.icon, tint: style.accent, background: style.tint, size: 26)
+                        HStack(spacing: 13) {
+                            SiteAuditRowIconChip(systemName: style.icon, tint: style.accent, background: style.tint, size: PPMetrics.menuIcon)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("\(auditType.rawValue) · \(project.jobNumber) \(project.siteName)")
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(.subheadline.weight(.semibold))
                                     .lineLimit(1)
                                 Text(items.isEmpty ? "Started today by \(authorName)" : "\(items.count) item\(items.count == 1 ? "" : "s") · Auto-saved")
-                                    .font(.system(size: 9))
+                                    .font(.footnote)
                                     .foregroundStyle(SiteAuditColors.textSecondary)
                             }
                             Spacer(minLength: 0)
                         }
-                        .padding(10)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
                     }
 
-                    HStack(spacing: 7) {
+                    HStack(spacing: 10) {
                         SiteAuditPrimaryButton(title: "Add item", systemImage: "plus", action: onAddItem)
                             .disabled(isProcessingPhotos)
                         PhotosPicker(selection: $multiSelection, maxSelectionCount: 20, matching: .images) {
@@ -418,15 +452,15 @@ struct SiteAuditItemsStepView: View {
                                 Image(systemName: "photo.on.rectangle.angled")
                                 Text(isProcessingPhotos ? "Processing…" : "Multi-add")
                             }
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
+                            .padding(.vertical, 13)
                             .foregroundStyle(isProcessingPhotos ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
-                            .background(ProjectWorksRevampColors.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                            .background(PPColor.card)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                    .strokeBorder(SiteAuditColors.primary, lineWidth: 0.5)
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .strokeBorder(SiteAuditColors.primary, lineWidth: 1)
                             )
                         }
                         .accessibilityIdentifier("siteAuditItemsStep.photoOnRectangleAngled")
@@ -437,7 +471,7 @@ struct SiteAuditItemsStepView: View {
                         HStack(spacing: 8) {
                             ProgressView()
                             Text("Preparing photos — this may take a moment for large batches.")
-                                .font(.system(size: 11))
+                                .font(.footnote)
                                 .foregroundStyle(SiteAuditColors.textSecondary)
                         }
                         .padding(.vertical, 4)
@@ -483,8 +517,9 @@ struct SiteAuditItemsStepView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.top, 12)
+                .padding(.bottom, 28)
             }
         }
         .siteAuditScreenBackground()
@@ -493,53 +528,30 @@ struct SiteAuditItemsStepView: View {
     private var emptyState: some View {
         VStack(spacing: 14) {
             ZStack(alignment: .bottomTrailing) {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(SiteAuditColors.card)
-                    .frame(width: 70, height: 70)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .strokeBorder(SiteAuditColors.border, lineWidth: 0.5)
-                    )
-                    .overlay {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.system(size: 32))
-                            .foregroundStyle(SiteAuditColors.textDisabled)
-                    }
-                Circle()
-                    .fill(SiteAuditColors.primary)
-                    .frame(width: 24, height: 24)
-                    .overlay {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-                    .offset(x: 4, y: 4)
+                PPIconTile(symbol: "photo.on.rectangle.angled", family: .plan, size: 56, lifted: true)
+                PPPlusBadge()
             }
             Text("No items yet")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             Text("Tap Add item for one entry, or Multi-add to pick several photos at once.")
-                .font(.system(size: 11))
+                .font(.subheadline)
                 .foregroundStyle(SiteAuditColors.textSecondary)
                 .multilineTextAlignment(.center)
 
-            SiteAuditCard {
-                HStack(alignment: .top, spacing: 9) {
-                    Image(systemName: "lightbulb.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(SiteAuditColors.primary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Tip")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(SiteAuditColors.primary)
-                        Text("Photos get auto-timestamped so the PDF shows when each was taken.")
-                            .font(.system(size: 10))
-                            .foregroundStyle(SiteAuditColors.primary.opacity(0.85))
-                    }
+            HStack(alignment: .top, spacing: 13) {
+                PPIconTile(symbol: "lightbulb.fill", family: .trade, size: PPMetrics.menuIcon)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tip")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Photos get auto-timestamped so the PDF shows when each was taken.")
+                        .font(.footnote)
+                        .foregroundStyle(SiteAuditColors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(12)
+                Spacer(minLength: 0)
             }
-            .background(SiteAuditColors.primaryTint)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(14)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
@@ -564,28 +576,29 @@ struct SiteAuditDraftItemCard: View {
                             endPoint: .bottomTrailing
                         )
                         .frame(width: 56, height: 56)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 5) {
                         Text("#\(index)")
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.footnote.weight(.semibold))
+                            .monospacedDigit()
                             .foregroundStyle(SiteAuditColors.textSecondary)
                         Text(item.title.isEmpty ? "Untitled item" : item.title)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                     }
                     if !item.comments.isEmpty {
                         Text(item.comments)
-                            .font(.system(size: 10))
+                            .font(.footnote)
                             .foregroundStyle(SiteAuditColors.textSecondary)
                             .lineLimit(2)
                     }
                     if !item.assignee.isEmpty {
                         Label(item.assignee, systemImage: "person.fill")
-                            .font(.system(size: 9))
+                            .font(.caption)
                             .foregroundStyle(SiteAuditColors.textSecondary)
                     } else if item.title == "Photo item" {
                         SiteAuditPill(text: "Needs review", style: .amber)
@@ -596,11 +609,11 @@ struct SiteAuditDraftItemCard: View {
                     if let onDelete {
                         Button(role: .destructive, action: onDelete) {
                             Image(systemName: "trash")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(SiteAuditColors.danger)
-                                .frame(width: 26, height: 26)
+                                .frame(width: 30, height: 30)
                                 .background(SiteAuditColors.dangerTint)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .clipShape(Circle())
                         }
                         .accessibilityIdentifier("siteAuditDraftItemCard.delete")
                         .buttonStyle(.plain)
@@ -610,7 +623,7 @@ struct SiteAuditDraftItemCard: View {
                         .foregroundStyle(SiteAuditColors.textDisabled)
                 }
             }
-            .padding(10)
+            .padding(12)
         }
     }
 }
@@ -655,32 +668,34 @@ struct SiteAuditPreviewStepView: View {
                     SiteAuditSectionLabel(title: "Items", suffix: "· \(items.count)")
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         SiteAuditCard {
-                            HStack(spacing: 10) {
+                            HStack(spacing: 12) {
                                 thumbnail(item)
-                                VStack(alignment: .leading, spacing: 2) {
+                                VStack(alignment: .leading, spacing: 3) {
                                     Text("\(index + 1) · \(item.title.isEmpty ? "Untitled" : item.title)")
-                                        .font(.system(size: 11, weight: .medium))
+                                        .font(.subheadline.weight(.semibold))
                                     if !item.comments.isEmpty {
                                         Text(item.comments)
-                                            .font(.system(size: 10))
+                                            .font(.footnote)
                                             .foregroundStyle(SiteAuditColors.textSecondary)
                                             .lineLimit(3)
                                     }
                                 }
+                                Spacer(minLength: 0)
                             }
-                            .padding(10)
+                            .padding(12)
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 100)
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.top, 12)
+                .padding(.bottom, 110)
             }
 
             VStack(spacing: 0) {
                 Divider()
                 if isSubmitting, !submitStatusMessage.isEmpty {
                     Text(submitStatusMessage)
-                        .font(.system(size: 11))
+                        .font(.footnote)
                         .foregroundStyle(SiteAuditColors.textSecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 16)
@@ -696,54 +711,51 @@ struct SiteAuditPreviewStepView: View {
                         action: onSubmit
                     )
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, PPMetrics.screenGutter)
                 .padding(.vertical, 12)
-                .background(ProjectWorksRevampColors.surface)
             }
+            .background(PPColor.card.ignoresSafeArea(edges: .bottom))
         }
         .siteAuditScreenBackground()
     }
 
     private var previewHero: some View {
         ZStack(alignment: .topTrailing) {
-            LinearGradient(
-                colors: [SiteAuditColors.headerGradientStart, SiteAuditColors.headerGradientEnd],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            Circle()
-                .fill(Color(red: 0.094, green: 0.373, blue: 0.647).opacity(0.35))
-                .frame(width: 120, height: 120)
-                .offset(x: 30, y: -30)
+            PPNavyBackdrop()
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Site audit report")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.7))
+                            .font(.caption2.weight(.semibold))
+                            .tracking(1.1)
+                            .foregroundStyle(PPColor.onNavySecondary)
                             .textCase(.uppercase)
                         Text(auditType.rawValue)
-                            .font(.system(size: 15, weight: .medium))
+                            .font(.system(.title2, design: .rounded))
+                            .fontWeight(.bold)
                         if !customTitle.isEmpty {
                             Text(customTitle)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.white.opacity(0.85))
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(PPColor.onNavySecondary)
                         }
                     }
                     Spacer()
                     orgBadge
                 }
-                Divider().overlay(Color.white.opacity(0.18))
-                HStack {
+                Rectangle()
+                    .fill(PPColor.onNavyHairline)
+                    .frame(height: 1)
+                HStack(alignment: .top, spacing: 12) {
                     metaCol("Project", "\(project.jobNumber) · \(project.siteName)")
                     metaCol("Date", date.formatted(date: .abbreviated, time: .omitted))
                 }
             }
             .foregroundStyle(.white)
-            .padding(16)
+            .padding(18)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        .environment(\.colorScheme, .dark)
     }
 
     private var orgBadge: some View {
@@ -760,16 +772,21 @@ struct SiteAuditPreviewStepView: View {
             .background(
                 LinearGradient(colors: [SiteAuditColors.heroGradientStart, SiteAuditColors.heroGradientEnd], startPoint: .topLeading, endPoint: .bottomTrailing)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
+            )
     }
 
     private func metaCol(_ key: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(key.uppercased())
-                .font(.system(size: 9))
-                .opacity(0.6)
+                .font(.caption2.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(PPColor.onNavyCaption)
             Text(value)
-                .font(.system(size: 11))
+                .font(.subheadline.weight(.medium))
                 .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -778,11 +795,11 @@ struct SiteAuditPreviewStepView: View {
     @ViewBuilder
     private func thumbnail(_ item: SiteAuditDraftItem) -> some View {
         if let image = item.image {
-            SiteAuditBoundedThumbnail(image: image, size: 70, cornerRadius: 8)
+            SiteAuditBoundedThumbnail(image: image, size: 70, cornerRadius: 12)
         } else {
             SiteAuditColors.primaryTint
                 .frame(width: 70, height: 70)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
 
@@ -794,10 +811,10 @@ struct SiteAuditPreviewStepView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
-                    .font(.system(size: 11))
+                    .font(.footnote)
                     .foregroundStyle(SiteAuditColors.textSecondary)
                 Text(value)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.body)
             }
             Spacer()
             if let pill {
@@ -805,5 +822,6 @@ struct SiteAuditPreviewStepView: View {
             }
         }
         .padding(.vertical, 11)
+        .frame(minHeight: 60)
     }
 }

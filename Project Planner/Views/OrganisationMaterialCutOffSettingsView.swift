@@ -32,8 +32,8 @@ struct OrganisationMaterialCutOffSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Remind all managers when materials still need ordering before the daily cut-off.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.secondary)
                     .padding(.horizontal, 4)
                     .padding(.top, 8)
                     .padding(.bottom, 16)
@@ -42,36 +42,28 @@ struct OrganisationMaterialCutOffSettingsView: View {
                 settingsCard {
                     settingsRow(
                         icon: "bell.badge.fill",
-                        iconBg: ProjectWorksRevampColors.upcomingAmber.opacity(0.18),
-                        iconFg: ProjectWorksRevampColors.upcomingAmber,
+                        family: .trade,
                         title: "Material cut-off notification",
                         subtitle: "Email all managers"
                     ) {
                         Toggle("", isOn: $draft.enabled)
                         .accessibilityIdentifier("organisationMaterialCutOffSettings.toggle")
                         .labelsHidden()
-                        .tint(ProjectWorksRevampColors.blue)
+                        .tint(PPColor.brand)
                     }
                 }
 
                 sectionTitle("Daily cut-off")
                 settingsCard {
-                    HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(ProjectWorksRevampColors.blue.opacity(0.12))
-                            .frame(width: 30, height: 30)
-                            .overlay(
-                                Image(systemName: "clock.fill")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.blue)
-                            )
+                    HStack(spacing: 13) {
+                        PPIconTile(symbol: "clock.fill", family: .plan)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Cut-off time")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                                .font(.body)
+                                .foregroundStyle(Color.primary)
                             Text(footerText)
-                                .font(.system(size: 11, weight: .regular))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .font(.footnote)
+                                .foregroundStyle(Color.secondary)
                         }
                         Spacer(minLength: 8)
                         Picker(
@@ -89,46 +81,44 @@ struct OrganisationMaterialCutOffSettingsView: View {
                     }
                     .padding(.vertical, 11)
 
-                    Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 42)
+                    Divider().overlay(Color(.separator)).padding(.leading, PPMetrics.menuIcon + 13)
 
                     settingsRow(
                         icon: "calendar",
-                        iconBg: ProjectWorksRevampColors.jobTypePillBg,
-                        iconFg: ProjectWorksRevampColors.jobTypePillInk,
+                        family: .plan,
                         title: "Include Saturday",
                         subtitle: "Send the reminder on Saturdays"
                     ) {
                         Toggle("", isOn: $draft.saturday)
                         .accessibilityIdentifier("organisationMaterialCutOffSettings.toggle2")
                         .labelsHidden()
-                        .tint(ProjectWorksRevampColors.blue)
+                        .tint(PPColor.brand)
                         .disabled(!draft.enabled)
                     }
 
-                    Divider().overlay(ProjectWorksRevampColors.border).padding(.leading, 42)
+                    Divider().overlay(Color(.separator)).padding(.leading, PPMetrics.menuIcon + 13)
 
                     settingsRow(
                         icon: "calendar",
-                        iconBg: ProjectWorksRevampColors.endDateBg,
-                        iconFg: ProjectWorksRevampColors.endDateFg,
+                        family: .plan,
                         title: "Include Sunday",
                         subtitle: "Send the reminder on Sundays"
                     ) {
                         Toggle("", isOn: $draft.sunday)
                         .accessibilityIdentifier("organisationMaterialCutOffSettings.toggle3")
                         .labelsHidden()
-                        .tint(ProjectWorksRevampColors.blue)
+                        .tint(PPColor.brand)
                         .disabled(!draft.enabled)
                     }
                 }
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, PPMetrics.screenGutter)
             .padding(.bottom, 28)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Material cut-off")
         .navigationBarTitleDisplayMode(.inline)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
         .safeAreaInset(edge: .bottom) {
             SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
                 Task { await save() }
@@ -173,11 +163,11 @@ struct OrganisationMaterialCutOffSettingsView: View {
 
     private func sectionTitle(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .tracking(0.4)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(Color.secondary)
+            .tracking(0.8)
             .padding(.leading, 4)
-            .padding(.top, 6)
+            .padding(.top, 14)
             .padding(.bottom, 8)
     }
 
@@ -186,39 +176,27 @@ struct OrganisationMaterialCutOffSettingsView: View {
             content()
         }
         .padding(.horizontal, 14)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         .padding(.bottom, 8)
     }
 
     private func settingsRow(
         icon: String,
-        iconBg: Color,
-        iconFg: Color,
+        family: PPFamily,
         title: String,
         subtitle: String,
         @ViewBuilder trailing: () -> some View
     ) -> some View {
-        HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(iconBg)
-                .frame(width: 30, height: 30)
-                .overlay(
-                    Image(systemName: icon)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(iconFg)
-                )
+        HStack(spacing: 13) {
+            PPIconTile(symbol: icon, family: family)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .font(.body)
+                    .foregroundStyle(Color.primary)
                 Text(subtitle)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.footnote)
+                    .foregroundStyle(Color.secondary)
             }
             Spacer(minLength: 8)
             trailing()

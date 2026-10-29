@@ -2,16 +2,14 @@ import SwiftUI
 import UIKit
 
 enum MaterialsOrderingTheme {
-    static let primary = AppAdaptiveColor.dynamic(
-        light: AppAdaptiveColor.rgb(0.102, 0.431, 0.761),
-        dark: AppAdaptiveColor.rgb(0.380, 0.655, 0.910)
-    )
+    /// PP brand blue (same token as Home and Settings).
+    static let primary = PPColor.brand
     static let primaryTint = AppAdaptiveColor.dynamic(
         light: AppAdaptiveColor.rgb(0.890, 0.949, 0.996),
         dark: AppAdaptiveColor.rgb(0.110, 0.173, 0.247)
     )
-    static let pageBackground = ProjectWorksRevampColors.canvas
-    static let cardBackground = ProjectWorksRevampColors.surface
+    static let pageBackground = PPColor.page
+    static let cardBackground = PPColor.card
     static let border = ProjectWorksRevampColors.border
     static let muted = ProjectWorksRevampColors.muted
     static let disabled = ProjectWorksRevampColors.placeholderInk
@@ -30,9 +28,6 @@ enum MaterialsOrderingTheme {
             : UIColor(red: 0.984, green: 0.949, blue: 0.886, alpha: 1)
     }
 
-    static let primaryGradient = LinearGradient(
-        colors: [Color(red: 0.102, green: 0.431, blue: 0.761), Color(red: 0.184, green: 0.565, blue: 0.902)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
+    /// PP "plan" family gradient (blue icon tiles).
+    static let primaryGradient = PPFamily.plan.gradient
 }

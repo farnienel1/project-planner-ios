@@ -74,13 +74,15 @@ struct ScheduleQuickAddSheet: View {
                 }
                 .padding(18)
             }
-            .background(ProjectWorksRevampColors.canvas)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Quick Add")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
                         .accessibilityIdentifier("scheduleQuickAdd.cancel")
+                        .foregroundStyle(.white)
                 }
             }
         }
@@ -315,9 +317,9 @@ struct ScheduleQuickAddSheet: View {
 
     private func sectionLabel(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .tracking(0.4)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .tracking(0.8)
     }
 
     private enum Slot {

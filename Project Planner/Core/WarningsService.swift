@@ -309,10 +309,10 @@ class WarningsService: ObservableObject {
         warningsInRange(range, types: [.managerLocationClash], activeOnly: true, source: source)
     }
 
-    /// Booking clashes ticked on Warnings — included on weekly report CSV.
+    /// Booking clashes ticked on Warnings, or whose pair was accepted on web — included on weekly report CSV.
     func approvedManagerClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
         warningsInRange(range, types: [.operativeBookingClash, .managerLocationClash], activeOnly: false, source: source)
-            .filter { resolutionStore.isApproved($0.resolutionKey) }
+            .filter { resolutionStore.isTicked($0) }
     }
 
     func unresolvedBookingClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
@@ -341,7 +341,7 @@ class WarningsService: ObservableObject {
             guard let day = w.occurrenceDate else { return false }
             guard range.contains(day) else { return false }
             if activeOnly {
-                return resolutionStore.shouldShowActive(w.resolutionKey)
+                return resolutionStore.shouldShowActive(w)
             }
             return true
         }

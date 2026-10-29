@@ -171,103 +171,55 @@ struct TasksDetailView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if !pendingHolidayApprovals.isEmpty {
-                        holidayBannersSection
-                    }
-                    if !qualificationExpiryBannerItems.isEmpty {
-                        qualificationBannersSection
-                    }
+                VStack(alignment: .leading, spacing: 0) {
+                    tasksNavyHeader
 
-                    let stats = myTasksStats
-                    HStack(spacing: 8) {
-                        statChip(value: stats.todo, label: "To do", valueColor: MyTasksScreenPalette.todoCount)
-                        statChip(value: stats.inProgress, label: "In progress", valueColor: MyTasksScreenPalette.inProgressCount)
-                        statChip(value: stats.overdue, label: "Overdue", valueColor: MyTasksScreenPalette.overdueCount)
-                        statChip(value: stats.done, label: "Done", valueColor: MyTasksScreenPalette.doneCount)
-                    }
-
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 14))
-                            .foregroundStyle(MyTasksScreenPalette.muted)
-                        TextField("Search tasks…", text: $searchText)
-                            .accessibilityIdentifier("tasksDetail.searchTasks")
-                            .font(.system(size: 12))
-                        Spacer(minLength: 0)
-                        Menu {
-                            Button(sortNewestFirst ? "Sort: Oldest first" : "Sort: Newest first") {
-                                sortNewestFirst.toggle()
-                            }
-                                .accessibilityIdentifier("tasksDetail.sortOldestFirst2")
-                        } label: {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                                .font(.system(size: 15))
-                                .foregroundStyle(MyTasksScreenPalette.blue)
+                    VStack(alignment: .leading, spacing: 14) {
+                        if !pendingHolidayApprovals.isEmpty {
+                            holidayBannersSection
                         }
-                            .accessibilityIdentifier("tasksDetail.sortOldestFirst")
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(ProjectWorksRevampColors.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5)
-                    )
+                        if !qualificationExpiryBannerItems.isEmpty {
+                            qualificationBannersSection
+                        }
 
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(GlobalMyTasksSegment.ordered, id: \.self) { seg in
-                                scopePill(
-                                    title: seg.pillTitle(
-                                        activeCount: activeRelevantCount,
-                                        completedCount: completedRelevantCount,
-                                        overdueCount: overdueRelevantCount
-                                    ),
-                                    isSelected: listSegment == seg
-                                ) {
-                                    listSegment = seg
+                        if taskStore.isLoading && hubScopeTasks.isEmpty && userRelevantTasks.isEmpty {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                                .padding(40)
+                        } else if let err = taskStore.errorMessage, hubScopeTasks.isEmpty && userRelevantTasks.isEmpty {
+                            errorState(err)
+                        } else if displayedTasks.isEmpty {
+                            emptyStateCard
+                        } else {
+                            VStack(spacing: 10) {
+                                ForEach(displayedTasks) { task in
+                                    MyTasksRedesignTaskCard(task: task)
+                                        .environmentObject(projectStore)
+                                        .environmentObject(operativeStore)
+                                        .environmentObject(taskStore)
+                                        .environmentObject(userStore)
+                                        .environmentObject(firebaseBackend)
+                                        .environmentObject(notificationService)
+                                        .environmentObject(bookingStore)
                                 }
                             }
                         }
                     }
-
-                    if taskStore.isLoading && hubScopeTasks.isEmpty && userRelevantTasks.isEmpty {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                            .padding(40)
-                    } else if let err = taskStore.errorMessage, hubScopeTasks.isEmpty && userRelevantTasks.isEmpty {
-                        errorState(err)
-                    } else if displayedTasks.isEmpty {
-                        emptyStateCard
-                    } else {
-                        VStack(spacing: 10) {
-                            ForEach(displayedTasks) { task in
-                                MyTasksRedesignTaskCard(task: task)
-                                    .environmentObject(projectStore)
-                                    .environmentObject(operativeStore)
-                                    .environmentObject(taskStore)
-                                    .environmentObject(userStore)
-                                    .environmentObject(firebaseBackend)
-                                    .environmentObject(notificationService)
-                                    .environmentObject(bookingStore)
-                            }
-                        }
-                    }
+                    .padding(.top, 18)
+                    .padding(.bottom, 24)
+                    .ppContentSheet()
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
             }
-            .background(MyTasksScreenPalette.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Tasks")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
                         .accessibilityIdentifier("tasksDetail.done")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(MyTasksScreenPalette.ink)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                 }
             }
             .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
@@ -282,35 +234,87 @@ struct TasksDetailView: View {
         }
     }
 
-    private func statChip(value: Int, label: String, valueColor: Color) -> some View {
-        VStack(spacing: 2) {
-            Text("\(value)")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(valueColor)
-            Text(label)
-                .font(.system(size: 10))
-                .foregroundStyle(MyTasksScreenPalette.muted)
+    /// Home-style navy header: the existing To do / In progress / Overdue / Done numbers, search and scope pills.
+    private var tasksNavyHeader: some View {
+        let stats = myTasksStats
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(stats.todo)", label: "To do")
+                PPStatDivider()
+                PPStat(value: "\(stats.inProgress)", label: "In progress")
+                PPStatDivider()
+                PPStat(value: "\(stats.overdue)", label: "Overdue", highlight: stats.overdue > 0)
+                PPStatDivider()
+                PPStat(value: "\(stats.done)", label: "Done")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(PPColor.onNavySecondary)
+                TextField("Search tasks…", text: $searchText)
+                    .accessibilityIdentifier("tasksDetail.searchTasks")
+                    .font(.callout)
+                    .foregroundStyle(.white)
+                Spacer(minLength: 0)
+                Menu {
+                    Button(sortNewestFirst ? "Sort: Oldest first" : "Sort: Newest first") {
+                        sortNewestFirst.toggle()
+                    }
+                        .accessibilityIdentifier("tasksDetail.sortOldestFirst2")
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.white)
+                }
+                    .accessibilityIdentifier("tasksDetail.sortOldestFirst")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(PPColor.onNavyFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
+            )
+            .padding(.top, 20)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(GlobalMyTasksSegment.ordered, id: \.self) { seg in
+                        scopePill(
+                            title: seg.pillTitle(
+                                activeCount: activeRelevantCount,
+                                completedCount: completedRelevantCount,
+                                overdueCount: overdueRelevantCount
+                            ),
+                            isSelected: listSegment == seg
+                        ) {
+                            listSegment = seg
+                        }
+                    }
+                }
+            }
+            .padding(.top, 12)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 6)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(MyTasksScreenPalette.border, lineWidth: 0.5))
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     private func scopePill(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(isSelected ? Color.white : MyTasksScreenPalette.muted)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(isSelected ? MyTasksScreenPalette.blue : Color.white)
-                .clipShape(Capsule())
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(isSelected ? PPColor.navy : Color.white.opacity(0.85))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(isSelected ? Color.white : PPColor.onNavyFill))
                 .overlay(
                     Capsule()
-                        .stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: isSelected ? 0 : 0.5)
+                        .strokeBorder(PPColor.onNavyStroke, lineWidth: isSelected ? 0 : 0.5)
                 )
         }
         .accessibilityIdentifier("tasksDetail.\(AccessibilityID.token(title))")
@@ -319,27 +323,20 @@ struct TasksDetailView: View {
 
     private var emptyStateCard: some View {
         VStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(red: 230 / 255, green: 241 / 255, blue: 251 / 255))
-                .frame(width: 56, height: 56)
-                .overlay(
-                    Image(systemName: "checklist")
-                        .font(.system(size: 26))
-                        .foregroundStyle(MyTasksScreenPalette.blue)
-                )
+            PPIconTile(symbol: "checklist", family: .plan, size: PPMetrics.quickActionIcon, lifted: true)
             Text(emptyTitle)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(MyTasksScreenPalette.ink)
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
             Text(emptySubtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(MyTasksScreenPalette.muted)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(32)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MyTasksScreenPalette.border, lineWidth: 0.5))
+        .padding(28)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var emptyTitle: String {
@@ -372,31 +369,30 @@ struct TasksDetailView: View {
 
     private func errorState(_ message: String) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(.orange)
+            PPIconTile(symbol: "exclamationmark.triangle.fill", family: .alert, size: 44)
             Text(message)
-                .font(.system(size: 13))
-                .foregroundStyle(MyTasksScreenPalette.muted)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button("Retry") {
                 Task { await taskStore.loadData() }
             }
             .accessibilityIdentifier("tasksDetail.retry")
             .buttonStyle(.borderedProminent)
-            .tint(MyTasksScreenPalette.blue)
+            .buttonBorderShape(.capsule)
+            .tint(PPColor.brand)
         }
         .frame(maxWidth: .infinity)
         .padding(24)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var holidayBannersSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Holiday approvals")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(MyTasksScreenPalette.ink)
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.bold)
+                .foregroundStyle(.primary)
             ForEach(pendingHolidayApprovals) { request in
                 HolidayApprovalTaskCard(
                     request: request,
@@ -412,21 +408,26 @@ struct TasksDetailView: View {
     private var qualificationBannersSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Qualification reminders")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(MyTasksScreenPalette.overdueCount)
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.bold)
+                .foregroundStyle(.primary)
             ForEach(qualificationExpiryBannerItems, id: \.id) { item in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(item.title)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                    Text(item.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(MyTasksScreenPalette.muted)
+                HStack(alignment: .top, spacing: 12) {
+                    PPIconTile(symbol: "rosette", family: .alert, size: PPMetrics.menuIcon)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.title)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text(item.subtitle)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(Color(red: 252 / 255, green: 235 / 255, blue: 235 / 255).opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(14)
+                .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
             }
         }
     }
@@ -618,8 +619,8 @@ private struct MyTasksRedesignTaskCard: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(alignment: .top, spacing: 8) {
                             Text(resolvedTask.title)
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(MyTasksScreenPalette.ink)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
                                 .multilineTextAlignment(.leading)
                             Spacer(minLength: 0)
                             statusPill
@@ -630,8 +631,8 @@ private struct MyTasksRedesignTaskCard: View {
                                 .font(.system(size: 12))
                                 .foregroundStyle(Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255))
                             Text(projectLineText)
-                                .font(.system(size: 11))
-                                .foregroundStyle(MyTasksScreenPalette.muted)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
 
                         HStack {
@@ -641,7 +642,7 @@ private struct MyTasksRedesignTaskCard: View {
                                     .font(.system(size: 12))
                                     .foregroundStyle(dueColor)
                                 Text(dueText)
-                                    .font(.system(size: 11, weight: dueWeight))
+                                    .font(.footnote.weight(dueWeight))
                                     .foregroundStyle(dueColor)
                             }
                         }
@@ -674,12 +675,7 @@ private struct MyTasksRedesignTaskCard: View {
             }
         }
         .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(MyTasksScreenPalette.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .sheet(isPresented: $showingTaskDetail) {
             CompletedTaskDetailView(task: resolvedTask)
                 .environmentObject(taskStore)
@@ -981,10 +977,8 @@ private struct HolidayApprovalTaskCard: View {
                     .tint(.green)
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(14)
-        .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
+        .padding(14)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 }
 

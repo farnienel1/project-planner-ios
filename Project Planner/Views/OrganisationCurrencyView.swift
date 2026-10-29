@@ -30,9 +30,9 @@ struct OrganisationCurrencyView: View {
                     }
                     .accessibilityIdentifier("organisationCurrency.currency")
                     .pickerStyle(.menu)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .padding(.vertical, 12)
-                    .tint(ProjectWorksRevampColors.blue)
+                    .tint(PPColor.brand)
                 }
                 SettingsHubChrome.footer("Used for rates, reports, and invoicing defaults. Country and address are set in Company details.")
 
@@ -47,8 +47,8 @@ struct OrganisationCurrencyView: View {
 
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 12))
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .font(.footnote)
+                        .foregroundStyle(PPColor.danger)
                         .padding(.horizontal, 4)
                         .padding(.bottom, 8)
                 }
@@ -59,10 +59,10 @@ struct OrganisationCurrencyView: View {
             }
             .padding(16)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Currency")
         .navigationBarTitleDisplayMode(.inline)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
         .onAppear {
             let org = firebaseBackend.currentOrganization
             let saved = org?.settings.currencyCode
@@ -75,12 +75,12 @@ struct OrganisationCurrencyView: View {
     private func previewRow(_ title: String, _ value: String) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.primary)
             Spacer()
             Text(value)
-                .font(.system(size: 13))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .font(.subheadline)
+                .foregroundStyle(Color.secondary)
         }
         .padding(.vertical, 12)
     }

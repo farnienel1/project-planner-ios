@@ -47,34 +47,38 @@ struct OrganisationWarningsSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 0) {
                 headerBar
 
-                detectionPeriodCard
-                excludedUsersCard
-                warningTypesCard
-                severityGuideCard
+                VStack(alignment: .leading, spacing: 20) {
+                    detectionPeriodCard
+                    excludedUsersCard
+                    warningTypesCard
+                    severityGuideCard
 
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 4)
-                }
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 4)
+                    }
 
-                if saveSucceeded, onSaved == nil {
-                    Text("Settings saved. Warnings have been updated.")
-                        .font(.caption)
-                        .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                        .padding(.horizontal, 4)
+                    if saveSucceeded, onSaved == nil {
+                        Text("Settings saved. Warnings have been updated.")
+                            .font(.caption)
+                            .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                            .padding(.horizontal, 4)
+                    }
                 }
+                .padding(.top, 18)
+                .padding(.bottom, 12)
+                .ppContentSheet()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Warnings")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .navigationBarBackButtonHidden(true)
         .background(SettingsSwipeBackGuard(disabled: isDirty))
         .safeAreaInset(edge: .bottom) {
@@ -95,9 +99,10 @@ struct OrganisationWarningsSettingsView: View {
                     } else {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                            .foregroundStyle(.white)
                     }
                 }
+                .tint(.white)
                 .accessibilityIdentifier("organisationWarningsSettings.back")
             }
         }
@@ -130,14 +135,15 @@ struct OrganisationWarningsSettingsView: View {
     // MARK: - Header
 
     private var headerBar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Warnings")
-                .font(.title2.bold())
-            Text("Control how and when your team is alerted to scheduling issues")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        PPNavyPageTitle(
+            title: "Warnings",
+            subtitle: "Control how and when your team is alerted to scheduling issues"
+        )
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     // MARK: - Detection period
@@ -179,11 +185,11 @@ struct OrganisationWarningsSettingsView: View {
             HStack(alignment: .top, spacing: 12) {
                 ZStack {
                     Circle()
-                        .strokeBorder(draft.clashLookaheadMode == mode ? ProjectWorksRevampColors.blue : Color(.systemGray4), lineWidth: 2)
+                        .strokeBorder(draft.clashLookaheadMode == mode ? PPColor.brand : Color(.systemGray4), lineWidth: 2)
                         .frame(width: 18, height: 18)
                     if draft.clashLookaheadMode == mode {
                         Circle()
-                            .fill(ProjectWorksRevampColors.blue)
+                            .fill(PPColor.brand)
                             .frame(width: 8, height: 8)
                     }
                 }
@@ -192,7 +198,7 @@ struct OrganisationWarningsSettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(draft.clashLookaheadMode == mode ? ProjectWorksRevampColors.blue : .primary)
+                        .foregroundStyle(draft.clashLookaheadMode == mode ? PPColor.brand : .primary)
                     Text(description)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -203,11 +209,11 @@ struct OrganisationWarningsSettingsView: View {
             .padding(14)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(draft.clashLookaheadMode == mode ? ProjectWorksRevampColors.blue.opacity(0.08) : Color(.secondarySystemBackground))
+                    .fill(draft.clashLookaheadMode == mode ? PPColor.brand.opacity(0.08) : Color(.secondarySystemBackground))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(draft.clashLookaheadMode == mode ? ProjectWorksRevampColors.blue : Color.clear, lineWidth: 2)
+                    .strokeBorder(draft.clashLookaheadMode == mode ? PPColor.brand : Color.clear, lineWidth: 2)
             )
         }
         .accessibilityIdentifier("organisationWarningsSettings.\(AccessibilityID.token(label))")
@@ -329,8 +335,8 @@ struct OrganisationWarningsSettingsView: View {
                             .font(.caption2.weight(.bold))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
-                            .background(ProjectWorksRevampColors.blue.opacity(0.15))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                            .background(PPColor.brand.opacity(0.15))
+                            .foregroundStyle(PPColor.brand)
                             .clipShape(Capsule())
                     }
                     Image(systemName: "chevron.right")
@@ -361,7 +367,7 @@ struct OrganisationWarningsSettingsView: View {
             } label: {
                 Text("Open full exclusion list")
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                    .foregroundStyle(PPColor.brand)
             }
             .accessibilityIdentifier("organisationWarningsSettings.openFullExclusionList")
             .padding(.top, 4)
@@ -477,28 +483,16 @@ struct OrganisationWarningsSettingsView: View {
             content()
         }
         .padding(18)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: Color.black.opacity(0.05), radius: 8, y: 2)
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(Color(.separator).opacity(0.35), lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func sectionHeader(icon: String, title: String, subtitle: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(ProjectWorksRevampColors.blue.opacity(0.1))
-                    .frame(width: 36, height: 36)
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
-            }
+        HStack(alignment: .top, spacing: 13) {
+            PPIconTile(symbol: icon, family: sectionFamily(for: icon), size: 36)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                 Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -507,26 +501,35 @@ struct OrganisationWarningsSettingsView: View {
         }
     }
 
+    private func sectionFamily(for icon: String) -> PPFamily {
+        switch icon {
+        case "clock.fill": return .plan
+        case "person.2.fill": return .people
+        case "exclamationmark.triangle.fill": return .alert
+        default: return .system
+        }
+    }
+
     private func infoBox(text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "info.circle.fill")
                 .font(.caption)
-                .foregroundStyle(ProjectWorksRevampColors.blue)
+                .foregroundStyle(PPColor.brand)
             Text(text)
                 .font(.caption)
-                .foregroundStyle(ProjectWorksRevampColors.blue)
+                .foregroundStyle(PPColor.brand)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
-        .background(ProjectWorksRevampColors.blue.opacity(0.08))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(ProjectWorksRevampColors.blue.opacity(0.2), lineWidth: 1))
+        .background(PPColor.brand.opacity(0.08))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(PPColor.brand.opacity(0.2), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func stepButton(systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .bold))
+                .font(.footnote.weight(.bold))
                 .frame(width: 32, height: 32)
                 .background(Color(.systemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -556,7 +559,7 @@ struct OrganisationWarningsSettingsView: View {
             Toggle("", isOn: isOn)
                 .accessibilityIdentifier("organisationWarningsSettings.\(AccessibilityID.token(title))")
                 .labelsHidden()
-                .tint(ProjectWorksRevampColors.blue)
+                .tint(PPColor.brand)
                 .onChange(of: isOn.wrappedValue) { _, _ in markEdited() }
         }
         .padding(.vertical, 4)
@@ -710,8 +713,11 @@ private struct WarningExcludedUsersPickerView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Excluded users")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .searchable(text: $searchText, prompt: "Search users")
     }
 

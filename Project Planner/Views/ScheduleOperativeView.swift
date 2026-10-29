@@ -257,7 +257,7 @@ struct ScheduleOperativeView: View {
     private var baseNavigationView: some View {
         NavigationView {
             ZStack(alignment: .top) {
-                ProjectWorksRevampColors.canvas
+                PPColor.page
                     .ignoresSafeArea()
 
                 ScrollView {
@@ -283,7 +283,7 @@ struct ScheduleOperativeView: View {
             }
             .navigationTitle("Schedule booking")
             .navigationBarTitleDisplayMode(.inline)
-            .appChromeNavigationBarSurface()
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: { dismiss() }) {
@@ -291,8 +291,8 @@ struct ScheduleOperativeView: View {
                             Image(systemName: "chevron.left")
                             Text("Back")
                         }
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                        .fontWeight(.medium)
+                        .foregroundStyle(.white)
+                        .fontWeight(.semibold)
                     }
                         .accessibilityIdentifier("scheduleOperative.back")
                 }
@@ -739,20 +739,16 @@ struct ScheduleOperativeView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var scheduleBookingOperativesSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("OPERATIVES")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .tracking(0.4)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.8)
                 .padding(.leading, 4)
                 .padding(.bottom, 8)
             VStack(spacing: 0) {
@@ -903,12 +899,8 @@ struct ScheduleOperativeView: View {
             .padding(.horizontal, 12)
         }
         .padding(.vertical, 6)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var scheduleMainClashNotice: some View {
@@ -933,9 +925,9 @@ struct ScheduleOperativeView: View {
     private var scheduleBookingReviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("CONFIRM BOOKING")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .tracking(0.4)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.8)
                 .padding(.leading, 4)
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -992,12 +984,8 @@ struct ScheduleOperativeView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-            )
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
     }
 
@@ -1049,9 +1037,9 @@ struct ScheduleOperativeView: View {
         let breakdown = probe.payrollHoursResult(policy: p)
         return VStack(alignment: .leading, spacing: 10) {
             Text("HOURS · AM / PM / FULL DAY / CUSTOM")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .tracking(0.4)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.8)
                 .padding(.leading, 4)
             VStack(alignment: .leading, spacing: 10) {
                 VStack(spacing: 8) {
@@ -1162,9 +1150,9 @@ struct ScheduleOperativeView: View {
     private var scheduleBookingCalendarCardCompact: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("DATES · \(selectedDates.count) selected")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .tracking(0.4)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.8)
                 .padding(.leading, 4)
             VStack(spacing: 8) {
                 HStack {

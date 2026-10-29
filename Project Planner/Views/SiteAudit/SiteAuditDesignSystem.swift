@@ -8,14 +8,16 @@
 import SwiftUI
 
 enum SiteAuditColors {
-    static let pageBackground = ProjectWorksRevampColors.canvas
-    static let card = ProjectWorksRevampColors.surface
-    static let text = ProjectWorksRevampColors.ink
-    static let textSecondary = ProjectWorksRevampColors.muted
-    static let textDisabled = ProjectWorksRevampColors.placeholderInk
-    static let border = ProjectWorksRevampColors.border
-    static let borderStrong = ProjectWorksRevampColors.searchBorder
-    static let primary = ProjectWorksRevampColors.blue
+    // UI surfaces and text follow the app's PP (Midnight) look. None of these tokens are
+    // used by SiteAuditPDFBuilder, which draws with its own UIColors, so the PDF is unchanged.
+    static let pageBackground = PPColor.page
+    static let card = PPColor.card
+    static let text = Color.primary
+    static let textSecondary = Color.secondary
+    static let textDisabled = Color(.tertiaryLabel)
+    static let border = Color(.separator)
+    static let borderStrong = Color(.separator)
+    static let primary = PPColor.brand
     static let primaryTint = AppAdaptiveColor.dynamic(
         light: AppAdaptiveColor.rgb(0.902, 0.945, 0.984),
         dark: AppAdaptiveColor.rgb(0.110, 0.173, 0.247)
@@ -108,12 +110,13 @@ struct SiteAuditPill: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10, weight: .medium))
+            .font(.caption2.weight(.semibold))
             .foregroundStyle(foreground)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
             .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .clipShape(Capsule())
     }
 
     private var foreground: Color {
@@ -133,7 +136,7 @@ struct SiteAuditPill: View {
         case .amber: return SiteAuditColors.warnTint
         case .blue: return SiteAuditColors.primaryTint
         case .green: return SiteAuditColors.successTint
-        case .grey: return Color(red: 0.949, green: 0.953, blue: 0.961)
+        case .grey: return PPColor.well
         case .red: return SiteAuditColors.dangerTint
         case .purple: return SiteAuditColors.purpleTint
         case .draft: return SiteAuditColors.primaryTint
@@ -144,23 +147,40 @@ struct SiteAuditPill: View {
 struct SiteAuditIconCircleButton: View {
     let systemName: String
     var primary = false
+    /// True when the button sits in a navy (`ppNavyNavigationBar`) toolbar. Look only.
+    var onNavy = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
+            label
+        }
+        .accessibilityIdentifier("siteAuditIconCircle.\(AccessibilityID.token(systemName))")
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var label: some View {
+        if onNavy {
+            Image(systemName: systemName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(primary ? PPColor.brand : PPColor.onNavyFill))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
+                .contentShape(Circle())
+        } else {
             Image(systemName: systemName)
                 .font(.system(size: primary ? 16 : 17, weight: .medium))
                 .foregroundStyle(primary ? Color.white : SiteAuditColors.text)
                 .frame(width: 34, height: 34)
-                .background(primary ? SiteAuditColors.primary : Color.white)
+                .background(primary ? SiteAuditColors.primary : PPColor.card)
                 .clipShape(Circle())
                 .overlay(
                     Circle()
                         .strokeBorder(primary ? Color.clear : SiteAuditColors.borderStrong, lineWidth: 0.5)
                 )
         }
-        .accessibilityIdentifier("siteAuditIconCircle.\(AccessibilityID.token(systemName))")
-        .buttonStyle(.plain)
     }
 }
 
@@ -168,24 +188,43 @@ struct SiteAuditToolbarPill: View {
     let title: String
     var filled = false
     var disabled = false
+    /// True when the pill sits in a navy (`ppNavyNavigationBar`) toolbar. Look only.
+    var onNavy = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Text(title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(disabled ? SiteAuditColors.textDisabled : (filled ? .white : SiteAuditColors.text))
-                .padding(.horizontal, filled ? 14 : 12)
-                .padding(.vertical, 6)
-                .background {
-                    if filled {
-                        Capsule().fill(disabled ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
-                    } else {
-                        Capsule()
-                            .fill(SiteAuditColors.card)
-                            .overlay(Capsule().strokeBorder(SiteAuditColors.borderStrong, lineWidth: 0.5))
+            if onNavy {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(disabled ? 0.45 : 1))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background {
+                        if filled {
+                            Capsule().fill(disabled ? PPColor.onNavyFill : PPColor.brand)
+                        } else {
+                            Capsule()
+                                .fill(PPColor.onNavyFill)
+                                .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
+                        }
                     }
-                }
+            } else {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(disabled ? SiteAuditColors.textDisabled : (filled ? .white : SiteAuditColors.text))
+                    .padding(.horizontal, filled ? 14 : 12)
+                    .padding(.vertical, 6)
+                    .background {
+                        if filled {
+                            Capsule().fill(disabled ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
+                        } else {
+                            Capsule()
+                                .fill(SiteAuditColors.card)
+                                .overlay(Capsule().strokeBorder(SiteAuditColors.borderStrong, lineWidth: 0.5))
+                        }
+                    }
+            }
         }
         .accessibilityIdentifier("siteAuditToolbarPill.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
@@ -200,19 +239,20 @@ struct SiteAuditSectionLabel: View {
     var body: some View {
         HStack(spacing: 0) {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .medium))
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(SiteAuditColors.textSecondary)
-                .tracking(0.4)
+                .tracking(0.8)
             if let suffix {
                 Text(" \(suffix)")
-                    .font(.system(size: 11, weight: .regular))
+                    .font(.footnote)
                     .foregroundStyle(SiteAuditColors.textDisabled)
                     .textCase(nil)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 4)
-        .padding(.bottom, 7)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
     }
 }
 
@@ -222,11 +262,7 @@ struct SiteAuditCard<Content: View>: View {
     var body: some View {
         content
             .background(SiteAuditColors.card)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(SiteAuditColors.border, lineWidth: 0.5)
-            )
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 }
 
@@ -268,54 +304,42 @@ struct SiteAuditBoundedThumbnail: View {
     }
 }
 
+/// Navy header for a project's audit list: job number, site name and the audit and photo
+/// counts the list already computes. Drawn with Home's navy backdrop (`ppNavyHeader`).
 struct SiteAuditProjectHero: View {
+    var jobNumber: String = ""
+    var siteName: String = ""
     let auditCount: Int
     let photoCount: Int
     let lastSubmittedLine: String?
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            LinearGradient(
-                colors: [SiteAuditColors.heroGradientStart, SiteAuditColors.heroGradientEnd],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+        VStack(alignment: .leading, spacing: 0) {
+            PPNavyPageTitle(
+                eyebrow: "This project",
+                title: jobNumber,
+                subtitle: siteName
             )
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [Color.white.opacity(0.12), Color.clear],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 60
-                    )
-                )
-                .frame(width: 120, height: 120)
-                .offset(x: 30, y: -30)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("This project")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.85))
-                    .textCase(.uppercase)
-                    .tracking(0.3)
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("\(auditCount)")
-                        .font(.system(size: 22, weight: .medium))
-                    Text("audits · \(photoCount) photos")
-                        .font(.system(size: 12, weight: .regular))
-                        .opacity(0.85)
-                }
-                .foregroundStyle(.white)
-                if let lastSubmittedLine {
-                    Text(lastSubmittedLine)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.white.opacity(0.85))
-                }
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(auditCount)", label: "Audits")
+                PPStatDivider()
+                PPStat(value: "\(photoCount)", label: "Photos")
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 16)
+            if let lastSubmittedLine {
+                Label(lastSubmittedLine, systemImage: "clock")
+                    .font(.footnote)
+                    .foregroundStyle(PPColor.onNavySecondary)
+                    .lineLimit(2)
+                    .padding(.top, 14)
+            }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 }
 
@@ -332,15 +356,16 @@ struct SiteAuditFilterChipsRow: View {
                         selectedIndex = index
                     } label: {
                         Text(chip.count.map { "\(chip.label) · \($0)" } ?? chip.label)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(selected ? Color.white : SiteAuditColors.textSecondary)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 5)
-                            .background(selected ? SiteAuditColors.primary : Color.white)
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(selected ? Color.white : Color.primary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(selected ? PPColor.brand : PPColor.card)
                             .clipShape(Capsule())
                             .overlay(
                                 Capsule()
-                                    .strokeBorder(SiteAuditColors.borderStrong, lineWidth: selected ? 0 : 0.5)
+                                    .strokeBorder(Color(.separator), lineWidth: selected ? 0 : 0.5)
                             )
                     }
                     .accessibilityIdentifier("siteAuditFilterChips.row.\(index)")
@@ -356,33 +381,31 @@ struct SiteAuditTypePickerGrid: View {
     @Binding var selected: SiteAuditType
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
             ForEach(SiteAuditType.allCases) { type in
                 let style = SiteAuditTypeStyle.forType(type)
                 let isSelected = selected == type
                 Button {
                     selected = type
                 } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Image(systemName: style.icon)
-                            .font(.system(size: 16))
-                            .foregroundStyle(isSelected ? style.accent : style.accent.opacity(0.9))
+                    VStack(alignment: .leading, spacing: 6) {
+                        SiteAuditRowIconChip(systemName: style.icon, tint: style.accent, background: style.tint, size: PPMetrics.menuIcon)
                         Text(type.rawValue)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(isSelected ? style.accent : SiteAuditColors.text)
                         Text(style.subtitle)
-                            .font(.system(size: 9))
-                            .foregroundStyle(isSelected ? style.accent.opacity(0.75) : SiteAuditColors.textSecondary)
+                            .font(.caption)
+                            .foregroundStyle(isSelected ? style.accent.opacity(0.8) : SiteAuditColors.textSecondary)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
+                    .padding(12)
                     .background(isSelected ? style.tint : SiteAuditColors.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .strokeBorder(isSelected ? style.accent : SiteAuditColors.borderStrong, lineWidth: isSelected ? 1.5 : 0.5)
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(isSelected ? style.accent : Color.clear, lineWidth: 1.5)
                     )
                 }
                 .accessibilityIdentifier("siteAuditTypePickerGrid.row.\(type.id)")
@@ -406,26 +429,25 @@ struct SiteAuditPrimaryButton: View {
             HStack(spacing: 6) {
                 if let systemImage {
                     Image(systemName: systemImage)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.subheadline.weight(.semibold))
                 }
                 Text(title)
-                    .font(.system(size: style == .secondary ? 12 : 13, weight: .medium))
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, style == .secondary ? 10 : 11)
+            .padding(.vertical, 13)
             .foregroundStyle(foreground)
             .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: style == .secondary ? 11 : 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 if style == .outline {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(SiteAuditColors.primary, lineWidth: 1)
                 } else if style == .dashed {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(SiteAuditColors.textDisabled, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-                } else if style == .secondary {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .strokeBorder(SiteAuditColors.border, lineWidth: 0.5)
                 }
             }
         }
@@ -449,9 +471,9 @@ struct SiteAuditPrimaryButton: View {
         switch style {
         case .primary: SiteAuditColors.primary
         case .success: SiteAuditColors.success
-        case .outline, .dashed: Color.white
-        case .secondary: SiteAuditColors.pageBackground
-        case .greyFilled: SiteAuditColors.textSecondary
+        case .outline, .dashed: PPColor.card
+        case .secondary: PPColor.card
+        case .greyFilled: Color(.systemGray)
         }
     }
 }
@@ -463,12 +485,15 @@ struct SiteAuditRowIconChip: View {
     var size: CGFloat = 30
 
     var body: some View {
+        // Solid tile with a white glyph, like PPIconTile. `background` is kept for callers but no longer drawn.
+        let shape = RoundedRectangle(cornerRadius: size * 0.29, style: .continuous)
         Image(systemName: systemName)
-            .font(.system(size: size * 0.5))
-            .foregroundStyle(tint)
+            .font(.system(size: size * 0.44, weight: .semibold))
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(Color.white)
             .frame(width: size, height: size)
-            .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: size * 0.3, style: .continuous))
+            .background(tint, in: shape)
+            .overlay(shape.strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
     }
 }
 

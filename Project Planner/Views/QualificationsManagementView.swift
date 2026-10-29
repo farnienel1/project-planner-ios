@@ -43,18 +43,25 @@ struct QualificationsManagementView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if canManageOrganisation {
-                    Picker("Qualifications", selection: $mode) {
-                        ForEach(QualificationsHubMode.allCases) { tab in
-                            Text(tab.title).tag(tab)
+                VStack(alignment: .leading, spacing: 0) {
+                    qualificationsHeaderTitle
+
+                    if canManageOrganisation {
+                        Picker("Qualifications", selection: $mode) {
+                            ForEach(QualificationsHubMode.allCases) { tab in
+                                Text(tab.title).tag(tab)
+                            }
                         }
+                        .accessibilityIdentifier("qualificationsManagement.qualifications")
+                        .pickerStyle(.segmented)
+                        .padding(.top, 16)
                     }
-                    .accessibilityIdentifier("qualificationsManagement.qualifications")
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                    .padding(.bottom, 8)
                 }
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.top, 12)
+                .padding(.bottom, PPMetrics.headerBottomPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .ppNavyHeader()
 
                 Group {
                     if canManageOrganisation && mode == .organisation {
@@ -64,15 +71,18 @@ struct QualificationsManagementView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(QualificationsContentSheet())
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Qualifications")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: { dismiss() }) {
                         Image(systemName: "xmark")
-                            .foregroundColor(.blue)
                     }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("qualificationsManagement.close")
                 }
 
@@ -81,6 +91,8 @@ struct QualificationsManagementView: View {
                         Button("Add") {
                             showingAddQualification = true
                         }
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.white)
                             .accessibilityIdentifier("qualificationsManagement.add")
                     }
                 }
@@ -111,33 +123,53 @@ struct QualificationsManagementView: View {
         }
     }
 
+    /// Navy header title. Shows the organisation template count already loaded in `operativeStore.qualifications`.
+    @ViewBuilder
+    private var qualificationsHeaderTitle: some View {
+        if canManageOrganisation && mode == .organisation {
+            let count = operativeStore.qualifications.count
+            PPOverviewTitle(
+                eyebrow: "Organisation qualifications",
+                count: "\(count)",
+                countLabel: count == 1 ? "template" : "templates"
+            )
+        } else {
+            PPNavyPageTitle(eyebrow: "Qualifications", title: "My Qualifications")
+        }
+    }
+
     @ViewBuilder
     private var organisationQualificationsContent: some View {
         if operativeStore.qualifications.isEmpty {
-            VStack(spacing: 20) {
-                Spacer()
-                Image(systemName: "graduationcap.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.gray)
+            VStack(spacing: 0) {
+                VStack(spacing: 16) {
+                    PPIconTile(symbol: "graduationcap.fill", family: .people, size: PPMetrics.quickActionIcon, lifted: true)
 
-                Text("No Qualifications Added Yet")
-                    .font(.title2)
-                    .fontWeight(.semibold)
+                    Text("No Qualifications Added Yet")
+                        .font(.system(.title2, design: .rounded))
+                        .fontWeight(.bold)
+                        .multilineTextAlignment(.center)
 
-                Text("Add organisation qualification templates. Staff can then assign them on My Qualifications, with their own expiry dates and certificates.")
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                    Text("Add organisation qualification templates. Staff can then assign them on My Qualifications, with their own expiry dates and certificates.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
 
-                Button("Create New Qualification") {
-                    showingAddQualification = true
+                    Button("Create New Qualification") {
+                        showingAddQualification = true
+                    }
+                    .accessibilityIdentifier("qualificationsManagement.createNewQualification")
+                    .ppProminentCapsule()
+                    .padding(.top, 4)
                 }
-                .accessibilityIdentifier("qualificationsManagement.createNewQualification")
-                .buttonStyle(.borderedProminent)
-                Spacer()
+                .padding(20)
+                .frame(maxWidth: .infinity)
+                .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.top, 20)
+
+                Spacer(minLength: 0)
             }
-            .padding()
         } else {
             QualificationLibraryBrowser(
                 items: operativeStore.qualifications,
@@ -226,17 +258,21 @@ struct AddQualificationView: View {
             if let errorMessage = errorMessage {
                 Section {
                     Text(errorMessage)
-                        .foregroundColor(.red)
+                        .foregroundStyle(PPColor.danger)
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Add Qualification")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("Cancel") {
                     dismiss()
                 }
+                    .foregroundStyle(.white)
                     .accessibilityIdentifier("addQualification.cancel")
             }
 
@@ -246,7 +282,8 @@ struct AddQualificationView: View {
                 }
                 .accessibilityIdentifier("addQualification.save")
                 .disabled(!isFormValid || isLoading)
-                .foregroundStyle(isFormValid && !isLoading ? Color.blue : Color.secondary)
+                .fontWeight(.semibold)
+                .foregroundStyle(isFormValid && !isLoading ? Color.white : PPColor.onNavySecondary)
             }
         }
     }
@@ -351,15 +388,19 @@ struct EditOrganisationQualificationView: View {
             if let errorMessage {
                 Section {
                     Text(errorMessage)
-                        .foregroundColor(.red)
+                        .foregroundStyle(PPColor.danger)
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Edit Qualification")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
+                    .foregroundStyle(.white)
                     .accessibilityIdentifier("editOrganisationQualification.cancel")
             }
             ToolbarItem(placement: .confirmationAction) {
@@ -368,7 +409,7 @@ struct EditOrganisationQualificationView: View {
                 }
                 .accessibilityIdentifier("editOrganisationQualification.saving")
                 .disabled(!canSave)
-                .foregroundStyle(canSave ? Color.blue : Color.secondary)
+                .foregroundStyle(canSave ? Color.white : PPColor.onNavySecondary)
                 .fontWeight(canSave ? .semibold : .regular)
             }
         }
@@ -417,6 +458,24 @@ struct EditOrganisationQualificationView: View {
         defer { isDeleting = false }
         await operativeStore.deleteQualification(qualification)
         dismiss()
+    }
+}
+
+/// Light rounded sheet under the navy header (Home's content sheet, sized for a List or Form).
+private struct QualificationsContentSheet: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.top, 8)
+            .background(PPColor.page)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: PPMetrics.contentCornerRadius,
+                    topTrailingRadius: PPMetrics.contentCornerRadius,
+                    style: .continuous
+                )
+            )
+            .padding(.top, -PPMetrics.contentOverlap)
     }
 }
 

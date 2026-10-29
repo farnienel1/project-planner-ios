@@ -141,12 +141,14 @@ struct HSRamsDocumentDetailView: View {
                 .padding(.horizontal, HSMetric.screenPad)
                 .padding(.vertical, 16)
             }
-            .hsScreen()
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("RAMS")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("hsRamsDocumentDetail.close")
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -155,6 +157,7 @@ struct HSRamsDocumentDetailView: View {
                             FileReportMenuButton(target: reportTarget, presented: $presentedReport)
                         } label: {
                             Image(systemName: "ellipsis.circle")
+                                .foregroundStyle(.white)
                         }
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("hsRamsDocumentDetail.more")
@@ -279,12 +282,14 @@ struct HSOtherDocumentDetailView: View {
                 .padding(.horizontal, HSMetric.screenPad)
                 .padding(.vertical, 16)
             }
-            .hsScreen()
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("H&S document")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("hsOtherDocumentDetail.close")
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -293,6 +298,7 @@ struct HSOtherDocumentDetailView: View {
                             FileReportMenuButton(target: reportTarget, presented: $presentedReport)
                         } label: {
                             Image(systemName: "ellipsis.circle")
+                                .foregroundStyle(.white)
                         }
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("hsOtherDocumentDetail.more")
@@ -429,12 +435,14 @@ struct HSCustomSignedTalkView: View {
                 .padding(.horizontal, HSMetric.screenPad)
                 .padding(.vertical, 16)
             }
-            .hsScreen()
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Signed toolbox talk")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("hsCustomSignedTalk.close")
                 }
             }

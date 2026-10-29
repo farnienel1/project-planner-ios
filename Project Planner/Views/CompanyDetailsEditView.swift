@@ -60,7 +60,7 @@ struct CompanyDetailsEditView: View {
                     SettingsHubChrome.card {
                         TextField("Organisation name", text: $organizationName)
                             .accessibilityIdentifier("companyDetailsEdit.organisationName")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                             .padding(.vertical, 12)
                     }
 
@@ -68,7 +68,7 @@ struct CompanyDetailsEditView: View {
                     SettingsHubChrome.card {
                         TextField("e.g. RM", text: $documentAbbreviation)
                             .accessibilityIdentifier("companyDetailsEdit.eGRM")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                             .textInputAutocapitalization(.characters)
                             .disableAutocorrection(true)
                             .padding(.vertical, 12)
@@ -82,8 +82,8 @@ struct CompanyDetailsEditView: View {
                     SettingsHubChrome.card {
                         Toggle("Organisation has an office address", isOn: $hasOfficeAddress)
                             .accessibilityIdentifier("companyDetailsEdit.organisationHasAnOfficeAddress")
-                            .font(.system(size: 13, weight: .medium))
-                            .tint(ProjectWorksRevampColors.blue)
+                            .font(.subheadline.weight(.medium))
+                            .tint(PPColor.brand)
                             .padding(.vertical, 11)
                         SettingsHubChrome.divider()
                         Picker("Country", selection: $countryCode) {
@@ -92,30 +92,30 @@ struct CompanyDetailsEditView: View {
                             }
                         }
                         .accessibilityIdentifier("companyDetailsEdit.country")
-                        .font(.system(size: 13, weight: .medium))
-                        .tint(ProjectWorksRevampColors.blue)
+                        .font(.subheadline.weight(.medium))
+                        .tint(PPColor.brand)
                         .padding(.vertical, 11)
                         if hasOfficeAddress {
                             SettingsHubChrome.divider()
                             TextField("Office address line 1", text: $officeAddressLine1)
                                 .accessibilityIdentifier("companyDetailsEdit.officeAddressLine1")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.subheadline.weight(.medium))
                                 .padding(.vertical, 11)
                             SettingsHubChrome.divider()
                             TextField("City / town", text: $officeCity)
                                 .accessibilityIdentifier("companyDetailsEdit.cityTown")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.subheadline.weight(.medium))
                                 .padding(.vertical, 11)
                             SettingsHubChrome.divider()
                             TextField("Postcode (optional)", text: $officePostcode)
                                 .accessibilityIdentifier("companyDetailsEdit.postcodeOptional")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.subheadline.weight(.medium))
                                 .padding(.vertical, 11)
                         } else {
                             SettingsHubChrome.divider()
                             Text("Map default: \(CountryCapitalDirectory.fallbackDescription(for: countryCode))")
-                                .font(.system(size: 12))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .font(.footnote)
+                                .foregroundStyle(Color.secondary)
                                 .padding(.vertical, 11)
                         }
                     }
@@ -132,7 +132,7 @@ struct CompanyDetailsEditView: View {
                                 } else if selectedLogoPDFData != nil {
                                     Image(systemName: "doc.fill")
                                         .font(.title2)
-                                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                                        .foregroundStyle(PPColor.brand)
                                 } else if !logoRemoved,
                                           let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
                                           let url = URL(string: logoURL) {
@@ -144,21 +144,21 @@ struct CompanyDetailsEditView: View {
                                 } else {
                                     Image(systemName: "photo")
                                         .font(.title2)
-                                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                                        .foregroundStyle(Color.secondary)
                                 }
                             }
                             .frame(width: 72, height: 72)
-                            .background(ProjectWorksRevampColors.canvas)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .background(PPColor.page)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                             VStack(alignment: .leading, spacing: 8) {
                                 PhotosPicker(selection: $selectedLogoItem, matching: .images) {
                                     Text("Upload logo (JPEG)")
-                                        .font(.system(size: 13, weight: .semibold))
+                                        .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.white)
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 8)
-                                        .background(ProjectWorksRevampColors.blue)
+                                        .background(PPColor.brand)
                                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 }
                                     .accessibilityIdentifier("companyDetailsEdit.uploadLogoJPEG")
@@ -166,8 +166,8 @@ struct CompanyDetailsEditView: View {
                                     showingLogoPDFPicker = true
                                 }
                                 .accessibilityIdentifier("companyDetailsEdit.uploadLogoPDF")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(PPColor.brand)
                                 Button("Remove logo", role: .destructive) {
                                     selectedLogoImage = nil
                                     selectedLogoItem = nil
@@ -175,8 +175,8 @@ struct CompanyDetailsEditView: View {
                                     logoRemoved = true
                                 }
                                 .accessibilityIdentifier("companyDetailsEdit.removeLogo")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(PPColor.danger)
                             }
                         }
                         .padding(.vertical, 12)
@@ -185,14 +185,14 @@ struct CompanyDetailsEditView: View {
 
                     if let errorMessage {
                         Text(errorMessage)
-                            .font(.system(size: 12))
-                            .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                            .font(.footnote)
+                            .foregroundStyle(PPColor.danger)
                             .padding(.horizontal, 4)
                             .padding(.bottom, 8)
                     }
                     if let successMessage {
                         Text(successMessage)
-                            .font(.system(size: 12))
+                            .font(.footnote)
                             .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                             .padding(.horizontal, 4)
                             .padding(.bottom, 8)
@@ -200,15 +200,15 @@ struct CompanyDetailsEditView: View {
                 }
                 .padding(16)
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .overlay(alignment: .top) {
                 if showAbbreviationLimitToast {
                     Text("Only 3 characters for the abbreviation")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
-                        .background(ProjectWorksRevampColors.ink.opacity(0.92))
+                        .background(PPColor.navy.opacity(0.94))
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .padding(.top, 12)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -217,7 +217,7 @@ struct CompanyDetailsEditView: View {
             .animation(.easeInOut(duration: 0.18), value: showAbbreviationLimitToast)
             .navigationTitle("Company details")
             .navigationBarTitleDisplayMode(.inline)
-            .appChromeNavigationBarSurface()
+            .ppNavyNavigationBar()
             .interactiveDismissDisabled(isDirty)
             .safeAreaInset(edge: .bottom) {
                 SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
@@ -228,6 +228,8 @@ struct CompanyDetailsEditView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { requestLeave() }
                         .accessibilityIdentifier("companyDetailsEdit.cancel")
+                        .font(.body.weight(.semibold))
+                        .tint(.white)
                 }
             }
             .alert("Unsaved changes", isPresented: $showingLeaveConfirm) {

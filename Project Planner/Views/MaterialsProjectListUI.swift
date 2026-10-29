@@ -12,34 +12,34 @@ struct MaterialsWeekNavigator: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack {
+            HStack(spacing: 12) {
                 Button { shiftWeek(-1) } label: {
                     Image(systemName: "chevron.left")
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
                 }
-                    .accessibilityIdentifier("materialsWeekNavigator.back")
-                Spacer()
+                .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
+                .accessibilityIdentifier("materialsWeekNavigator.back")
+                Spacer(minLength: 4)
                 VStack(spacing: 2) {
                     Text(weekRangeLabel)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(.headline, design: .rounded))
+                        .fontWeight(.bold)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     Text("\(weekItemCount) items this week")
-                        .font(.system(size: 10))
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .font(.footnote)
+                        .monospacedDigit()
+                        .foregroundStyle(PPColor.onNavySecondary)
                 }
-                Spacer()
+                Spacer(minLength: 4)
                 Button { shiftWeek(1) } label: {
                     Image(systemName: "chevron.right")
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
                 }
-                    .accessibilityIdentifier("materialsWeekNavigator.chevronRight")
+                .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
+                .accessibilityIdentifier("materialsWeekNavigator.chevronRight")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(MaterialsOrderingTheme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(MaterialsOrderingTheme.border, lineWidth: 0.5))
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, PPMetrics.screenGutter)
     }
 
     private func shiftWeek(_ delta: Int) {
@@ -62,34 +62,36 @@ struct MaterialsDayStrip: View {
                 Button { selectedDate = day } label: {
                     VStack(spacing: 3) {
                         Text(shortWeekday(day))
-                            .font(.system(size: 9))
+                            .font(.caption2.weight(.semibold))
                             .opacity(isSelected ? 0.85 : 1)
                         Text("\(Calendar.current.component(.day, from: day))")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(.headline, design: .rounded))
+                            .fontWeight(.bold)
+                            .monospacedDigit()
                     }
-                    .foregroundStyle(isSelected ? Color.white : (hasItems ? MaterialsOrderingTheme.ink : MaterialsOrderingTheme.disabled))
+                    .foregroundStyle(isSelected ? PPColor.navy : (hasItems ? Color.white : PPColor.onNavySecondary))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 8)
                     .background {
                         if isSelected {
-                            MaterialsOrderingTheme.primaryGradient
+                            Color.white
                         } else if hasItems {
-                            MaterialsOrderingTheme.cardBackground
+                            PPColor.onNavyFill
                         } else {
-                            MaterialsOrderingTheme.pageBackground
+                            Color.clear
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 9)
-                            .stroke(MaterialsOrderingTheme.border, lineWidth: isSelected ? 0 : 0.5)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(PPColor.onNavyStroke, lineWidth: isSelected ? 0 : 0.5)
                     )
                     .overlay(alignment: .topTrailing) {
                         if hasItems && !isSelected {
                             Circle()
-                                .fill(MaterialsOrderingTheme.primary)
-                                .frame(width: 5, height: 5)
-                                .offset(x: -3, y: 3)
+                                .fill(PPColor.warningAmber)
+                                .frame(width: 6, height: 6)
+                                .offset(x: -4, y: 4)
                         }
                     }
                 }
@@ -97,7 +99,7 @@ struct MaterialsDayStrip: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, PPMetrics.screenGutter)
     }
 
     private func shortWeekday(_ date: Date) -> String {
@@ -114,37 +116,39 @@ struct MaterialsLineCard: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(material.material)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(MaterialsOrderingTheme.ink)
-                            .multilineTextAlignment(.leading)
-                        if !material.subtitleLine.isEmpty {
-                            Text(material.subtitleLine)
-                                .font(.system(size: 10))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
+            HStack(alignment: .top, spacing: 13) {
+                PPIconTile(symbol: "shippingbox.fill", family: .trade, size: PPMetrics.menuIcon)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(material.material)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .multilineTextAlignment(.leading)
+                            if !material.subtitleLine.isEmpty {
+                                Text(material.subtitleLine)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        Spacer(minLength: 8)
+                        MaterialsQuantityBadge(quantity: material.quantity, unit: material.unit)
                     }
-                    Spacer(minLength: 8)
-                    MaterialsQuantityBadge(quantity: material.quantity, unit: material.unit)
-                }
-                HStack(spacing: 6) {
-                    MaterialsStatusPill(status: material.status)
-                    Text(metaLine)
-                        .font(.system(size: 10))
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        MaterialsStatusPill(status: material.status)
+                        Text(metaLine)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
-            .padding(11)
-            .background(MaterialsOrderingTheme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(MaterialsOrderingTheme.border, lineWidth: 0.5))
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
         .accessibilityIdentifier("materialsLineCard.\(AccessibilityID.token(metaLine))")
-        .buttonStyle(.plain)
+        .buttonStyle(PPPressableButtonStyle())
         .allowsHitTesting(canManage)
         .opacity(canManage ? 1 : 0.92)
     }
@@ -168,30 +172,30 @@ struct MaterialsDraftSendBanner: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 10) {
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: 16))
+            HStack(spacing: 12) {
+                PPIconTile(symbol: "paperplane.fill", family: .plan, size: PPMetrics.chipIcon)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Draft ready to send")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.subheadline.weight(.semibold))
                     if let cutOffLabel {
                         Text(cutOffLabel)
-                            .font(.system(size: 10))
-                            .opacity(0.85)
+                            .font(.caption)
+                            .opacity(0.7)
                     }
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12))
+                    .font(.footnote.weight(.semibold))
+                    .opacity(0.6)
             }
             .foregroundStyle(.white)
-            .padding(12)
-            .background(MaterialsOrderingTheme.primaryGradient)
-            .clipShape(RoundedRectangle(cornerRadius: 13))
+            .padding(14)
+            .background(PPNavyBackdrop())
+            // Clip the whole banner: the backdrop's glow is a fixed 300pt circle and would spill over the list.
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
         .accessibilityIdentifier("materialsDraftSendBanner.paperplaneFill")
-        .buttonStyle(.plain)
-        .padding(.horizontal, 16)
+        .buttonStyle(PPPressableButtonStyle())
     }
 }
 
@@ -226,71 +230,88 @@ struct OperativeMaterialsPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MaterialsWeekNavigator(
-                currentWeek: $currentWeek,
-                weekRangeLabel: MaterialsWeekHelpers.weekRangeString(for: currentWeek),
-                weekItemCount: MaterialsWeekHelpers.itemsThisWeek(materials, week: currentWeek)
-            )
-            MaterialsDayStrip(
-                selectedDate: $selectedDate,
-                weekDays: MaterialsWeekHelpers.weekDays(containing: currentWeek),
-                materials: materials
-            )
-            .padding(.bottom, 12)
-
-            HStack {
-                Text(dayTitle)
-                    .font(.system(size: 12, weight: .medium))
-                Spacer()
-                if canViewQuoteOrderHistory {
-                    Button("Quote/Order History") {
-                        showingHistory = true
-                    }
-                    .accessibilityIdentifier("operativeMaterialsPanel.quoteOrderHistory")
-                    .font(.system(size: 11, weight: .medium))
-                    .buttonStyle(.bordered)
-                    .tint(MaterialsOrderingTheme.muted)
-                }
-                Button { showingAddMaterial = true } label: {
-                    Label("Add", systemImage: "plus")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .accessibilityIdentifier("operativeMaterialsPanel.add")
-                .buttonStyle(.borderedProminent)
-                .tint(MaterialsOrderingTheme.primary)
+            VStack(spacing: 14) {
+                MaterialsWeekNavigator(
+                    currentWeek: $currentWeek,
+                    weekRangeLabel: MaterialsWeekHelpers.weekRangeString(for: currentWeek),
+                    weekItemCount: MaterialsWeekHelpers.itemsThisWeek(materials, week: currentWeek)
+                )
+                MaterialsDayStrip(
+                    selectedDate: $selectedDate,
+                    weekDays: MaterialsWeekHelpers.weekDays(containing: currentWeek),
+                    materials: materials
+                )
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
+            .padding(.top, 12)
+            .padding(.bottom, PPMetrics.headerBottomPadding)
+            .frame(maxWidth: .infinity)
+            .ppNavyHeader()
 
-            ScrollView {
-                VStack(spacing: 8) {
-                    if dayMaterials.isEmpty {
-                        Text("No materials for this day")
-                            .font(.system(size: 13))
-                            .foregroundStyle(MaterialsOrderingTheme.muted)
-                            .padding(.vertical, 40)
-                    } else {
-                        ForEach(dayMaterials) { material in
-                            let canManage = materialCanBeManagedByCurrentUser(material, userStore: userStore, firebaseBackend: firebaseBackend)
-                            MaterialsLineCard(material: material, canManage: canManage) {
-                                if canManage { editingMaterial = material }
-                            }
-                            .contextMenu {
-                                if canManage {
-                                    Button(role: .destructive) {
-                                        deleteMaterial(material)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Text(dayTitle)
+                        .font(.system(.headline, design: .rounded))
+                        .fontWeight(.bold)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 4)
+                    if canViewQuoteOrderHistory {
+                        Button("Quote/Order History") {
+                            showingHistory = true
+                        }
+                        .accessibilityIdentifier("operativeMaterialsPanel.quoteOrderHistory")
+                        .font(.footnote.weight(.semibold))
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .tint(MaterialsOrderingTheme.muted)
+                    }
+                    Button { showingAddMaterial = true } label: {
+                        Label("Add", systemImage: "plus")
+                            .font(.footnote.weight(.semibold))
+                    }
+                    .accessibilityIdentifier("operativeMaterialsPanel.add")
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(MaterialsOrderingTheme.primary)
+                }
+                .padding(.horizontal, 2)
+                .padding(.top, 18)
+                .padding(.bottom, 10)
+
+                ScrollView {
+                    VStack(spacing: 10) {
+                        if dayMaterials.isEmpty {
+                            Text("No materials for this day")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 40)
+                        } else {
+                            ForEach(dayMaterials) { material in
+                                let canManage = materialCanBeManagedByCurrentUser(material, userStore: userStore, firebaseBackend: firebaseBackend)
+                                MaterialsLineCard(material: material, canManage: canManage) {
+                                    if canManage { editingMaterial = material }
+                                }
+                                .contextMenu {
+                                    if canManage {
+                                        Button(role: .destructive) {
+                                            deleteMaterial(material)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                            .accessibilityIdentifier("operativeMaterialsPanel.row.\(material.id).delete")
                                     }
-                                        .accessibilityIdentifier("operativeMaterialsPanel.row.\(material.id).delete")
                                 }
                             }
                         }
                     }
+                    .padding(.bottom, 24)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .ppContentSheet()
         }
-        .background(MaterialsOrderingTheme.pageBackground)
+        .background(PPColor.page.ignoresSafeArea())
         .sheet(isPresented: $showingAddMaterial) {
             MaterialsAddWithCatalogueSheet(project: project, date: selectedDate, canSendQuoteOrOrder: false)
                 .environmentObject(userStore)
@@ -382,51 +403,71 @@ struct MaterialsOrderHistorySheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(spacing: 0) {
                     Text("Every quote and order sent for this job")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(PPColor.onNavySecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, PPMetrics.screenGutter)
+                        .padding(.top, 12)
+                        .padding(.bottom, PPMetrics.headerBottomPadding)
+                        .ppNavyHeader()
 
-                    if isLoading {
-                        ProgressView()
+                    VStack(alignment: .leading, spacing: 12) {
+                        if isLoading {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 40)
+                        } else if let loadErrorMessage {
+                            VStack(spacing: 8) {
+                                PPIconTile(symbol: "exclamationmark.triangle.fill", family: .alert, size: PPMetrics.quickActionIcon, lifted: true)
+                                Text("Could not load history")
+                                    .font(.system(.headline, design: .rounded))
+                                    .fontWeight(.bold)
+                                Text(loadErrorMessage)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                            }
                             .frame(maxWidth: .infinity)
-                            .padding(.top, 40)
-                    } else if let loadErrorMessage {
-                        VStack(spacing: 8) {
-                            Text("Could not load history")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text(loadErrorMessage)
-                                .font(.system(size: 13))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
-                                .multilineTextAlignment(.center)
-                        }
-                    } else if jobRecords.isEmpty {
-                        VStack(spacing: 8) {
-                            Text("No quotes or orders for this job yet")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text("When you send a quote or order to a wholesaler, it appears here.")
-                                .font(.system(size: 13))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
-                                .multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 32)
-                        .padding(.horizontal, 8)
-                    } else {
-                        ForEach(jobRecords) { record in
-                            historyTimelineCard(record)
+                            .padding(20)
+                            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                        } else if jobRecords.isEmpty {
+                            VStack(spacing: 8) {
+                                PPIconTile(symbol: "clock.arrow.circlepath", family: .plan, size: PPMetrics.quickActionIcon, lifted: true)
+                                Text("No quotes or orders for this job yet")
+                                    .font(.system(.headline, design: .rounded))
+                                    .fontWeight(.bold)
+                                    .multilineTextAlignment(.center)
+                                Text("When you send a quote or order to a wholesaler, it appears here.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 28)
+                            .padding(.horizontal, 16)
+                            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                        } else {
+                            ForEach(jobRecords) { record in
+                                historyTimelineCard(record)
+                            }
                         }
                     }
+                    .padding(.top, 18)
+                    .padding(.bottom, 24)
+                    .ppContentSheet()
                 }
-                .padding(16)
             }
-            .background(MaterialsOrderingTheme.pageBackground)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Quote & order history")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("materialsOrderHistory.close")
                 }
             }
@@ -483,30 +524,32 @@ struct MaterialsOrderHistorySheet: View {
                 else { expandedRecordIds.insert(record.id) }
             } label: {
                 HStack(alignment: .top, spacing: 12) {
-                    Circle()
-                        .fill(isQuote ? Color(red: 0.06, green: 0.65, blue: 0.91) : Color(red: 0.98, green: 0.45, blue: 0.09))
-                        .frame(width: 10, height: 10)
-                        .padding(.top, 5)
+                    PPIconTile(
+                        symbol: isQuote ? "doc.text.fill" : "shippingbox.fill",
+                        family: isQuote ? .plan : .sites,
+                        size: PPMetrics.menuIcon
+                    )
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(isQuote ? "QUOTE" : "ORDER")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(isQuote ? Color(red: 0.06, green: 0.65, blue: 0.91) : Color(red: 0.086, green: 0.639, blue: 0.29))
+                                .font(.caption2.weight(.bold))
+                                .tracking(0.4)
+                                .foregroundStyle(isQuote ? PPFamily.plan.bottom : PPFamily.sites.bottom)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 3)
-                                .background(isQuote ? Color(red: 0.88, green: 0.96, blue: 1) : Color(red: 0.882, green: 0.969, blue: 0.929))
+                                .background((isQuote ? PPFamily.plan.top : PPFamily.sites.top).opacity(0.16))
                                 .clipShape(Capsule())
                             Spacer()
                             Text(record.sentAt.formatted(date: .abbreviated, time: .shortened))
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
                         }
                         Text("\(record.itemCountLabel) · sent by \(record.sentBy)")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(MaterialsOrderingTheme.ink)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
                         Text(recipientSummary(record))
-                            .font(.system(size: 12))
-                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                             .lineLimit(isExpanded ? nil : 2)
                             .multilineTextAlignment(.leading)
                         if let required = record.requiredDeliverySummary {
@@ -536,8 +579,9 @@ struct MaterialsOrderHistorySheet: View {
                 VStack(alignment: .leading, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("SENT TO")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                            .font(.caption.weight(.semibold))
+                            .tracking(0.8)
+                            .foregroundStyle(.secondary)
                         ForEach(record.recipients, id: \.email) { recipient in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(recipient.name)
@@ -553,14 +597,15 @@ struct MaterialsOrderHistorySheet: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(10)
-                            .background(MaterialsOrderingTheme.cardBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .background(PPColor.well)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         Text("MATERIALS ON THIS \(record.requestTypeLabel.uppercased())")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                            .font(.caption.weight(.semibold))
+                            .tracking(0.8)
+                            .foregroundStyle(.secondary)
                         ForEach(record.lines, id: \.materialId) { line in
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -585,12 +630,8 @@ struct MaterialsOrderHistorySheet: View {
                 .padding(.bottom, 14)
             }
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(MaterialsOrderingTheme.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private func recipientSummary(_ record: MaterialSendRecord) -> String {
@@ -701,8 +742,9 @@ struct MaterialsQuantityBadge: View {
 
     var body: some View {
         Text("\(quantity) \(unit.quantityLabel(for: quantity))")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(MaterialsOrderingTheme.ink)
+            .font(.caption.weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(.primary)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(MaterialsOrderingTheme.primaryTint)
@@ -715,7 +757,8 @@ struct MaterialsStatusPill: View {
 
     var body: some View {
         Text(status.displayLabel.uppercased())
-            .font(.system(size: 9, weight: .semibold))
+            .font(.caption2.weight(.bold))
+            .tracking(0.4)
             .foregroundStyle(palette.foreground)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -726,7 +769,7 @@ struct MaterialsStatusPill: View {
     private var palette: (foreground: Color, background: Color) {
         switch status {
         case .draft:
-            return (MaterialsOrderingTheme.muted, MaterialsOrderingTheme.pageBackground)
+            return (MaterialsOrderingTheme.muted, PPColor.well)
         case .sentForQuote:
             return (.white, MaterialsOrderingTheme.primary)
         case .ordered:

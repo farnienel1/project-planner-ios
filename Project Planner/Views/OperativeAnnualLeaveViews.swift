@@ -58,17 +58,22 @@ struct OperativeAnnualLeaveHubView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if isAdmin {
-                Picker("Team view", selection: $activeTab) {
-                    ForEach(OperativeAnnualLeaveHubTab.allCases) { tab in
-                        Text(tab.shortTitle).tag(tab)
+            VStack(alignment: .leading, spacing: 0) {
+                if isAdmin {
+                    Picker("Team view", selection: $activeTab) {
+                        ForEach(OperativeAnnualLeaveHubTab.allCases) { tab in
+                            Text(tab.shortTitle).tag(tab)
+                        }
                     }
+                    .accessibilityIdentifier("operativeAnnualLeaveHub.teamView")
+                    .pickerStyle(.segmented)
                 }
-                .accessibilityIdentifier("operativeAnnualLeaveHub.teamView")
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
             }
+            .padding(.horizontal, PPMetrics.screenGutter)
+            .padding(.top, 10)
+            .padding(.bottom, PPMetrics.contentOverlap + 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(PPNavyHeaderBackground(bleed: 0))
 
             Group {
                 switch activeTab {
@@ -80,10 +85,21 @@ struct OperativeAnnualLeaveHubView: View {
                     OperativeAnnualLeaveRequestsListView()
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(PPColor.page)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: PPMetrics.contentCornerRadius,
+                    topTrailingRadius: PPMetrics.contentCornerRadius,
+                    style: .continuous
+                )
+            )
+            .padding(.top, -PPMetrics.contentOverlap)
         }
-        .background(HolidayChrome.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("View and manage user annual leave")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await holidayStore.loadData()
@@ -166,10 +182,12 @@ struct OperativeAnnualLeaveDirectoryView: View {
                         .accessibilityIdentifier("operativeAnnualLeaveDirectory.trade")
                 }
             }
+            .listRowBackground(PPColor.card)
 
             Section {
                 if filteredPeople.isEmpty {
                     Text("No active team members match your filters.")
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(filteredPeople) { person in
@@ -181,27 +199,37 @@ struct OperativeAnnualLeaveDirectoryView: View {
                                 .environmentObject(operativeStore)
                                 .environmentObject(userStore)
                         } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(person.displayName)
-                                    .font(.subheadline.weight(.semibold))
-                                Text(person.subtitle)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            HStack(spacing: 13) {
+                                PPIconTile(symbol: "person.fill", family: .people, size: PPMetrics.menuIcon)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(person.displayName)
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                    Text(person.subtitle)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
-                            .padding(.vertical, 2)
+                            .padding(.vertical, 4)
                         }
                             .accessibilityIdentifier("operativeAnnualLeaveDirectory.row.\(person.id)")
                     }
                 }
             } header: {
                 Text("Active team")
+                    .font(.footnote.weight(.semibold))
+                    .tracking(0.8)
             } footer: {
                 Text("Select a person to view their calendar, book approved leave, or approve pending requests.")
             }
+            .listRowBackground(PPColor.card)
         }
+        .scrollContentBackground(.hidden)
+        .background(PPColor.page)
         .if(showNavigationTitle) { view in
             view.navigationTitle("Operative annual leave")
                 .navigationBarTitleDisplayMode(.inline)
+                .ppNavyNavigationBar()
         }
         .searchable(text: $searchText, prompt: "Search name, email, or trade")
     }
@@ -238,19 +266,23 @@ private struct OperativeAnnualLeaveApprovedListView: View {
         List {
             if approvedBookings.isEmpty {
                 Text("No approved operative bookings.")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .listRowBackground(PPColor.card)
             } else {
                 ForEach(approvedBookings) { booking in
-                    HStack(alignment: .top, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .center, spacing: 13) {
+                        PPIconTile(symbol: "sun.max.fill", family: .sites, size: PPMetrics.menuIcon)
+                        VStack(alignment: .leading, spacing: 2) {
                             Text(personFor(booking: booking)?.displayName ?? "Unknown")
-                                .font(.subheadline.weight(.semibold))
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
                             Text(dateRangeLabel(booking))
-                                .font(.caption)
+                                .font(.footnote)
                                 .foregroundStyle(.secondary)
                             Text(booking.timeSlot.rawValue)
-                                .font(.caption2)
-                                .foregroundStyle(HolidayChrome.muted)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
                         Button {
@@ -265,10 +297,13 @@ private struct OperativeAnnualLeaveApprovedListView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Remove annual leave booking")
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 4)
+                    .listRowBackground(PPColor.card)
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(PPColor.page)
         .overlay {
             if bookingPendingRemoval != nil {
                 ZStack {
@@ -333,7 +368,9 @@ private struct OperativeAnnualLeaveRequestsListView: View {
         List {
             if pendingRequests.isEmpty {
                 Text("Nothing is waiting. New leave requests and cancellation requests will show here.")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .listRowBackground(PPColor.card)
             } else {
                 ForEach(pendingRequests) { request in
                     HolidayRequestRowView(
@@ -345,9 +382,12 @@ private struct OperativeAnnualLeaveRequestsListView: View {
                         onDecline: { decline(request) }
                     )
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    .listRowBackground(PPColor.card)
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(PPColor.page)
     }
 
     private func approve(_ request: HolidayBooking) {
@@ -479,26 +519,32 @@ struct OperativeAnnualLeaveCalendarView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 0) {
                 headerCard
-                if let summary = annualLeaveSummary {
-                    AnnualLeaveBalanceHero(summary: summary, pendingCaption: "Awaiting approval")
+
+                VStack(alignment: .leading, spacing: 18) {
+                    if let summary = annualLeaveSummary {
+                        AnnualLeaveBalanceHero(summary: summary, pendingCaption: "Awaiting approval")
+                    }
+                    bookedLeaveCard
+                    pendingLeaveCard
+                    AnnualLeaveLegend()
+                    monthNavigator
+                    calendarGrid
+                    if let day = selectedDay {
+                        dayActionPanel(for: day)
+                    }
+                    futureApprovedList
                 }
-                bookedLeaveCard
-                pendingLeaveCard
-                AnnualLeaveLegend()
-                monthNavigator
-                calendarGrid
-                if let day = selectedDay {
-                    dayActionPanel(for: day)
-                }
-                futureApprovedList
+                .padding(.top, 20)
+                .padding(.bottom, 28)
+                .ppContentSheet()
             }
-            .padding(16)
         }
-        .background(HolidayChrome.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle(person.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .overlay {
             if bookingPendingRemoval != nil {
                 ZStack {
@@ -639,8 +685,8 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func changePanel(for day: Date) -> some View {
@@ -692,8 +738,8 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func requestPanel(for day: Date) -> some View {
@@ -761,7 +807,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                 .font(.caption.weight(.semibold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .background(on ? HolidayChrome.accent.opacity(0.15) : Color.white)
+                .background(on ? HolidayChrome.accent.opacity(0.15) : PPColor.card)
                 .foregroundStyle(on ? HolidayChrome.accent : HolidayChrome.ink)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay(
@@ -828,30 +874,17 @@ struct OperativeAnnualLeaveCalendarView: View {
     }
 
     private var headerCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(person.displayName)
-                .font(.title3.weight(.semibold))
-            Text(person.subtitle)
-                .font(.subheadline)
-                .foregroundStyle(HolidayChrome.muted)
+        VStack(alignment: .leading, spacing: 12) {
+            PPNavyPageTitle(title: person.displayName, subtitle: person.subtitle)
             if !person.tradeLabel.isEmpty {
-                Text(person.tradeLabel)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(HolidayChrome.accent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(HolidayChrome.accent.opacity(0.12))
-                    .clipShape(Capsule())
+                PPOnNavyPill(text: person.tradeLabel, symbol: "wrench.and.screwdriver.fill")
             }
         }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(HolidayChrome.border, lineWidth: 1)
-        )
+        .ppNavyHeader()
     }
 
     private var bookedLeaveCard: some View {
@@ -924,12 +957,8 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(HolidayChrome.border, lineWidth: 1)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func leaveDateLabel(_ booking: HolidayBooking) -> String {
@@ -1002,12 +1031,8 @@ struct OperativeAnnualLeaveCalendarView: View {
             .id(bankHolidayCalendarTick)
         }
         .padding(12)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(HolidayChrome.border, lineWidth: 1)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private enum DayKind {
@@ -1107,12 +1132,8 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(HolidayChrome.border, lineWidth: 1)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func approvedBooking(on day: Date?) -> HolidayBooking? {

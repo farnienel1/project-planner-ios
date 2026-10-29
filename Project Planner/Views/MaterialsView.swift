@@ -48,6 +48,8 @@ struct MaterialsView: View {
                 .environmentObject(firebaseBackend)
             }
         }
+        .background(PPColor.page.ignoresSafeArea())
+        .ppNavyNavigationBar()
         .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await MainActor.run {

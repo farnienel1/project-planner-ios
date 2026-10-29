@@ -57,6 +57,12 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
                 loaded.talks = ToolboxTalkLibrary.bundledTalks()
                 loaded.updatedAt = Date()
                 try await firebaseBackend.saveHealthSafetyData(loaded, project: project, organizationId: orgId)
+            } else {
+                // A project whose stored list already holds a few talks (an issued talk, an upload) never got
+                // the rest of the library. Show the missing library talks too; stored talks stay first and
+                // untouched, and nothing is written back.
+                let storedIds = Set(loaded.talks.map(\.id))
+                loaded.talks += ToolboxTalkLibrary.bundledTalks().filter { !storedIds.contains($0.id) }
             }
             data = loaded
         } catch {
@@ -694,31 +700,46 @@ struct ProjectHealthSafetyView: View {
         vm.data.signatures.filter { $0.status == .pending }.count
     }
 
+    /// Navy header context (same site name, job number and kind the old blue hero card showed).
+    private var hsNavyContextTitle: some View {
+        HStack(alignment: .top, spacing: 12) {
+            PPNavyPageTitle(
+                eyebrow: "\(project.jobNumber) · \(contextKind)",
+                title: project.siteName
+            )
+            Spacer(minLength: 8)
+            PPIconTile(symbol: "shield.lefthalf.filled", family: .sites, size: 40)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            HSNavBar(
-                title: "Health & Safety",
-                subtitle: "\(project.jobNumber) · \(project.siteName)",
-                onBack: { dismiss() }
-            )
+            VStack(alignment: .leading, spacing: 0) {
+                HSNavBar(
+                    title: "Health & Safety",
+                    subtitle: "\(project.jobNumber) · \(project.siteName)",
+                    onBack: { dismiss() }
+                )
 
-            if isOperative {
-                HSSegmented(items: operativeSegments, selection: $operativeTab)
-                    .padding(.bottom, 6)
-            } else {
-                HSSegmented(items: managerSegments, selection: $managerTab)
-                    .padding(.bottom, 6)
+                hsNavyContextTitle
+                    .padding(.horizontal, PPMetrics.screenGutter)
+                    .padding(.top, 4)
+                    .padding(.bottom, 16)
+
+                if isOperative {
+                    HSSegmented(items: operativeSegments, selection: $operativeTab)
+                        .padding(.bottom, 6)
+                } else {
+                    HSSegmented(items: managerSegments, selection: $managerTab)
+                        .padding(.bottom, 6)
+                }
             }
+            .padding(.bottom, PPMetrics.headerBottomPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .ppNavyHeader()
 
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    HSContextHero(
-                        title: project.siteName,
-                        reference: project.jobNumber,
-                        kind: contextKind
-                    )
-                    .padding(.top, 6)
-
                     if isOperative {
                         operativeContent
                     } else {
@@ -726,10 +747,12 @@ struct ProjectHealthSafetyView: View {
                     }
                 }
                 .hsGutter()
+                .padding(.top, 4)
                 .padding(.bottom, 28)
             }
+            .modifier(HSSafetyContentSheet())
         }
-        .hsScreen()
+        .background(PPColor.page.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .overlay {
             if vm.isLoading {
@@ -1965,6 +1988,8 @@ private struct HSIssueTalkSheet: View {
             }
             .background(HS.bg.ignoresSafeArea())
             .navigationTitle("Issue Toolbox Talk")
+            .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .onAppear {
                 if selectedTalkId == nil {
                     selectedTalkId = preselectedTalkId ?? filteredTalks.first?.id ?? talks.first?.id
@@ -1982,6 +2007,7 @@ private struct HSIssueTalkSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("hsIssueTalk.cancel")
                 }
             }
@@ -2095,9 +2121,11 @@ private struct HSToolboxTalkDetailView: View {
             .hsScreen()
             .navigationTitle("Toolbox Talk")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("hsToolboxTalkDetail.close")
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -2106,6 +2134,7 @@ private struct HSToolboxTalkDetailView: View {
                             FileReportMenuButton(target: reportTarget, presented: $presentedReport)
                         } label: {
                             Image(systemName: "ellipsis.circle")
+                                .foregroundStyle(.white)
                         }
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("hsToolboxTalkDetail.more")
@@ -2169,6 +2198,7 @@ private struct HSScheduledTalksView: View {
             }
             .navigationTitle("Scheduled Toolbox Talks")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
         }
     }
 }
@@ -2305,6 +2335,7 @@ private struct HSScheduledTalkDetailView: View {
         }
         .navigationTitle("Scheduled Talk")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
     }
 }
 
@@ -2434,9 +2465,12 @@ private struct HSAddRecipientsSheet: View {
             }
             .background(HS.bg.ignoresSafeArea())
             .navigationTitle("Add Recipients")
+            .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("hsAddRecipients.cancel")
                 }
             }
@@ -2554,9 +2588,11 @@ private struct HSTrackIssueView: View {
             .hsScreen()
             .navigationTitle("Sign-off tracking")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("hsTrackIssue.close")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -2728,9 +2764,11 @@ private struct HSSignTalkView: View {
             .hsScreen()
             .navigationTitle("Sign Toolbox Talk")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("hsSignTalk.cancel")
                 }
             }
@@ -2819,6 +2857,7 @@ private struct HSSignedTalkView: View {
             .background(HS.bg.ignoresSafeArea())
             .navigationTitle("Signed Talk")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
         }
     }
 }
@@ -3596,5 +3635,22 @@ private struct HSCanvasRepresentable: UIViewRepresentable {
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             onChange()
         }
+    }
+}
+
+/// Light rounded sheet that slides up over the navy header (Home / Managers style). Visual only.
+private struct HSSafetyContentSheet: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(PPColor.page)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: PPMetrics.contentCornerRadius,
+                    topTrailingRadius: PPMetrics.contentCornerRadius,
+                    style: .continuous
+                )
+            )
+            .padding(.top, -PPMetrics.contentOverlap)
     }
 }

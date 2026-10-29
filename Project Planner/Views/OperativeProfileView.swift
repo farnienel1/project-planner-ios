@@ -132,21 +132,25 @@ struct OperativeProfileView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(spacing: 0) {
                     heroCard
-                    detailsCard
-                    qualificationsCard
+                    VStack(spacing: 0) {
+                        detailsCard
+                        qualificationsCard
+                    }
+                    .padding(.bottom, 28)
+                    .ppContentSheet()
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 28)
             }
-            .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("operativeProfile.close")
                 }
                 if canOpenOperativeSettings {
@@ -155,9 +159,8 @@ struct OperativeProfileView: View {
                             showingEdit = true
                         } label: {
                             Image(systemName: "gearshape.fill")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(ManageUserProfilePalette.listBlue)
                         }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("operativeProfile.settings")
                         .accessibilityLabel("Settings")
                     }
@@ -187,47 +190,37 @@ struct OperativeProfileView: View {
 
     // MARK: - Hero
 
+    /// Navy header (Home style): avatar, name and the existing Active / Verified status chips.
     private var heroCard: some View {
-        ManageUserCard {
-            VStack(spacing: 14) {
-                avatarView
-                    .frame(width: 104, height: 104)
-                    .opacity(displayedUser.isActive ? 1 : 0.55)
+        VStack(spacing: 14) {
+            avatarView
+                .frame(width: 96, height: 96)
+                .opacity(displayedUser.isActive ? 1 : 0.55)
 
-                VStack(spacing: 8) {
-                    Text(displayName)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
-                        .multilineTextAlignment(.center)
+            VStack(spacing: 10) {
+                Text(displayName)
+                    .font(.system(.title2, design: .rounded))
+                    .fontWeight(.bold)
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
 
-                    HStack(spacing: 8) {
-                        statusChip(
-                            text: displayedUser.isActive ? "Active" : "Inactive",
-                            systemImage: displayedUser.isActive ? "checkmark.circle.fill" : "pause.circle.fill",
-                            foreground: displayedUser.isActive
-                                ? ManageUserProfilePalette.chipTealFg
-                                : ManageUserProfilePalette.textSecondary,
-                            background: displayedUser.isActive
-                                ? ManageUserProfilePalette.chipTealBg
-                                : ManageUserProfilePalette.segmentedBackground
-                        )
-                        statusChip(
-                            text: displayedUser.passwordSet ? "Verified" : "Pending",
-                            systemImage: displayedUser.passwordSet ? "checkmark.seal.fill" : "clock.fill",
-                            foreground: displayedUser.passwordSet
-                                ? ManageUserProfilePalette.chipBlueFg
-                                : ManageUserProfilePalette.chipAmberFg,
-                            background: displayedUser.passwordSet
-                                ? ManageUserProfilePalette.chipBlueBg
-                                : ManageUserProfilePalette.chipAmberBg
-                        )
-                    }
+                HStack(spacing: 8) {
+                    PPOnNavyPill(
+                        text: displayedUser.isActive ? "Active" : "Inactive",
+                        symbol: displayedUser.isActive ? "checkmark.circle.fill" : "pause.circle.fill"
+                    )
+                    PPOnNavyPill(
+                        text: displayedUser.passwordSet ? "Verified" : "Pending",
+                        symbol: displayedUser.passwordSet ? "checkmark.seal.fill" : "clock.fill"
+                    )
                 }
             }
-            .padding(.vertical, 24)
-            .padding(.horizontal, 20)
-            .frame(maxWidth: .infinity)
         }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity)
+        .ppNavyHeader()
     }
 
     @ViewBuilder
@@ -257,8 +250,7 @@ struct OperativeProfileView: View {
         .clipShape(Circle())
         .overlay(
             Circle()
-                .stroke(Color.white, lineWidth: 3)
-                .shadow(color: Color.black.opacity(0.08), radius: 6, y: 2)
+                .stroke(Color.white.opacity(0.9), lineWidth: 3)
         )
     }
 
@@ -282,64 +274,39 @@ struct OperativeProfileView: View {
             )
     }
 
-    private func statusChip(
-        text: String,
-        systemImage: String,
-        foreground: Color,
-        background: Color
-    ) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: systemImage)
-                .font(.system(size: 11, weight: .semibold))
-            Text(text)
-                .font(.system(size: 12, weight: .semibold))
-        }
-        .foregroundStyle(foreground)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(background)
-        .clipShape(Capsule(style: .continuous))
-    }
-
     // MARK: - Details
 
     private var detailsCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ManageUserSectionTitle(text: "Details")
-            ManageUserCard {
-                VStack(spacing: 0) {
-                    ManageUserDetailStaticRow(
-                        iconName: "envelope.fill",
-                        iconBackground: ManageUserProfilePalette.chipBlueBg,
-                        iconForeground: ManageUserProfilePalette.chipBlueFg,
-                        label: "Email",
-                        value: displayedUser.email.isEmpty ? "Not set" : displayedUser.email
-                    )
-                    ManageUserCardDivider()
-                    ManageUserDetailStaticRow(
-                        iconName: "phone.fill",
-                        iconBackground: ManageUserProfilePalette.chipTealBg,
-                        iconForeground: ManageUserProfilePalette.chipTealFg,
-                        label: "Telephone number",
-                        value: telephoneValue
-                    )
-                    ManageUserCardDivider()
-                    ManageUserDetailStaticRow(
-                        iconName: "person.2.fill",
-                        iconBackground: ManageUserProfilePalette.chipPurpleBg,
-                        iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                        label: "Line manager",
-                        value: lineManagerValue
-                    )
-                    ManageUserCardDivider()
-                    ManageUserDetailStaticRow(
-                        iconName: "banknote.fill",
-                        iconBackground: ManageUserProfilePalette.chipAmberBg,
-                        iconForeground: ManageUserProfilePalette.chipAmberFg,
-                        label: dayRateLabel,
-                        value: dayRateValue
-                    )
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            PPGroupLabel(text: "Details")
+            PPGroupedCard {
+                PPDetailRowLabel(
+                    title: "Email",
+                    value: displayedUser.email.isEmpty ? "Not set" : displayedUser.email,
+                    symbol: "envelope.fill",
+                    family: .plan
+                )
+                PPRowDivider()
+                PPDetailRowLabel(
+                    title: "Telephone number",
+                    value: telephoneValue,
+                    symbol: "phone.fill",
+                    family: .sites
+                )
+                PPRowDivider()
+                PPDetailRowLabel(
+                    title: "Line manager",
+                    value: lineManagerValue,
+                    symbol: "person.2.fill",
+                    family: .people
+                )
+                PPRowDivider()
+                PPDetailRowLabel(
+                    title: dayRateLabel,
+                    value: dayRateValue,
+                    symbol: "banknote.fill",
+                    family: .trade
+                )
             }
         }
     }
@@ -347,61 +314,56 @@ struct OperativeProfileView: View {
     // MARK: - Qualifications
 
     private var qualificationsCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ManageUserSectionTitle(text: "Qualifications")
-            ManageUserCard {
+        VStack(alignment: .leading, spacing: 0) {
+            PPGroupLabel(text: "Qualifications")
+            PPGroupedCard {
                 if qualificationRows.isEmpty {
-                    HStack(spacing: 12) {
-                        ManageUserIconChip(
-                            systemName: "graduationcap.fill",
-                            background: ManageUserProfilePalette.chipBlueBg,
-                            foreground: ManageUserProfilePalette.chipBlueFg
-                        )
+                    HStack(spacing: 13) {
+                        PPIconTile(symbol: "graduationcap.fill", family: .people, size: PPMetrics.menuIcon)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("No qualifications yet")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                                .font(.body)
+                                .foregroundStyle(.primary)
                             Text("Add them from Edit when needed.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 0)
                     }
-                    .padding(.vertical, 14)
+                    .padding(.vertical, 11)
                     .padding(.horizontal, 14)
+                    .frame(minHeight: 60)
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(qualificationRows.enumerated()), id: \.element.id) { index, row in
-                            HStack(alignment: .top, spacing: 12) {
-                                ManageUserIconChip(
-                                    systemName: "checkmark.seal.fill",
-                                    background: ManageUserProfilePalette.chipTealBg,
-                                    foreground: ManageUserProfilePalette.chipTealFg
-                                )
+                            HStack(alignment: .top, spacing: 13) {
+                                PPIconTile(symbol: "checkmark.seal.fill", family: .sites, size: PPMetrics.menuIcon)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(row.title)
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(.primary)
                                     if let detail = row.detail {
                                         Text(detail)
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                                            .font(.footnote)
+                                            .foregroundStyle(.secondary)
                                     }
                                     if let certificateURL = row.certificateURL {
                                         Button("View certificate") {
                                             certificateViewerURL = IdentifiableURL(certificateURL)
                                         }
                                         .accessibilityIdentifier("operativeProfile.row.\(row.id).viewCertificate")
-                                        .font(.system(size: 12, weight: .medium))
+                                        .font(.footnote.weight(.semibold))
+                                        .tint(PPColor.brand)
+                                        .padding(.top, 2)
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            .padding(.vertical, 12)
+                            .padding(.vertical, 11)
                             .padding(.horizontal, 14)
 
                             if index < qualificationRows.count - 1 {
-                                ManageUserCardDivider()
+                                PPRowDivider()
                             }
                         }
                     }

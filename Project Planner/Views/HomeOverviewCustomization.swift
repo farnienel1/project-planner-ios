@@ -69,7 +69,8 @@ struct AdminHomeOverviewCustomizeSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Text("Shown on home (up to 3)")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(.title3, design: .rounded))
+                        .fontWeight(.bold)
 
                     HStack(alignment: .top, spacing: 10) {
                         ForEach(0..<3, id: \.self) { index in
@@ -88,24 +89,16 @@ struct AdminHomeOverviewCustomizeSheet: View {
                         }
                     }
                     .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
-                    .background(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.094, green: 0.373, blue: 0.647),
-                                Color(red: 0.216, green: 0.541, blue: 0.867)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .background(PPNavyBackdrop())
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
 
                     Text("These are just organisation metrics.")
-                        .font(.system(size: 12))
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
 
                     Text("Add metrics")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(.title3, design: .rounded))
+                        .fontWeight(.bold)
                         .padding(.top, 4)
 
                     VStack(spacing: 0) {
@@ -113,9 +106,10 @@ struct AdminHomeOverviewCustomizeSheet: View {
                             HStack(spacing: 12) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(metric.catalogTitle)
-                                        .font(.system(size: 15, weight: .medium))
+                                        .font(.body)
                                     Text("Current: \(metricValue(metric))")
-                                        .font(.system(size: 12))
+                                        .font(.footnote)
+                                        .monospacedDigit()
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer(minLength: 0)
@@ -125,7 +119,7 @@ struct AdminHomeOverviewCustomizeSheet: View {
                                 } label: {
                                     Image(systemName: "plus.circle.fill")
                                         .font(.system(size: 26))
-                                        .foregroundStyle(draftMetricIds.count >= 3 ? Color.secondary.opacity(0.35) : Color.accentColor)
+                                        .foregroundStyle(draftMetricIds.count >= 3 ? Color.secondary.opacity(0.35) : PPColor.brand)
                                 }
                                 .accessibilityIdentifier("adminHomeOverviewCustomize.row.\(metric.id).plusCircleFill")
                                 .buttonStyle(.plain)
@@ -133,23 +127,29 @@ struct AdminHomeOverviewCustomizeSheet: View {
                             }
                             .padding(.vertical, 12)
                             if metric != addableMetrics.last {
-                                Divider()
+                                Rectangle()
+                                    .fill(Color(.separator))
+                                    .frame(height: 0.5)
+                                    .accessibilityHidden(true)
                             }
                         }
                     }
                     .padding(.horizontal, 14)
-                    .background(Color(uiColor: .secondarySystemGroupedBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(PPColor.card)
+                    .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                 }
-                .padding(20)
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.vertical, 20)
             }
-            .background(Color(uiColor: .systemGroupedBackground))
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Dashboard metrics")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .accessibilityIdentifier("adminHomeOverviewCustomize.cancel")
+                        .tint(.white)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
@@ -157,6 +157,8 @@ struct AdminHomeOverviewCustomizeSheet: View {
                         dismiss()
                     }
                     .accessibilityIdentifier("adminHomeOverviewCustomize.save")
+                    .font(.body.weight(.semibold))
+                    .tint(.white)
                     .disabled(draftMetricIds.isEmpty)
                 }
             }
@@ -167,18 +169,24 @@ struct AdminHomeOverviewCustomizeSheet: View {
         ZStack(alignment: .topTrailing) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(value)
-                    .font(.system(size: 18, weight: .medium))
+                    .font(.system(.title3, design: .rounded))
+                    .fontWeight(.bold)
+                    .monospacedDigit()
                     .foregroundStyle(.white)
                 Text(title)
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .font(.caption)
+                    .foregroundStyle(PPColor.onNavyCaption)
                     .lineLimit(2)
                     .minimumScaleFactor(0.85)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
-            .background(.white.opacity(0.14))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(PPColor.onNavyFill)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
+            )
 
             if showRemove {
                 Button(action: onRemove) {

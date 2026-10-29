@@ -17,52 +17,61 @@ struct NotificationsView: View {
             VStack(spacing: 0) {
                 if notificationService.notifications.isEmpty {
                     ScrollView {
-                        VStack(spacing: 16) {
-                            Image(systemName: "bell.slash")
-                                .font(.system(size: 52))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                            Text("No Notifications")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
-                            Text("You're all caught up!")
-                                .font(.system(size: 13))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                        VStack(spacing: 0) {
+                            notificationsNavyBand
+                            VStack(spacing: 14) {
+                                PPIconTile(symbol: "bell.slash", family: .system, size: PPMetrics.quickActionIcon, lifted: true)
+                                Text("No Notifications")
+                                    .font(.system(.title3, design: .rounded))
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(.primary)
+                                Text("You're all caught up!")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 320)
+                            .padding(.top, 56)
+                            .ppContentSheet()
                         }
-                        .frame(maxWidth: .infinity, minHeight: 320)
-                        .padding(.top, 80)
                     }
                     .refreshable {
                         await notificationService.loadNotifications()
                     }
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 10) {
-                            ForEach(notificationService.notifications) { notification in
-                                Button {
-                                    open(notification)
-                                } label: {
-                                    NotificationRowView(notification: notification)
+                        VStack(spacing: 0) {
+                            notificationsNavyBand
+                            LazyVStack(spacing: 10) {
+                                ForEach(notificationService.notifications) { notification in
+                                    Button {
+                                        open(notification)
+                                    } label: {
+                                        NotificationRowView(notification: notification)
+                                    }
+                                    .accessibilityIdentifier("notifications.row.\(notification.id)")
+                                    .buttonStyle(.plain)
                                 }
-                                .accessibilityIdentifier("notifications.row.\(notification.id)")
-                                .buttonStyle(.plain)
                             }
+                            .padding(.top, 18)
+                            .padding(.bottom, 24)
+                            .ppContentSheet()
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
                     }
                     .refreshable {
                         await notificationService.loadNotifications()
                     }
                 }
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Notifications")
             .navigationBarTitleDisplayMode(.inline)
-            .appChromeNavigationBarSurface()
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .accessibilityIdentifier("notifications.done")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                 }
             }
             .task {
@@ -71,6 +80,14 @@ struct NotificationsView: View {
                 await notificationService.loadNotifications()
             }
         }
+    }
+
+    /// Navy strip under the navy bar so the light sheet slides up over it, as on Home.
+    private var notificationsNavyBand: some View {
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: PPMetrics.headerBottomPadding)
+            .ppNavyHeader()
     }
 
     private func open(_ notification: AppNotification) {
@@ -94,23 +111,18 @@ struct NotificationRowView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: iconForType(notification.type))
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(colorForType(notification.type))
-                .frame(width: 36, height: 36)
-                .background(colorForType(notification.type).opacity(0.14))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        HStack(alignment: .top, spacing: 13) {
+            PPIconTile(symbol: iconForType(notification.type), family: familyForType(notification.type), size: 36)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(notification.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
                     .multilineTextAlignment(.leading)
 
                 Text(notification.message)
-                    .font(.system(size: 13))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .lineLimit(isMessageExpanded ? nil : 6)
@@ -122,24 +134,20 @@ struct NotificationRowView: View {
                         }
                     }
                     .accessibilityIdentifier("notificationRow.showLess")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(PPColor.brand)
                     .buttonStyle(.plain)
                 }
 
                 Text(notification.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
         }
         .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private func iconForType(_ type: AppNotification.NotificationType) -> String {
@@ -171,32 +179,33 @@ struct NotificationRowView: View {
         }
     }
 
-    private func colorForType(_ type: AppNotification.NotificationType) -> Color {
+    /// Icon-tile colour family for each type (Home's families; red only for warnings and declines).
+    private func familyForType(_ type: AppNotification.NotificationType) -> PPFamily {
         switch type {
-        case .bookingCreated: return ProjectWorksRevampColors.blue
-        case .operativeCreated: return ProjectWorksRevampColors.activeGreen
-        case .managerCreated: return ProjectWorksRevampColors.jobTypePillInk
-        case .clientCreated: return ProjectWorksRevampColors.upcomingAmber
-        case .projectCreated: return ProjectWorksRevampColors.blueLight
-        case .smallWorksCreated: return ProjectWorksRevampColors.upcomingAmber
-        case .bookingClash: return ProjectWorksRevampColors.requiredPillFg
-        case .warningRemoved: return ProjectWorksRevampColors.upcomingAmber
-        case .taskCompleted: return ProjectWorksRevampColors.activeGreen
-        case .taskCreated: return ProjectWorksRevampColors.blue
-        case .deadlineAssigned, .deadlineReminder, .deadlineDue: return ProjectWorksRevampColors.upcomingAmber
-        case .qualificationExpiry: return ProjectWorksRevampColors.upcomingAmber
-        case .materialOrderCutOff: return ProjectWorksRevampColors.upcomingAmber
-        case .materialAdded, .materialOrderPlaced: return ProjectWorksRevampColors.activeGreen
-        case .toolboxTalkIssued, .hsToolboxReminder: return ProjectWorksRevampColors.blueLight
-        case .ideaStatus, .ideaShipped: return ProjectWorksRevampColors.activeGreen
-        case .holidayRequestSubmitted: return ProjectWorksRevampColors.upcomingAmber
-        case .holidayRequestApproved: return ProjectWorksRevampColors.activeGreen
-        case .holidayRequestDeclined: return ProjectWorksRevampColors.requiredPillFg
-        case .timesheetPendingManagerSignoff: return ProjectWorksRevampColors.upcomingAmber
-        case .timesheetSignedByManager: return ProjectWorksRevampColors.activeGreen
-        case .lineManagerPeerUpdate: return ProjectWorksRevampColors.blue
-        case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return ProjectWorksRevampColors.upcomingAmber
-        case .timesheetSubmissionReminder: return ProjectWorksRevampColors.upcomingAmber
+        case .bookingCreated: return .plan
+        case .operativeCreated: return .people
+        case .managerCreated: return .people
+        case .clientCreated: return .people
+        case .projectCreated: return .sites
+        case .smallWorksCreated: return .trade
+        case .bookingClash: return .alert
+        case .warningRemoved: return .trade
+        case .taskCompleted: return .sites
+        case .taskCreated: return .plan
+        case .deadlineAssigned, .deadlineReminder, .deadlineDue: return .trade
+        case .qualificationExpiry: return .trade
+        case .materialOrderCutOff: return .trade
+        case .materialAdded, .materialOrderPlaced: return .sites
+        case .toolboxTalkIssued, .hsToolboxReminder: return .plan
+        case .ideaStatus, .ideaShipped: return .sites
+        case .holidayRequestSubmitted: return .trade
+        case .holidayRequestApproved: return .sites
+        case .holidayRequestDeclined: return .alert
+        case .timesheetPendingManagerSignoff: return .trade
+        case .timesheetSignedByManager: return .sites
+        case .lineManagerPeerUpdate: return .people
+        case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return .trade
+        case .timesheetSubmissionReminder: return .trade
         }
     }
 }

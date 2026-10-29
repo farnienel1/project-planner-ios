@@ -51,28 +51,19 @@ struct OperativesView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                ForEach(UserRosterSegment.allCases) { seg in
-                    OperativeTabButton(title: seg.title, isSelected: rosterSegment == seg) {
-                        rosterSegment = seg
-                    }
+            operativesNavyHeader
+            
+            Group {
+                if rosterSegment == .pending {
+                    pendingOperativeInviteesList
+                } else {
+                    operativesList
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(Color(.systemGroupedBackground))
-
-            operativesLiveSearchBar
-                .padding(.horizontal, 16)
-                .padding(.bottom, 10)
-                .background(Color(.systemGroupedBackground))
-            
-            if rosterSegment == .pending {
-                pendingOperativeInviteesList
-            } else {
-                operativesList
-            }
+            .padding(.top, 10)
+            .modifier(OperativesListSheet())
         }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Manage Operatives")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -81,9 +72,8 @@ struct OperativesView: View {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }) {
                         Image(systemName: "chevron.left")
-                            .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
-                            .font(.system(size: 17, weight: .semibold))
                     }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("operatives.gobacktoprevioustab")
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -93,16 +83,19 @@ struct OperativesView: View {
                         } label: {
                             Image(systemName: "plus")
                         }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("operatives.add")
                         .accessibilityLabel("Add operative")
                     }
                     Button(action: { showingFilterOptions.toggle() }) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                     }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("operatives.filter")
                 }
             }
             .navigationBarBackButtonHidden(true)
+            .ppNavyNavigationBar()
             .task {
                 await userStore.loadOrganizationUsers()
             }
@@ -298,14 +291,68 @@ struct OperativesView: View {
         return base.filter { operativePassesTextFilter($0) }
     }
 
+    /// Home-style navy header: roster numbers, Active / Inactive / Pending tabs and the live search field.
+    private var operativesNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            operativesStatsRow(operativeRosterCounts)
+            
+            HStack(spacing: 4) {
+                ForEach(UserRosterSegment.allCases) { seg in
+                    OperativeTabButton(title: seg.title, isSelected: rosterSegment == seg) {
+                        rosterSegment = seg
+                    }
+                }
+            }
+            .padding(4)
+            .background(Capsule().fill(PPColor.onNavyFill))
+            .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
+            .padding(.top, 20)
+            
+            operativesLiveSearchBar
+                .padding(.top, 12)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 14)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+    
+    /// Header numbers. Same `listedRosterUsers` / `rosterSegment` calls the tabs use, before search and filters.
+    private var operativeRosterCounts: OperativesRosterCounts {
+        let listed = CanonicalBusinessEngine.listedRosterUsers(
+            allOperativeUsers,
+            claimedEmails: userStore.organizationUserEmailClaims
+        ) ?? []
+        let segments = listed.map { CanonicalBusinessEngine.rosterSegment($0) }
+        return OperativesRosterCounts(
+            active: segments.filter { $0 == UserRosterSegment.active.canonicalSegment }.count,
+            inactive: segments.filter { $0 == UserRosterSegment.inactive.canonicalSegment }.count,
+            pending: segments.filter { $0 == UserRosterSegment.pending.canonicalSegment }.count
+        )
+    }
+    
+    private func operativesStatsRow(_ counts: OperativesRosterCounts) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            PPStat(value: "\(counts.active)", label: "Active")
+            PPStatDivider()
+            PPStat(value: "\(counts.inactive)", label: "Inactive")
+            PPStatDivider()
+            PPStat(value: "\(counts.pending)", label: "Pending invite", highlight: counts.pending > 0)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var operativesLiveSearchBar: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(ManageUserProfilePalette.listBlue)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(PPColor.onNavySecondary)
             TextField("Search operatives by name", text: $liveSearchText)
                 .accessibilityIdentifier("operatives.searchOperativesByName")
-                .font(.system(size: 16))
+                .font(.body)
+                .foregroundStyle(.white)
+                .tint(.white)
                 .textInputAutocapitalization(.words)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
@@ -315,7 +362,7 @@ struct OperativesView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 16))
-                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .foregroundStyle(PPColor.onNavySecondary)
                 }
                 .accessibilityIdentifier("operatives.clearSearch")
                 .buttonStyle(.plain)
@@ -323,12 +370,11 @@ struct OperativesView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .frame(minHeight: 44)
+        .background(PPColor.onNavyFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(ManageUserProfilePalette.cardBorder, lineWidth: 0.5)
+                .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
         )
     }
     
@@ -374,11 +420,13 @@ struct OperativesView: View {
                         guard user.isStoredUserDocument else { return }
                         selectedUserForProfile = user
                     }
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                     .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 }
             }
             .listStyle(PlainListStyle())
+            .scrollContentBackground(.hidden)
             .refreshable {
                 await userStore.loadOrganizationUsers()
             }
@@ -395,20 +443,27 @@ struct OperativesView: View {
         } else {
             VStack(spacing: 0) {
                 if !filterText.isEmpty {
-                    HStack {
+                    HStack(spacing: 8) {
+                        Image(systemName: "line.3.horizontal.decrease")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(PPColor.brand)
                         Text("Filter: \(selectedFilterType.rawValue) - \(filterText)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
                         Button("Clear") {
                             filterText = ""
                         }
                         .accessibilityIdentifier("operatives.clear")
-                        .font(.caption)
+                        .font(.footnote.weight(.semibold))
+                        .tint(PPColor.brand)
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemGray6))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(PPColor.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .padding(.horizontal, PPMetrics.screenGutter)
+                    .padding(.bottom, 6)
                 }
                 
                 List(displayedOperativeUsers) { user in
@@ -416,8 +471,9 @@ struct OperativesView: View {
                         guard user.isStoredUserDocument else { return }
                         selectedUserForProfile = user
                     }
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                         .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(action: {
                                 if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
@@ -433,6 +489,7 @@ struct OperativesView: View {
                         }
                 }
                 .listStyle(PlainListStyle())
+                .scrollContentBackground(.hidden)
                 .alert("Delete Operative", isPresented: Binding(
                     get: { operativeToDelete != nil },
                     set: { if !$0 { operativeToDelete = nil } }
@@ -467,17 +524,74 @@ struct OperativesView: View {
     }
     
     private var emptyOperativesView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "person.2.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
+        VStack(spacing: 14) {
+            PPIconTile(symbol: "person.2.fill", family: .people, size: PPMetrics.quickActionIcon, lifted: true)
             
             Text(emptyOperativesTitle)
-                .font(.title2)
+                .font(.system(.title3, design: .rounded))
                 .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
         }
-        .padding()
+        .padding(.horizontal, 24)
+        .padding(.top, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
+/// Numbers shown in the Manage Operatives navy header.
+private struct OperativesRosterCounts {
+    let active: Int
+    let inactive: Int
+    let pending: Int
+}
+
+/// Light rounded sheet under the navy header that holds the list (Home's content sheet, sized for a List).
+private struct OperativesListSheet: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(PPColor.page)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: PPMetrics.contentCornerRadius,
+                    topTrailingRadius: PPMetrics.contentCornerRadius,
+                    style: .continuous
+                )
+            )
+            .padding(.top, -PPMetrics.contentOverlap)
+    }
+}
+
+/// Gradient initials circle (Home icon-tile colours).
+private struct OperativeInitialsAvatar: View {
+    let initials: String
+    let family: PPFamily
+    var size: CGFloat = 46
+    
+    var body: some View {
+        Text(initials)
+            .font(.system(size: size * 0.36, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(family.gradient, in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
+    }
+}
+
+/// Small tinted capsule for the existing Pending / Inactive labels.
+private struct OperativeStatusPill: View {
+    let text: String
+    let tint: Color
+    
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(tint)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(tint.opacity(0.14), in: Capsule())
     }
 }
 
@@ -489,46 +603,37 @@ struct OperativeUserRowView: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                Circle()
-                    .fill(user.isActive ? Color.indigo : Color.gray)
-                    .frame(width: 50, height: 50)
-                    .overlay(
-                        Text(user.firstName.prefix(1) + user.surname.prefix(1))
-                            .font(.headline)
-                            .foregroundColor(.white)
-                    )
-                VStack(alignment: .leading, spacing: 4) {
+                OperativeInitialsAvatar(
+                    initials: String(user.firstName.prefix(1)) + String(user.surname.prefix(1)),
+                    family: user.isActive ? .people : .system
+                )
+                VStack(alignment: .leading, spacing: 3) {
                     Text(user.fullName)
-                        .font(.headline)
-                        .foregroundColor(.primary)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
                     Text(user.email)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     if user.rosterSegment == .pending {
-                        Text("Pending")
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.orange.opacity(0.2))
-                            .foregroundColor(.orange)
-                            .cornerRadius(4)
+                        OperativeStatusPill(text: "Pending", tint: .orange)
+                            .padding(.top, 2)
                     }
                     if user.rosterSegment == .inactive {
-                        Text("Inactive")
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.red.opacity(0.2))
-                            .foregroundColor(.red)
-                            .cornerRadius(4)
+                        OperativeStatusPill(text: "Inactive", tint: .red)
+                            .padding(.top, 2)
                     }
                 }
-                Spacer()
+                Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
+            .buttonStyle(PlainButtonStyle())
             .accessibilityIdentifier("operativeUserRow.pending")
     }
 }
@@ -668,9 +773,7 @@ struct OperativeDetailRowView: View {
             }
         }
         .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 }
 
@@ -1273,18 +1376,21 @@ struct OperativeTabButton: View {
     let action: () -> Void
     
     var body: some View {
+        // Segment on the navy header: white capsule when selected.
         Button(action: action) {
-            VStack(spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(isSelected ? .indigo : .secondary)
-                
-                Rectangle()
-                    .fill(isSelected ? Color.indigo : Color.clear)
-                    .frame(height: 2)
-            }
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(isSelected ? PPColor.navy : PPColor.onNavySecondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .frame(height: 34)
+                .background(Capsule().fill(isSelected ? Color.white : Color.clear))
+                .contentShape(Capsule())
+                .animation(.easeInOut(duration: 0.2), value: isSelected)
         }
+        .buttonStyle(.plain)
         .accessibilityIdentifier("operativeTab.\(AccessibilityID.token(title))")
+        .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : [])
         .frame(maxWidth: .infinity)
     }
 }
@@ -1299,43 +1405,37 @@ struct PendingUserRowView: View {
         Button(action: onTap) {
             HStack(spacing: 12) {
                 // Avatar
-                Circle()
-                    .fill(Color.orange)
-                    .frame(width: 50, height: 50)
-                    .overlay(
-                        Text(user.firstName.prefix(1) + user.surname.prefix(1))
-                            .font(.headline)
-                            .foregroundColor(.white)
-                    )
+                OperativeInitialsAvatar(
+                    initials: String(user.firstName.prefix(1)) + String(user.surname.prefix(1)),
+                    family: .trade
+                )
                 
                 // User Info
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(user.fullName)
-                        .font(.headline)
-                        .foregroundColor(.primary)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
                     
                     Text(user.email)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     
                     HStack {
-                        Text("Pending")
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.orange.opacity(0.2))
-                            .foregroundColor(.orange)
-                            .cornerRadius(8)
+                        OperativeStatusPill(text: "Pending", tint: .orange)
                     }
+                    .padding(.top, 2)
                 }
                 
-                Spacer()
+                Spacer(minLength: 8)
                 
                 Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 8)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
         .accessibilityIdentifier("pendingUserRow.pending")
         .buttonStyle(PlainButtonStyle())

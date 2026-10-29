@@ -192,11 +192,10 @@ struct BookLabourFlowView: View {
 
     private var bookFlowRoot: some View {
         phaseContent
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(isCustomHoursPhase ? "Custom hours" : "Book labour")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(ProjectWorksRevampColors.canvas, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .ppNavyNavigationBar()
             .toolbar {
                 if !isCustomHoursPhase {
                     ToolbarItem(placement: .cancellationAction) {
@@ -208,6 +207,8 @@ struct BookLabourFlowView: View {
                             }
                         }
                             .accessibilityIdentifier("bookLabourFlow.close")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
                     }
                 }
             }
@@ -412,12 +413,8 @@ struct BookLabourFlowView: View {
                             }
                         }
                         .padding(.horizontal, 14)
-                        .background(ProjectWorksRevampColors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                        )
+                        .background(PPColor.card)
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
 
                         Text(isMultiSelectMode
                              ? "Tick everyone to book, then Continue."
@@ -451,7 +448,7 @@ struct BookLabourFlowView: View {
                         .padding(.horizontal, 18)
                         .padding(.top, 8)
                         .padding(.bottom, 10)
-                        .background(ProjectWorksRevampColors.canvas)
+                        .background(PPColor.page)
                     }
                 }
             }
@@ -567,12 +564,8 @@ struct BookLabourFlowView: View {
                             }
                         }
                         .padding(.horizontal, 14)
-                        .background(ProjectWorksRevampColors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                        )
+                        .background(PPColor.card)
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                     }
                     .padding(18)
                 }
@@ -675,12 +668,8 @@ struct BookLabourFlowView: View {
                             }
                         }
                         .padding(.horizontal, 14)
-                        .background(ProjectWorksRevampColors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                        )
+                        .background(PPColor.card)
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                     }
                     .padding(18)
                 }
@@ -1223,9 +1212,9 @@ struct BookLabourFlowView: View {
 
     private func bookLabourSectionLabel(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .tracking(0.4)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .tracking(0.8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 4)
     }
@@ -1281,12 +1270,8 @@ struct BookLabourFlowView: View {
         }
         .padding(12)
         .padding(.horizontal, 2)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func bookLabourBookToSelector(
@@ -1940,20 +1925,26 @@ private struct BookLabourOperativeHoursSheet: View {
                 if let errorMessage {
                     Section {
                         Text(errorMessage)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(PPColor.danger)
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Custom hours")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
                         .accessibilityIdentifier("bookLabourOperativeHours.cancel")
+                        .foregroundStyle(.white)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { validateAndSave() }
                         .accessibilityIdentifier("bookLabourOperativeHours.save")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                 }
             }
         }

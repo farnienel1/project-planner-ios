@@ -62,53 +62,29 @@ struct MaterialCatalogueRootView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                VStack(spacing: 0) {
                     heroCard
-                    catalogueActionsRow
-                    searchField
-                    if store.isLoading || (firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty {
-                        ProgressView("Loading catalogue…")
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 40)
-                    } else if isSearchingCatalogue {
-                        if filteredItems.isEmpty {
-                            Text("No items match")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        catalogueActionsRow
+                        searchField
+                        if store.isLoading || (firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty {
+                            ProgressView("Loading catalogue…")
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 32)
-                        } else {
-                            Text("\(filteredItems.count) matches")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(MaterialsOrderingTheme.muted)
-                            LazyVStack(spacing: 8) {
-                                ForEach(filteredItems) { item in
-                                    Button { selectedItem = item } label: {
-                                        catalogueRow(item)
-                                    }
-                                    .accessibilityIdentifier("materialCatalogueRoot.row.\(item.id)")
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    } else if store.items.isEmpty {
-                        emptyCatalogue
-                    } else {
-                        ForEach(categoryGroups) { group in
-                            DisclosureGroup(
-                                isExpanded: Binding(
-                                    get: { expandedCategories.contains(group.category) },
-                                    set: { isExpanded in
-                                        if isExpanded {
-                                            expandedCategories.insert(group.category)
-                                        } else {
-                                            expandedCategories.remove(group.category)
-                                        }
-                                    }
-                                )
-                            ) {
+                                .padding(.vertical, 40)
+                        } else if isSearchingCatalogue {
+                            if filteredItems.isEmpty {
+                                Text("No items match")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 32)
+                            } else {
+                                Text("\(filteredItems.count) matches")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 4)
                                 LazyVStack(spacing: 8) {
-                                    ForEach(group.items) { item in
+                                    ForEach(filteredItems) { item in
                                         Button { selectedItem = item } label: {
                                             catalogueRow(item)
                                         }
@@ -116,31 +92,67 @@ struct MaterialCatalogueRootView: View {
                                         .buttonStyle(.plain)
                                     }
                                 }
-                                .padding(.top, 8)
-                            } label: {
-                                HStack {
-                                    Text(group.category.uppercased())
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundStyle(MaterialsOrderingTheme.muted)
-                                    Spacer()
-                                    Text("\(group.items.count) item\(group.items.count == 1 ? "" : "s")")
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(MaterialsOrderingTheme.muted)
-                                }
                             }
-                            .padding(.vertical, 4)
+                        } else if store.items.isEmpty {
+                            emptyCatalogue
+                        } else {
+                            ForEach(categoryGroups) { group in
+                                DisclosureGroup(
+                                    isExpanded: Binding(
+                                        get: { expandedCategories.contains(group.category) },
+                                        set: { isExpanded in
+                                            if isExpanded {
+                                                expandedCategories.insert(group.category)
+                                            } else {
+                                                expandedCategories.remove(group.category)
+                                            }
+                                        }
+                                    )
+                                ) {
+                                    LazyVStack(spacing: 8) {
+                                        ForEach(group.items) { item in
+                                            Button { selectedItem = item } label: {
+                                                catalogueRow(item)
+                                            }
+                                            .accessibilityIdentifier("materialCatalogueRoot.row.\(item.id)")
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                    .padding(.top, 8)
+                                } label: {
+                                    HStack(spacing: 13) {
+                                        PPIconTile(symbol: "square.stack.3d.up.fill", family: .trade, size: PPMetrics.menuIcon)
+                                        Text(group.category.uppercased())
+                                            .font(.footnote.weight(.semibold))
+                                            .tracking(0.8)
+                                            .foregroundStyle(.primary)
+                                        Spacer()
+                                        Text("\(group.items.count) item\(group.items.count == 1 ? "" : "s")")
+                                            .font(.subheadline)
+                                            .monospacedDigit()
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .tint(.secondary)
+                                .padding(.vertical, 6)
+                                .padding(.horizontal, 4)
+                            }
                         }
                     }
+                    .padding(.top, 18)
+                    .padding(.bottom, 24)
+                    .ppContentSheet()
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
             }
-            .background(MaterialsOrderingTheme.pageBackground.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Material catalogue")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("materialCatalogueRoot.done")
                 }
             }
@@ -232,34 +244,28 @@ struct MaterialCatalogueRootView: View {
         }
     }
 
+    /// Home-style navy header. Same values the old hero card showed.
     private var heroCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("CATALOGUE")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                    Text("\(store.items.count) items")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(.white)
-                }
+                PPOverviewTitle(eyebrow: "Catalogue", count: "\(store.items.count)", countLabel: "items")
                 Spacer()
-                Image(systemName: "shippingbox.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.white.opacity(0.18))
-                    .clipShape(Circle())
+                PPIconTile(symbol: "shippingbox.fill", family: .trade, size: PPMetrics.quickCreateIcon)
             }
-            HStack(spacing: 7) {
+            HStack(alignment: .top, spacing: 12) {
                 statTile(value: "\(store.brandCount)", label: "Brands")
+                PPStatDivider()
                 statTile(value: "\(max(store.categoryCount, categories.count))", label: "Categories")
+                PPStatDivider()
                 statTile(value: "\(store.countAddedToday())", label: "Added today")
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(14)
-        .background(MaterialsOrderingTheme.primaryGradient)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     private var catalogueActionsRow: some View {
@@ -272,6 +278,7 @@ struct MaterialCatalogueRootView: View {
             }
             .accessibilityIdentifier("materialCatalogueRoot.uploadOrDownloadCatalogue")
             .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
             .tint(MaterialsOrderingTheme.primary)
             .accessibilityLabel("Upload or download catalogue")
 
@@ -283,24 +290,14 @@ struct MaterialCatalogueRootView: View {
             }
             .accessibilityIdentifier("materialCatalogueRoot.addCatalogueItem")
             .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
             .tint(MaterialsOrderingTheme.primary)
             .accessibilityLabel("Add catalogue item")
         }
     }
 
     private func statTile(value: String, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white)
-            Text(label)
-                .font(.system(size: 9))
-                .foregroundStyle(.white.opacity(0.85))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(7)
-        .background(Color.white.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        PPStat(value: value, label: label)
     }
 
     private var searchField: some View {
@@ -309,32 +306,24 @@ struct MaterialCatalogueRootView: View {
                 .foregroundStyle(MaterialsOrderingTheme.muted)
             TextField("Search by name, brand or code", text: $searchText)
                 .accessibilityIdentifier("materialCatalogueRoot.searchByNameBrandOrCode")
-                .font(.system(size: 12))
+                .font(.body)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(MaterialsOrderingTheme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(MaterialsOrderingTheme.border, lineWidth: 0.5))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func catalogueRow(_ item: MaterialCatalogItem) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(MaterialsOrderingTheme.primaryTint)
-                .frame(width: 32, height: 32)
-                .overlay(
-                    Image(systemName: "circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(MaterialsOrderingTheme.primary)
-                )
+            PPIconTile(symbol: "shippingbox.fill", family: .trade, size: PPMetrics.menuIcon)
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.name)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MaterialsOrderingTheme.ink)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
                 Text(item.brand)
-                    .font(.system(size: 10))
-                    .foregroundStyle(MaterialsOrderingTheme.muted)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 HStack(spacing: 6) {
                     if let code = item.productCode, !code.isEmpty {
                         Text(code)
@@ -350,7 +339,7 @@ struct MaterialCatalogueRootView: View {
                         .foregroundStyle(MaterialsOrderingTheme.muted)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(Color(red: 0.949, green: 0.953, blue: 0.961))
+                        .background(PPColor.well)
                         .clipShape(RoundedRectangle(cornerRadius: 3))
                     if let size = item.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
                         Text("Size: \(size)")
@@ -358,7 +347,7 @@ struct MaterialCatalogueRootView: View {
                             .foregroundStyle(MaterialsOrderingTheme.muted)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
-                            .background(Color(red: 0.949, green: 0.953, blue: 0.961))
+                            .background(PPColor.well)
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
                     if !item.formattedLengthSpecification.isEmpty {
@@ -367,36 +356,37 @@ struct MaterialCatalogueRootView: View {
                             .foregroundStyle(MaterialsOrderingTheme.muted)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
-                            .background(Color(red: 0.949, green: 0.953, blue: 0.961))
+                            .background(PPColor.well)
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
                 }
             }
             Spacer(minLength: 0)
             Image(systemName: "chevron.right")
-                .font(.system(size: 12))
-                .foregroundStyle(MaterialsOrderingTheme.disabled)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
-        .padding(12)
-        .background(MaterialsOrderingTheme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(MaterialsOrderingTheme.border, lineWidth: 0.5))
+        .padding(14)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private var emptyCatalogue: some View {
         VStack(spacing: 12) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 40))
-                .foregroundStyle(MaterialsOrderingTheme.disabled)
+            PPIconTile(symbol: "shippingbox.fill", family: .trade, size: PPMetrics.quickActionIcon, lifted: true)
             Text(store.errorMessage == nil ? "No catalogue items yet" : "Catalogue could not be loaded")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.bold)
+                .multilineTextAlignment(.center)
             Text(store.errorMessage ?? "Add materials manually or update the catalogue from a CSV.")
-                .font(.system(size: 12))
-                .foregroundStyle(MaterialsOrderingTheme.muted)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 32)
+        .padding(.vertical, 28)
+        .padding(.horizontal, 20)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func normalizedCategory(_ value: String?) -> String {
@@ -468,8 +458,9 @@ private struct MaterialCatalogueEditorSheet: View {
                         }
                     }
                     Text("DEFAULT TYPE")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .font(.footnote.weight(.semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(.secondary)
                     HStack(spacing: 6) {
                         ForEach(MaterialUnit.allCases, id: \.self) { u in
                             Button { unit = u } label: {
@@ -487,7 +478,7 @@ private struct MaterialCatalogueEditorSheet: View {
                                     RoundedRectangle(cornerRadius: 11)
                                         .stroke(unit == u ? MaterialsOrderingTheme.primary : MaterialsOrderingTheme.border, lineWidth: unit == u ? 1.5 : 0.5)
                                 )
-                                .clipShape(RoundedRectangle(cornerRadius: 11))
+                                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                             }
                             .accessibilityIdentifier("materialCatalogueEditor.row.\(u)")
                             .buttonStyle(.plain)
@@ -498,16 +489,19 @@ private struct MaterialCatalogueEditorSheet: View {
                 }
                 .padding(16)
             }
-            .background(MaterialsOrderingTheme.pageBackground)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(modeTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("materialCatalogueEditor.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { attemptSave() }
+                        .fontWeight(.semibold)
                         .accessibilityIdentifier("materialCatalogueEditor.save")
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -627,12 +621,12 @@ private struct MaterialCatalogueEditorSheet: View {
     @ViewBuilder
     private func fieldSection(title: String, @ViewBuilder content: () -> some View) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(MaterialsOrderingTheme.muted)
+            .font(.footnote.weight(.semibold))
+            .tracking(0.8)
+            .foregroundStyle(.secondary)
         content()
-            .background(MaterialsOrderingTheme.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(MaterialsOrderingTheme.border, lineWidth: 0.5))
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private func textFieldRow(label: String, text: Binding<String>, required: Bool, placeholder: String = "") -> some View {
@@ -659,8 +653,9 @@ private struct MaterialCatalogueEditorSheet: View {
     private func suggestionRow(title: String, options: [String], onSelect: @escaping (String) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title.uppercased())
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(MaterialsOrderingTheme.muted)
+                .font(.footnote.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(options, id: \.self) { option in
@@ -700,10 +695,11 @@ private struct MaterialCatalogueDetailView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(item.name)
-                            .font(.system(size: 16, weight: .medium))
+                            .font(.system(.title3, design: .rounded))
+                            .fontWeight(.bold)
                         Text(item.brand)
-                            .font(.system(size: 12))
-                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                         if let code = item.productCode {
                             Text("Code: \(code)")
                                 .font(.system(size: 11, design: .monospaced))
@@ -712,8 +708,8 @@ private struct MaterialCatalogueDetailView: View {
                     }
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(MaterialsOrderingTheme.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .background(PPColor.card)
+                    .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
 
                     specRow(label: "Default unit", value: unitLabel)
                     specRow(label: "Size", value: item.size?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? item.size! : "—")
@@ -727,16 +723,19 @@ private struct MaterialCatalogueDetailView: View {
                     }
                     .accessibilityIdentifier("materialCatalogueDetail.removeFromCatalogue")
                     .padding()
-                    .background(MaterialsOrderingTheme.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .background(PPColor.card)
+                    .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
                 }
                 .padding(16)
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Item details")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("materialCatalogueDetail.close")
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -744,7 +743,9 @@ private struct MaterialCatalogueDetailView: View {
                         dismiss()
                         onEdit()
                     }
-                        .accessibilityIdentifier("materialCatalogueDetail.edit")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+                    .accessibilityIdentifier("materialCatalogueDetail.edit")
                 }
             }
             .confirmationDialog("Remove from catalogue?", isPresented: $showingDeleteConfirm) {
@@ -766,16 +767,16 @@ private struct MaterialCatalogueDetailView: View {
     private func specRow(label: String, value: String) -> some View {
         HStack {
             Text(label)
-                .font(.system(size: 11))
-                .foregroundStyle(MaterialsOrderingTheme.muted)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             Spacer()
             Text(value)
-                .font(.system(size: 13, weight: .medium))
+                .font(.body.weight(.medium))
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(MaterialsOrderingTheme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.vertical, 12)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -821,8 +822,9 @@ struct MaterialCatalogueBulkImportView: View {
                     infoBanner
 
                     Text("STEP 1 · DOWNLOAD")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .font(.footnote.weight(.semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(.secondary)
 
                     Button {
                         pendingDownload = .currentCatalogue
@@ -844,7 +846,7 @@ struct MaterialCatalogueBulkImportView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(16)
                         .background(MaterialsOrderingTheme.primaryGradient)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
                     }
                     .accessibilityIdentifier("materialCatalogueBulkImport.arrowDownCircleFill")
                     .buttonStyle(.plain)
@@ -869,20 +871,17 @@ struct MaterialCatalogueBulkImportView: View {
                             Spacer(minLength: 0)
                         }
                         .padding(14)
-                        .background(MaterialsOrderingTheme.cardBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(MaterialsOrderingTheme.border, lineWidth: 1)
-                        )
+                        .background(PPColor.card)
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
                     }
                     .accessibilityIdentifier("materialCatalogueBulkImport.docBadgePlus")
                     .buttonStyle(.plain)
                     .disabled(isBusy)
 
                     Text("STEP 2 · UPLOAD UPDATED CATALOGUE")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .font(.footnote.weight(.semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(.secondary)
                         .padding(.top, 4)
 
                     csvDropZone(
@@ -897,8 +896,9 @@ struct MaterialCatalogueBulkImportView: View {
                     }
 
                     Text("STEP 3 · REPLACE ENTIRE CATALOGUE")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .font(.footnote.weight(.semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(.secondary)
                         .padding(.top, 4)
 
                     csvDropZone(
@@ -917,12 +917,14 @@ struct MaterialCatalogueBulkImportView: View {
                 }
                 .padding(16)
             }
-            .background(MaterialsOrderingTheme.pageBackground.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Catalogue CSV")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .fontWeight(.semibold)
                         .accessibilityIdentifier("materialCatalogueBulkImport.close")
                         .disabled(isBusy)
                 }

@@ -27,13 +27,13 @@ struct ChangePasswordView: View {
                     SettingsHubChrome.card {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Enter your current password and choose a new one.")
-                                .font(.system(size: 13))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .font(.subheadline)
+                                .foregroundStyle(Color.secondary)
                                 .padding(.top, 12)
                             labeledSecure("Current password", title: "Enter your current password", text: $currentPassword)
-                            Divider().overlay(ProjectWorksRevampColors.border)
+                            Divider().overlay(Color(.separator))
                             labeledSecure("New password", title: "Enter your new password", text: $newPassword)
-                            Divider().overlay(ProjectWorksRevampColors.border)
+                            Divider().overlay(Color(.separator))
                             labeledSecure("Confirm new password", title: "Confirm your new password", text: $confirmPassword)
                         }
                         .padding(.bottom, 12)
@@ -41,8 +41,8 @@ struct ChangePasswordView: View {
 
                     if let errorMessage = firebaseBackend.errorMessage {
                         Text(errorMessage)
-                            .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                            .font(.system(size: 12))
+                            .foregroundStyle(PPColor.danger)
+                            .font(.footnote)
                             .padding(.horizontal, 4)
                             .padding(.bottom, 8)
                     }
@@ -50,7 +50,7 @@ struct ChangePasswordView: View {
                     if showingSuccessMessage {
                         Text("Password changed successfully")
                             .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                            .font(.system(size: 12))
+                            .font(.footnote)
                             .padding(.horizontal, 4)
                             .padding(.bottom, 8)
                     }
@@ -58,9 +58,10 @@ struct ChangePasswordView: View {
                 }
                 .padding(16)
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Sign-in & password")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .safeAreaInset(edge: .bottom) {
                 SettingsStickySaveBar(title: "Save", isDirty: isDirty, isSaving: firebaseBackend.isLoading) {
                     changePassword()
@@ -75,8 +76,8 @@ struct ChangePasswordView: View {
     private func labeledSecure(_ label: String, title: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.primary)
             CustomSecureField(title: title, text: text)
         }
         .padding(.vertical, 8)

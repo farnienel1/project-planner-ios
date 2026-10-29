@@ -18,63 +18,80 @@ struct ClientsView: View {
     
     var body: some View {
         NavigationView {
-            VStack {
-                if projectStore.clients.isEmpty {
-                    // Empty state
-                    VStack(spacing: 20) {
-                        Image(systemName: "person.2.fill")
-                            .font(.system(size: 60))
-                            .foregroundColor(.gray)
-                        
-                        Text("No Clients Added Yet")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        
-                        Text("Add clients to your organisation. Clients are the companies or individuals you work for.")
-                            .font(.body)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                        
-                        Button("Create Client") {
-                            showingCreateClient = true
-                        }
-                        .accessibilityIdentifier("clients.createClient")
-                        .buttonStyle(.borderedProminent)
-                    }
-                    .padding()
-                } else {
-                    // List of clients in card style
-                    ScrollView {
+            VStack(spacing: 0) {
+                clientsNavyHeader
+
+                VStack(spacing: 0) {
+                    if projectStore.clients.isEmpty {
+                        // Empty state
                         VStack(spacing: 16) {
-                            ForEach(projectStore.clients) { client in
-                                ClientCardView(client: client)
-                                    
-                                    .accessibilityIdentifier("clients.tap").onTapGesture {
-                                        selectedClient = client
-                                        showingClientDetails = true
-                                    }
+                            PPIconTile(symbol: "person.2.fill", family: .people, size: PPMetrics.quickActionIcon, lifted: true)
+
+                            Text("No Clients Added Yet")
+                                .font(.system(.title2, design: .rounded))
+                                .fontWeight(.bold)
+                                .multilineTextAlignment(.center)
+
+                            Text("Add clients to your organisation. Clients are the companies or individuals you work for.")
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+
+                            Button("Create Client") {
+                                showingCreateClient = true
                             }
+                            .accessibilityIdentifier("clients.createClient")
+                            .ppProminentCapsule()
+                            .padding(.top, 4)
                         }
-                        .padding()
+                        .padding(20)
+                        .frame(maxWidth: .infinity)
+                        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                        .padding(.top, 20)
+                    } else {
+                        // List of clients in card style
+                        ScrollView {
+                            VStack(spacing: 10) {
+                                PPGroupLabel(text: "Clients")
+                                    .padding(.top, -8)
+                                ForEach(projectStore.clients) { client in
+                                    ClientCardView(client: client)
+                                        
+                                        .accessibilityIdentifier("clients.tap").onTapGesture {
+                                            selectedClient = client
+                                            showingClientDetails = true
+                                        }
+                                }
+                            }
+                            .padding(.top, 8)
+                            .padding(.bottom, 24)
+                        }
                     }
+                    
+                    Spacer(minLength: 0)
                 }
-                
-                Spacer()
+                .frame(maxHeight: .infinity, alignment: .top)
+                .ppContentSheet()
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Clients")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") {
                         dismiss()
                     }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("clients.done")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("New Client") {
                         showingCreateClient = true
                     }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("clients.newClient")
                 }
             }
@@ -98,6 +115,26 @@ struct ClientsView: View {
             }
         }
     }
+
+    /// Home-style navy header with the number of clients already loaded.
+    private var clientsNavyHeader: some View {
+        let count = projectStore.clients.count
+        return VStack(alignment: .leading, spacing: 8) {
+            PPOverviewTitle(
+                eyebrow: "Your clients",
+                count: "\(count)",
+                countLabel: count == 1 ? "client" : "clients"
+            )
+            Text("The companies or individuals you work for.")
+                .font(.footnote)
+                .foregroundStyle(PPColor.onNavySecondary)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
 }
 
 // MARK: - Client Card View
@@ -105,61 +142,60 @@ struct ClientCardView: View {
     let client: Client
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 13) {
+            PPIconTile(symbol: "building.2.fill", family: .people, size: 38)
+
+            VStack(alignment: .leading, spacing: 6) {
+                // Header
+                HStack(alignment: .firstTextBaseline) {
                     Text(client.name)
-                        .font(.headline)
-                        .fontWeight(.bold)
-                        .foregroundColor(.primary)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
                     
-                    if let email = client.email, !email.isEmpty {
-                        HStack(spacing: 4) {
-                            Image(systemName: "envelope.fill")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                            Text(email)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-                
-                Spacer()
-                
-                if let phone = client.phone, !phone.isEmpty {
-                    VStack(alignment: .trailing, spacing: 4) {
+                    Spacer(minLength: 8)
+                    
+                    if let phone = client.phone, !phone.isEmpty {
                         HStack(spacing: 4) {
                             Image(systemName: "phone.fill")
-                                .font(.caption)
-                                .foregroundColor(.green)
+                                .font(.caption2)
                             Text(phone)
-                                .font(.caption)
-                                .foregroundColor(.green)
-                                .fontWeight(.medium)
+                                .font(.footnote.weight(.medium))
+                                .monospacedDigit()
                         }
+                        .foregroundStyle(PPFamily.sites.bottom)
                     }
                 }
-            }
-            
-            // Address if available
-            if let address = client.address, !address.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "location.fill")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                    Text(address)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
+                
+                if let email = client.email, !email.isEmpty {
+                    HStack(spacing: 5) {
+                        Image(systemName: "envelope.fill")
+                            .font(.caption2)
+                            .foregroundStyle(PPFamily.plan.bottom)
+                        Text(email)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                
+                // Address if available
+                if let address = client.address, !address.isEmpty {
+                    HStack(alignment: .top, spacing: 5) {
+                        Image(systemName: "location.fill")
+                            .font(.caption2)
+                            .foregroundStyle(PPFamily.trade.bottom)
+                        Text(address)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
             }
         }
-        .padding(16)
-        .background(ProjectWorksRevampColors.surface)
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 }
 
@@ -231,15 +267,14 @@ struct ClientDetailsView: View {
                         }
                     }
                     .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
+                    .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                     
                     // Projects Section
                     if !clientProjects.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Projects (\(clientProjects.count))")
-                                .font(.headline)
-                                .fontWeight(.semibold)
+                                .font(.system(.title3, design: .rounded))
+                                .fontWeight(.bold)
                             
                             ForEach(clientProjects) { project in
                                 ProjectDetailRowView(project: project)
@@ -249,19 +284,25 @@ struct ClientDetailsView: View {
                 }
                 .padding()
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Client Details")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") {
                         dismiss()
                     }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("clientDetails.done")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Edit") {
                         showingEditClient = true
                     }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("clientDetails.edit")
                 }
             }

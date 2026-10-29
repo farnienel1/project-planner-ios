@@ -144,6 +144,7 @@ struct WeeklyReportView: View {
         NavigationStack {
             weeklyReportScrollContent
                 .navigationBarTitleDisplayMode(.inline)
+                .ppNavyNavigationBar()
                 .toolbar { weeklyReportToolbar }
                 .sheet(isPresented: $showingWarningsDetail) { warningsDetailSheet }
                 .sheet(isPresented: $showGeneratedSuccess) {
@@ -164,29 +165,31 @@ struct WeeklyReportView: View {
 
     private var weeklyReportScrollContent: some View {
         ZStack {
-            Color(.systemGroupedBackground).ignoresSafeArea()
+            PPColor.page.ignoresSafeArea()
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 24) {
+                VStack(spacing: 0) {
                     brandHeader
-                    quickSelectCard
-                    invoicingPeriodCard
-                    Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward). Live bookings from projects, small works and daily overview feed this snapshot until a timesheet is counter-signed (or self-signed when the person has no line manager). Agreed timesheet figures then replace those days, including price work and expenses.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(WeeklyReportColors.muted)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 8)
-                    generateSection
-                    if let message {
-                        Text(message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                    VStack(spacing: 24) {
+                        quickSelectCard
+                        invoicingPeriodCard
+                        Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward). Live bookings from projects, small works and daily overview feed this snapshot until a timesheet is counter-signed (or self-signed when the person has no line manager). Agreed timesheet figures then replace those days, including price work and expenses.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(WeeklyReportColors.muted)
                             .multilineTextAlignment(.center)
+                            .padding(.horizontal, 8)
+                        generateSection
+                        if let message {
+                            Text(message)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        Spacer(minLength: 24)
                     }
-                    Spacer(minLength: 24)
+                    .padding(.top, 20)
+                    .padding(.bottom, 20)
+                    .ppContentSheet()
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 20)
             }
         }
     }
@@ -199,19 +202,20 @@ struct WeeklyReportView: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .semibold))
                     Text("Close")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 15, weight: .semibold))
                 }
-                .foregroundStyle(WeeklyReportColors.blue)
+                .foregroundStyle(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(WeeklyReportColors.light)
-                .clipShape(Capsule())
+                .background(Capsule().fill(PPColor.onNavyFill))
+                .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
             }
                 .accessibilityIdentifier("weeklyReport.close")
         }
         ToolbarItem(placement: .principal) {
             Text("Weekly Report")
                 .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
         }
     }
 
@@ -235,12 +239,7 @@ struct WeeklyReportView: View {
     // MARK: - UI sections
 
     private var brandHeader: some View {
-        ZStack {
-            LinearGradient(
-                colors: [WeeklyReportColors.navy, Color(red: 0.043, green: 0.118, blue: 0.224)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+        VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
                     barChartIcon.frame(width: 36, height: 36)
@@ -250,8 +249,8 @@ struct WeeklyReportView: View {
                             Text(" PLANNER").font(.system(size: 16, weight: .black)).foregroundStyle(WeeklyReportColors.cyan).tracking(1.2)
                         }
                         Text(organizationName)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.5))
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(PPColor.onNavySecondary)
                     }
                     Spacer()
                     if let logoImage {
@@ -271,12 +270,20 @@ struct WeeklyReportView: View {
                     WeeklyReportColors.cyan.frame(height: 2)
                 }
                 .clipShape(Capsule())
+                .padding(.top, 8)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 16)
+
+            PPOnNavyPill(
+                text: "\(formatDate(startDate))  →  \(formatDate(endDate))",
+                symbol: "calendar.badge.clock"
+            )
+            .padding(.top, 16)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: WeeklyReportColors.navy.opacity(0.35), radius: 12, x: 0, y: 6)
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     private var barChartIcon: some View {
@@ -459,9 +466,8 @@ struct WeeklyReportView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            .background(Color(.systemBackground))
+            .background(PPColor.card)
             .clipShape(Capsule())
-            .overlay(Capsule().strokeBorder(WeeklyReportColors.mid, lineWidth: 0.5))
 
             Button {
                 generateReports()
@@ -482,12 +488,12 @@ struct WeeklyReportView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
-                .background(LinearGradient(colors: [WeeklyReportColors.blue, WeeklyReportColors.cyan], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: WeeklyReportColors.blue.opacity(0.4), radius: 10, x: 0, y: 5)
+                .background(PPFamily.plan.gradient)
+                .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+                .shadow(color: PPFamily.plan.bottom.opacity(0.35), radius: 10, x: 0, y: 5)
             }
             .accessibilityIdentifier("weeklyReport.generatingReport")
-            .buttonStyle(.plain)
+            .buttonStyle(PPPressableButtonStyle())
             .disabled(isGenerating)
 
             Text("Generates Excel (.xlsx) and PDF files ready to share.")
@@ -562,17 +568,15 @@ struct WeeklyReportView: View {
     private func reportSectionCard<Content: View>(title: String, icon: String, iconColor: Color, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(iconColor)
-                Text(title.uppercased()).font(.system(size: 11, weight: .semibold)).foregroundStyle(WeeklyReportColors.muted).tracking(0.6)
+                Image(systemName: icon).font(.footnote.weight(.semibold)).foregroundStyle(iconColor)
+                Text(title.uppercased()).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).tracking(0.8)
             }
             .padding(.horizontal, 4)
             .padding(.bottom, 8)
 
             VStack(spacing: 0) { content() }
-                .background(Color(.systemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 2)
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(WeeklyReportColors.mid.opacity(0.6), lineWidth: 0.5))
+                .background(PPColor.card)
+                .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
     }
 
@@ -583,29 +587,30 @@ struct WeeklyReportView: View {
             }
         } label: {
             HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(WeeklyReportColors.light).frame(width: 36, height: 36)
-                    Image(systemName: selection == .custom ? "calendar.badge.plus" : "calendar").foregroundStyle(WeeklyReportColors.blue)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(label).font(.system(size: 15, weight: .semibold))
-                    Text(subLabel).font(.system(size: 12)).foregroundStyle(WeeklyReportColors.muted)
+                PPIconTile(
+                    symbol: selection == .custom ? "calendar.badge.plus" : "calendar",
+                    family: .plan,
+                    size: PPMetrics.menuIcon
+                )
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(label).font(.body).foregroundStyle(.primary)
+                    Text(subLabel).font(.footnote).foregroundStyle(.secondary)
                 }
                 Spacer()
                 let selected = quickRange == selection
                 ZStack {
-                    Circle().fill(selected ? WeeklyReportColors.blue : WeeklyReportColors.mid.opacity(0.4)).frame(width: 22, height: 22)
+                    Circle().fill(selected ? PPColor.brand : WeeklyReportColors.mid.opacity(0.4)).frame(width: 22, height: 22)
                     if selected {
                         Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 60)
             .contentShape(Rectangle())
         }
         .accessibilityIdentifier("weeklyReport.calendarBadgePlus")
-        .buttonStyle(.plain)
+        .buttonStyle(PPMenuRowButtonStyle())
     }
 
     /// Editing either date leaves the preset and uses exactly these two days.

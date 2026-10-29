@@ -339,57 +339,49 @@ struct DailyOverviewView: View {
     
     private var overviewContent: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                if !isHistoric {
-                    topActionsRow
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                overviewNavyHeader
 
-                if displayDate == nil && !isHistoric {
-                    dateDayNavigatorCard
-                } else if isHistoric {
-                    historicDateCaption
-                }
+                VStack(alignment: .leading, spacing: 0) {
+                    if !unbookedAllNames.isEmpty {
+                        unbookedLabourRevampCard
+                            .padding(.top, 20)
+                    }
 
-                todayAtAGlanceHeroCard
+                    if !dayHolidays.isEmpty {
+                        annualLeaveRevampBlock
+                    }
 
-                if !unbookedAllNames.isEmpty {
-                    unbookedLabourRevampCard
-                }
+                    otherScheduleRevampSection
 
-                if !dayHolidays.isEmpty {
-                    annualLeaveRevampBlock
-                }
+                    if !visibleSiteSurveyBookings.isEmpty {
+                        VStack(alignment: .leading, spacing: 0) {
+                            revampSectionHeader(title: "Site survey", trailing: nil)
+                            managerScheduleRevampCard(
+                                sectionIcon: "mappin.and.ellipse",
+                                family: .people,
+                                title: "Site survey",
+                                trailingCaption: "Managers / admins",
+                                bookings: visibleSiteSurveyBookings
+                            )
+                        }
+                    }
 
-                otherScheduleRevampSection
+                    liveProjectsRevampSection
 
-                if !visibleSiteSurveyBookings.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        revampSectionHeader(title: "Site survey", trailing: nil)
-                        managerScheduleRevampCard(
-                            sectionIcon: "mappin.and.ellipse",
-                            iconBackground: ProjectWorksRevampColors.pinRoseBg,
-                            iconForeground: ProjectWorksRevampColors.pinRoseFg,
-                            title: "Site survey",
-                            trailingCaption: "Managers / admins",
-                            bookings: visibleSiteSurveyBookings
-                        )
+                    if displayedProjectIds.isEmpty &&
+                        dayHolidays.isEmpty &&
+                        !hasOtherScheduleContent &&
+                        visibleSiteSurveyBookings.isEmpty {
+                        noBookingsView
+                            .padding(.top, 20)
                     }
                 }
-
-                liveProjectsRevampSection
-
-                if displayedProjectIds.isEmpty &&
-                    dayHolidays.isEmpty &&
-                    !hasOtherScheduleContent &&
-                    visibleSiteSurveyBookings.isEmpty {
-                    noBookingsView
-                }
+                .padding(.bottom, 28)
+                .ppContentSheet()
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 8)
-            .padding(.bottom, 28)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationDestination(isPresented: $showingBookLabour) {
             BookLabourFlowView(bookDate: overviewDate, embedsNavigationStack: false)
                 .environmentObject(appSettings)
@@ -404,78 +396,83 @@ struct DailyOverviewView: View {
         }
     }
 
+    /// Home-style navy header: day picker (or the fixed date), then the day at a glance.
+    private var overviewNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !isHistoric {
+                topActionsRow
+                    .padding(.bottom, 12)
+            }
+            if displayDate == nil && !isHistoric {
+                dateDayNavigatorCard
+            } else if isHistoric {
+                historicDateCaption
+            }
+            todayAtAGlanceHeroCard
+                .padding(.top, 18)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // A fixed date sits under other content (date picker, warnings), so its navy must not reach above it.
+        .modifier(PPNavyHeaderBackground(bleed: isHistoric ? 0 : 900))
+    }
+
     private var topActionsRow: some View {
         HStack {
             Spacer(minLength: 0)
             Button(action: { showingPastBookings = true }) {
-                Label("View by date", systemImage: "calendar")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                PPOnNavyPill(text: "View by date", symbol: "calendar")
             }
             .accessibilityIdentifier("dailyOverview.viewByDate")
-            .buttonStyle(.plain)
+            .buttonStyle(PPPressableButtonStyle())
         }
     }
 
     private var historicDateCaption: some View {
-        Text(dateFormatter.string(from: overviewDate))
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.ink)
-            .frame(maxWidth: .infinity)
-            .padding(14)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-            )
+        PPNavyPageTitle(
+            eyebrow: CanonicalBusinessEngine.businessCalendar.isDateInToday(overviewDate) ? "Today" : "Daily overview",
+            title: dateFormatter.string(from: overviewDate)
+        )
     }
 
     private var dateDayNavigatorCard: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .center, spacing: 10) {
             Button(action: { shiftOverviewDay(-1) }) {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .frame(width: 44, height: 44)
             }
             .accessibilityIdentifier("dailyOverview.back")
-            .buttonStyle(.plain)
+            .buttonStyle(PPOnNavyCircleButtonStyle())
             Button(action: { showingPastBookings = true }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "calendar")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                    VStack(spacing: 2) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(CanonicalBusinessEngine.businessCalendar.isDateInToday(overviewDate) ? "TODAY · TAP TO CHANGE" : "TAP TO CHANGE")
+                        .font(.caption2.weight(.semibold))
+                        .tracking(1.1)
+                        .foregroundStyle(PPColor.onNavySecondary)
+                    HStack(spacing: 6) {
                         Text(dateFormatter.string(from: overviewDate))
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Text(CanonicalBusinessEngine.businessCalendar.isDateInToday(overviewDate) ? "Today · Tap to change" : "Tap to change")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                            .font(.system(.title2, design: .rounded))
+                            .fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                        Image(systemName: "calendar")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(PPColor.onNavySecondary)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .accessibilityIdentifier("dailyOverview.calendar")
-            .buttonStyle(.plain)
+            .buttonStyle(PPPressableButtonStyle())
             Button(action: { shiftOverviewDay(1) }) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .frame(width: 44, height: 44)
             }
             .accessibilityIdentifier("dailyOverview.chevronRight")
-            .buttonStyle(.plain)
+            .buttonStyle(PPOnNavyCircleButtonStyle())
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
     }
 
     private var glanceHeadlinePeopleCount: Int {
@@ -496,7 +493,7 @@ struct DailyOverviewView: View {
         return (office / total, wfh / total, onSite / total, unbooked / total)
     }
 
-    /// Unified summary hero (`project_planner_daily_overview_unified_hero.html`) — display only, not tappable.
+    /// Day at a glance on the navy header (Home overview style) — display only, not tappable.
     private var todayAtAGlanceHeroCard: some View {
         let unbooked = glanceUnbookedCount
         let mult = PayrollTimePolicyCatalog.timelinePolicy(for: overviewDate, policy: payrollTimePolicy).outsideMultiplier
@@ -507,85 +504,55 @@ struct DailyOverviewView: View {
         let isToday = CanonicalBusinessEngine.businessCalendar.isDateInToday(overviewDate)
         let glanceTitle = isToday ? "Today at a glance" : "Day at a glance"
 
-        return ZStack(alignment: .topTrailing) {
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [Color.white.opacity(0.1), Color.clear],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 65
-                    )
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                PPOverviewTitle(
+                    eyebrow: glanceTitle,
+                    count: "\(overviewFormatHours(dayJobSiteLabourHours))h",
+                    countLabel: "· \(people) \(people == 1 ? "person" : "people")"
                 )
-                .frame(width: 130, height: 130)
-                .offset(x: 28, y: -28)
-                .allowsHitTesting(false)
-
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(glanceTitle.uppercased())
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.85))
-                            .tracking(0.4)
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text("\(overviewFormatHours(dayJobSiteLabourHours))h")
-                                .font(.system(size: 28, weight: .medium))
-                                .foregroundStyle(Color.white)
-                                .tracking(-0.5)
-                            Text("· \(people) \(people == 1 ? "person" : "people")")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Color.white.opacity(0.85))
-                        }
+                Spacer(minLength: 8)
+                if unbooked > 0 {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2.weight(.semibold))
+                        Text("\(unbooked) unbooked")
+                            .font(.caption.weight(.semibold))
                     }
-                    Spacer(minLength: 8)
-                    if unbooked > 0 {
-                        HStack(spacing: 4) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 11, weight: .medium))
-                            Text("\(unbooked) unbooked")
-                                .font(.system(size: 10, weight: .medium))
-                        }
-                        .foregroundStyle(Color.white)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.18))
-                        .clipShape(Capsule())
-                    }
+                    .foregroundStyle(PPColor.warningAmber)
+                    .padding(.horizontal, 10)
+                    .frame(height: 26)
+                    .background(Capsule().fill(PPColor.warningAmber.opacity(0.14)))
+                    .overlay(Capsule().strokeBorder(PPColor.warningAmber.opacity(0.4), lineWidth: 0.5))
                 }
-                .padding(.bottom, 14)
+            }
 
-                HStack(spacing: 7) {
-                    glanceStatPill(value: overviewFormatHours(dayJobSiteStandardPortionHours), label: "Standard hrs")
-                    glanceStatPill(
-                        value: overviewFormatHours(dayJobSiteOvertimeHours),
-                        label: "OT \(multLabel)×"
-                    )
-                    glanceStatPill(value: "\(jobsCount)", label: jobsCount == 1 ? "Job active" : "Jobs active")
-                }
-                .padding(.bottom, 14)
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: overviewFormatHours(dayJobSiteStandardPortionHours), label: "Standard hrs")
+                PPStatDivider()
+                PPStat(value: overviewFormatHours(dayJobSiteOvertimeHours), label: "OT \(multLabel)×")
+                PPStatDivider()
+                PPStat(value: "\(jobsCount)", label: jobsCount == 1 ? "Job active" : "Jobs active")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 16)
 
-                Rectangle()
-                    .fill(Color.white.opacity(0.2))
-                    .frame(height: 0.5)
-                    .padding(.bottom, 12)
-
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text("WHERE THE TEAM IS")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.85))
-                        .tracking(0.4)
+                        .font(.caption2.weight(.semibold))
+                        .tracking(1.1)
+                        .foregroundStyle(PPColor.onNavySecondary)
                     Spacer()
                     Text("\(bookedPeopleCount) booked · \(unbooked) unbooked")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.7))
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(PPColor.onNavyCaption)
                 }
-                .padding(.bottom, 10)
 
                 teamLocationDistributionBar(office: bar.office, wfh: bar.wfh, onSite: bar.onSite, unbooked: bar.unbooked)
-                    .padding(.bottom, 8)
 
-                HStack(spacing: 12) {
+                HStack(spacing: 14) {
                     glanceLocationLegendItem(
                         systemImage: "building.2.fill",
                         count: officePeopleCount,
@@ -608,78 +575,66 @@ struct DailyOverviewView: View {
                     if unbooked > 0 {
                         HStack(spacing: 5) {
                             Image(systemName: "person.fill.questionmark")
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.caption.weight(.semibold))
                             Text("\(unbooked)")
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.footnote.weight(.semibold))
+                                .monospacedDigit()
                         }
-                        .foregroundStyle(Color.white)
+                        .foregroundStyle(PPColor.warningAmber)
                     }
                 }
             }
-            .padding(18)
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(PPColor.onNavyFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
+            )
+            .padding(.top, 18)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LinearGradient(
-                colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(glanceTitle). \(overviewFormatHours(dayJobSiteLabourHours)) hours across \(people) people.")
     }
 
-    private func glanceStatPill(value: String, label: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color.white)
-            Text(label)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.85))
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.85)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 9)
-        .padding(.horizontal, 8)
-        .background(Color.white.opacity(0.14))
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-    }
+    /// Location colours shared by the bar and its legend (Home icon families).
+    private static let officeTint = PPFamily.plan.top
+    private static let wfhTint = PPFamily.sites.top
+    private static let onSiteTint = PPFamily.trade.top
 
     private func teamLocationDistributionBar(office: CGFloat, wfh: CGFloat, onSite: CGFloat, unbooked: CGFloat) -> some View {
         GeometryReader { geo in
             let w = geo.size.width
-            HStack(spacing: 0) {
+            HStack(spacing: 2) {
                 if office > 0 {
-                    Rectangle()
-                        .fill(Color.white)
-                        .frame(width: max(1, w * office))
+                    Capsule()
+                        .fill(Self.officeTint)
+                        .frame(width: max(4, w * office))
                 }
                 if wfh > 0 {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.6))
-                        .frame(width: max(1, w * wfh))
+                    Capsule()
+                        .fill(Self.wfhTint)
+                        .frame(width: max(4, w * wfh))
                 }
                 if onSite > 0 {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.85))
-                        .frame(width: max(1, w * onSite))
+                    Capsule()
+                        .fill(Self.onSiteTint)
+                        .frame(width: max(4, w * onSite))
                 }
                 if unbooked > 0 {
                     glanceUnbookedStripeFill()
-                        .frame(width: max(1, w * unbooked))
+                        .frame(width: max(4, w * unbooked))
+                        .clipShape(Capsule())
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         }
-        .frame(height: 8)
-        .background(Color.black.opacity(0.18))
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .frame(height: 10)
+        .background(Capsule().fill(Color.black.opacity(0.25)))
+        .clipShape(Capsule())
     }
 
     private struct GlanceUnbookedStripeFill: View {
@@ -694,8 +649,8 @@ struct DailyOverviewView: View {
                         x += step
                     }
                 }
-                .stroke(Color.white.opacity(0.35), lineWidth: 2)
-                .background(Color.white.opacity(0.15))
+                .stroke(PPColor.warningAmber.opacity(0.7), lineWidth: 2)
+                .background(PPColor.warningAmber.opacity(0.2))
             }
         }
     }
@@ -705,105 +660,95 @@ struct DailyOverviewView: View {
     }
 
     private func glanceLocationLegendItem(systemImage: String, count: Int, label: String, dimmed: Bool) -> some View {
-        HStack(spacing: 5) {
+        let tint: Color = {
+            switch label {
+            case "Office": return Self.officeTint
+            case "WFH": return Self.wfhTint
+            default: return Self.onSiteTint
+            }
+        }()
+        return HStack(spacing: 5) {
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .medium))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
             Text("\(count)")
-                .font(.system(size: 11, weight: .medium))
+                .font(.footnote.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(.white)
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .font(.caption)
+                .foregroundStyle(PPColor.onNavyCaption)
         }
-        .foregroundStyle(Color.white.opacity(dimmed ? 0.55 : 1))
+        .opacity(dimmed ? 0.5 : 1)
     }
 
     private var unbookedLabourRevampCard: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(ProjectWorksRevampColors.surface)
-                    .frame(width: 34, height: 34)
-                Image(systemName: "person.fill.questionmark")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 13) {
+                PPIconTile(symbol: "person.fill.questionmark", family: .alert, size: PPMetrics.menuIcon)
+                VStack(alignment: .leading, spacing: 1) {
                     Text("Unbooked labour")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                    Spacer(minLength: 8)
-                    Text("\(unbookedAllNames.count) people")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text("\(unbookedAllNames.count) \(unbookedAllNames.count == 1 ? "person" : "people") with nothing booked")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(unbookedAllNames, id: \.self) { name in
-                        HStack(spacing: 8) {
-                            Text(PlannerUIInitials.from(name))
-                                .font(.system(size: 8, weight: .medium))
-                                .foregroundStyle(Color.white)
-                                .frame(width: 18, height: 18)
-                                .background(
-                                    LinearGradient(
-                                        colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .clipShape(Circle())
-                            Text(name)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(ProjectWorksRevampColors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                }
+                Spacer(minLength: 8)
                 if canBookLabour {
                     Button(action: { showingBookLabour = true }) {
                         Text("Book labour")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(Color.clear)
-                            .overlay(
-                                Capsule().stroke(ProjectWorksRevampColors.requiredPillFg, lineWidth: 0.5)
-                            )
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .frame(height: 32)
+                            .background(Capsule().fill(PPColor.danger))
                     }
                     .accessibilityIdentifier("dailyOverview.bookLabour")
-                    .buttonStyle(.plain)
+                    .buttonStyle(PPPressableButtonStyle())
                 }
             }
+            .padding(14)
+
+            ForEach(unbookedAllNames, id: \.self) { name in
+                PPRowDivider()
+                HStack(spacing: 13) {
+                    Text(PlannerUIInitials.from(name))
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: PPMetrics.menuIcon, height: PPMetrics.menuIcon)
+                        .background(PPFamily.people.gradient, in: Circle())
+                    Text(name)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 48)
+            }
         }
-        .padding(14)
-        .background(ProjectWorksRevampColors.requiredPillBg)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous)
+                .strokeBorder(PPColor.danger.opacity(0.35), lineWidth: 1)
+        )
     }
 
     private var annualLeaveRevampBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             revampSectionHeader(title: "Annual leave", trailing: nil)
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(dayHolidays.enumerated()), id: \.element.id) { idx, booking in
                     OnHolidayRowView(booking: booking)
                     if idx < dayHolidays.count - 1 {
-                        Divider().overlay(ProjectWorksRevampColors.border)
+                        Divider()
                     }
                 }
             }
             .padding(14)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-            )
+            .ppDailyOverviewCard()
         }
     }
 
@@ -823,7 +768,7 @@ struct DailyOverviewView: View {
             .union(Set(wfh.map(\.userId)))
             .union(Set(customBookings.map(\.userId)))
         if hasOtherScheduleContent {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
                 revampSectionHeader(
                     title: "Other",
                     trailing: "\(people.count) person\(people.count == 1 ? "" : "s")"
@@ -832,8 +777,7 @@ struct DailyOverviewView: View {
                     otherScheduleBlock(
                         needsTopDivider: false,
                         icon: "building.2.fill",
-                        iconBg: Color(red: 0.902, green: 0.945, blue: 0.984),
-                        iconTint: ProjectWorksRevampColors.blue,
+                        family: .plan,
                         title: "Office",
                         bookings: office,
                         locationTitle: "Office"
@@ -841,8 +785,7 @@ struct DailyOverviewView: View {
                     otherScheduleBlock(
                         needsTopDivider: !office.isEmpty,
                         icon: "house.fill",
-                        iconBg: Color(red: 0.882, green: 0.961, blue: 0.933),
-                        iconTint: ProjectWorksRevampColors.activeGreen,
+                        family: .sites,
                         title: "Working from home",
                         bookings: wfh,
                         locationTitle: "Working from home"
@@ -851,8 +794,7 @@ struct DailyOverviewView: View {
                         otherScheduleBlock(
                             needsTopDivider: !office.isEmpty || !wfh.isEmpty || idx > 0,
                             icon: "mappin.and.ellipse",
-                            iconBg: ProjectWorksRevampColors.jobTypePillBg,
-                            iconTint: ProjectWorksRevampColors.jobTypePillInk,
+                            family: .people,
                             title: customName,
                             bookings: customGroups[customName] ?? [],
                             locationTitle: customName
@@ -860,12 +802,7 @@ struct DailyOverviewView: View {
                     }
                 }
                 .padding(14)
-                .background(ProjectWorksRevampColors.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                )
+                .ppDailyOverviewCard()
             }
         }
     }
@@ -874,43 +811,35 @@ struct DailyOverviewView: View {
     private func otherScheduleBlock(
         needsTopDivider: Bool,
         icon: String,
-        iconBg: Color,
-        iconTint: Color,
+        family: PPFamily,
         title: String,
         bookings: [ManagerSiteBooking],
         locationTitle: String
     ) -> some View {
         if !bookings.isEmpty {
             if needsTopDivider {
-                Divider().padding(.vertical, 6).overlay(ProjectWorksRevampColors.border)
+                Divider().padding(.vertical, 8)
             }
-            otherScheduleInnerHeader(icon: icon, iconBg: iconBg, iconTint: iconTint, title: title, caption: "Managers / admins")
+            otherScheduleInnerHeader(icon: icon, family: family, title: title, caption: "Managers / admins")
             ForEach(Array(bookings.enumerated()), id: \.element.id) { idx, booking in
                 managerBookingRevampRow(booking: booking, locationTitle: locationTitle, editable: false)
-                if idx < bookings.count - 1 { Divider().overlay(ProjectWorksRevampColors.border) }
+                if idx < bookings.count - 1 { Divider() }
             }
         }
     }
 
-    private func otherScheduleInnerHeader(icon: String, iconBg: Color, iconTint: Color, title: String, caption: String) -> some View {
+    private func otherScheduleInnerHeader(icon: String, family: PPFamily, title: String, caption: String) -> some View {
         HStack {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(iconBg)
-                        .frame(width: 30, height: 30)
-                    Image(systemName: icon)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(iconTint)
-                }
+            HStack(spacing: 13) {
+                PPIconTile(symbol: icon, family: family, size: PPMetrics.menuIcon)
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
             }
             Spacer()
             Text(caption)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding(.bottom, 10)
     }
@@ -923,8 +852,9 @@ struct DailyOverviewView: View {
         }
         return Group {
             if !ids.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 12) {
                     revampSectionHeader(title: "By project", trailing: nil)
+                        .padding(.bottom, -12)
                     ForEach(ids, id: \.self) { projectId in
                         if let project = projectStore.projects.first(where: { $0.id == projectId }) {
                             liveProjectRevampCard(
@@ -980,95 +910,53 @@ struct DailyOverviewView: View {
             Button {
                 openCataloguePage(for: project)
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Text(project.jobType == .smallWorks ? "Open small works" : "Open project")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.subheadline.weight(.semibold))
                     Image(systemName: "arrow.right")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.footnote.weight(.semibold))
                 }
-                .foregroundStyle(ProjectWorksRevampColors.blue)
+                .foregroundStyle(PPColor.brand)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(ProjectWorksRevampColors.canvas)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                )
+                .frame(height: 40)
+                .background(Capsule().fill(PPColor.brand.opacity(0.1)))
             }
             .accessibilityIdentifier("dailyOverview.row.\(project.id).openSmallWorks")
-            .padding(.top, 8)
-            .buttonStyle(.plain)
+            .padding(.top, 10)
+            .buttonStyle(PPPressableButtonStyle())
         }
         .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .ppDailyOverviewCard()
     }
 
     private func revampSectionHeader(title: String, trailing: String?) -> some View {
-        HStack {
-            Text(title.uppercased())
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .tracking(0.4)
-            Spacer()
+        PPSectionHeader(title) {
             if let trailing {
                 Text(trailing)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.leading, 4)
     }
 
     private func managerScheduleRevampCard(
         sectionIcon: String,
-        iconBackground: Color,
-        iconForeground: Color,
+        family: PPFamily,
         title: String,
         trailingCaption: String,
         bookings: [ManagerSiteBooking]
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                HStack(spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(iconBackground)
-                            .frame(width: 30, height: 30)
-                        Image(systemName: sectionIcon)
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(iconForeground)
-                    }
-                    Text(title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                }
-                Spacer()
-                Text(trailingCaption)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            .padding(.bottom, 10)
+            otherScheduleInnerHeader(icon: sectionIcon, family: family, title: title, caption: trailingCaption)
 
             ForEach(Array(bookings.enumerated()), id: \.element.id) { idx, booking in
                 managerBookingRevampRow(booking: booking, locationTitle: title)
                 if idx < bookings.count - 1 {
-                    Divider().overlay(ProjectWorksRevampColors.border)
+                    Divider()
                 }
             }
         }
         .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .ppDailyOverviewCard()
     }
 
     @ViewBuilder
@@ -1076,44 +964,36 @@ struct DailyOverviewView: View {
         let name = managerName(for: booking.userId)
         let canEditRow = canBookLabour && editable
         let row = HStack(spacing: 10) {
-            Text(managerTimeSlotDisplayText(for: booking))
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.pinRoseFg)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .background(ProjectWorksRevampColors.pinRoseBg)
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-            HStack(spacing: 6) {
+            HStack(spacing: 10) {
                 Text(PlannerUIInitials.from(name))
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.caption2.weight(.bold))
                     .foregroundStyle(Color.white)
-                    .frame(width: 22, height: 22)
-                    .background(
-                        LinearGradient(
-                            colors: [ProjectWorksRevampColors.pinRoseFg, Color(red: 0.761, green: 0.345, blue: 0.471)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .clipShape(Circle())
+                    .frame(width: 30, height: 30)
+                    .background(PPFamily.people.gradient, in: Circle())
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.body)
+                        .foregroundStyle(.primary)
                     Text(booking.scheduleLabel(policy: payrollTimePolicy))
-                        .font(.system(size: 10))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
+            Text(managerTimeSlotDisplayText(for: booking))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(PPColor.brand)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(Capsule().fill(PPColor.brand.opacity(0.1)))
             if canEditRow {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
 
         if canEditRow {
@@ -1145,10 +1025,12 @@ struct DailyOverviewView: View {
                         .toolbar {
                             ToolbarItem(placement: .navigationBarTrailing) {
                                 Button("Done") { dismiss() }
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(.white)
                                     .accessibilityIdentifier("dailyOverview.done")
                             }
                         }
-                        .appChromeNavigationBarSurface()
+                        .ppNavyNavigationBar()
                 }
             }
         }
@@ -1196,15 +1078,16 @@ struct DailyOverviewView: View {
     }
     
     private var noBookingsView: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
+            PPIconTile(symbol: "calendar", family: .system, size: PPMetrics.quickActionIcon)
             Text("No bookings")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .font(.headline)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        .padding(.vertical, 36)
         .padding(.horizontal, 20)
-        .appChromeCardContainer()
+        .ppDailyOverviewCard()
     }
     
     @ViewBuilder
@@ -1874,13 +1757,9 @@ private struct ProjectDayPersonRow: Identifiable {
     let subcontractorBooking: SubcontractorBooking?
 }
 
-
-
-
-
-
-
-
-
-
-
+private extension View {
+    /// White (dark: raised grey) rounded card on the Daily overview's light sheet.
+    func ppDailyOverviewCard() -> some View {
+        background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+    }
+}

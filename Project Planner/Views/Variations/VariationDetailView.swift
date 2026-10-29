@@ -32,73 +32,117 @@ struct VariationDetailView: View {
         Group {
             if let variation {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 0) {
                         header(variation)
-                        statusControl(variation)
-                        Text(variation.status.definition)
-                            .font(.footnote)
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
 
-                        sectionTitle("Labour · \(formatHours(variation.totalLabourHours)) hrs")
-                        if variation.labour.isEmpty {
-                            Text("No labour logged").foregroundStyle(ProjectWorksRevampColors.muted)
-                        } else {
-                            ForEach(variation.labour) { row in
-                                HStack {
-                                    Text(row.trade)
-                                    Spacer()
-                                    Text(formatHours(row.hours) + " hrs")
-                                }
-                                .font(.subheadline)
-                            }
-                        }
-
-                        sectionTitle("Materials")
-                        if variation.materials.isEmpty {
-                            Text("No materials").foregroundStyle(ProjectWorksRevampColors.muted)
-                        } else {
-                            ForEach(variation.materials) { row in
-                                HStack {
-                                    Text(row.name)
-                                    Spacer()
-                                    Text(row.quantity).foregroundStyle(ProjectWorksRevampColors.muted)
-                                }
-                                .font(.subheadline)
-                            }
-                        }
-
-                        sectionTitle("Evidence")
-                        if variation.evidence.isEmpty {
-                            Text("Please upload any supporting evidence here")
-                                .foregroundStyle(.red)
-                        } else {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 8)], spacing: 8) {
-                                ForEach(variation.evidence) { item in
-                                    evidenceThumb(item)
-                                }
-                            }
-                        }
-
-                        sectionTitle("History")
-                        ForEach(historyLines(variation), id: \.self) { line in
-                            Text(line)
+                        VStack(alignment: .leading, spacing: 0) {
+                            statusControl(variation)
+                                .padding(16)
+                                .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                                .padding(.top, 16)
+                            Text(variation.status.definition)
                                 .font(.footnote)
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 4)
+                                .padding(.top, 10)
+
+                            sectionTitle("Labour · \(formatHours(variation.totalLabourHours)) hrs")
+                            PPGroupedCard {
+                                if variation.labour.isEmpty {
+                                    Text("No labour logged")
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 14)
+                                } else {
+                                    ForEach(variation.labour) { row in
+                                        HStack(spacing: 13) {
+                                            PPIconTile(symbol: "person.fill", family: .people)
+                                            Text(row.trade)
+                                                .foregroundStyle(.primary)
+                                            Spacer()
+                                            Text(formatHours(row.hours) + " hrs")
+                                                .monospacedDigit()
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .font(.subheadline)
+                                        .padding(.horizontal, 14)
+                                        .frame(minHeight: 50)
+                                    }
+                                }
+                            }
+
+                            sectionTitle("Materials")
+                            PPGroupedCard {
+                                if variation.materials.isEmpty {
+                                    Text("No materials")
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 14)
+                                } else {
+                                    ForEach(variation.materials) { row in
+                                        HStack(spacing: 13) {
+                                            PPIconTile(symbol: "shippingbox.fill", family: .trade)
+                                            Text(row.name)
+                                                .foregroundStyle(.primary)
+                                            Spacer()
+                                            Text(row.quantity).foregroundStyle(.secondary)
+                                        }
+                                        .font(.subheadline)
+                                        .padding(.horizontal, 14)
+                                        .frame(minHeight: 50)
+                                    }
+                                }
+                            }
+
+                            sectionTitle("Evidence")
+                            if variation.evidence.isEmpty {
+                                Text("Please upload any supporting evidence here")
+                                    .font(.subheadline)
+                                    .foregroundStyle(PPColor.danger)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(16)
+                                    .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                            } else {
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 8)], spacing: 8) {
+                                    ForEach(variation.evidence) { item in
+                                        evidenceThumb(item)
+                                    }
+                                }
+                            }
+
+                            sectionTitle("History")
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(historyLines(variation), id: \.self) { line in
+                                    Text(line)
+                                        .font(.footnote)
+                                        .foregroundStyle(.primary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                            .padding(16)
+                            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                         }
+                        .padding(.bottom, 28)
+                        .ppContentSheet()
                     }
-                    .padding(16)
                 }
-                .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+                .background(PPColor.page.ignoresSafeArea())
             } else {
                 ContentUnavailableView("Variation not found", systemImage: "questionmark.folder")
             }
         }
         .navigationTitle(variation?.voNumber ?? "Variation")
+        .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .fileReportSheet($reportTarget)
         .toolbar {
             if canEdit, variation != nil {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Edit") { showingEditor = true }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("variationDetail.edit")
                 }
             }
@@ -136,40 +180,62 @@ struct VariationDetailView: View {
         }
     }
 
+    /// Navy header: VO number, origin and status pills, heading, description, and the variation's own totals.
     private func header(_ variation: Variation) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(variation.voNumber)
-                    .font(.caption.weight(.bold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.white.opacity(0.25))
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                PPOnNavyPill(text: variation.voNumber)
                 if variation.origin == .tracker {
-                    Text("From tracker")
-                        .font(.caption2.weight(.semibold))
+                    PPOnNavyPill(text: "From tracker", symbol: "list.bullet.rectangle")
                 }
                 Spacer()
-                Text(variation.status.title)
-                    .font(.caption.weight(.semibold))
+                HStack(spacing: 5) {
+                    Circle().fill(headerColor(variation.status)).frame(width: 7, height: 7)
+                    Text(variation.status.title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .background(Capsule().fill(headerColor(variation.status).opacity(0.28)))
+                .overlay(Capsule().strokeBorder(headerColor(variation.status).opacity(0.6), lineWidth: 0.5))
             }
             Text(variation.heading)
-                .font(.title3.weight(.bold))
+                .font(.system(.title2, design: .rounded))
+                .fontWeight(.bold)
+                .foregroundStyle(.white)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 14)
             Text(variation.description)
                 .font(.subheadline)
+                .foregroundStyle(PPColor.onNavySecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 6)
+
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: formatHours(variation.totalLabourHours), label: "Hours")
+                PPStatDivider()
+                PPStat(value: "\(variation.materialLineCount)", label: "Materials")
+                PPStatDivider()
+                PPStat(value: "\(variation.evidenceCount)", label: "Evidence", highlight: variation.evidenceCount == 0)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 18)
         }
-        .foregroundStyle(.white)
-        .padding(16)
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(headerColor(variation.status))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .ppNavyHeader()
     }
 
     private func statusControl(_ variation: Variation) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Status")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+            Text("Status".uppercased())
+                .font(.footnote.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 ForEach(VariationStatus.allCases, id: \.self) { status in
                     Button {
@@ -184,11 +250,11 @@ struct VariationDetailView: View {
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
-                            .foregroundStyle(variation.status == status ? .white : ProjectWorksRevampColors.ink)
-                            .background(variation.status == status ? headerColor(status) : ProjectWorksRevampColors.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .foregroundStyle(variation.status == status ? Color.white : Color.primary)
+                            .background(variation.status == status ? headerColor(status) : PPColor.well)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
                                     .stroke(headerColor(status).opacity(variation.status == status ? 0 : 0.45), lineWidth: 1)
                             )
                     }
@@ -202,7 +268,7 @@ struct VariationDetailView: View {
                  ? "An admin, or a manager assigned to this job, can mark it submitted or closed."
                  : "Only an admin, or a manager assigned to this job, can change the status.")
                 .font(.caption)
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -240,17 +306,16 @@ struct VariationDetailView: View {
         Button {
             if let url = URL(string: item.downloadURL) { fullscreenURL = url }
         } label: {
-            VStack {
-                Image(systemName: item.contentType.contains("pdf") ? "doc.fill" : "photo")
-                    .font(.title2)
+            VStack(spacing: 6) {
+                PPIconTile(symbol: item.contentType.contains("pdf") ? "doc.fill" : "photo", family: .plan, size: 36)
                 Text(item.fileName)
                     .font(.caption2)
+                    .foregroundStyle(.primary)
                     .lineLimit(2)
             }
             .frame(maxWidth: .infinity, minHeight: 80)
             .padding(8)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .accessibilityIdentifier("variationDetail.pdf")
         .buttonStyle(.plain)
@@ -292,9 +357,7 @@ struct VariationDetailView: View {
     }
 
     private func sectionTitle(_ text: String) -> some View {
-        Text(text)
-            .font(.headline)
-            .padding(.top, 4)
+        PPSectionHeader(text)
     }
 
     private func formatHours(_ value: Double) -> String {

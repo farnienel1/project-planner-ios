@@ -46,31 +46,37 @@ struct InvoicingView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
-                        timesheetsDisabledMessageCard
-                    } else if !userStore.canAccessTimesheetsSurface() {
-                        ContentUnavailableView(
-                            "Timesheets unavailable",
-                            systemImage: "lock.fill",
-                            description: Text("No timesheet section is available for this account.")
-                        )
-                    } else {
-                        paymentSummaryCard
-                        if canShowOperativeTimesheets {
-                            managerLandingCards
-                        } else if canShowMyTimesheets {
-                            operativeLandingCard
-                        } else if showTimesheetsDisabledMessage {
+                VStack(alignment: .leading, spacing: 0) {
+                    hubNavyHeader
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
                             timesheetsDisabledMessageCard
+                        } else if !userStore.canAccessTimesheetsSurface() {
+                            ContentUnavailableView(
+                                "Timesheets unavailable",
+                                systemImage: "lock.fill",
+                                description: Text("No timesheet section is available for this account.")
+                            )
+                        } else {
+                            if canShowOperativeTimesheets {
+                                managerLandingCards
+                            } else if canShowMyTimesheets {
+                                operativeLandingCard
+                            } else if showTimesheetsDisabledMessage {
+                                timesheetsDisabledMessageCard
+                            }
                         }
                     }
+                    .padding(.top, 20)
+                    .padding(.bottom, 28)
+                    .ppContentSheet()
                 }
-                .padding(16)
             }
-            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Timesheets")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .navigationDestination(isPresented: $pushMyTimesheets) {
                 MyTimesheetsHubView(settings: settings)
                     .environmentObject(firebaseBackend)
@@ -129,96 +135,100 @@ struct InvoicingView: View {
         _initialSurface = initialSurface
     }
 
+    /// Home-style navy header. Shows the current payment run when the timesheet surface is available,
+    /// following the same branches as the sheet below it.
+    private var hubNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
+                PPNavyPageTitle(title: "Timesheets")
+            } else if !userStore.canAccessTimesheetsSurface() {
+                PPNavyPageTitle(title: "Timesheets")
+            } else {
+                paymentSummaryCard
+            }
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
+    private var paymentRunTitle: String {
+        if settings.paymentRunMode == .dateRanges, let first = settings.normalizedRanges.first {
+            return "Day \(first.startDay) - Day \(first.endDay)"
+        }
+        return settings.recurringRunDisplaySummary
+    }
+
+    private var paymentDateLine: String {
+        if settings.paymentDateMode == .specificDates {
+            return "Paid on day \(settings.normalizedPaymentDates.map(String.init).joined(separator: " & "))"
+        }
+        return "Paid every \(settings.recurringPaymentDay.title)"
+    }
+
     private var paymentSummaryCard: some View {
         let note = settings.normalizedUserNote
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 0) {
             Text("CURRENT PAYMENT RUN")
-                .font(.caption.weight(.heavy))
-                .tracking(1.2)
-                .foregroundStyle(Color.white.opacity(0.85))
+                .font(.caption2.weight(.semibold))
+                .tracking(1.1)
+                .foregroundStyle(PPColor.onNavySecondary)
 
-            if settings.paymentRunMode == .dateRanges, let first = settings.normalizedRanges.first {
-                Text("Day \(first.startDay) - Day \(first.endDay)")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white)
-            } else {
-                Text(settings.recurringRunDisplaySummary)
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white)
-            }
+            Text(paymentRunTitle)
+                .font(.system(.title, design: .rounded))
+                .fontWeight(.bold)
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+                .padding(.top, 2)
 
-            if settings.paymentDateMode == .specificDates {
-                Text("Paid on day \(settings.normalizedPaymentDates.map(String.init).joined(separator: " & "))")
-                    .font(.subheadline)
-                    .foregroundStyle(Color.white.opacity(0.82))
-            } else {
-                Text("Paid every \(settings.recurringPaymentDay.title)")
-                    .font(.subheadline)
-                    .foregroundStyle(Color.white.opacity(0.82))
-            }
+            PPOnNavyPill(text: paymentDateLine, symbol: "banknote")
+                .padding(.top, 12)
 
             if !note.isEmpty {
-                Divider().overlay(Color.white.opacity(0.28))
-                Text(note)
-                    .font(.footnote)
-                    .foregroundStyle(Color.white.opacity(0.9))
-                    .lineLimit(3)
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "text.quote")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(PPColor.onNavySecondary)
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(PPColor.onNavyFill)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
+                )
+                .padding(.top, 16)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(
-            LinearGradient(
-                colors: [Color(red: 0.184, green: 0.435, blue: 0.839), Color(red: 0.114, green: 0.306, blue: 0.847)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     @ViewBuilder
     private func timesheetEntryCard(title: String, detail: String, symbol: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.blue)
-                .frame(width: 34, height: 34)
-                .background(Color.blue.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Text(detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+        PPGroupedCard {
+            PPMenuRowLabel(title: title, symbol: symbol, family: .plan, subtitle: detail)
+                .padding(.vertical, 4)
         }
-        .padding(14)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(.separator), lineWidth: 0.5)
-        )
     }
 
     private var timesheetsDisabledMessageCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                Image(systemName: "clock.badge.xmark")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.orange)
-                    .frame(width: 40, height: 40)
-                    .background(Color.orange.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                PPIconTile(symbol: "clock.badge.xmark", family: .trade, size: 38)
                 Text("Timesheets follow employment type")
                     .font(.headline)
+                    .foregroundStyle(.primary)
             }
             Text("My Timesheets is for self-employed pay. PAYE accounts keep the current pay run until it is paid, then schedule hours no longer fill the next timesheet. Switch the person back to self-employed if they need timesheets again.")
                 .font(.subheadline)
@@ -227,12 +237,7 @@ struct InvoicingView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color(.separator), lineWidth: 0.5)
-        )
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     @ViewBuilder
@@ -254,7 +259,7 @@ struct InvoicingView: View {
             )
         }
         .accessibilityIdentifier("invoicing.myTimesheets")
-        .buttonStyle(.plain)
+        .buttonStyle(PPPressableButtonStyle())
     }
 
     @ViewBuilder
@@ -314,10 +319,31 @@ struct InvoicingView: View {
             TimesheetApprovalPolicy.isExported(TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start))
         }.count
 
-        VStack(spacing: 12) {
-            if canShowMyTimesheets {
+        VStack(alignment: .leading, spacing: 14) {
+            PPGroupedCard {
+                if canShowMyTimesheets {
+                    NavigationLink {
+                        MyTimesheetsHubView(settings: settings)
+                            .environmentObject(firebaseBackend)
+                            .environmentObject(userStore)
+                            .environmentObject(bookingStore)
+                            .environmentObject(operativeStore)
+                            .environmentObject(projectStore)
+                            .environmentObject(managerScheduleStore)
+                            .environmentObject(notificationService)
+                    } label: {
+                        managerTile(title: "My Timesheets", subtitle: "Your own hours, expenses and price work", symbol: "clock.fill", badge: nil)
+                    }
+                    .accessibilityIdentifier("invoicing.myTimesheets2")
+                    .buttonStyle(PPMenuRowButtonStyle())
+                    PPRowDivider()
+                }
                 NavigationLink {
-                    MyTimesheetsHubView(settings: settings)
+                    OperativeTimesheetsView(
+                        settings: settings,
+                        week: pendingReviewWeek,
+                        initialReviewUserId: pendingReviewUserId
+                    )
                         .environmentObject(firebaseBackend)
                         .environmentObject(userStore)
                         .environmentObject(bookingStore)
@@ -326,97 +352,92 @@ struct InvoicingView: View {
                         .environmentObject(managerScheduleStore)
                         .environmentObject(notificationService)
                 } label: {
-                    managerTile(title: "My Timesheets", subtitle: "Your own hours, expenses and price work", symbol: "clock.fill", badge: nil)
+                    managerTile(
+                        title: isAdminViewer ? "User Timesheets" : "Operative Timesheets",
+                        subtitle: isAdminViewer
+                            ? "Review, sign off and export company timesheets"
+                            : "Review, sign off and export your team's sheets",
+                        symbol: "person.3.fill",
+                        badge: awaiting > 0 ? "\(awaiting) new" : nil,
+                        family: .people
+                    )
                 }
-                .accessibilityIdentifier("invoicing.myTimesheets2")
-                .buttonStyle(.plain)
+                .accessibilityIdentifier("invoicing.userTimesheets")
+                .buttonStyle(PPMenuRowButtonStyle())
             }
-            NavigationLink {
-                OperativeTimesheetsView(
-                    settings: settings,
-                    week: pendingReviewWeek,
-                    initialReviewUserId: pendingReviewUserId
-                )
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(userStore)
-                    .environmentObject(bookingStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(projectStore)
-                    .environmentObject(managerScheduleStore)
-                    .environmentObject(notificationService)
-            } label: {
-                managerTile(
-                    title: isAdminViewer ? "User Timesheets" : "Operative Timesheets",
-                    subtitle: isAdminViewer
-                        ? "Review, sign off and export company timesheets"
-                        : "Review, sign off and export your team's sheets",
-                    symbol: "person.3.fill",
-                    badge: awaiting > 0 ? "\(awaiting) new" : nil
-                )
-            }
-            .accessibilityIdentifier("invoicing.userTimesheets")
-            .buttonStyle(.plain)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
 
-            HStack(spacing: 10) {
-                statMiniCard(value: "\(awaiting)", label: "Awaiting sign-off", color: .orange)
-                statMiniCard(value: "\(signed)", label: "Signed off", color: .green)
+            HStack(alignment: .top, spacing: 0) {
+                statMiniCard(value: "\(awaiting)", label: "Awaiting sign-off", color: PPFamily.trade.bottom)
+                Rectangle()
+                    .fill(Color(.separator))
+                    .frame(width: 0.5)
+                    .padding(.vertical, 12)
+                    .accessibilityHidden(true)
+                statMiniCard(value: "\(signed)", label: "Signed off", color: PPFamily.sites.bottom)
+                Rectangle()
+                    .fill(Color(.separator))
+                    .frame(width: 0.5)
+                    .padding(.vertical, 12)
+                    .accessibilityHidden(true)
                 statMiniCard(value: "\(exported)", label: "Exported", color: .secondary)
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
     }
 
     @ViewBuilder
-    private func managerTile(title: String, subtitle: String, symbol: String, badge: String?) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.blue)
-                .frame(width: 48, height: 48)
-                .background(Color.blue.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            VStack(alignment: .leading, spacing: 4) {
+    private func managerTile(title: String, subtitle: String, symbol: String, badge: String?, family: PPFamily = .plan) -> some View {
+        HStack(spacing: 13) {
+            PPIconTile(symbol: symbol, family: family, size: PPMetrics.menuIcon)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.title3.weight(.bold))
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
                 Text(subtitle)
-                    .font(.subheadline)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
+            Spacer(minLength: 8)
             if let badge {
                 Text(badge)
                     .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(Color.blue)
+                    .background(PPColor.brand, in: Capsule())
                     .foregroundStyle(.white)
-                    .clipShape(Capsule())
             }
             Image(systemName: "chevron.right")
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
         }
-        .padding(16)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.04), radius: 6, y: 1)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(minHeight: 64)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
     private func statMiniCard(value: String, label: String, color: Color) -> some View {
-        VStack(spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(value)
-                .font(.title2.weight(.bold))
+                .font(.system(.title, design: .rounded))
+                .fontWeight(.bold)
+                .monospacedDigit()
                 .foregroundStyle(color)
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
                 .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity)
-        .padding(10)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     private var usersForManagerTimesheetScope: [AppUser] {
@@ -1296,97 +1317,102 @@ private struct MyTimesheetsHubView: View {
     }
 
     var body: some View {
+        let pending = pendingWeeks
         ScrollView {
-            VStack(spacing: 12) {
-                hubCard(
-                    title: "Current pay run period",
-                    subtitle: currentWeek.title,
-                    detail: "Review bookings, add extras, and sign your timesheet.",
-                    symbol: "calendar",
-                    tint: .blue
-                ) {
-                    MyTimesheetView(settings: settings, week: currentWeek)
-                        .environmentObject(firebaseBackend)
-                        .environmentObject(userStore)
-                        .environmentObject(bookingStore)
-                        .environmentObject(operativeStore)
-                        .environmentObject(projectStore)
-                        .environmentObject(managerScheduleStore)
-                        .environmentObject(notificationService)
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                myTimesheetsNavyHeader(pendingCount: pending.count)
 
-                if !pendingWeeks.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Pending timesheets")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
-                            .padding(.horizontal, 4)
-                        ForEach(pendingWeeks, id: \.start) { week in
-                            hubCard(
-                                title: week.title,
-                                subtitle: "Timesheet pending manager signature",
-                                detail: "You signed — waiting for your line manager to counter-sign.",
-                                symbol: "clock.fill",
-                                tint: .orange
-                            ) {
-                                MyTimesheetView(settings: settings, week: week)
-                                    .environmentObject(firebaseBackend)
-                                    .environmentObject(userStore)
-                                    .environmentObject(bookingStore)
-                                    .environmentObject(operativeStore)
-                                    .environmentObject(projectStore)
-                                    .environmentObject(managerScheduleStore)
-                                    .environmentObject(notificationService)
+                VStack(alignment: .leading, spacing: 0) {
+                    hubCard(
+                        title: "Current pay run period",
+                        subtitle: currentWeek.title,
+                        detail: "Review bookings, add extras, and sign your timesheet.",
+                        symbol: "calendar",
+                        tint: PPColor.brand,
+                        family: .plan
+                    ) {
+                        MyTimesheetView(settings: settings, week: currentWeek)
+                            .environmentObject(firebaseBackend)
+                            .environmentObject(userStore)
+                            .environmentObject(bookingStore)
+                            .environmentObject(operativeStore)
+                            .environmentObject(projectStore)
+                            .environmentObject(managerScheduleStore)
+                            .environmentObject(notificationService)
+                    }
+                    .padding(.top, 20)
+
+                    if !pending.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            PPGroupLabel(text: "Pending timesheets")
+                                .padding(.bottom, -10)
+                            ForEach(pending, id: \.start) { week in
+                                hubCard(
+                                    title: week.title,
+                                    subtitle: "Timesheet pending manager signature",
+                                    detail: "You signed — waiting for your line manager to counter-sign.",
+                                    symbol: "clock.fill",
+                                    tint: PPFamily.trade.bottom,
+                                    family: .trade
+                                ) {
+                                    MyTimesheetView(settings: settings, week: week)
+                                        .environmentObject(firebaseBackend)
+                                        .environmentObject(userStore)
+                                        .environmentObject(bookingStore)
+                                        .environmentObject(operativeStore)
+                                        .environmentObject(projectStore)
+                                        .environmentObject(managerScheduleStore)
+                                        .environmentObject(notificationService)
+                                }
+                            }
+                        }
+                    }
+
+                    if isLoadingPastWeeks && pastWeeks.isEmpty {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Loading past pay runs…")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                    }
+
+                    if !pastWeeks.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            PPGroupLabel(text: "Past timesheets")
+                                .padding(.bottom, -10)
+                            ForEach(pastWeeks, id: \.self) { week in
+                                hubCard(
+                                    title: week.title,
+                                    subtitle: pastSubtitle(for: week),
+                                    detail: "View breakdown, signatures, and generate invoice again.",
+                                    symbol: "clock.arrow.circlepath",
+                                    tint: .secondary,
+                                    family: .system
+                                ) {
+                                    MyTimesheetView(settings: settings, week: week)
+                                        .environmentObject(firebaseBackend)
+                                        .environmentObject(userStore)
+                                        .environmentObject(bookingStore)
+                                        .environmentObject(operativeStore)
+                                        .environmentObject(projectStore)
+                                        .environmentObject(managerScheduleStore)
+                                        .environmentObject(notificationService)
+                                }
                             }
                         }
                     }
                 }
-
-                if isLoadingPastWeeks && pastWeeks.isEmpty {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text("Loading past pay runs…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                }
-
-                if !pastWeeks.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Past timesheets")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
-                            .padding(.horizontal, 4)
-                        ForEach(pastWeeks, id: \.self) { week in
-                            hubCard(
-                                title: week.title,
-                                subtitle: pastSubtitle(for: week),
-                                detail: "View breakdown, signatures, and generate invoice again.",
-                                symbol: "clock.arrow.circlepath",
-                                tint: .secondary
-                            ) {
-                                MyTimesheetView(settings: settings, week: week)
-                                    .environmentObject(firebaseBackend)
-                                    .environmentObject(userStore)
-                                    .environmentObject(bookingStore)
-                                    .environmentObject(operativeStore)
-                                    .environmentObject(projectStore)
-                                    .environmentObject(managerScheduleStore)
-                                    .environmentObject(notificationService)
-                            }
-                        }
-                    }
-                }
+                .padding(.bottom, 28)
+                .ppContentSheet()
             }
-            .padding(16)
         }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("My Timesheets")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .onAppear {
             if let userId = userStore.displayUser?.id {
                 refreshPastWeeksFromLocalCache(userId: userId)
@@ -1409,6 +1435,26 @@ private struct MyTimesheetsHubView: View {
         return "Saved draft"
     }
 
+    /// Home-style navy header: the current pay run and counts the hub already lists.
+    private func myTimesheetsNavyHeader(pendingCount: Int) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PPNavyPageTitle(eyebrow: "Current pay run period", title: currentWeek.title)
+
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(pendingCount)", label: "Pending manager signature", highlight: pendingCount > 0)
+                PPStatDivider()
+                PPStat(value: "\(pastWeeks.count)", label: "Past timesheets")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 18)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
     @ViewBuilder
     private func hubCard<Destination: View>(
         title: String,
@@ -1416,42 +1462,38 @@ private struct MyTimesheetsHubView: View {
         detail: String,
         symbol: String,
         tint: Color,
+        family: PPFamily,
         @ViewBuilder destination: () -> Destination
     ) -> some View {
         NavigationLink {
             destination()
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(tint)
-                    .frame(width: 44, height: 44)
-                    .background(tint.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 13) {
+                PPIconTile(symbol: symbol, family: family, size: 38)
+                VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.headline)
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text(subtitle)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.footnote.weight(.semibold))
                         .foregroundStyle(tint)
                     Text(detail)
-                        .font(.caption)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer()
+                Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .background(Color(.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
         .accessibilityIdentifier("timesheets.chevronRight")
-        .buttonStyle(.plain)
+        .buttonStyle(PPPressableButtonStyle())
     }
 }
 
@@ -2862,6 +2904,9 @@ private struct OperativeTimesheetsView: View {
 
     var body: some View {
         ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                userTimesheetsNavyHeader
+
             VStack(alignment: .leading, spacing: 12) {
                 Picker("Status", selection: $selectedTab) {
                     Text("Awaiting sign-off").tag(ManagerTimesheetListTab.awaiting)
@@ -2914,14 +2959,7 @@ private struct OperativeTimesheetsView: View {
                                         .environmentObject(notificationService)
                                 } label: {
                                     HStack(spacing: 12) {
-                                        Circle()
-                                            .fill(Color.blue.opacity(0.85))
-                                            .frame(width: 38, height: 38)
-                                            .overlay(
-                                                Text(initials(for: row.user))
-                                                    .font(.caption.weight(.bold))
-                                                    .foregroundStyle(.white)
-                                            )
+                                        initialsAvatar(for: row.user)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
                                                 .font(.subheadline.weight(.semibold))
@@ -2939,15 +2977,16 @@ private struct OperativeTimesheetsView: View {
                                         statusPill(for: row.draft, user: row.user)
                                         Image(systemName: "chevron.right")
                                             .font(.footnote.weight(.semibold))
-                                            .foregroundStyle(.secondary)
+                                            .foregroundStyle(.tertiary)
                                     }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 11)
+                                    .contentShape(Rectangle())
                                 }
                                 .accessibilityIdentifier("timesheets.row.\(row.id).exported")
-                                .buttonStyle(.plain)
+                                .buttonStyle(PPMenuRowButtonStyle())
                                 if row.id != filteredExportedHistory.last?.id {
-                                    Divider().padding(.leading, 60)
+                                    Divider().padding(.leading, 66)
                                 }
                             }
                         }
@@ -2972,14 +3011,7 @@ private struct OperativeTimesheetsView: View {
                                 .environmentObject(notificationService)
                         } label: {
                             HStack(spacing: 12) {
-                                Circle()
-                                    .fill(Color.blue.opacity(0.85))
-                                    .frame(width: 38, height: 38)
-                                    .overlay(
-                                        Text(initials(for: row.user))
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(.white)
-                                    )
+                                initialsAvatar(for: row.user)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
                                         .font(.subheadline.weight(.semibold))
@@ -3002,15 +3034,16 @@ private struct OperativeTimesheetsView: View {
                                 )
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.tertiary)
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .contentShape(Rectangle())
                         }
                         .accessibilityIdentifier("timesheets.row.\(row.id).hrsOTPWExp")
-                        .buttonStyle(.plain)
+                        .buttonStyle(PPMenuRowButtonStyle())
                         if row.id != awaitingRows.last?.id {
-                            Divider().padding(.leading, 60)
+                            Divider().padding(.leading, 66)
                         }
                     }
                     }
@@ -3027,14 +3060,7 @@ private struct OperativeTimesheetsView: View {
                                 .environmentObject(notificationService)
                         } label: {
                             HStack(spacing: 12) {
-                                Circle()
-                                    .fill(Color.blue.opacity(0.85))
-                                    .frame(width: 38, height: 38)
-                                    .overlay(
-                                        Text(initials(for: operative))
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(.white)
-                                    )
+                                initialsAvatar(for: operative)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(operative.fullName.isEmpty ? operative.email : operative.fullName)
                                         .font(.subheadline.weight(.semibold))
@@ -3057,30 +3083,29 @@ private struct OperativeTimesheetsView: View {
                                 )
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.tertiary)
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .contentShape(Rectangle())
                         }
                         .accessibilityIdentifier("timesheets.row.\(operative.id).hrsOTPWExp")
-                        .buttonStyle(.plain)
+                        .buttonStyle(PPMenuRowButtonStyle())
                         if operative.id != filteredReports.last?.id {
-                            Divider().padding(.leading, 60)
+                            Divider().padding(.leading, 66)
                         }
                     }
                     }
                 }
-                .padding(8)
-                .background(Color(.systemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
 
                 if selectedTab == .signedOff && !filteredReports.isEmpty {
                     // Admins only: managers cannot see other people's tax identifiers.
                     if userStore.canViewSensitiveProfile(of: "") {
                         SensitiveExportToggle(isOn: $includeTaxIdsInExport, accessibilityToken: "signedTimesheetsExport")
                             .padding(14)
-                            .background(Color(.systemBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                     }
                     Button {
                         Task { await exportSignedTimesheets() }
@@ -3089,22 +3114,26 @@ private struct OperativeTimesheetsView: View {
                             isExporting ? "Sending timesheets…" : "Email and export \(filteredReports.count) timesheets",
                             systemImage: "envelope.fill"
                         )
+                            .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
+                            .padding(.vertical, 15)
                             .foregroundStyle(.white)
-                            .background(Color.blue)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(PPColor.brand, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                     .accessibilityIdentifier("timesheets.sendingTimesheets")
-                    .buttonStyle(.plain)
+                    .buttonStyle(PPPressableButtonStyle())
                     .disabled(isExporting)
                 }
             }
-            .padding(16)
+            .padding(.top, 20)
+            .padding(.bottom, 28)
+            .ppContentSheet()
+            }
         }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("User Timesheets")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .navigationDestination(item: $autoOpenReview) { target in
             if let operative = userStore.organizationUsers.first(where: { $0.id == target.userId }) {
                 let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: operative.id, weekStart: target.weekStart)
@@ -3220,45 +3249,71 @@ private struct OperativeTimesheetsView: View {
             }
             .accessibilityIdentifier("timesheets.exportedRun")
         }
-        .padding(12)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(14)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+
+    /// Home-style navy header: the pay period this list opens on and counts the screen already holds.
+    private var userTimesheetsNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PPNavyPageTitle(eyebrow: "Pay period", title: week.title)
+
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(directReports.count)", label: "People")
+                PPStatDivider()
+                PPStat(value: "\(awaitingRows.count)", label: "Awaiting sign-off", highlight: !awaitingRows.isEmpty)
+                PPStatDivider()
+                PPStat(value: "\(exportedHistory.count)", label: "Exported, all runs")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 18)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
+    /// Gradient initials avatar for a person row.
+    private func initialsAvatar(for user: AppUser) -> some View {
+        Text(initials(for: user))
+            .font(.system(.footnote, design: .rounded))
+            .fontWeight(.bold)
+            .foregroundStyle(.white)
+            .frame(width: 40, height: 40)
+            .background(PPFamily.people.gradient, in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
+            .accessibilityHidden(true)
+    }
+
+    private func statusPillLabel(_ text: String, symbol: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.caption2.weight(.bold))
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 24)
+        .foregroundStyle(color)
+        .background(Capsule().fill(color.opacity(0.14)))
     }
 
     @ViewBuilder
     private func statusPill(for draft: TimesheetDraft, user: AppUser) -> some View {
         if TimesheetApprovalPolicy.isExported(draft) {
-            Label("Exported", systemImage: "tray.and.arrow.up.fill")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.14))
-                .foregroundStyle(.secondary)
-                .clipShape(Capsule())
+            statusPillLabel("Exported", symbol: "tray.and.arrow.up.fill", color: .secondary)
         } else if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) {
-            Label("Signed off", systemImage: "checkmark.circle.fill")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.green.opacity(0.14))
-                .foregroundStyle(.green)
-                .clipShape(Capsule())
+            statusPillLabel("Signed off", symbol: "checkmark.circle.fill", color: PPFamily.sites.bottom)
         } else if TimesheetApprovalPolicy.operativeHasSigned(draft) {
-            Label("Pending", systemImage: "clock.fill")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.orange.opacity(0.14))
-                .foregroundStyle(.orange)
-                .clipShape(Capsule())
+            statusPillLabel("Pending", symbol: "clock.fill", color: PPFamily.trade.bottom)
         } else {
-            Label("Not signed", systemImage: "circle")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.12))
-                .foregroundStyle(.secondary)
-                .clipShape(Capsule())
+            statusPillLabel("Not signed", symbol: "circle", color: .secondary)
         }
     }
 

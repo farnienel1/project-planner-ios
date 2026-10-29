@@ -134,19 +134,30 @@ struct SelectOperativesView: View {
                             acknowledgedIds: acknowledgedConflictIds,
                             struckIds: struckConflictIds
                         )
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            PPColor.card,
+                            in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous)
+                        )
                         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Select people")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: { dismiss() }) {
                         Image(systemName: "chevron.left")
-                            .foregroundStyle(Color.theme.primary)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.white)
                     }
                         .accessibilityIdentifier("selectOperatives.back")
                 }
@@ -154,7 +165,7 @@ struct SelectOperativesView: View {
                     Button("Save") { dismiss() }
                         .accessibilityIdentifier("selectOperatives.save")
                         .fontWeight(.semibold)
-                        .foregroundStyle(canSave ? Color.theme.primary : Color.secondary)
+                        .foregroundStyle(canSave ? Color.white : PPColor.onNavySecondary)
                         .disabled(!canSave)
                 }
             }
@@ -298,7 +309,7 @@ private struct SchedulePersonSelectionRow: View {
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color(.systemGray6))
+                            .background(PPColor.well)
                             .clipShape(Capsule())
                         if let summary, summary.triangle != .none {
                             Image(systemName: "exclamationmark.triangle.fill")
@@ -370,7 +381,7 @@ struct OperativeSearchBar: View {
             }
         }
         .padding(10)
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

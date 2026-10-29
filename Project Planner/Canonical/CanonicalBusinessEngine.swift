@@ -3113,6 +3113,30 @@ nonisolated enum CanonicalBusinessEngine {
         callJSON("isClashAccepted", arguments: [a, b, accepted]) as? Bool
     }
 
+    /// `resolvedWarningKeys`: the keys of `warningResolutions` documents that hide their warning
+    /// (status approved or dismissed, any case; `resolutionKey`, else the document `id`). Nil when the script did not run.
+    static func resolvedWarningKeys(_ records: [[String: Any]]) -> [String]? {
+        callJSON("resolvedWarningKeys", arguments: [records]) as? [String]
+    }
+
+    /// `isWarningActive`: false when the key was approved or dismissed on any device, or the clash's two
+    /// bookings are in `acceptedBookingClashes`. Nil when the script did not run.
+    static func isWarningActive(
+        resolutionKey: String,
+        bookingAId: String?,
+        bookingBId: String?,
+        resolvedKeys: [String],
+        acceptedClashes: [[String: Any]]
+    ) -> Bool? {
+        let row: [String: Any] = [
+            "resolutionKey": resolutionKey,
+            "bookingAId": bookingAId ?? "",
+            "bookingBId": bookingBId ?? ""
+        ]
+        let decisions: [String: Any] = ["resolvedKeys": resolvedKeys, "acceptedClashes": acceptedClashes]
+        return callJSON("isWarningActive", arguments: [row, decisions]) as? Bool
+    }
+
     /// `acceptedClashWriteFields`: the `acceptedBookingClashes` document to write (add `acceptedAt` as a Timestamp).
     /// Nil when the script refused it (same booking twice, no signed-in user) or did not run.
     static func acceptedClashWriteFields(bookingAId: String, bookingBId: String, acceptedByUserId: String) -> (documentId: String, fields: [String: Any])? {
