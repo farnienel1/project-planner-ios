@@ -329,7 +329,8 @@ private struct OperativeAnnualLeaveApprovedListView: View {
         let f = DateFormatter()
         f.dateStyle = .medium
         f.timeStyle = .none
-        if Calendar.current.isDate(booking.startDate, inSameDayAs: booking.endDate) {
+        f.timeZone = OrganizationRulebookContext.timeZone
+        if OrganizationRulebookContext.calendar.isDate(booking.startDate, inSameDayAs: booking.endDate) {
             return f.string(from: booking.startDate)
         }
         return "\(f.string(from: booking.startDate)) – \(f.string(from: booking.endDate))"
@@ -350,10 +351,29 @@ private struct OperativeAnnualLeaveRequestsListView: View {
         )
     }
 
+    /// D6: pending requests and cancellation asks this viewer may decide (`leaveApproverIds`; admins see all).
     private var pendingRequests: [HolidayBooking] {
-        holidayStore.bookings
-            .filter { $0.status == .pending && personFor(booking: $0) != nil }
-            .sorted { $0.startDate > $1.startDate }
+        AnnualLeaveApproval.decidableRequests(
+            holidayStore.pendingRequests.filter { personFor(booking: $0) != nil },
+            viewer: approvalViewer,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
+        .sorted { $0.startDate > $1.startDate }
+    }
+
+    private var approvalViewer: AppUser? {
+        guard let me = userStore.currentUser else { return nil }
+        return userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me
+    }
+
+    private func canDecide(_ request: HolidayBooking) -> Bool {
+        AnnualLeaveApproval.canDecide(
+            request,
+            viewer: approvalViewer,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
     }
 
     private func personFor(booking: HolidayBooking) -> AnnualLeavePerson? {
@@ -391,7 +411,7 @@ private struct OperativeAnnualLeaveRequestsListView: View {
     }
 
     private func approve(_ request: HolidayBooking) {
-        guard let uid = firebaseBackend.currentUser?.uid else { return }
+        guard let uid = firebaseBackend.currentUser?.uid, canDecide(request) else { return }
         Task {
             if request.cancellationRequestedAt != nil {
                 await holidayStore.deleteBooking(request)
@@ -432,7 +452,7 @@ private struct OperativeAnnualLeaveRequestsListView: View {
 
     private func decline(_ request: HolidayBooking) {
         if request.cancellationRequestedAt != nil { return }
-        guard let uid = firebaseBackend.currentUser?.uid else { return }
+        guard let uid = firebaseBackend.currentUser?.uid, canDecide(request) else { return }
         Task {
             await holidayStore.rejectBooking(request, rejectedByUserId: uid)
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
@@ -479,6 +499,7 @@ struct OperativeAnnualLeaveCalendarView: View {
     let person: AnnualLeavePerson
 
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject private var smartCache: SmartCacheService
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
@@ -502,7 +523,8 @@ struct OperativeAnnualLeaveCalendarView: View {
     @State private var bankHolidayCalendarTick = 0
     @State private var bookingPendingRemoval: HolidayBooking?
 
-    private let calendar = Calendar.current
+    /// Leave days are organisation business days (§1).
+    private var calendar: Calendar { OrganizationRulebookContext.calendar }
 
     private var bankHolidayRegion: BankHolidayRegion {
         BankHolidayRegionDirectory.resolvedRegion(for: firebaseBackend.currentOrganization)
@@ -751,6 +773,11 @@ struct OperativeAnnualLeaveCalendarView: View {
                     .font(.caption)
                     .foregroundStyle(HolidayChrome.muted)
             }
+            if let pending = pendingBooking(on: day), !canDecide(pending) {
+                Text("This request goes to the people who approve this person's leave.")
+                    .font(.caption)
+                    .foregroundStyle(HolidayChrome.muted)
+            } else {
             HStack(spacing: 12) {
                 Button {
                     Task { await approvePending(on: day) }
@@ -778,6 +805,9 @@ struct OperativeAnnualLeaveCalendarView: View {
                 }
                 .accessibilityIdentifier("operativeAnnualLeaveCalendar.decline")
                 .buttonStyle(.plain)
+            }
+            // RULEBOOK §2: annual leave approval is online only.
+            .onlineOnly(isOnline: smartCache.isOnline)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1048,20 +1078,19 @@ struct OperativeAnnualLeaveCalendarView: View {
         var pendingHalf: HolidayBooking?
         var approvedHalf: HolidayBooking?
         for booking in personBookings {
-            let start = calendar.startOfDay(for: booking.startDate)
-            let end = calendar.startOfDay(for: booking.endDate)
-            guard dayStart >= start && dayStart <= end else { continue }
+            // The record's leave days (`leaveRecordDayKeys`); its slot applies to every one of them (§9).
+            guard LeaveRecordDays.covers(booking, day: dayStart) else { continue }
             switch booking.status {
             case .rejected:
                 continue
             case .pending:
-                if booking.timeSlot == .fullDay || !calendar.isDate(booking.startDate, inSameDayAs: booking.endDate) {
+                if booking.timeSlot == .fullDay {
                     return .pendingFull
                 }
                 pendingHalf = booking
             case .approved:
                 if booking.cancellationRequestedAt != nil { continue }
-                if booking.timeSlot == .fullDay || !calendar.isDate(booking.startDate, inSameDayAs: booking.endDate) {
+                if booking.timeSlot == .fullDay {
                     return .approvedFull
                 }
                 approvedHalf = booking
@@ -1141,9 +1170,7 @@ struct OperativeAnnualLeaveCalendarView: View {
         let dayStart = calendar.startOfDay(for: day)
         return personBookings.first { booking in
             guard booking.status == .approved, booking.cancellationRequestedAt == nil else { return false }
-            let start = calendar.startOfDay(for: booking.startDate)
-            let end = calendar.startOfDay(for: booking.endDate)
-            return dayStart >= start && dayStart <= end
+            return LeaveRecordDays.covers(booking, day: dayStart)
         }
     }
 
@@ -1152,9 +1179,7 @@ struct OperativeAnnualLeaveCalendarView: View {
         let dayStart = calendar.startOfDay(for: day)
         return personBookings.first { booking in
             guard booking.status == .pending else { return false }
-            let start = calendar.startOfDay(for: booking.startDate)
-            let end = calendar.startOfDay(for: booking.endDate)
-            return dayStart >= start && dayStart <= end
+            return LeaveRecordDays.covers(booking, day: dayStart)
         }
     }
 
@@ -1314,19 +1339,21 @@ struct OperativeAnnualLeaveCalendarView: View {
         isSaving = true
         defer { isSaving = false }
 
+        _ = orgId
         do {
-            let booking = HolidayBooking(
-                organizationId: orgId,
+            // One document per request range (`holidayRequestRanges` → `holidayRequestWriteFields`).
+            let created = try await holidayStore.createRequests(
+                picks: [(day: day, timeSlot: bookSlot)],
                 userId: person.userId,
                 operativeId: person.operativeId,
-                startDate: day,
-                endDate: day,
                 status: .approved,
-                timeSlot: bookSlot,
-                approvedByUserId: approverId,
-                approvedAt: Date()
+                approvedByUserId: approverId
             )
-            try await holidayStore.saveBooking(booking)
+            guard let booking = created.first else {
+                errorMessage = "Annual leave could not be booked."
+                showError = true
+                return
+            }
 
             if let notifyUserId = resolvedNotificationUserId() {
                 let bookedBy = userStore.currentUser?.fullName
@@ -1397,13 +1424,8 @@ struct OperativeAnnualLeaveCalendarView: View {
                 managerName: managerName
             )
         }
-        if let selected = selectedDay {
-            let start = calendar.startOfDay(for: booking.startDate)
-            let end = calendar.startOfDay(for: booking.endDate)
-            let day = calendar.startOfDay(for: selected)
-            if day >= start && day <= end {
-                selectedDay = nil
-            }
+        if let selected = selectedDay, LeaveRecordDays.covers(booking, day: selected) {
+            selectedDay = nil
         }
         successMessage = "Annual leave deleted."
         showSuccess = true
@@ -1416,10 +1438,24 @@ struct OperativeAnnualLeaveCalendarView: View {
         await removeApprovedBooking(booking)
     }
 
+    /// D6: admins decide any request; anyone else only where `leaveApproverIds` names them. Never their own.
+    private func canDecide(_ request: HolidayBooking) -> Bool {
+        let viewer = userStore.currentUser.flatMap { me in
+            userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me
+        }
+        return AnnualLeaveApproval.canDecide(
+            request,
+            viewer: viewer,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
+    }
+
     @MainActor
     private func approvePending(on day: Date) async {
         guard let booking = pendingBooking(on: day),
-              let uid = firebaseBackend.currentUser?.uid else { return }
+              let uid = firebaseBackend.currentUser?.uid,
+              canDecide(booking) else { return }
         isSaving = true
         defer { isSaving = false }
         await holidayStore.approveBooking(booking, approvedByUserId: uid)
@@ -1442,7 +1478,8 @@ struct OperativeAnnualLeaveCalendarView: View {
     @MainActor
     private func declinePending(on day: Date) async {
         guard let booking = pendingBooking(on: day),
-              let uid = firebaseBackend.currentUser?.uid else { return }
+              let uid = firebaseBackend.currentUser?.uid,
+              canDecide(booking) else { return }
         isSaving = true
         defer { isSaving = false }
         await holidayStore.rejectBooking(booking, rejectedByUserId: uid)

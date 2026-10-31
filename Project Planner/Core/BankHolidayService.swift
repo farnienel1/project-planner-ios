@@ -44,7 +44,8 @@ struct BankHolidayDay: Hashable, Codable, Sendable, Identifiable {
         try c.encode(name, forKey: .name)
     }
 
-    static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
+    /// Organisation-zone day key (§1: one business time zone).
+    static func dayKey(for date: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> String {
         let day = calendar.startOfDay(for: date)
         let y = calendar.component(.year, from: day)
         let m = calendar.component(.month, from: day)
@@ -62,7 +63,8 @@ final class BankHolidayService: ObservableObject {
     @Published private(set) var lastErrorMessage: String?
 
     private var activeRegionId: String?
-    private let calendar = Calendar.current
+    /// Bank holidays are organisation business days: organisation zone, not the device zone.
+    private var calendar: Calendar { OrganizationRulebookContext.calendar }
     private let cacheSchemaVersion = 4
     private let cacheFileName = "bank-holiday-cache-v4.json"
     private let urlSession: URLSession = {
@@ -120,6 +122,7 @@ final class BankHolidayService: ObservableObject {
         if activeRegionId == regionId {
             activeRegionId = nil
             holidaysByDayKey = [:]
+            OrganizationBankHolidays.update([])
         }
     }
 
@@ -180,7 +183,7 @@ final class BankHolidayService: ObservableObject {
     }
 
     /// Prior year plus current and two years ahead (leave years often span calendar years).
-    static func prefetchYears(for referenceDate: Date, calendar: Calendar = .current) -> [Int] {
+    static func prefetchYears(for referenceDate: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> [Int] {
         let year = calendar.component(.year, from: referenceDate)
         return [year - 1, year, year + 1, year + 2]
     }
@@ -196,6 +199,7 @@ final class BankHolidayService: ObservableObject {
         guard let cache = readCache(regionId: regionId),
               cache.schemaVersion >= cacheSchemaVersion else {
             holidaysByDayKey = [:]
+            OrganizationBankHolidays.update([])
             return
         }
         var merged: [String: BankHolidayDay] = [:]
@@ -205,6 +209,7 @@ final class BankHolidayService: ObservableObject {
             }
         }
         holidaysByDayKey = merged
+        OrganizationBankHolidays.update(Array(merged.keys))
         objectWillChange.send()
     }
 
@@ -228,7 +233,7 @@ final class BankHolidayService: ObservableObject {
         .sorted { $0.date < $1.date }
     }
 
-    /// Parses `"yyyy-MM-dd"` as a local calendar day (avoids UTC day-shift bugs).
+    /// Parses `"yyyy-MM-dd"` as an organisation-zone calendar day (avoids UTC day-shift bugs).
     private static func parseHolidayDateString(_ string: String, calendar: Calendar) -> Date? {
         let parts = string.split(separator: "-")
         guard parts.count == 3,

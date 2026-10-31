@@ -432,21 +432,16 @@ struct TasksDetailView: View {
         }
     }
 
+    /// D6: admins and super admins see every pending request; anyone else only the requests whose
+    /// `leaveApproverIds` names them. Nobody sees their own.
     private var pendingHolidayApprovals: [HolidayBooking] {
-        guard let me = userStore.currentUser, !me.permissions.operativeMode else { return [] }
-        let pending = holidayStore.pendingRequests
-
-        let filtered: [HolidayBooking]
-        if me.permissions.manager && !me.isSuperAdmin && !me.permissions.adminAccess && me.role != .admin {
-            filtered = pending.filter { assignedApproverUserId(for: $0) == me.id }
-        } else if userStore.hasAdminAccess() {
-            filtered = pending.filter {
-                let assigned = assignedApproverUserId(for: $0)
-                return assigned == nil || assigned == me.id
-            }
-        } else {
-            filtered = []
-        }
+        guard userStore.currentUser != nil else { return [] }
+        let filtered = AnnualLeaveApproval.decidableRequests(
+            holidayStore.pendingRequests,
+            viewer: holidayApprovalViewer,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
 
         if sortNewestFirst {
             return filtered.sorted { $0.createdAt > $1.createdAt }
@@ -454,30 +449,18 @@ struct TasksDetailView: View {
         return filtered.sorted { $0.createdAt < $1.createdAt }
     }
 
-    private func assignedApproverUserId(for request: HolidayBooking) -> String? {
-        if let uid = request.userId,
-           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            if requester.permissions.manager &&
-                !requester.permissions.annualLeaveSelfBook &&
-                !requester.permissions.operativeMode &&
-                !requester.isSuperAdmin &&
-                !requester.permissions.adminAccess &&
-                requester.role != .admin {
-                return nil
-            }
-            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (managerId?.isEmpty == false) ? managerId : nil
-        }
-        if let oid = request.operativeId,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let requester = userStore.organizationUsers.first(where: {
-               ($0.permissions.operativeMode || $0.role == .operative) &&
-               $0.email.lowercased() == op.email.lowercased()
-           }) {
-            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (managerId?.isEmpty == false) ? managerId : nil
-        }
-        return nil
+    private var holidayApprovalViewer: AppUser? {
+        guard let me = userStore.currentUser else { return nil }
+        return userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me
+    }
+
+    private func canDecideHoliday(_ request: HolidayBooking) -> Bool {
+        AnnualLeaveApproval.canDecide(
+            request,
+            viewer: holidayApprovalViewer,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
     }
 
     private func requesterName(for request: HolidayBooking) -> String {
@@ -493,7 +476,7 @@ struct TasksDetailView: View {
     }
 
     private func approveHolidayRequest(_ request: HolidayBooking) {
-        guard let uid = userStore.currentUser?.id else { return }
+        guard let uid = userStore.currentUser?.id, canDecideHoliday(request) else { return }
         Task {
             let name = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
             if request.cancellationRequestedAt != nil {
@@ -515,7 +498,7 @@ struct TasksDetailView: View {
     }
 
     private func declineHolidayRequest(_ request: HolidayBooking) {
-        guard let uid = userStore.currentUser?.id else { return }
+        guard let uid = userStore.currentUser?.id, canDecideHoliday(request) else { return }
         Task {
             if request.cancellationRequestedAt != nil {
                 var updated = request
@@ -940,6 +923,7 @@ private struct HolidayApprovalTaskCard: View {
     let isCancellationRequest: Bool
     let onApprove: () -> Void
     let onDecline: () -> Void
+    @EnvironmentObject private var smartCache: SmartCacheService
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -976,6 +960,8 @@ private struct HolidayApprovalTaskCard: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
             }
+            // RULEBOOK §2: annual leave approval is online only.
+            .onlineOnly(isOnline: smartCache.isOnline)
         }
         .padding(14)
         .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
@@ -1005,6 +991,7 @@ struct TaskTileView: View {
 
 #Preview {
     TasksDetailView()
+        .environmentObject(SmartCacheService())
         .environmentObject(ProjectTaskStore())
         .environmentObject(ProjectStore())
         .environmentObject(OperativeStore())

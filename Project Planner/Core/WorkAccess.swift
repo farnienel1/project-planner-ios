@@ -177,25 +177,19 @@ enum WorkAccess {
         return active.filter { !$0.hiddenManagerUserIds.contains(user.id) }.count
     }
 
-    /// Roster row for the signed-in account. Email first, then first and last name.
+    /// Roster row for the signed-in account, matched by email only (§10: by account, never by name).
+    /// `firstName` / `surname` are kept for callers and no longer used.
     static func signedInOperative(
         email: String?,
         firstName: String?,
         surname: String?,
         operatives: [Operative]
     ) -> Operative? {
+        _ = firstName
+        _ = surname
         let needle = normalizedEmail(email)
-        if !needle.isEmpty,
-           let match = operatives.first(where: { normalizedEmail($0.email) == needle }) {
-            return match
-        }
-        let first = firstName?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let last = surname?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !first.isEmpty || !last.isEmpty else { return nil }
-        return operatives.first { operative in
-            operative.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == first
-                && operative.lastName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == last
-        }
+        guard !needle.isEmpty else { return nil }
+        return operatives.first(where: { normalizedEmail($0.email) == needle })
     }
 
     /// Every operative profile for this email. Bookings are stored on one profile;
@@ -470,10 +464,9 @@ enum DeadlineLocalNotifications {
         return nil
     }
 
+    /// Deadlines are organisation business days: reminder and due times use the organisation zone.
     static func deadlineCalendar() -> Calendar {
-        var cal = Calendar.current
-        cal.timeZone = TimeZone.current
-        return cal
+        OrganizationRulebookContext.calendar
     }
 
     static func reminderFireDate(for item: DLDeadline) -> Date? {

@@ -58,6 +58,22 @@ class NotificationService: ObservableObject {
     private var notificationAuthorizationTask: Task<Bool, Never>?
     private var didLogNotificationAuthorization = false
     private static let dismissedSyntheticKeyPrefix = "NotificationService.dismissedSyntheticKey."
+    /// Sets the app-icon badge to the unread inbox count when the app leaves the foreground (§13).
+    private var appBackgroundObserver: NSObjectProtocol?
+
+    init() {
+        #if canImport(UIKit)
+        appBackgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.syncAppIconBadgeToUnreadCount()
+            }
+        }
+        #endif
+    }
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         self.firebaseBackend = backend
@@ -997,15 +1013,18 @@ class NotificationService: ObservableObject {
         let targetId = await resolvedRecipientUserIdResolvingStaleIds(userId)
         print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY DECISION] bookingId=\(bookingId.uuidString) approved=\(approved) decidedBy=\(decidedByName) target=\(targetId) original=\(userId)")
         let dedupeId = syntheticNotificationId(from: "holidayDecision|\(bookingId.uuidString)|\(targetId)|\(approved)")
-        let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
-        let storedNote = holidayStore?.bookings.first(where: { $0.id == bookingId })?.decisionNote?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedReason = CanonicalBusinessEngine.parseHolidayDecisionNote(reason) ?? ""
+        let storedNote = CanonicalBusinessEngine.parseHolidayDecisionNote(
+            holidayStore?.bookings.first(where: { $0.id == bookingId })?.decisionNote
+        ) ?? ""
         let note = trimmedReason.isEmpty ? storedNote : trimmedReason
         let dateText = annualLeaveDateText(bookingId: bookingId)
         let when = dateText.isEmpty ? "" : " for \(dateText)"
         let decisionMessage: String
         if approved {
-            decisionMessage = "\(decidedByName) approved your annual leave request\(when)."
+            decisionMessage = note.isEmpty
+                ? "\(decidedByName) approved your annual leave request\(when)."
+                : "\(decidedByName) approved your annual leave request\(when). \(note)"
         } else if note.isEmpty {
             decisionMessage = "\(decidedByName) declined your annual leave request\(when)."
         } else {
@@ -1077,7 +1096,7 @@ class NotificationService: ObservableObject {
     private func annualLeaveDateText(for booking: HolidayBooking) -> String {
         let start = booking.startDate.formatted(date: .abbreviated, time: .omitted)
         let end = booking.endDate.formatted(date: .abbreviated, time: .omitted)
-        if Calendar.current.isDate(booking.startDate, inSameDayAs: booking.endDate) {
+        if OrganizationRulebookContext.calendar.isDate(booking.startDate, inSameDayAs: booking.endDate) {
             return "\(start) (\(booking.timeSlot.rawValue))"
         }
         return "\(start) – \(end) (\(booking.timeSlot.rawValue))"
@@ -1473,7 +1492,8 @@ class NotificationService: ObservableObject {
         return deliveryAllowed(type: notification.type.rawValue)
     }
 
-    /// The signed-in user's toggles. A type with no key stays allowed. A nil script result does not block.
+    /// The signed-in user's toggles for a device push or local banner (`notificationPreferenceAllowsDelivery`).
+    /// Never used to hide an inbox row. A type with no key stays allowed. A nil script result does not block.
     private func deliveryAllowed(type: String) -> Bool {
         guard let prefs = appSettingsStore?.settings.notifications.preferenceValues else { return true }
         return CanonicalBusinessEngine.notificationPreferenceAllowsDelivery(prefs: prefs, type: type) ?? true
@@ -1511,12 +1531,8 @@ class NotificationService: ObservableObject {
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        if let target = notification.userId,
-           let me = userStore?.currentUser?.id,
-           resolvedRecipientUserId(target) == resolvedRecipientUserId(me),
-           !deliveryAllowed(type: notification.type.rawValue) {
-            return
-        }
+        // A toggle stops the push only; the inbox row is always written (§13, `notificationShowsInInbox`).
+        // The local banner below still checks the toggle (`shouldShowNotification` → `notificationPreferenceAllowsDelivery`).
         
         do {
             try await firebaseBackend.saveNotification(
@@ -1581,6 +1597,8 @@ class NotificationService: ObservableObject {
             .document(organizationId)
             .collection("notifications")
             .whereField("userId", isEqualTo: userId)
+            // Newest 150 (composite index userId ASC, createdAt DESC is deployed from web).
+            .order(by: "createdAt", descending: true)
             .limit(to: 150)
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error {
@@ -1767,49 +1785,39 @@ class NotificationService: ObservableObject {
         }
     }
 
+    /// Who approves this request (`leaveApproverIds`, §9): the requester's active line managers, else every
+    /// active admin and super admin; never the requester. A requester with no account found in the roster is
+    /// sent with the stored manager id(s), so the script still routes it.
     private func holidayRequestRecipients(assignedManagerUserId: String?, assignedManagerUserIds: [String]? = nil, requesterUserId: String? = nil) async -> [String] {
         guard let userStore else { return [] }
         if userStore.organizationUsers.isEmpty {
             await userStore.loadOrganizationUsers()
         }
-
-        if let requesterUserId,
-           let requester = userStore.organizationUsers.first(where: { $0.id == requesterUserId }) {
-            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: requester) {
-                let requesterManagers = requester.lineManagerUserIds
-                if !requesterManagers.isEmpty {
-                    var recipients: [String] = []
-                    for mid in requesterManagers {
-                        recipients.append(await resolvedRecipientUserIdResolvingStaleIds(mid))
-                    }
-                    return uniqueCanonicalUserIds(from: recipients)
-                }
+        let users = userStore.organizationUsers
+        let trimmedRequester = requesterUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let requester = trimmedRequester.isEmpty ? nil : users.first(where: {
+            $0.id == trimmedRequester || $0.sameEmailUserIds.contains(trimmedRequester) || $0.formerUserIds.contains(trimmedRequester)
+        })
+        var requesterPayload = AnnualLeaveApproval.requesterPayload(requester, fallbackUserId: trimmedRequester)
+        if requester == nil {
+            let listed = (assignedManagerUserIds ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            if !listed.isEmpty { requesterPayload["assignedManagerUserIds"] = listed }
+            if let legacy = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !legacy.isEmpty {
+                requesterPayload["assignedManagerUserId"] = legacy
             }
         }
-
-        if let mids = assignedManagerUserIds, !mids.isEmpty {
-            var recipients: [String] = []
-            for mid in mids {
-                recipients.append(await resolvedRecipientUserIdResolvingStaleIds(mid))
-            }
-            return uniqueCanonicalUserIds(from: recipients)
+        guard let approvers = CanonicalBusinessEngine.leaveApproverIds(
+            requester: requesterPayload,
+            roster: AnnualLeaveApproval.rosterPayload(users)
+        ) else {
+            print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY] leaveApproverIds did not answer; no request notice written")
+            return []
         }
-        if let mid = assignedManagerUserId, !mid.isEmpty {
-            let canonical = await resolvedRecipientUserIdResolvingStaleIds(mid)
-            return [canonical]
+        var recipients: [String] = []
+        for id in approvers {
+            recipients.append(await resolvedRecipientUserIdResolvingStaleIds(id))
         }
-        // No line manager and no assigned project manager: do not tell every manager.
-        // Super admins and admins still receive it so the request is not dropped.
-        let superAdmins = userStore.organizationUsers.filter {
-            $0.isActive && $0.isSuperAdmin && !$0.permissions.operativeMode
-        }.map(\.id)
-        if !superAdmins.isEmpty {
-            return uniqueCanonicalUserIds(from: superAdmins)
-        }
-        let admins = userStore.organizationUsers.filter {
-            $0.isActive && ($0.permissions.adminAccess || $0.role == .admin) && !$0.permissions.operativeMode
-        }.map(\.id)
-        return uniqueCanonicalUserIds(from: admins)
+        return uniqueCanonicalUserIds(from: recipients)
     }
 
     private func resolvedRecipientUserId(_ userId: String) -> String {
@@ -2118,15 +2126,14 @@ class NotificationService: ObservableObject {
         let recentCutoff = Date().addingTimeInterval(-60 * 60 * 24 * 14)
 
         if !user.permissions.operativeMode && (user.permissions.manager || user.permissions.adminAccess || user.isSuperAdmin || user.role == .admin) {
+            // D6: admins decide every request; anyone else only where `leaveApproverIds` names them. Never their own.
+            let users = userStore?.organizationUsers ?? []
+            let operatives = operativeStore?.allOperatives ?? []
             let pending = holidayStore.pendingRequests.filter { request in
                 if isCurrentUserHolidayRequester(request: request, user: user) {
                     return false
                 }
-                let approver = approverUserId(for: request)
-                if user.permissions.manager && !user.permissions.adminAccess && !user.isSuperAdmin && user.role != .admin {
-                    return approver == user.id
-                }
-                return approver == nil || approver == user.id
+                return AnnualLeaveApproval.canDecide(request, viewer: user, users: users, operatives: operatives)
             }
             return pending.map { request in
                 let requester = requesterName(for: request)
@@ -2153,10 +2160,12 @@ class NotificationService: ObservableObject {
             let key = "annualLeaveDecision|\(booking.id.uuidString)|\(user.id)|\(booking.status.rawValue)"
             let dateText = annualLeaveDateText(for: booking)
             let when = dateText.isEmpty ? "" : " for \(dateText)"
-            let note = booking.decisionNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let note = CanonicalBusinessEngine.parseHolidayDecisionNote(booking.decisionNote) ?? ""
             let decisionMessage: String
             if booking.status == .approved {
-                decisionMessage = "Your annual leave request was approved\(when)."
+                decisionMessage = note.isEmpty
+                    ? "Your annual leave request was approved\(when)."
+                    : "Your annual leave request was approved\(when). \(note)"
             } else if note.isEmpty {
                 decisionMessage = "Your annual leave request was declined\(when)."
             } else {
@@ -2228,29 +2237,68 @@ class NotificationService: ObservableObject {
         CanonicalBusinessEngine.notificationDeliversDevicePush(type) == true
     }
 
+    /// `devicePushAllowed(prefs, type)`: the type sends a device push and the signed-in user's toggle is on.
+    private func devicePushAllowed(type: String) -> Bool {
+        let prefs = appSettingsStore?.settings.notifications.preferenceValues ?? [:]
+        return CanonicalBusinessEngine.devicePushAllowed(prefs: prefs, type: type)
+            ?? (isDevicePush(type) && deliveryAllowed(type: type))
+    }
+
     func foregroundPresentationOptions(isRemote: Bool, type: String?) -> UNNotificationPresentationOptions {
         if isRemote {
-            guard let type, isDevicePush(type), deliveryAllowed(type: type) else { return [] }
+            guard let type, devicePushAllowed(type: type) else { return [] }
             clearAppIconBadgeIfNeeded()
             return [.banner, .sound, .list]
         }
         return [.banner, .sound, .list]
     }
 
-    /// Home-screen icon only. The in-app number stays until the listed rows are read.
+    /// Home-screen icon on foreground. The script's `NOTIFICATION_ICON_BADGE_CLEARS_ON_FOREGROUND` (true)
+    /// clears it while the app is open; the in-app number stays until the listed rows are read. When the
+    /// script says it does not clear, the icon shows the unread inbox count.
     func clearAppIconBadgeIfNeeded() {
-        guard CanonicalBusinessEngine.notificationIconBadgeClearsOnForeground == true else { return }
+        if CanonicalBusinessEngine.notificationIconBadgeClearsOnForeground == true {
+            setAppIconBadge(0)
+        } else {
+            setAppIconBadge(unreadCount)
+        }
+    }
+
+    /// The app-icon badge counts the same unread inbox rows (§13). While the app is open and the script
+    /// clears the icon on foreground, it stays clear.
+    func syncAppIconBadgeToUnreadCount() {
+        #if canImport(UIKit)
+        let isActive = UIApplication.shared.applicationState == .active
+        #else
+        let isActive = false
+        #endif
+        if isActive, CanonicalBusinessEngine.notificationIconBadgeClearsOnForeground == true { return }
+        setAppIconBadge(unreadCount)
+    }
+
+    private func setAppIconBadge(_ count: Int) {
+        let value = max(0, count)
         if #available(iOS 16.0, *) {
-            UNUserNotificationCenter.current().setBadgeCount(0) { _ in }
+            UNUserNotificationCenter.current().setBadgeCount(value) { _ in }
         } else {
             #if canImport(UIKit)
-            UIApplication.shared.applicationIconBadgeNumber = 0
+            UIApplication.shared.applicationIconBadgeNumber = value
             #endif
         }
     }
 
-    /// Rows the centre shows. Visibility and newest-first order come from the script.
-    func listedInbox(_ items: [AppNotification], userId: String) -> [AppNotification] {
+    /// Rows the centre shows. Visibility and newest-first order come from the script. A toggle never hides
+    /// a row (`notificationShowsInInbox`).
+    func listedInbox(_ allItems: [AppNotification], userId: String) -> [AppNotification] {
+        let prefs = appSettingsStore?.settings.notifications.preferenceValues
+        var inboxTypeShown: [String: Bool] = [:]
+        let items = allItems.filter { item in
+            let type = item.type.rawValue
+            if let known = inboxTypeShown[type] { return known }
+            let shown = CanonicalBusinessEngine.notificationShowsInInbox(prefs: prefs, type: type)
+            inboxTypeShown[type] = shown
+            return shown
+        }
         let rows = items.map { item in
             CanonicalBusinessEngine.CanonicalInboxNotificationRow(
                 id: item.id.uuidString,
@@ -2269,6 +2317,7 @@ class NotificationService: ObservableObject {
 
     private func setUnreadCount(_ count: Int) {
         unreadCount = max(0, count)
+        syncAppIconBadgeToUnreadCount()
     }
 
     func setUnreadCount(from items: [AppNotification]) {

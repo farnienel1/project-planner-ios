@@ -40,7 +40,7 @@ nonisolated enum AnnualLeavePolicy {
         containing date: Date,
         startMonth: Int,
         endMonth: Int,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> (start: Date, end: Date)? {
         _ = calendar
         let key = CanonicalBusinessEngine.dayKey(for: date)
@@ -60,7 +60,7 @@ nonisolated enum AnnualLeavePolicy {
         beforeCurrentYearStart start: Date,
         startMonth: Int,
         endMonth: Int,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> (start: Date, end: Date)? {
         guard let dayBefore = calendar.date(byAdding: .day, value: -1, to: start) else { return nil }
         return leaveYearRange(containing: dayBefore, startMonth: startMonth, endMonth: endMonth, calendar: calendar)
@@ -89,7 +89,7 @@ nonisolated enum AnnualLeavePolicy {
         statuses: Set<HolidayStatus>,
         rangeStart: Date,
         rangeEnd: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> Double {
         let rs = calendar.startOfDay(for: rangeStart)
         let re = calendar.startOfDay(for: rangeEnd)
@@ -123,13 +123,14 @@ nonisolated enum AnnualLeavePolicy {
         endMonth: Int,
         carriesOver: Bool,
         referenceDate: Date = Date(),
-        calendar: Calendar = .current,
+        calendar: Calendar = OrganizationRulebookContext.calendar,
         annualLeaveEnabled: Bool = true,
         orgDaysPerYear: Double? = nil,
         orgStartMonth: Int? = nil,
         orgEndMonth: Int? = nil,
         yearAllowance: Double? = nil,
-        yearAllowanceKey: String? = nil
+        yearAllowanceKey: String? = nil,
+        nonWorkingDayKeys: [String]? = nil
     ) -> AnnualLeaveUsageSummary {
         _ = calendar
         let records: [CanonicalBusinessEngine.CanonicalLeaveBooking] = bookings.compactMap { booking in
@@ -143,6 +144,7 @@ nonisolated enum AnnualLeavePolicy {
                 status: booking.status.rawValue
             )
         }
+        // Bank holidays inside a multi-day record are not taken from the allowance (§9).
         let balance = CanonicalBusinessEngine.annualLeaveBalance(
             annualLeaveEnabled: annualLeaveEnabled,
             daysPerYear: daysPerYear,
@@ -155,7 +157,8 @@ nonisolated enum AnnualLeavePolicy {
             yearAllowance: yearAllowance,
             yearAllowanceKey: yearAllowanceKey,
             bookings: records,
-            onDayKey: CanonicalBusinessEngine.dayKey(for: referenceDate)
+            onDayKey: CanonicalBusinessEngine.dayKey(for: referenceDate),
+            nonWorkingDayKeys: nonWorkingDayKeys ?? OrganizationBankHolidays.dayKeys
         )
         guard let balance else {
             return AnnualLeaveUsageSummary(
@@ -235,7 +238,7 @@ nonisolated enum AnnualLeavePolicy {
         startMonth: Int,
         endMonth: Int,
         carriesOver: Bool,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> String? {
         let sod = selectedStartOfDays.map { calendar.startOfDay(for: $0) }
         let unique = Array(Set(sod)).sorted()
@@ -280,7 +283,7 @@ nonisolated enum AnnualLeavePolicy {
         startMonth: Int,
         endMonth: Int,
         carriesOver: Bool,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> String? {
         let normalized = Dictionary(uniqueKeysWithValues: daySlots.map { (calendar.startOfDay(for: $0.key), $0.value) })
         guard !normalized.isEmpty else { return nil }
@@ -323,7 +326,7 @@ nonisolated enum AnnualLeavePolicy {
         startMonth: Int,
         endMonth: Int,
         carriesOver: Bool,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> String? {
         let deltaPerDay = newTimeSlot.dayValue - booking.timeSlot.dayValue
         if deltaPerDay <= allowanceEpsilon { return nil }
