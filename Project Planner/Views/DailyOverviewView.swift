@@ -38,21 +38,22 @@ struct DailyOverviewView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var taskStore: ProjectTaskStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
     @State private var showingPastBookings = false
     @State private var showingBookLabour = false
     @State private var bookingEditTarget: DailyOverviewEditTarget?
     @State private var scheduleRefreshTask: Task<Void, Never>?
     /// When `displayDate` is nil, the user can change the day from the strip (today’s overview sheet).
-    @State private var selectedCalendarDay: Date = Calendar.current.startOfDay(for: Date())
+    @State private var selectedCalendarDay: Date = OrganizationRulebookContext.calendar.startOfDay(for: Date())
     
-    /// London midnight of the day picked on this device's calendar. Bookings are stored at London
-    /// midnight, so a phone in another zone still lists the same day's bookings as the web app.
+    /// Organisation-zone midnight of the day shown. Bookings are stored at that instant, so a phone in
+    /// another zone lists the same day's bookings as the web app. Callers pass organisation-zone days
+    /// (`date(fromDayKey:)`, warning days, the org-zone pickers below).
     private var overviewDate: Date {
         let picked = displayDate ?? selectedCalendarDay
-        let parts = Calendar.current.dateComponents([.year, .month, .day], from: picked)
-        let key = String(format: "%04d-%02d-%02d", parts.year ?? 1970, parts.month ?? 1, parts.day ?? 1)
-        return CanonicalBusinessEngine.date(fromDayKey: key)
+        let key = OrganizationRulebookContext.dayKey(picked)
+        return OrganizationRulebookContext.date(fromDayKey: key)
             ?? CanonicalBusinessEngine.businessCalendar.startOfDay(for: picked)
     }
 
@@ -218,64 +219,50 @@ struct DailyOverviewView: View {
         return keys.count
     }
 
-    /// Wall-clock hours on project / small-work sites (operatives + managers on jobs) for the overview day.
+    /// `workedHoursSplit(payrollHoursResult)` for every job-site booking on the overview day:
+    /// operatives on jobs, managers on project / small-work sites, and subcontractors. Web's
+    /// Daily Overview (lib/daily-overview/buildDailyOverview.ts) sums exactly these.
+    private var dayJobSiteHourSplits: [CanonicalWorkedHoursSplit] {
+        let p = payrollTimePolicy
+        let cal = CanonicalBusinessEngine.businessCalendar
+        var splits: [CanonicalWorkedHoursSplit] = []
+        for b in dayBookings {
+            if let split = b.workedHoursSplit(policy: p) { splits.append(split) }
+        }
+        for b in managerScheduleStore.managerSiteBookings {
+            guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
+            guard b.locationType == .project || b.locationType == .smallWork else { continue }
+            if let split = b.workedHoursSplit(policy: p) { splits.append(split) }
+        }
+        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+            if let split = b.payrollMirrorBooking().workedHoursSplit(policy: p) { splits.append(split) }
+        }
+        return splits
+    }
+
+    /// Hours worked on job sites (`payrollHoursResult.workedHours`, never multiplied), as web's headline.
     private var dayJobSiteLabourHours: Double {
-        let p = payrollTimePolicy
-        let cal = CanonicalBusinessEngine.businessCalendar
-        var t = 0.0
-        for b in dayBookings {
-            t += b.paidBookedHours(policy: p)
-        }
-        for b in managerScheduleStore.managerSiteBookings {
-            guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
-            guard b.locationType == .project || b.locationType == .smallWork else { continue }
-            t += b.paidBookedHours(policy: p)
-        }
-        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
-            t += b.payrollMirrorBooking().paidBookedHours(policy: p)
-        }
-        return t
+        dayJobSiteHourSplits.reduce(0) { $0 + $1.workedHours }
     }
 
+    /// Hours worked outside the standard window (`workedHoursSplit.outsideWorkedHours`).
     private var dayJobSiteOvertimeHours: Double {
-        let p = payrollTimePolicy
-        let cal = CanonicalBusinessEngine.businessCalendar
-        var t = 0.0
-        for b in dayBookings {
-            t += b.overtimeHoursBeyondPaidStandard(policy: p)
-        }
-        for b in managerScheduleStore.managerSiteBookings {
-            guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
-            guard b.locationType == .project || b.locationType == .smallWork else { continue }
-            t += b.overtimeHoursBeyondPaidStandard(policy: p)
-        }
-        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
-            t += b.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: p)
-        }
-        return t
+        dayJobSiteHourSplits.reduce(0) { $0 + $1.outsideWorkedHours }
     }
 
-    /// Portion of job-site hours counted at standard (elapsed minus per-booking “beyond standard” bucket).
+    /// Hours worked inside the standard window (`workedHoursSplit.standardWorkedHours`).
     private var dayJobSiteStandardPortionHours: Double {
-        let p = payrollTimePolicy
-        let cal = CanonicalBusinessEngine.businessCalendar
-        var t = 0.0
-        for b in dayBookings {
-            let wall = b.paidBookedHours(policy: p)
-            t += wall - b.overtimeHoursBeyondPaidStandard(policy: p)
-        }
-        for b in managerScheduleStore.managerSiteBookings {
-            guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
-            guard b.locationType == .project || b.locationType == .smallWork else { continue }
-            let wall = b.paidBookedHours(policy: p)
-            t += wall - b.overtimeHoursBeyondPaidStandard(policy: p)
-        }
-        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
-            let m = b.payrollMirrorBooking()
-            let wall = m.paidBookedHours(policy: p)
-            t += wall - m.overtimeHoursBeyondPaidStandard(policy: p)
-        }
-        return t
+        dayJobSiteHourSplits.reduce(0) { $0 + $1.standardWorkedHours }
+    }
+
+    /// The overtime multiplier label: the highest `outsideMultiplier` among bookings with outside
+    /// hours, else the day's own (web `overtimeMultiplier`).
+    private var dayJobSiteOvertimeMultiplier: Double {
+        let fromBookings = dayJobSiteHourSplits
+            .filter { $0.outsideHours > 0 }
+            .reduce(0) { max($0, $1.outsideMultiplier) }
+        if fromBookings > 0 { return fromBookings }
+        return PayrollTimePolicyCatalog.timelinePolicy(for: overviewDate, policy: payrollTimePolicy).outsideMultiplier
     }
 
     private func overviewFormatHours(_ hours: Double) -> String {
@@ -288,8 +275,8 @@ struct DailyOverviewView: View {
 
     private func shiftOverviewDay(_ delta: Int) {
         guard displayDate == nil else { return }
-        // `selectedCalendarDay` is the day as picked on this device; `overviewDate` turns it into London midnight.
-        let cal = Calendar.current
+        // `selectedCalendarDay` is an organisation-zone day; `overviewDate` reads its day key.
+        let cal = OrganizationRulebookContext.calendar
         guard let d = cal.date(byAdding: .day, value: delta, to: selectedCalendarDay) else { return }
         selectedCalendarDay = cal.startOfDay(for: d)
     }
@@ -343,6 +330,11 @@ struct DailyOverviewView: View {
                 overviewNavyHeader
 
                 VStack(alignment: .leading, spacing: 0) {
+                    if !smartCache.isOnline {
+                        // RULEBOOK §2: Daily Overview is read-only offline data, labelled "Last updated".
+                        LastUpdatedOfflineLabel()
+                            .padding(.top, 14)
+                    }
                     if !unbookedAllNames.isEmpty {
                         unbookedLabourRevampCard
                             .padding(.top, 20)
@@ -496,7 +488,7 @@ struct DailyOverviewView: View {
     /// Day at a glance on the navy header (Home overview style) — display only, not tappable.
     private var todayAtAGlanceHeroCard: some View {
         let unbooked = glanceUnbookedCount
-        let mult = PayrollTimePolicyCatalog.timelinePolicy(for: overviewDate, policy: payrollTimePolicy).outsideMultiplier
+        let mult = dayJobSiteOvertimeMultiplier
         let multLabel = abs(mult - mult.rounded()) < 0.05 ? String(format: "%.0f", mult) : String(format: "%.1f", mult)
         let jobsCount = displayedProjectIds.count
         let people = glanceHeadlinePeopleCount
@@ -978,6 +970,8 @@ struct DailyOverviewView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    // RULEBOOK §2: queued offline change not yet confirmed by the server.
+                    PendingSyncIndicator(entityId: booking.id.uuidString)
                 }
             }
             Spacer(minLength: 0)
@@ -1330,17 +1324,17 @@ struct OnHolidayRowView: View {
 /// Date Overview: pick any date (past or future) and see that day's bookings and holidays.
 struct HistoricDailyOverviewView: View {
     @State private var selectedDate: Date = {
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         return cal.startOfDay(for: Date())
     }()
     @Environment(\.dismiss) private var dismiss
     
     private var minDate: Date {
-        Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date())
+        OrganizationRulebookContext.calendar.startOfDay(for: OrganizationRulebookContext.calendar.date(byAdding: .year, value: -1, to: Date()) ?? Date())
     }
 
     private var maxDate: Date {
-        Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .year, value: 1, to: Date()) ?? Date())
+        OrganizationRulebookContext.calendar.startOfDay(for: OrganizationRulebookContext.calendar.date(byAdding: .year, value: 1, to: Date()) ?? Date())
     }
     
     var body: some View {
@@ -1352,6 +1346,7 @@ struct HistoricDailyOverviewView: View {
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                     DatePicker("", selection: $selectedDate, in: minDate...maxDate, displayedComponents: .date)
                         .accessibilityIdentifier("historicDailyOverview.datePicker")
+                        .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                         .datePickerStyle(.graphical)
                         .tint(ProjectWorksRevampColors.blue)
                 }
@@ -1513,9 +1508,10 @@ struct ProjectBookingCard: View {
 
     private var cardOvertimeHours: Double {
         let p = payrollTimePolicy
-        var t = sortedBookings.reduce(0.0) { $0 + $1.overtimeHoursBeyondPaidStandard(policy: p) }
-        t += managerBookingsThisProjectDay.reduce(0.0) { $0 + $1.overtimeHoursBeyondPaidStandard(policy: p) }
-        t += subcontractorBookingsThisProjectDay.reduce(0.0) { $0 + $1.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: p) }
+        // Hours worked outside the standard window (`workedHoursSplit`), as the day headline.
+        var t = sortedBookings.reduce(0.0) { $0 + ($1.workedHoursSplit(policy: p)?.outsideWorkedHours ?? 0) }
+        t += managerBookingsThisProjectDay.reduce(0.0) { $0 + ($1.workedHoursSplit(policy: p)?.outsideWorkedHours ?? 0) }
+        t += subcontractorBookingsThisProjectDay.reduce(0.0) { $0 + ($1.payrollMirrorBooking().workedHoursSplit(policy: p)?.outsideWorkedHours ?? 0) }
         return t
     }
 
@@ -1672,6 +1668,12 @@ struct ProjectBookingCard: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(row.subtitleOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen)
                     .lineLimit(2)
+                // RULEBOOK §2: queued offline change not yet confirmed by the server.
+                if let b = row.operativeBooking {
+                    PendingSyncIndicator(entityId: b.id.uuidString)
+                } else if let b = row.managerBooking {
+                    PendingSyncIndicator(entityId: b.id.uuidString)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Text(row.pillText)

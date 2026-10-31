@@ -144,7 +144,8 @@ final class BookingAuditTests: XCTestCase {
             LogicFixtures.booking(on: friday, operativeId: UUID(uuidString: placeholderId)!),
             LogicFixtures.booking(on: monday, status: .completed, operativeId: Booking.internalOperativeId(for: authUid)),
             LogicFixtures.booking(on: tuesday, status: .cancelled, operativeId: Booking.internalOperativeId(for: authUid)),
-            // The same day under two of the person's ids is one paid day, not two.
+            // The same day under two of the person's ids: both bookings are paid and flagged as
+            // overlapping (rulebook §6, `overlappingBookingIds`), never merged.
             LogicFixtures.booking(on: thursday, operativeId: Booking.internalOperativeId(for: authUid)),
         ]
         let summary = TimesheetPayrollCollector.collect(
@@ -159,7 +160,8 @@ final class BookingAuditTests: XCTestCase {
             policy: LogicFixtures.policy,
             relatedUsers: [user]
         )
-        XCTAssertEqual(summary.shiftCount, 3)
+        XCTAssertEqual(summary.shiftCount, 4)
+        XCTAssertEqual(summary.lineItems.filter(\.isOverlapping).count, 2)
     }
 
     func testManagerBookingUnderFormerIdIsPaid() {

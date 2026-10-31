@@ -62,8 +62,9 @@ enum PayrollHoursEngine {
     /// Paid hours for a booking on `day` (its London calendar day), from the rulebook's
     /// `payrollHoursResult`. The web app runs the same function, so Daily Overview, the weekly report,
     /// timesheets and invoicing show the same hours on both. There is no Swift copy of the rule.
-    static func compute(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
-        let input = CanonicalPayrollHoursInput(
+    /// The script's input for one booking on `day` (organisation-zone day key). A mapping, not a rule.
+    static func canonicalInput(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> CanonicalPayrollHoursInput {
+        CanonicalPayrollHoursInput(
             booking: CanonicalPayrollBooking(
                 timeSlot: booking.timeSlot.rawValue,
                 workStartTime: booking.workStartTime,
@@ -74,6 +75,22 @@ enum PayrollHoursEngine {
             dayKey: CanonicalBusinessEngine.dayKey(for: day),
             policy: canonicalPolicy(policy)
         )
+    }
+
+    /// `payrollHoursResult` as the script returns it (`standardHours`, `outsideHours`, `outsideMultiplier`).
+    /// Timesheet and invoice pay lines read these fields, as web's collector does.
+    static func canonicalResult(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> CanonicalPayrollHours? {
+        CanonicalBusinessEngine.payrollHoursResult(canonicalInput(booking: booking, day: day, policy: policy))
+    }
+
+    /// `workedHoursSplit(payrollHoursResult)`: hours worked inside / outside the standard window,
+    /// never multiplied. Daily Overview's Standard and OT figures (web buildDailyOverview.ts).
+    static func workedHoursSplit(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> CanonicalWorkedHoursSplit? {
+        CanonicalBusinessEngine.workedHoursSplit(canonicalInput(booking: booking, day: day, policy: policy))
+    }
+
+    static func compute(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
+        let input = canonicalInput(booking: booking, day: day, policy: policy)
         guard let result = CanonicalBusinessEngine.payrollHoursResult(input) else {
             NSLog("PAYROLL_HOURS_UNAVAILABLE slot=%@ — canonical script did not answer", booking.timeSlot.rawValue)
             return PayrollHoursResult(totalPaidHours: 0, segments: [])
@@ -142,6 +159,18 @@ enum PayrollHoursEngine {
 extension Booking {
     func payrollHoursResult(policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
         PayrollHoursEngine.compute(booking: self, day: date, policy: policy)
+    }
+
+    /// `workedHoursSplit(payrollHoursResult)` for this booking on its own day.
+    func workedHoursSplit(policy: OrgPayrollTimePolicy) -> CanonicalWorkedHoursSplit? {
+        PayrollHoursEngine.workedHoursSplit(booking: self, day: date, policy: policy)
+    }
+}
+
+extension ManagerSiteBooking {
+    /// `workedHoursSplit(payrollHoursResult)` for this manager booking on its own day.
+    func workedHoursSplit(policy: OrgPayrollTimePolicy) -> CanonicalWorkedHoursSplit? {
+        PayrollHoursEngine.workedHoursSplit(booking: operativePayrollProbe(), day: date, policy: policy)
     }
 }
 

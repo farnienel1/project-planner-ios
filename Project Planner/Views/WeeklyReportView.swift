@@ -94,7 +94,8 @@ struct WeeklyReportView: View {
         self.appSettings = appSettings
         self.notificationService = notificationService
         self.taskStore = taskStore
-        let cal = Calendar.current
+        // The report week is Monday–Sunday in the organisation zone (§1), not this device's zone.
+        let cal = OrganizationRulebookContext.calendar
         let now = cal.startOfDay(for: Date())
         let weekday = cal.component(.weekday, from: now)
         let daysFromMonday = (weekday + 5) % 7
@@ -117,11 +118,11 @@ struct WeeklyReportView: View {
         InvoicingPeriodResolver.resolve(invoicing: invoicingSettings)
     }
 
-    /// The picked day (this device's calendar) as London midnight, the instant bookings are stored at.
+    /// The picked day as organisation-zone midnight, the instant bookings are stored at. The pickers
+    /// show the organisation zone, so the picked instant's organisation day key is the day chosen.
     private func londonDay(_ picked: Date) -> Date {
-        let parts = Calendar.current.dateComponents([.year, .month, .day], from: picked)
-        let key = String(format: "%04d-%02d-%02d", parts.year ?? 1970, parts.month ?? 1, parts.day ?? 1)
-        return CanonicalBusinessEngine.date(fromDayKey: key)
+        let key = OrganizationRulebookContext.dayKey(picked)
+        return OrganizationRulebookContext.date(fromDayKey: key)
             ?? CanonicalBusinessEngine.businessCalendar.startOfDay(for: picked)
     }
 
@@ -170,6 +171,10 @@ struct WeeklyReportView: View {
                 VStack(spacing: 0) {
                     brandHeader
                     VStack(spacing: 24) {
+                        // RULEBOOK §2: read-only offline, labelled "Last updated". The label observes
+                        // SmartCacheService itself (renders nothing online), so this view still observes no store.
+                        LastUpdatedOfflineLabel()
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         quickSelectCard
                         invoicingPeriodCard
                         Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward). Live bookings from projects, small works and daily overview feed this snapshot until a timesheet is counter-signed (or self-signed when the person has no line manager). Agreed timesheet figures then replace those days, including price work and expenses.")
@@ -689,6 +694,7 @@ struct WeeklyReportView: View {
                 if label == "End" {
                     DatePicker("", selection: date, in: startDate..., displayedComponents: .date)
                         .accessibilityIdentifier("weeklyReport.dateRow")
+                        .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                         .datePickerStyle(.graphical)
                         .tint(WeeklyReportColors.blue)
                         .padding(.horizontal, 12)
@@ -696,6 +702,7 @@ struct WeeklyReportView: View {
                 } else {
                     DatePicker("", selection: date, displayedComponents: .date)
                         .accessibilityIdentifier("weeklyReport.dateRow2")
+                        .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                         .datePickerStyle(.graphical)
                         .tint(WeeklyReportColors.blue)
                         .padding(.horizontal, 12)
@@ -783,7 +790,7 @@ struct WeeklyReportView: View {
     }
 
     private var thisWeekRange: (start: Date, end: Date) {
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         let now = Date()
         let weekday = cal.component(.weekday, from: now)
         let daysFromMonday = (weekday + 5) % 7
@@ -794,8 +801,8 @@ struct WeeklyReportView: View {
 
     private var lastWeekRange: (start: Date, end: Date) {
         let thisWeek = thisWeekRange
-        let start = Calendar.current.date(byAdding: .day, value: -7, to: thisWeek.start) ?? thisWeek.start
-        let end = Calendar.current.date(byAdding: .day, value: -7, to: thisWeek.end) ?? thisWeek.end
+        let start = OrganizationRulebookContext.calendar.date(byAdding: .day, value: -7, to: thisWeek.start) ?? thisWeek.start
+        let end = OrganizationRulebookContext.calendar.date(byAdding: .day, value: -7, to: thisWeek.end) ?? thisWeek.end
         return (start, end)
     }
 
@@ -1818,7 +1825,7 @@ struct WeeklyReportView: View {
     }
 
     private func formatDate(_ date: Date) -> String {
-        date.formatted(date: .abbreviated, time: .omitted)
+        date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone))
     }
 
     private func formatDays(_ value: Double) -> String {
@@ -1827,7 +1834,7 @@ struct WeeklyReportView: View {
 
     private func formatCurrency(_ value: Double?) -> String {
         guard let value else { return "" }
-        return String(format: "£%.2f", value)
+        return OrgMoney.format(value)
     }
 
     private func csvEscape(_ input: String) -> String {

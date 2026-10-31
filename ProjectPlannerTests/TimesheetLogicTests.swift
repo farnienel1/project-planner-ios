@@ -141,7 +141,8 @@ final class TimesheetLogicTests: XCTestCase {
         XCTAssertGreaterThan(summed, merged)
     }
 
-    func testOverlappingOperativeShiftsArePaidOnce() {
+    /// Rulebook §6: overlapping bookings are each paid, never merged, and flagged with `overlappingBookingIds`.
+    func testOverlappingOperativeShiftsAreEachPaidAndFlagged() {
         let operativeId = UUID()
         let user = LogicFixtures.selfEmployedUser()
         let operative = LogicFixtures.operative(id: operativeId, email: user.email)
@@ -159,7 +160,6 @@ final class TimesheetLogicTests: XCTestCase {
             end: "14:00",
             operativeId: operativeId
         )
-        let union = LogicFixtures.booking(on: monday, slot: .customHours, start: "08:00", end: "14:00")
         let summary = TimesheetPayrollCollector.collect(
             for: user,
             in: monday...monday,
@@ -171,11 +171,35 @@ final class TimesheetLogicTests: XCTestCase {
             history: .empty,
             policy: LogicFixtures.policy
         )
+        XCTAssertEqual(summary.shiftCount, 2)
         XCTAssertClose(
             summary.totalHours,
-            union.paidBookedHours(policy: LogicFixtures.policy),
-            "overlapping 08:00–12:00 and 10:00–14:00 should pay the 08:00–14:00 union once"
+            first.paidBookedHours(policy: LogicFixtures.policy) + second.paidBookedHours(policy: LogicFixtures.policy),
+            "08:00–12:00 and 10:00–14:00 are each paid"
         )
+        XCTAssertTrue(summary.lineItems.allSatisfy(\.isOverlapping))
+    }
+
+    func testTouchingOperativeShiftsAreNotFlagged() {
+        let operativeId = UUID()
+        let user = LogicFixtures.selfEmployedUser()
+        let operative = LogicFixtures.operative(id: operativeId, email: user.email)
+        let summary = TimesheetPayrollCollector.collect(
+            for: user,
+            in: monday...monday,
+            bookings: [
+                LogicFixtures.booking(on: monday, slot: .customHours, start: "08:00", end: "12:00", operativeId: operativeId),
+                LogicFixtures.booking(on: monday, slot: .customHours, start: "12:00", end: "16:00", operativeId: operativeId),
+            ],
+            managerBookings: [],
+            operatives: [operative],
+            projects: [],
+            smallWorks: [],
+            history: .empty,
+            policy: LogicFixtures.policy
+        )
+        XCTAssertEqual(summary.shiftCount, 2)
+        XCTAssertFalse(summary.lineItems.contains(where: \.isOverlapping))
     }
 
     func testEntryCrossingMidnightCountsTheOvernightHours() {

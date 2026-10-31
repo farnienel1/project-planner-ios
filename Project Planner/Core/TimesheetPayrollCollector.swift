@@ -20,6 +20,11 @@ struct TimesheetPayrollLineItem: Identifiable, Hashable {
     let amount: Double
     let isPayeDay: Bool
     let isOvertimeLine: Bool
+    /// `op-{uuid}` / `mgr-{uuid}`: the booking this line comes from (web `bookingId`).
+    var bookingId: String? = nil
+    /// `overlappingBookingIds`: the booking overlaps another on the same day. Still paid; shown amber
+    /// with `OVERLAPPING_BOOKING_NOTE` to the person and their line manager.
+    var isOverlapping: Bool = false
 }
 
 struct TimesheetPayrollSummary {
@@ -48,7 +53,8 @@ enum TimesheetPayrollCollector {
         scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
         relatedUsers: [AppUser] = []
     ) -> TimesheetPayrollSummary {
-        let cal = Calendar.current
+        // Pay periods and booking days are organisation-zone days (§1).
+        let cal = OrganizationRulebookContext.calendar
         let rangeStart = cal.startOfDay(for: range.lowerBound)
         let rangeEnd = cal.startOfDay(for: range.upperBound)
         func dayPolicy(for day: Date) -> OrgPayrollTimePolicy {
@@ -63,6 +69,8 @@ enum TimesheetPayrollCollector {
         var overtimeHours = 0.0
         var baseAmount = 0.0
         var overtimeAmount = 0.0
+        /// Every paid booking, for `overlappingBookingIds` (web collector `paidBookings`).
+        var paidBookings: [CanonicalOverlapBookingInput] = []
         let matchedOperatives = operatives.filter {
             $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 == user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -73,55 +81,65 @@ enum TimesheetPayrollCollector {
 
         let projectsById = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let smallWorksById = Dictionary(smallWorks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let eligibleBookings = bookings.filter { booking in
-            guard booking.occupiesDay, operativeIds.contains(booking.operativeId) else { return false }
-            let day = cal.startOfDay(for: booking.date)
-            guard day >= rangeStart && day <= rangeEnd else { return false }
-            return TimesheetPayrollPolicy.isBillableSelfEmployedDay(user, on: day, calendar: cal)
-        }
-        // One person, so one group per day even when the day's bookings carry different stored ids.
-        let bookingsByDay = Dictionary(grouping: eligibleBookings) { cal.startOfDay(for: $0.date) }
-        for group in bookingsByDay.values {
-            guard let first = group.first else { continue }
-            let day = cal.startOfDay(for: first.date)
+
+        /// One booking's lines (web `pushBooking`). PAYE days stay as lines with no pay
+        /// (`employmentTypeOnDay`; the rate resolver returns no amount on a PAYE day).
+        func pushBooking(
+            idPrefix: String,
+            bookingId: UUID,
+            probe: Booking,
+            day: Date,
+            details: String,
+            labels: (jobNumber: String, siteName: String),
+            operative: Operative?
+        ) {
             let policy = dayPolicy(for: day)
-            for cluster in OperativeBookingInterval.payClusters(on: group, policy: policy) {
-            let booking = cluster.payable
             let standardDayHours = max(policy.standardPaidHours, 0.01)
             shiftCount += 1
-            let matchedOperative = matchedOperatives.first(where: { $0.id == booking.operativeId }) ?? matchedOperatives.first
             let resolved = PayrollRateResolver.resolveForTimesheetDay(
                 user: user,
-                operative: matchedOperative,
+                operative: operative,
                 on: day,
                 history: history,
                 standardDayHours: standardDayHours
             )
-            let paidHours = booking.paidBookedHours(policy: policy)
-            let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
-            let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
-            let overtimePaidHours = otHours * otMultiplier
-            let normalHours = max(0, paidHours - overtimePaidHours)
+            // One rulebook result (`payrollHoursResult`): the same fields web's collector reads.
+            let hours = PayrollHoursEngine.canonicalResult(booking: probe, day: probe.date, policy: policy)
+            let paidHours = hours?.totalPaidHours ?? 0
+            let otHours = hours?.outsideHours ?? 0
+            let otMultiplier = hours?.outsideMultiplier ?? 1
+            let normalHours = max(0, hours?.standardHours ?? 0)
             totalHours += paidHours
             overtimeHours += otHours
+            let isPaye = user.employmentType(on: day) == .paye
+            let lineBookingId = "\(idPrefix)-\(bookingId.uuidString)"
+            paidBookings.append(
+                CanonicalOverlapBookingInput(
+                    id: lineBookingId,
+                    dayKey: OrganizationRulebookContext.dayKey(day),
+                    timeSlot: probe.timeSlot.rawValue,
+                    workStartTime: probe.workStartTime,
+                    workEndTime: probe.workEndTime
+                )
+            )
 
             let normalAmount = resolved.payForHours(normalHours, standardDayHours: standardDayHours)
             baseAmount += normalAmount
-            let labels = projectLabel(for: booking.projectId, projectsById: projectsById, smallWorksById: smallWorksById)
             lineItems.append(
                 TimesheetPayrollLineItem(
-                    id: "op-\(booking.id.uuidString)-normal",
+                    id: "\(lineBookingId)-normal",
                     date: day,
                     jobNumber: labels.jobNumber,
                     projectName: labels.siteName,
-                    details: booking.scheduleLabel(policy: policy),
+                    details: details,
                     paidHours: normalHours,
                     payrollBasis: resolved.basis,
                     dayRate: resolved.dayRate ?? 0,
                     hourlyRate: resolved.hourlyRate,
                     amount: normalAmount,
-                    isPayeDay: user.employmentType(on: day) == .paye,
-                    isOvertimeLine: false
+                    isPayeDay: isPaye,
+                    isOvertimeLine: false,
+                    bookingId: lineBookingId
                 )
             )
 
@@ -131,7 +149,7 @@ enum TimesheetPayrollCollector {
                 let (otDisplayRate, otDisplayHourly) = overtimeDisplayRates(resolved: resolved, otMultiplier: otMultiplier)
                 lineItems.append(
                     TimesheetPayrollLineItem(
-                        id: "op-\(booking.id.uuidString)-ot",
+                        id: "\(lineBookingId)-ot",
                         date: day,
                         jobNumber: labels.jobNumber,
                         projectName: "\(labels.siteName) (Overtime)",
@@ -141,12 +159,30 @@ enum TimesheetPayrollCollector {
                         dayRate: otDisplayRate,
                         hourlyRate: otDisplayHourly,
                         amount: otAmount,
-                        isPayeDay: user.employmentType(on: day) == .paye,
-                        isOvertimeLine: true
+                        isPayeDay: isPaye,
+                        isOvertimeLine: true,
+                        bookingId: lineBookingId
                     )
                 )
             }
-            }
+        }
+
+        // Every booking is paid on its own; overlapping ones are flagged below, never merged.
+        for booking in bookings {
+            guard booking.occupiesDay, operativeIds.contains(booking.operativeId) else { continue }
+            let day = cal.startOfDay(for: booking.date)
+            guard day >= rangeStart && day <= rangeEnd else { continue }
+            let policy = dayPolicy(for: day)
+            let matchedOperative = matchedOperatives.first(where: { $0.id == booking.operativeId }) ?? matchedOperatives.first
+            pushBooking(
+                idPrefix: "op",
+                bookingId: booking.id,
+                probe: booking,
+                day: day,
+                details: booking.scheduleLabel(policy: policy),
+                labels: projectLabel(for: booking.projectId, projectsById: projectsById, smallWorksById: smallWorksById),
+                operative: matchedOperative
+            )
         }
 
         let managerIds = StaffEmailIdentity.userIds(sharing: user.email, in: relatedUsers + [user])
@@ -155,65 +191,29 @@ enum TimesheetPayrollCollector {
             guard scheduleOptions.includesManagerScheduleLocation(booking) else { continue }
             let day = cal.startOfDay(for: booking.date)
             guard day >= rangeStart && day <= rangeEnd else { continue }
-            guard TimesheetPayrollPolicy.isBillableSelfEmployedDay(user, on: day, calendar: cal) else { continue }
             let policy = dayPolicy(for: day)
-            let standardDayHours = max(policy.standardPaidHours, 0.01)
-            shiftCount += 1
-            let resolved = PayrollRateResolver.resolveForTimesheetDay(
-                user: user,
-                operative: matchedOperatives.first,
-                on: day,
-                history: history,
-                standardDayHours: standardDayHours
+            pushBooking(
+                idPrefix: "mgr",
+                bookingId: booking.id,
+                probe: booking.operativePayrollProbe(),
+                day: day,
+                details: booking.scheduleLabel(policy: policy),
+                labels: managerBookingLabels(for: booking, projectsById: projectsById, smallWorksById: smallWorksById),
+                operative: matchedOperatives.first
             )
-            let paidHours = booking.paidBookedHours(policy: policy)
-            let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
-            let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
-            let overtimePaidHours = otHours * otMultiplier
-            let normalHours = max(0, paidHours - overtimePaidHours)
-            totalHours += paidHours
-            overtimeHours += otHours
+        }
 
-            let normalAmount = resolved.payForHours(normalHours, standardDayHours: standardDayHours)
-            baseAmount += normalAmount
-            let labels = managerBookingLabels(for: booking, projectsById: projectsById, smallWorksById: smallWorksById)
-            lineItems.append(
-                TimesheetPayrollLineItem(
-                    id: "mgr-\(booking.id.uuidString)-normal",
-                    date: day,
-                    jobNumber: labels.jobNumber,
-                    projectName: labels.siteName,
-                    details: booking.scheduleLabel(policy: policy),
-                    paidHours: normalHours,
-                    payrollBasis: resolved.basis,
-                    dayRate: resolved.dayRate ?? 0,
-                    hourlyRate: resolved.hourlyRate,
-                    amount: normalAmount,
-                    isPayeDay: user.employmentType(on: day) == .paye,
-                    isOvertimeLine: false
-                )
-            )
-
-            if otHours > 0.05 {
-                let otAmount = resolved.payForHours(otHours, standardDayHours: standardDayHours, otMultiplier: otMultiplier)
-                overtimeAmount += otAmount
-                let (otDisplayRate, otDisplayHourly) = overtimeDisplayRates(resolved: resolved, otMultiplier: otMultiplier)
-                lineItems.append(
-                    TimesheetPayrollLineItem(
-                        id: "mgr-\(booking.id.uuidString)-ot",
-                        date: day,
-                        jobNumber: labels.jobNumber,
-                        projectName: "\(labels.siteName) (Overtime)",
-                        details: "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: otHours, multiplier: otMultiplier))",
-                        paidHours: otHours,
-                        payrollBasis: resolved.basis,
-                        dayRate: otDisplayRate,
-                        hourlyRate: otDisplayHourly,
-                        amount: otAmount,
-                        isPayeDay: user.employmentType(on: day) == .paye,
-                        isOvertimeLine: true
-                    )
-                )
+        // `overlappingBookingIds` over every paid booking (operative and manager), with the
+        // organisation's standard day, as web's collector does. Touching times do not overlap.
+        let overlapping = CanonicalBusinessEngine.overlappingBookingIds(
+            paidBookings,
+            day: CanonicalStandardDayInput(policy: policy)
+        )
+        if !overlapping.isEmpty {
+            for index in lineItems.indices {
+                if let id = lineItems[index].bookingId, overlapping.contains(id) {
+                    lineItems[index].isOverlapping = true
+                }
             }
         }
 
@@ -264,6 +264,47 @@ enum TimesheetPayrollCollector {
             organization: organization,
             scheduleOptions: scheduleOptions,
             relatedUsers: relatedUsers
+        )
+    }
+
+    /// Approved annual leave inside the period (`timesheetLeaveLines`): information rows with no hours,
+    /// no pay and no edit control, for the person and their line manager. Never on an invoice.
+    /// Records are this account's (`bookingIdsForAccount`: uid, former and same-email ids, and
+    /// catalogue rows on the email), matched on the holiday's user id or operative id, as web does.
+    static func leaveLines(
+        for user: AppUser,
+        in range: ClosedRange<Date>,
+        holidays: [HolidayBooking],
+        operatives: [Operative]
+    ) -> [CanonicalTimesheetLeaveLine] {
+        let account = CanonicalBusinessEngine.CanonicalBookingPersonAccount(
+            id: user.id, email: user.email, formerIds: user.formerUserIds, aliasIds: user.sameEmailUserIds
+        )
+        let ids = CanonicalBusinessEngine.bookingIdsForAccount(
+            account,
+            operatives: operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.id.uuidString, email: $0.email) }
+        ) ?? [user.id]
+        let idKeys = Set(ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
+        let records: [CanonicalTimesheetLeaveRecord] = holidays.compactMap { holiday in
+            let userKey = (holiday.userId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let operativeKey = holiday.operativeId?.uuidString.lowercased() ?? ""
+            guard (!userKey.isEmpty && idKeys.contains(userKey)) || (!operativeKey.isEmpty && idKeys.contains(operativeKey)) else {
+                return nil
+            }
+            return CanonicalTimesheetLeaveRecord(
+                id: holiday.id.uuidString,
+                startDayKey: OrganizationRulebookContext.dayKey(holiday.startDate),
+                endDayKey: OrganizationRulebookContext.dayKey(holiday.endDate),
+                timeSlot: holiday.timeSlot.rawValue,
+                status: holiday.status.rawValue
+            )
+        }
+        guard !records.isEmpty else { return [] }
+        return CanonicalBusinessEngine.timesheetLeaveLines(
+            records,
+            startDayKey: OrganizationRulebookContext.dayKey(range.lowerBound),
+            endDayKey: OrganizationRulebookContext.dayKey(range.upperBound),
+            nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
         )
     }
 

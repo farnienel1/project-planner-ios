@@ -23,8 +23,13 @@ enum TimesheetWeeklyReportOverrideBuilder {
         organization: Organization?,
         scheduleOptions: MyScheduleOptions,
         viewer: AppUser?,
-        relatedUsers: [AppUser] = []
+        relatedUsers: [AppUser] = [],
+        writerIsReviewer: Bool? = nil
     ) {
+        // `timesheetOwnerWriteFields`: the owner writes the approved snapshot only when they have no
+        // line manager. An owner save (writerIsReviewer == false) with a line manager leaves the
+        // stored snapshot exactly as the line manager wrote it.
+        if writerIsReviewer == false, user.hasLineManager { return }
         guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else {
             draft.weeklyReportOverride = nil
             return
