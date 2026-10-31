@@ -49,6 +49,7 @@ struct OrganisationWorkingHoursView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft = OrgPayrollTimePolicy.default
@@ -58,8 +59,26 @@ struct OrganisationWorkingHoursView: View {
     @State private var showingImmediateSaveWarning = false
     @State private var showingScheduleSheet = false
     @State private var showingCancelConfirm = false
-    @State private var scheduleEffectiveDate = Calendar.current.startOfDay(for: Date())
+    /// Date-picker value (device calendar, UI only); sent as that `YYYY-MM-DD` organisation day.
+    @State private var scheduleEffectiveDate = Self.firstSchedulableDay
     @State private var saveSucceeded = false
+    @State private var showingCancelScheduledConfirm = false
+
+    /// A scheduled change must start after today (`payrollTimePolicyScheduleDateError`).
+    private static var firstSchedulableDay: Date {
+        let today = Calendar.current.startOfDay(for: Date())
+        return Calendar.current.date(byAdding: .day, value: 1, to: today) ?? today
+    }
+
+    /// `PAYROLL_POLICY_LIMITS` (break 0–120 min, paid and counts-as 1–12 h, multipliers ×1–×3).
+    private var limits: CanonicalBusinessEngine.PayrollPolicyLimits? {
+        CanonicalBusinessEngine.payrollPolicyLimits
+    }
+
+    /// `validatePayrollTimePolicy(draft)`. Nil when the draft can be saved.
+    private var validationMessage: String? {
+        CanonicalBusinessEngine.validatePayrollTimePolicy(draft)
+    }
 
     private var scheduledChange: OrgPayrollTimePolicyScheduledChange? {
         firebaseBackend.currentOrganization?.payrollTimePolicyScheduled
@@ -115,6 +134,13 @@ struct OrganisationWorkingHoursView: View {
                         .foregroundStyle(.red)
                         .padding(.horizontal, 20)
                         .padding(.top, 12)
+                } else if isDirty, let validationMessage {
+                    Text(validationMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+                        .accessibilityIdentifier("organisationWorkingHours.validation")
                 }
 
                 Text("Changes apply to new timesheet entries from today. Existing approved timesheets aren't recalculated.")
@@ -161,6 +187,21 @@ struct OrganisationWorkingHoursView: View {
             bottomActionBar
         }
         .task { loadDraft() }
+        .onChange(of: firebaseBackend.currentOrganization?.settings.payrollTimePolicy) { _, _ in
+            // §4: keep an unsaved draft; follow the server only while nothing has been changed here.
+            guard !isDirty, !isSaving else { return }
+            loadDraft()
+        }
+        .alert("Cancel scheduled change?", isPresented: $showingCancelScheduledConfirm) {
+            Button("Keep", role: .cancel) {}
+                .accessibilityIdentifier("organisationWorkingHours.keepScheduled")
+            Button("Cancel change", role: .destructive) {
+                Task { await cancelScheduledChange() }
+            }
+                .accessibilityIdentifier("organisationWorkingHours.confirmCancelScheduled")
+        } message: {
+            Text("The queued working hours will not take effect. The current working hours stay in place.")
+        }
         .sheet(isPresented: $showingScheduleSheet) {
             scheduleChangeSheet
         }
@@ -206,9 +247,18 @@ struct OrganisationWorkingHoursView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Scheduled change")
                     .font(.subheadline.weight(.semibold))
-                Text("New working hours take effect on \(scheduled.effectiveFrom.formatted(date: .abbreviated, time: .omitted)).")
+                Text("New working hours take effect on \(scheduled.effectiveFrom.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone))).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button("Cancel scheduled change") {
+                    showingCancelScheduledConfirm = true
+                }
+                .accessibilityIdentifier("organisationWorkingHours.cancelScheduled")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(WorkingHoursPalette.rose)
+                .disabled(isSaving)
+                .onlineOnly(isOnline: smartCache.isOnline)
+                .padding(.top, 2)
             }
         }
         .padding(14)
@@ -359,8 +409,8 @@ struct OrganisationWorkingHoursView: View {
                         }
                     ),
                     step: 5,
-                    min: 0,
-                    max: 90,
+                    min: limits?.breakMinutes.min ?? 0,
+                    max: limits?.breakMinutes.max ?? 120,
                     suffix: " min"
                 )
 
@@ -535,8 +585,8 @@ struct OrganisationWorkingHoursView: View {
                 set: { settings.wrappedValue.countsAsHours = $0 }
             ),
             step: 0.5,
-            min: 1,
-            max: 14,
+            min: limits?.paidHours.min ?? 1,
+            max: limits?.paidHours.max ?? 12,
             suffix: "h"
         )
 
@@ -703,6 +753,7 @@ struct OrganisationWorkingHoursView: View {
                 .shadow(color: isDirty ? WorkingHoursPalette.indigo.opacity(0.25) : .clear, radius: 4, y: 2)
                 .disabled(!isDirty || !isFormValid || isSaving)
                 .opacity((!isDirty || !isFormValid || isSaving) ? 0.85 : 1)
+                .onlineOnly(isOnline: smartCache.isOnline, showsMessage: false)
 
                 Button {
                     showingScheduleSheet = true
@@ -723,6 +774,7 @@ struct OrganisationWorkingHoursView: View {
                 )
                 .disabled(!isFormValid || isSaving)
                 .opacity(!isFormValid || isSaving ? 0.55 : 1)
+                .onlineOnly(isOnline: smartCache.isOnline, showsMessage: false)
 
                 Button {
                     clearDraft()
@@ -745,6 +797,17 @@ struct OrganisationWorkingHoursView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(.ultraThinMaterial)
+            if !smartCache.isOnline {
+                // RULEBOOK §2: Save and Schedule are online only.
+                Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .background(.ultraThinMaterial)
+                    .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+            }
         }
     }
 
@@ -900,7 +963,7 @@ struct OrganisationWorkingHoursView: View {
                 DatePicker(
                     "Effective from",
                     selection: $scheduleEffectiveDate,
-                    in: Calendar.current.startOfDay(for: Date())...,
+                    in: Self.firstSchedulableDay...,
                     displayedComponents: .date
                 )
                     .accessibilityIdentifier("organisationWorkingHours.effectiveFrom")
@@ -929,6 +992,7 @@ struct OrganisationWorkingHoursView: View {
                     .font(.body.weight(.semibold))
                     .tint(.white)
                     .disabled(!isFormValid || isSaving)
+                    .onlineOnly(isOnline: smartCache.isOnline, showsMessage: false)
                 }
             }
         }
@@ -953,8 +1017,10 @@ struct OrganisationWorkingHoursView: View {
         if !isValidHM(out.standardDayEnd) {
             out.standardDayEnd = OrgPayrollTimePolicy.default.standardDayEnd
         }
-        out.unpaidBreakMinutes = Swift.max(0, Swift.min(90, out.unpaidBreakMinutes))
-        out.standardPaidHours = Swift.max(1, Swift.min(24, out.standardPaidHours))
+        let breakLimits = limits?.breakMinutes
+        let paidLimits = limits?.paidHours
+        out.unpaidBreakMinutes = Swift.max(Int(breakLimits?.min ?? 0), Swift.min(Int(breakLimits?.max ?? 120), out.unpaidBreakMinutes))
+        out.standardPaidHours = Swift.max(paidLimits?.min ?? 1, Swift.min(paidLimits?.max ?? 12, out.standardPaidHours))
         out.weekdayOutsideStandardMultiplier = clampMultiplier(out.weekdayOutsideStandardMultiplier)
         out.saturday = sanitizeWeekendSettings(out.saturday, fallbackPaid: out.standardPaidHours)
         out.sunday = sanitizeWeekendSettings(out.sunday, fallbackPaid: out.standardPaidHours)
@@ -968,7 +1034,7 @@ struct OrganisationWorkingHoursView: View {
         if let start = out.customStandardStart, !isValidHM(start) { out.customStandardStart = nil }
         if let end = out.customStandardEnd, !isValidHM(end) { out.customStandardEnd = nil }
         if let counts = out.countsAsHours {
-            out.countsAsHours = Swift.max(1, Swift.min(24, counts))
+            out.countsAsHours = Swift.max(limits?.paidHours.min ?? 1, Swift.min(limits?.paidHours.max ?? 12, counts))
         }
         if !out.allHoursAtMultiplierMode,
            out.customStandardStart == nil,
@@ -982,7 +1048,7 @@ struct OrganisationWorkingHoursView: View {
 
     private func clampMultiplier(_ value: Double) -> Double {
         guard value.isFinite else { return 1.5 }
-        return Swift.max(1, Swift.min(3, value))
+        return Swift.max(limits?.multiplier.min ?? 1, Swift.min(limits?.multiplier.max ?? 3, value))
     }
 
     private func clearDraft() {
@@ -1008,7 +1074,9 @@ struct OrganisationWorkingHoursView: View {
         errorMessage = nil
         saveSucceeded = false
         let priorPolicy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        let effectiveDay = Calendar.current.startOfDay(for: Date())
+        // Organisation-zone today (§1), not the device day.
+        let effectiveDay = OrganizationRulebookContext.date(fromDayKey: OrganizationRulebookContext.dayKey(Date()))
+            ?? CanonicalBusinessEngine.businessCalendar.startOfDay(for: Date())
         do {
             try await firebaseBackend.applyOrganizationPayrollTimePolicyImmediately(draft)
             await PayrollPolicyBookingRecalibrator.apply(
@@ -1022,6 +1090,8 @@ struct OrganisationWorkingHoursView: View {
                 isSaving = false
                 baselineDraft = draft
                 saveSucceeded = true
+                // Saved: back to the previous screen.
+                dismiss()
             }
         } catch {
             await MainActor.run {
@@ -1043,11 +1113,29 @@ struct OrganisationWorkingHoursView: View {
                 showingScheduleSheet = false
                 saveSucceeded = true
             }
+            // Let the sheet close, then go back to the previous screen.
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            await MainActor.run { dismiss() }
         } catch {
             await MainActor.run {
                 isSaving = false
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    /// Online, after confirmation: `payrollTimePolicyCancelScheduleWriteFields` on the server document.
+    private func cancelScheduledChange() async {
+        guard !isSaving else { return }
+        isSaving = true
+        errorMessage = nil
+        do {
+            try await firebaseBackend.cancelScheduledOrganizationPayrollTimePolicyChange()
+            isSaving = false
+            if !isDirty { loadDraft() }
+        } catch {
+            isSaving = false
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -1069,22 +1157,9 @@ struct OrganisationWorkingHoursView: View {
         return Double(em - sm) / 60.0
     }
 
+    /// `validatePayrollTimePolicy` (rulebook limits and clock checks).
     private var isFormValid: Bool {
-        isValidHM(draft.standardDayStart)
-            && isValidHM(draft.standardDayEnd)
-            && isValidHM(draft.breakWindowStart)
-            && isValidHM(draft.breakWindowEnd)
-            && draft.weekdayOutsideStandardMultiplier > 0
-            && weekendValid(draft.saturday)
-            && (draft.sundaySameAsSaturday || weekendValid(draft.sunday))
-    }
-
-    private func weekendValid(_ w: OrgWeekendDayPayrollSettings) -> Bool {
-        if w.allHoursMultiplier <= 0 || w.outsideStandardWindowMultiplier <= 0 { return false }
-        if w.allHoursAtMultiplierMode { return true }
-        guard let s = w.customStandardStart, let e = w.customStandardEnd,
-              isValidHM(s), isValidHM(e) else { return false }
-        return (w.countsAsHours ?? draft.standardPaidHours) > 0
+        validationMessage == nil
     }
 
     private func isValidHM(_ s: String) -> Bool {

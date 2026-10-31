@@ -110,10 +110,16 @@ class AppSettingsStore: ObservableObject {
         errorMessage = nil
         
         Task {
-            let previousOptions = settings.myScheduleOptions
             do {
-                let loadedSettings = try await persistenceService.loadAppSettings()
-                self.settings = Self.mergedSettings(loaded: loadedSettings, preserving: previousOptions)
+                var loadedSettings = try await persistenceService.loadAppSettings()
+                // The organisation document owns My Schedule options; the device copy is never merged back
+                // into it, so a deleted custom item stays deleted.
+                if let backend = firebaseBackend,
+                   backend.organizationHasFirestoreMyScheduleOptions,
+                   let org = backend.currentOrganization {
+                    loadedSettings.myScheduleOptions = org.settings.myScheduleOptions
+                }
+                self.settings = loadedSettings
                 UserDefaults.standard.set(self.settings.theme.rawValue, forKey: Self.appearanceDefaultsKey)
                 self.isLoading = false
             } catch {
@@ -122,21 +128,6 @@ class AppSettingsStore: ObservableObject {
                 // Keep existing in-memory settings on failure — do not wipe custom My Schedule items.
             }
         }
-    }
-
-    /// Preserves custom My Schedule locations across reloads and merges enabled flags.
-    private static func mergedSettings(loaded: AppSettings, preserving previous: MyScheduleOptions) -> AppSettings {
-        var merged = loaded
-        var items = Set(previous.customItems)
-        items.formUnion(loaded.myScheduleOptions.customItems)
-        merged.myScheduleOptions.customItems = items.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-        for item in merged.myScheduleOptions.customItems {
-            let enabled = loaded.myScheduleOptions.customItemEnabled[item]
-                ?? previous.customItemEnabled[item]
-                ?? true
-            merged.myScheduleOptions.customItemEnabled[item] = enabled
-        }
-        return merged
     }
 
     private static func myScheduleOptionsHasCustomizations(_ options: MyScheduleOptions) -> Bool {
@@ -224,15 +215,17 @@ class AppSettingsStore: ObservableObject {
         settings.notifications = cutOff.applied(to: settings.notifications)
     }
     
+    /// Saves exactly `options` (`scheduleOptionsWriteFields` in the backend). Nothing is merged with the
+    /// previous list, so removing a custom item removes it.
     func updateMyScheduleOptions(_ options: MyScheduleOptions) async {
-        settings.myScheduleOptions = Self.mergedSettings(
-            loaded: AppSettings(myScheduleOptions: options),
-            preserving: settings.myScheduleOptions
-        ).myScheduleOptions
+        settings.myScheduleOptions = options
 
         if let backend = firebaseBackend {
             do {
-                try await backend.updateOrganizationMyScheduleOptions(settings.myScheduleOptions)
+                try await backend.updateOrganizationMyScheduleOptions(options)
+                if let saved = backend.currentOrganization?.settings.myScheduleOptions {
+                    settings.myScheduleOptions = saved
+                }
             } catch {
                 errorMessage = "Failed to sync My Schedule options: \(error.localizedDescription)"
             }
@@ -244,12 +237,7 @@ class AppSettingsStore: ObservableObject {
     
     private func saveSettingsLocallyOnly() async {
         do {
-            var toSave = settings
-            if let onDisk = try? await persistenceService.loadAppSettings() {
-                toSave = Self.mergedSettings(loaded: toSave, preserving: onDisk.myScheduleOptions)
-            }
-            settings = toSave
-            try await persistenceService.saveAppSettings(toSave)
+            try await persistenceService.saveAppSettings(settings)
         } catch {
             errorMessage = "Failed to save settings: \(error.localizedDescription)"
         }

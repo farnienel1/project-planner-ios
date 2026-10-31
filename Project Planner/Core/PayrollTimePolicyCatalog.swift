@@ -10,7 +10,7 @@ import Foundation
 /// Future working-hours change queued on the organisation document.
 nonisolated struct OrgPayrollTimePolicyScheduledChange: Codable, Hashable, Sendable {
     var policy: OrgPayrollTimePolicy
-    /// Start of calendar day (local) when `policy` becomes live.
+    /// Organisation-zone midnight of the day `policy` becomes live.
     var effectiveFrom: Date
 
     func asFirestoreDictionary() -> [String: Any] {
@@ -20,18 +20,18 @@ nonisolated struct OrgPayrollTimePolicyScheduledChange: Codable, Hashable, Senda
         ]
     }
 
+    /// `parsePayrollTimePolicyScheduled`: nil when the map has no policy or no usable `effectiveFrom`.
+    /// Day keys are organisation-zone (`OrganizationRulebookContext`).
     static func fromFirestore(_ data: [String: Any]) -> OrgPayrollTimePolicyScheduledChange? {
-        guard let policyDict = data["policy"] as? [String: Any] else { return nil }
-        let policy = OrgPayrollTimePolicy.fromFirestore(policyDict)
-        let day: Date = {
-            if let s = data["effectiveFrom"] as? String, let d = PayrollTimePolicyCatalog.date(fromDayKey: s) {
-                return d
-            }
-            if let ts = data["effectiveFrom"] as? Timestamp {
-                return Calendar.current.startOfDay(for: ts.dateValue())
-            }
-            return Calendar.current.startOfDay(for: Date())
-        }()
+        guard data["policy"] is [String: Any] else { return nil }
+        let raw = FirebaseBackend.firestoreJSON(data)
+        guard let parsed = CanonicalBusinessEngine.callJSON(
+            "parsePayrollTimePolicyScheduled",
+            arguments: [raw, OrganizationRulebookContext.timeZoneIdentifier]
+        ) as? [String: Any],
+              let policy = CanonicalBusinessEngine.payrollPolicy(fromJSON: parsed["policy"]),
+              let key = parsed["effectiveFrom"] as? String,
+              let day = OrganizationRulebookContext.date(fromDayKey: key) else { return nil }
         return OrgPayrollTimePolicyScheduledChange(policy: policy, effectiveFrom: day)
     }
 }
@@ -63,52 +63,80 @@ enum PayrollTimePolicyCatalog {
         }
     }
 
+    /// Organisation-zone `YYYY-MM-DD` (RULEBOOK §1), never the device zone.
     nonisolated static func dayKey(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.calendar = Calendar.current
-        f.locale = Locale(identifier: "en_GB")
-        f.timeZone = TimeZone.current
-        f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: Calendar.current.startOfDay(for: date))
+        OrganizationRulebookContext.dayKey(date)
     }
 
+    /// Organisation-zone midnight for a `YYYY-MM-DD` key.
     nonisolated static func date(fromDayKey key: String) -> Date? {
-        let f = DateFormatter()
-        f.calendar = Calendar.current
-        f.locale = Locale(identifier: "en_GB")
-        f.timeZone = TimeZone.current
-        f.dateFormat = "yyyy-MM-dd"
-        return f.date(from: key.trimmingCharacters(in: .whitespacesAndNewlines))
+        OrganizationRulebookContext.date(fromDayKey: key.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Promotes a due scheduled change into live + prior policy on the org document fields.
+    /// `payrollTimePolicyTimeline`: promotes a due scheduled change (current = scheduled, prior = the
+    /// policy of the day before it). A future change stays pending. Falls back to the input unchanged
+    /// when the script does not answer.
     nonisolated static func appliedPolicyState(
         current: OrgPayrollTimePolicy,
         prior: OrgPayrollTimePolicy?,
         effectiveFrom: Date,
         scheduled: OrgPayrollTimePolicyScheduledChange?
     ) -> (current: OrgPayrollTimePolicy, prior: OrgPayrollTimePolicy?, effectiveFrom: Date, scheduled: OrgPayrollTimePolicyScheduledChange?) {
-        guard let scheduled else {
-            return (current, prior, Calendar.current.startOfDay(for: effectiveFrom), nil)
+        let doc = CanonicalBusinessEngine.payrollPolicyDocument(
+            current: current,
+            prior: prior,
+            effectiveFromDayKey: dayKey(effectiveFrom),
+            scheduledPolicy: scheduled?.policy,
+            scheduledEffectiveFromDayKey: scheduled.map { dayKey($0.effectiveFrom) }
+        )
+        guard let state = CanonicalBusinessEngine.payrollTimePolicyTimeline(orgDocument: doc, todayKey: dayKey(Date())) else {
+            return (current, prior, effectiveFrom, scheduled)
         }
-        let today = Calendar.current.startOfDay(for: Date())
-        guard Calendar.current.startOfDay(for: scheduled.effectiveFrom) <= today else {
-            return (current, prior, Calendar.current.startOfDay(for: effectiveFrom), scheduled)
+        let nextEffective = state.effectiveFromDayKey.flatMap { date(fromDayKey: $0) } ?? effectiveFrom
+        var nextScheduled: OrgPayrollTimePolicyScheduledChange?
+        if let policy = state.scheduledPolicy,
+           let key = state.scheduledEffectiveFromDayKey,
+           let day = date(fromDayKey: key) {
+            nextScheduled = OrgPayrollTimePolicyScheduledChange(policy: policy, effectiveFrom: day)
         }
-        let newPrior = current
-        return (scheduled.policy, newPrior, scheduled.effectiveFrom, nil)
+        return (state.current, state.prior, nextEffective, nextScheduled)
     }
 
-    /// Policy that applies to bookings / timesheets on `day`.
+    /// The raw-document shape of an organisation's four payroll fields, for the script.
+    static func payrollPolicyDocument(for org: Organization) -> [String: Any] {
+        CanonicalBusinessEngine.payrollPolicyDocument(
+            current: org.settings.payrollTimePolicy,
+            prior: org.payrollTimePolicyPrior,
+            effectiveFromDayKey: org.payrollTimePolicyEffectiveFrom.map { dayKey($0) },
+            scheduledPolicy: org.payrollTimePolicyScheduled?.policy,
+            scheduledEffectiveFromDayKey: org.payrollTimePolicyScheduled.map { dayKey($0.effectiveFrom) }
+        )
+    }
+
+    /// `effectivePayrollTimePolicy` answers, keyed by the organisation's payroll state and day.
+    private static var effectivePolicyCache: [String: OrgPayrollTimePolicy] = [:]
+
+    /// Policy that applies to bookings / timesheets on `day`: `effectivePayrollTimePolicy(org, dayKey)`
+    /// (scheduled from its day on, prior before `payrollTimePolicyEffectiveFrom`, otherwise current).
     static func policy(for day: Date, organization: Organization?) -> OrgPayrollTimePolicy {
         guard let org = organization else { return .default }
-        let cal = Calendar.current
-        let target = cal.startOfDay(for: day)
-        let effective = cal.startOfDay(for: org.payrollTimePolicyEffectiveFrom ?? .distantPast)
-        if target >= effective {
-            return org.settings.payrollTimePolicy
-        }
-        return org.payrollTimePolicyPrior ?? org.settings.payrollTimePolicy
+        let key = dayKey(day)
+        var hasher = Hasher()
+        hasher.combine(org.firestoreDocumentId)
+        hasher.combine(org.settings.payrollTimePolicy)
+        hasher.combine(org.payrollTimePolicyPrior)
+        hasher.combine(org.payrollTimePolicyEffectiveFrom)
+        hasher.combine(org.payrollTimePolicyScheduled)
+        hasher.combine(OrganizationRulebookContext.timeZoneIdentifier)
+        let cacheKey = "\(hasher.finalize())|\(key)"
+        if let cached = effectivePolicyCache[cacheKey] { return cached }
+        let resolved = CanonicalBusinessEngine.effectivePayrollTimePolicy(
+            orgDocument: payrollPolicyDocument(for: org),
+            dayKey: key
+        ) ?? org.settings.payrollTimePolicy
+        if effectivePolicyCache.count > 2000 { effectivePolicyCache.removeAll() }
+        effectivePolicyCache[cacheKey] = resolved
+        return resolved
     }
 
     static func policy(for day: Date, firebaseBackend: FirebaseBackend) -> OrgPayrollTimePolicy {

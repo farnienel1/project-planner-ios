@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 
 struct CompanyDetailsEditView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
     
     @State private var organizationName = ""
@@ -17,7 +18,9 @@ struct CompanyDetailsEditView: View {
     @State private var showAbbreviationLimitToast = false
     @State private var hasOfficeAddress = true
     @State private var officeAddressLine1 = ""
+    @State private var officeAddressLine2 = ""
     @State private var officeCity = ""
+    @State private var officeCounty = ""
     @State private var officePostcode = ""
     @State private var countryCode = "GB"
     @State private var selectedLogoItem: PhotosPickerItem?
@@ -34,7 +37,9 @@ struct CompanyDetailsEditView: View {
     @State private var baselineAbbreviation = ""
     @State private var baselineHasOffice = true
     @State private var baselineLine1 = ""
+    @State private var baselineLine2 = ""
     @State private var baselineCity = ""
+    @State private var baselineCounty = ""
     @State private var baselinePostcode = ""
     @State private var baselineCountry = "GB"
     @State private var didLoad = false
@@ -44,7 +49,9 @@ struct CompanyDetailsEditView: View {
             || documentAbbreviation != baselineAbbreviation
             || hasOfficeAddress != baselineHasOffice
             || officeAddressLine1 != baselineLine1
+            || officeAddressLine2 != baselineLine2
             || officeCity != baselineCity
+            || officeCounty != baselineCounty
             || officePostcode != baselinePostcode
             || countryCode != baselineCountry
             || logoRemoved
@@ -102,8 +109,18 @@ struct CompanyDetailsEditView: View {
                                 .font(.subheadline.weight(.medium))
                                 .padding(.vertical, 11)
                             SettingsHubChrome.divider()
+                            TextField("Address line 2 (optional)", text: $officeAddressLine2)
+                                .accessibilityIdentifier("companyDetailsEdit.officeAddressLine2")
+                                .font(.subheadline.weight(.medium))
+                                .padding(.vertical, 11)
+                            SettingsHubChrome.divider()
                             TextField("City / town", text: $officeCity)
                                 .accessibilityIdentifier("companyDetailsEdit.cityTown")
+                                .font(.subheadline.weight(.medium))
+                                .padding(.vertical, 11)
+                            SettingsHubChrome.divider()
+                            TextField("County (optional)", text: $officeCounty)
+                                .accessibilityIdentifier("companyDetailsEdit.county")
                                 .font(.subheadline.weight(.medium))
                                 .padding(.vertical, 11)
                             SettingsHubChrome.divider()
@@ -220,7 +237,7 @@ struct CompanyDetailsEditView: View {
             .ppNavyNavigationBar()
             .interactiveDismissDisabled(isDirty)
             .safeAreaInset(edge: .bottom) {
-                SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+                SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving, isOnline: smartCache.isOnline) {
                     Task { await save() }
                 }
             }
@@ -247,6 +264,11 @@ struct CompanyDetailsEditView: View {
                 guard !didLoad else { return }
                 applyOrganizationToForm()
                 didLoad = true
+            }
+            .onChange(of: serverCompanyDetailsFingerprint) { _, _ in
+                // §4: keep an unsaved draft; follow the server only while nothing has been changed here.
+                guard didLoad, !isSaving, !isDirty else { return }
+                applyOrganizationToForm()
             }
             .fileImporter(
                 isPresented: $showingLogoPDFPicker,
@@ -290,15 +312,33 @@ struct CompanyDetailsEditView: View {
         }
     }
     
-    private var canSave: Bool {
-        let nameOk = !organizationName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let countryOk = !countryCode.isEmpty
-        if hasOfficeAddress {
-            let lineOk = !officeAddressLine1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            let cityOk = !officeCity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            return nameOk && countryOk && lineOk && cityOk
-        }
-        return nameOk && countryOk
+    /// Company fields of the live organisation, so a web save refreshes an untouched form.
+    private var serverCompanyDetailsFingerprint: String {
+        guard let org = firebaseBackend.currentOrganization else { return "" }
+        return [
+            org.firestoreDocumentId, org.name, org.documentAbbreviation ?? "", org.countryCode,
+            org.officeAddressLine1 ?? "", org.officeAddressLine2 ?? "", org.officeCity ?? "",
+            org.officeCounty ?? "", org.officePostcode ?? "", org.companyLogoURL ?? "",
+        ].joined(separator: "\u{1F}")
+    }
+
+    /// `companyDetailsValidationError` (rulebook). Nil when the form can be saved.
+    private var validationError: String? {
+        CanonicalBusinessEngine.companyDetailsValidationError(
+            CanonicalBusinessEngine.companyDetailsInput(
+                name: organizationName,
+                hasOfficeAddress: hasOfficeAddress,
+                officeAddressLine1: officeAddressLine1,
+                officeAddressLine2: officeAddressLine2,
+                officeCity: officeCity,
+                officeCounty: officeCounty,
+                officePostcode: officePostcode,
+                countryCode: countryCode,
+                documentAbbreviation: documentAbbreviation,
+                defaultLatitude: nil,
+                defaultLongitude: nil
+            )
+        )
     }
     
     private func requestLeave() {
@@ -319,12 +359,16 @@ struct CompanyDetailsEditView: View {
            let city = org.officeCity, !city.isEmpty {
             hasOfficeAddress = true
             officeAddressLine1 = line1
+            officeAddressLine2 = org.officeAddressLine2 ?? ""
             officeCity = city
+            officeCounty = org.officeCounty ?? ""
             officePostcode = org.officePostcode ?? ""
         } else {
             hasOfficeAddress = false
             officeAddressLine1 = ""
+            officeAddressLine2 = ""
             officeCity = ""
+            officeCounty = ""
             officePostcode = org.officePostcode ?? ""
         }
         selectedLogoImage = nil
@@ -339,7 +383,9 @@ struct CompanyDetailsEditView: View {
         baselineAbbreviation = documentAbbreviation
         baselineHasOffice = hasOfficeAddress
         baselineLine1 = officeAddressLine1
+        baselineLine2 = officeAddressLine2
         baselineCity = officeCity
+        baselineCounty = officeCounty
         baselinePostcode = officePostcode
         baselineCountry = countryCode
     }
@@ -348,7 +394,9 @@ struct CompanyDetailsEditView: View {
         if hasOfficeAddress {
             let parts = [
                 officeAddressLine1.trimmingCharacters(in: .whitespacesAndNewlines),
+                officeAddressLine2.trimmingCharacters(in: .whitespacesAndNewlines),
                 officeCity.trimmingCharacters(in: .whitespacesAndNewlines),
+                officeCounty.trimmingCharacters(in: .whitespacesAndNewlines),
                 officePostcode.trimmingCharacters(in: .whitespacesAndNewlines)
             ].filter { !$0.isEmpty }
             let query = parts.joined(separator: ", ")
@@ -366,10 +414,8 @@ struct CompanyDetailsEditView: View {
     }
     
     private func save() async {
-        guard canSave else {
-            errorMessage = hasOfficeAddress
-                ? "Name, country, address line 1 and town are required."
-                : "Organisation name and country are required."
+        if let validationError {
+            errorMessage = validationError
             return
         }
         isSaving = true
@@ -381,7 +427,9 @@ struct CompanyDetailsEditView: View {
                 name: organizationName,
                 hasOfficeAddress: hasOfficeAddress,
                 officeAddressLine1: hasOfficeAddress ? officeAddressLine1 : nil,
+                officeAddressLine2: hasOfficeAddress ? officeAddressLine2 : nil,
                 officeCity: hasOfficeAddress ? officeCity : nil,
+                officeCounty: hasOfficeAddress ? officeCounty : nil,
                 officePostcode: hasOfficeAddress ? officePostcode : nil,
                 countryCode: countryCode,
                 defaultLatitude: lat,

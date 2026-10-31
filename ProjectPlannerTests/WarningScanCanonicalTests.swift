@@ -169,9 +169,9 @@ final class WarningScanCanonicalTests: XCTestCase {
             clashLookaheadDays: 12,
             excludedUserIdsFromUnbookedWarnings: ["admin-1"]
         )
-        let kept = FirebaseBackend.detectionForWarningScan(current: saved, loaded: .default)
-        XCTAssertEqual(kept.clashLookaheadMode, .endOfInvoicingPeriod)
-        XCTAssertEqual(kept.clashLookaheadDays, 12)
+        // The server always wins, even when it holds the factory defaults (RULEBOOK §4).
+        let serverDefaults = FirebaseBackend.detectionForWarningScan(current: saved, loaded: .default)
+        XCTAssertEqual(serverDefaults, OrgWarningDetectionSettings.default)
         let replaced = FirebaseBackend.detectionForWarningScan(
             current: saved,
             loaded: OrgWarningDetectionSettings(clashLookaheadMode: .endOfWorkingWeek)

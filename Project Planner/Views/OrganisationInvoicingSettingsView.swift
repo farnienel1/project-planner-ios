@@ -8,6 +8,7 @@ import SwiftUI
 struct OrganisationInvoicingSettingsView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft: OrganizationInvoicingSettings = .default
@@ -17,6 +18,24 @@ struct OrganisationInvoicingSettingsView: View {
     @State private var didLoad = false
 
     private var isDirty: Bool { draft != baseline }
+
+    /// `validateInvoicingSettings` on the draft, shown inline (e.g. run 1 must end by the 27th).
+    private var inlineValidationError: String? {
+        guard didLoad, draft != baseline else { return nil }
+        return CanonicalBusinessEngine.validateInvoicingSettings(draft.canonicalInvoicingSettings())
+    }
+
+    /// The run active today (`activePaymentRunSummary`, organisation zone) and its pay day
+    /// (`paymentRunPayDate`) for the draft settings.
+    private var currentRunLine: String? {
+        guard let run = CanonicalBusinessEngine.activePaymentRunSummary(draft) else { return nil }
+        let span = "\(CanonicalBusinessEngine.formatPaymentRunDay(run.startDayKey)) – \(CanonicalBusinessEngine.formatPaymentRunDay(run.endDayKey))"
+        let period = CanonicalDayWindow(startDayKey: run.startDayKey, endDayKey: run.endDayKey)
+        guard let payDay = CanonicalBusinessEngine.paymentRunPayDate(draft, period: period) else {
+            return "Current run: \(span) · pay date not set"
+        }
+        return "Current run: \(span) · Paid on \(CanonicalBusinessEngine.formatPaymentRunDay(payDay))"
+    }
 
     private var showsMonthCoverage: Bool {
         CanonicalBusinessEngine.paymentRunShowsMonthCoverage(draft.canonicalInvoicingSettings()) == true
@@ -124,6 +143,18 @@ struct OrganisationInvoicingSettingsView: View {
                         .padding(.vertical, 8)
                 }
 
+                if errorMessage == nil, let inlineValidationError {
+                    Text(inlineValidationError)
+                        .foregroundStyle(PPColor.danger)
+                        .font(.subheadline.weight(.semibold))
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(ProjectWorksRevampColors.requiredPillBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.bottom, 8)
+                        .accessibilityIdentifier("organisationInvoicingSettings.validation")
+                }
+
                 if let errorMessage {
                     Text(errorMessage)
                         .foregroundStyle(PPColor.danger)
@@ -143,7 +174,7 @@ struct OrganisationInvoicingSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
         .safeAreaInset(edge: .bottom) {
-            SettingsStickySaveBar(title: "Save", isDirty: isDirty, isSaving: isSaving) {
+            SettingsStickySaveBar(title: "Save", isDirty: isDirty, isSaving: isSaving, isOnline: smartCache.isOnline) {
                 Task { await save() }
             }
         }
@@ -159,6 +190,15 @@ struct OrganisationInvoicingSettingsView: View {
             adoptTimesheetRowsFromScript()
             baseline = draft
             didLoad = true
+        }
+        .onChange(of: firebaseBackend.currentOrganization?.settings.invoicing) { _, server in
+            // §4: keep an unsaved draft; follow the server only while nothing has been changed here.
+            guard didLoad, !isSaving, draft == baseline, let server else { return }
+            draft = server
+            ensureTwoDateRanges()
+            draft.refreshRecurringSummaryFromDays()
+            adoptTimesheetRowsFromScript()
+            baseline = draft
         }
         .onChange(of: draft.paymentRunMode) { _, mode in
             if mode == .recurringTimeframe {
@@ -256,23 +296,24 @@ struct OrganisationInvoicingSettingsView: View {
     }
 
     private var glanceLines: [String] {
+        let current = currentRunLine.map { [$0] } ?? []
         if draft.paymentRunMode == .dateRanges {
             return editorRanges.enumerated().map { index, range in
                 let span = ordinalSpan(start: range.startDay, end: range.endDay)
                 let pay = draft.paymentDateMode == .specificDates ? paidOn(index) : "pay date not set"
                 return "Run \(index + 1): work from the \(span), \(pay)"
-            }
+            } + current
         }
         let week = "Weekly in arrears: \(draft.recurringRunStartDay.title) to \(draft.recurringRunEndDay.title) of the previous week"
         if draft.paymentDateMode == .recurringDate {
-            return [week, "Paid every \(draft.recurringPaymentDay.title)"]
+            return [week, "Paid every \(draft.recurringPaymentDay.title)"] + current
         }
         let dates = draft.paymentDates
             .map { PaymentRunDateRange.clampDay($0) }
             .filter { (1...31).contains($0) }
             .compactMap { ordinalDay($0) }
         let paid = dates.isEmpty ? "dates not set" : dates.map { "the \($0)" }.joined(separator: " and ")
-        return [week, "Paid on \(paid)"]
+        return [week, "Paid on \(paid)"] + current
     }
 
     private var atAGlanceCard: some View {

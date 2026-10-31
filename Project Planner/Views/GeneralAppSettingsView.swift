@@ -43,6 +43,7 @@ struct GeneralAppSettingsView: View {
 
 struct MyScheduleGeneralOptionsView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
     @State private var showingAddItemAlert = false
     @State private var newItemName = ""
@@ -76,11 +77,16 @@ struct MyScheduleGeneralOptionsView: View {
                     SettingsHubChrome.sectionTitle("Custom Items")
                     SettingsHubChrome.card {
                         ForEach(Array(draft.customItems.enumerated()), id: \.offset) { index, item in
-                            HStack {
-                                Text(item)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(Color.primary)
-                                Spacer()
+                            HStack(spacing: 12) {
+                                // `settings.myScheduleOptions.customItemEnabled[name]`: off hides the item
+                                // from every location picker (`enabledScheduleLocations`) without deleting it.
+                                Toggle(isOn: customItemEnabledBinding(item)) {
+                                    Text(item)
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(Color.primary)
+                                }
+                                .tint(PPColor.brand)
+                                .accessibilityIdentifier("myScheduleGeneralOptions.row.\(index).enabled")
                                 Button(role: .destructive) {
                                     deleteCustomItem(at: index)
                                 } label: {
@@ -108,7 +114,7 @@ struct MyScheduleGeneralOptionsView: View {
         .background(PPColor.page.ignoresSafeArea())
         .ppNavyNavigationBar()
         .safeAreaInset(edge: .bottom) {
-            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving, isOnline: smartCache.isOnline) {
                 Task { await save() }
             }
         }
@@ -121,6 +127,12 @@ struct MyScheduleGeneralOptionsView: View {
             draft = appSettings.settings.myScheduleOptions
             baseline = draft
             didLoad = true
+        }
+        .onChange(of: appSettings.settings.myScheduleOptions) { _, server in
+            // §4: refresh from the server only while the draft is unchanged.
+            guard didLoad, !isSaving, draft == baseline else { return }
+            draft = server
+            baseline = server
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -168,6 +180,13 @@ struct MyScheduleGeneralOptionsView: View {
         draft.customItemEnabled[trimmed] = true
     }
 
+    private func customItemEnabledBinding(_ name: String) -> Binding<Bool> {
+        Binding(
+            get: { draft.customItemEnabled[name] ?? true },
+            set: { draft.customItemEnabled[name] = $0 }
+        )
+    }
+
     private func deleteCustomItem(at index: Int) {
         guard draft.customItems.indices.contains(index) else { return }
         let name = draft.customItems.remove(at: index)
@@ -178,7 +197,10 @@ struct MyScheduleGeneralOptionsView: View {
         guard !isSaving else { return }
         isSaving = true
         defer { isSaving = false }
+        appSettings.errorMessage = nil
         await appSettings.updateMyScheduleOptions(draft)
+        guard appSettings.errorMessage == nil else { return }
+        draft = appSettings.settings.myScheduleOptions
         baseline = draft
     }
 }
