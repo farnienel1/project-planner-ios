@@ -3011,6 +3011,17 @@ nonisolated enum CanonicalBusinessEngine {
 
     // MARK: - Script surface
 
+    /// The rulebook the packed script was built from (`rulebookStamp()`): the `Version:` of web
+    /// `docs/RULEBOOK.md` and that file's sha256. `RulebookParityTests` compares it with the mirror.
+    struct RulebookStamp: Codable, Equatable, Sendable {
+        let version: String
+        let sha256: String
+    }
+
+    static func rulebookStamp() -> RulebookStamp? {
+        decodeExpression(RulebookStamp.self, "ProjectPlannerCanonical.rulebookStamp()")
+    }
+
     /// Names the packed script exports.
     static func exportNames() -> [String] {
         evaluate("Object.keys(ProjectPlannerCanonical)")?.toArray()?.compactMap { $0 as? String } ?? []
