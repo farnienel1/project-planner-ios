@@ -233,13 +233,19 @@ final class WarningResolutionStore: ObservableObject {
         return built
     }
 
-    /// The same, with approvals only: a dismissed clash is not an approved one on the weekly report.
+    /// The same, with `approvedKeys: approvedWarningKeys(...)`: a dismissed clash is hidden but is not an
+    /// approved one on the weekly report (`isClashApproved` / `isClashGroupApproved` read `approvedKeys`).
     private func approvalDecisions() -> [String: Any] {
         if let cachedApprovalDecisions { return cachedApprovalDecisions }
-        let keys = CanonicalBusinessEngine.resolvedWarningKeys(
-            records(approved: approvedResolutionKeys, dismissed: [])
-        ) ?? Array(approvedResolutionKeys).sorted()
-        let built = CanonicalBusinessEngine.warningDecisions(resolvedKeys: keys, acceptedClashes: acceptedClashes)
+        let all = records(approved: approvedResolutionKeys, dismissed: dismissedResolutionKeys)
+        let resolved = CanonicalBusinessEngine.resolvedWarningKeys(all)
+            ?? Array(approvedResolutionKeys.union(dismissedResolutionKeys)).sorted()
+        let approved = CanonicalBusinessEngine.approvedWarningKeys(all) ?? Array(approvedResolutionKeys).sorted()
+        let built = CanonicalBusinessEngine.warningDecisions(
+            resolvedKeys: resolved,
+            approvedKeys: approved,
+            acceptedClashes: acceptedClashes
+        )
         cachedApprovalDecisions = built
         return built
     }
@@ -260,6 +266,15 @@ final class WarningResolutionStore: ObservableObject {
     /// `isWarningActive` over `resolvedWarningKeys` and `acceptedBookingClashes`. Every list and count uses this.
     func shouldShowActive(_ warning: Warning) -> Bool {
         if legacyStatus(for: warning) != nil { return false }
+        // Operative cluster: hidden once every overlapping pair is approved, dismissed or accepted
+        // (`isClashGroupApproved` over `resolvedKeys`); a third booking reopens an approved pair.
+        if let clash = warning.operativeClash,
+           let approved = CanonicalBusinessEngine.isClashGroupApproved(
+            pairs: clash.approvalPairs.map { (bookingAId: $0.bookingAId, bookingBId: $0.bookingBId) },
+            decisions: decisions()
+           ) {
+            return !approved
+        }
         let pair = Self.clashBookingIds(warning)
         if let active = CanonicalBusinessEngine.isWarningActive(
             resolutionKey: warning.resolutionKey,
@@ -276,6 +291,13 @@ final class WarningResolutionStore: ObservableObject {
     func isClashApproved(_ warning: Warning) -> Bool {
         guard let pair = Self.clashBookingIds(warning) else { return false }
         if legacyStatus(for: warning) == "approved" { return true }
+        // A cluster is approved only when every overlapping pair is (`isClashGroupApproved`).
+        if let clash = warning.operativeClash {
+            return CanonicalBusinessEngine.isClashGroupApproved(
+                pairs: clash.approvalPairs.map { (bookingAId: $0.bookingAId, bookingBId: $0.bookingBId) },
+                decisions: approvalDecisions()
+            ) ?? isApproved(warning.resolutionKey)
+        }
         return CanonicalBusinessEngine.isClashApproved(
             bookingAId: pair.a,
             bookingBId: pair.b,
@@ -292,6 +314,16 @@ final class WarningResolutionStore: ObservableObject {
             return (clash.bookingAId.uuidString, clash.bookingBId.uuidString)
         }
         return nil
+    }
+
+    /// The pairs an approval writes and an un-approval deletes: every overlapping pair of an operative
+    /// cluster (`operativeClashGroups`), else the clash row's own pair.
+    nonisolated static func clashApprovalPairs(_ warning: Warning) -> [(a: String, b: String)] {
+        if let clash = warning.operativeClash {
+            return clash.approvalPairs.map { (a: $0.bookingAId, b: $0.bookingBId) }
+        }
+        if let pair = clashBookingIds(warning) { return [pair] }
+        return []
     }
 
     // MARK: - Writes (staff only)
@@ -311,9 +343,9 @@ final class WarningResolutionStore: ObservableObject {
     @discardableResult
     func approve(_ warning: Warning) -> Bool {
         guard canWrite else { return false }
-        guard let pair = Self.clashBookingIds(warning) else { return approve(warning.resolutionKey) }
+        guard Self.clashBookingIds(warning) != nil else { return approve(warning.resolutionKey) }
         guard let organizationId, let uid = Auth.auth().currentUser?.uid else { return false }
-        return commitClashApproval(warning, pair: pair, organizationId: organizationId, uid: uid)
+        return commitClashApproval(warning, organizationId: organizationId, uid: uid)
     }
 
     @discardableResult
@@ -335,15 +367,25 @@ final class WarningResolutionStore: ObservableObject {
         let org = Firestore.firestore().collection("organizations").document(organizationId)
         let batch = Firestore.firestore().batch()
         var deletes = 0
-        if let pair = Self.clashBookingIds(warning) {
+        var keys = [warning.resolutionKey] + (legacyKeysByResolutionKey[warning.resolutionKey] ?? [])
+        let pairs = Self.clashApprovalPairs(warning)
+        if !pairs.isEmpty {
             var pairIds = Set<String>()
-            if let pairKey = CanonicalBusinessEngine.clashPairKey(pair.a, pair.b) {
-                pairIds.insert(pairKey)
-            }
-            for row in acceptedClashes {
-                guard let id = row["id"] as? String, !id.isEmpty,
-                      CanonicalBusinessEngine.isClashAccepted(pair.a, pair.b, accepted: [row]) == true else { continue }
-                pairIds.insert(id)
+            for pair in pairs {
+                if let pairKey = CanonicalBusinessEngine.clashPairKey(pair.a, pair.b) {
+                    pairIds.insert(pairKey)
+                }
+                // Operative pairs have no own key: their `warningResolutions` id is `clashResolutionKey` of the pair.
+                if warning.operativeClash != nil,
+                   let key = CanonicalBusinessEngine.clashResolutionKey(bookingAId: pair.a, bookingBId: pair.b),
+                   !keys.contains(key) {
+                    keys.append(key)
+                }
+                for row in acceptedClashes {
+                    guard let id = row["id"] as? String, !id.isEmpty,
+                          CanonicalBusinessEngine.isClashAccepted(pair.a, pair.b, accepted: [row]) == true else { continue }
+                    pairIds.insert(id)
+                }
             }
             // Only rows that exist: deleting a missing document is refused for a manager.
             let existing = Set(acceptedClashes.compactMap { $0["id"] as? String })
@@ -356,7 +398,6 @@ final class WarningResolutionStore: ObservableObject {
                 return pairIds.contains(id)
             }
         }
-        let keys = [warning.resolutionKey] + (legacyKeysByResolutionKey[warning.resolutionKey] ?? [])
         for key in keys {
             if approvedResolutionKeys.contains(key),
                let write = CanonicalBusinessEngine.warningResolutionWriteFields(
@@ -386,36 +427,41 @@ final class WarningResolutionStore: ObservableObject {
         return true
     }
 
+    /// `clashApprovalWrites` for every pair of the clash (`clashApprovalPairs`), in one batch. An operative
+    /// pair has no own key, so its `warningResolutions` id is the pair's `clashResolutionKey`.
     private func commitClashApproval(
         _ warning: Warning,
-        pair: (a: String, b: String),
         organizationId: String,
         uid: String
     ) -> Bool {
-        guard let writes = CanonicalBusinessEngine.clashApprovalWrites(
-            bookingAId: pair.a,
-            bookingBId: pair.b,
-            resolutionKey: warning.resolutionKey,
-            approvedByUserId: uid
-        ) else { return false }
+        let pairs = Self.clashApprovalPairs(warning)
+        let ownKey: String? = warning.operativeClash == nil ? warning.resolutionKey : nil
         let org = Firestore.firestore().collection("organizations").document(organizationId)
         let batch = Firestore.firestore().batch()
         var wrote = false
-        if let accepted = writes.acceptedClash {
-            var fields = WriteMetadata.stamped(accepted.fields, userId: uid)
-            fields["acceptedAt"] = Timestamp(date: Date())
-            batch.setData(fields, forDocument: org.collection("acceptedBookingClashes").document(accepted.documentId))
-            if !acceptedClashes.contains(where: { ($0["id"] as? String) == accepted.documentId }) {
-                acceptedClashes.append(["id": accepted.documentId, "bookingAId": pair.a, "bookingBId": pair.b])
+        for pair in pairs {
+            guard let writes = CanonicalBusinessEngine.clashApprovalWrites(
+                bookingAId: pair.a,
+                bookingBId: pair.b,
+                resolutionKey: ownKey,
+                approvedByUserId: uid
+            ) else { continue }
+            if let accepted = writes.acceptedClash {
+                var fields = WriteMetadata.stamped(accepted.fields, userId: uid)
+                fields["acceptedAt"] = Timestamp(date: Date())
+                batch.setData(fields, forDocument: org.collection("acceptedBookingClashes").document(accepted.documentId))
+                if !acceptedClashes.contains(where: { ($0["id"] as? String) == accepted.documentId }) {
+                    acceptedClashes.append(["id": accepted.documentId, "bookingAId": pair.a, "bookingBId": pair.b])
+                }
+                wrote = true
             }
-            wrote = true
-        }
-        if let resolution = writes.resolution {
-            var fields = WriteMetadata.stamped(resolution.fields, userId: uid)
-            fields["resolvedAt"] = Timestamp(date: Date())
-            batch.setData(fields, forDocument: org.collection("warningResolutions").document(resolution.documentId))
-            approvedResolutionKeys.insert(resolution.documentId)
-            wrote = true
+            if let resolution = writes.resolution {
+                var fields = WriteMetadata.stamped(resolution.fields, userId: uid)
+                fields["resolvedAt"] = Timestamp(date: Date())
+                batch.setData(fields, forDocument: org.collection("warningResolutions").document(resolution.documentId))
+                approvedResolutionKeys.insert(resolution.documentId)
+                wrote = true
+            }
         }
         guard wrote else { return false }
         persistApproved()
@@ -561,8 +607,8 @@ final class WarningResolutionStore: ObservableObject {
                 forgetLegacyKeys(legacy, organizationId: organizationId)
                 continue
             }
-            if status == "approved", let pair = Self.clashBookingIds(warning) {
-                if commitClashApproval(warning, pair: pair, organizationId: organizationId, uid: uid) {
+            if status == "approved", Self.clashBookingIds(warning) != nil {
+                if commitClashApproval(warning, organizationId: organizationId, uid: uid) {
                     forgetLegacyKeys(legacy, organizationId: organizationId)
                 }
                 continue

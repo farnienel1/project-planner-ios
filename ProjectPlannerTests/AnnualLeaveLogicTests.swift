@@ -323,4 +323,60 @@ final class AnnualLeaveLogicTests: XCTestCase {
         )
         XCTAssertNil(downgrade)
     }
+
+    // MARK: - Rulebook 1.2.0 self-book, line manager and deciders
+
+    private func staff(
+        _ id: String,
+        role: UserRole,
+        permissions: UserPermissions,
+        lineManagers: [String] = [],
+        hasNoLineManager: Bool = false
+    ) -> AppUser {
+        var user = AppUser(id: id, email: "\(id)@example.test", organizationId: "TEST-org", role: role, permissions: permissions)
+        user.setLineManagerUserIds(lineManagers)
+        user.hasNoLineManager = hasNoLineManager
+        return user
+    }
+
+    /// Having no line manager no longer makes anyone a self-booker (`canSelfBookAnnualLeave`), and such a
+    /// person now needs one (`lineManagerRequiredError`).
+    func testNoLineManagerIsNotSelfBookAndNeedsALineManager() {
+        let director = staff("dir-1", role: .manager, permissions: UserPermissions(manager: true), hasNoLineManager: true)
+        XCTAssertFalse(AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: director))
+        XCTAssertNotNil(AnnualLeaveApproval.lineManagerRequiredError(for: director, users: [director]))
+        XCTAssertTrue(AnnualLeaveApproval.showsNoLineManagerNotice(for: director, users: [director]))
+
+        var selfBooker = director
+        selfBooker.permissions.annualLeaveSelfBook = true
+        XCTAssertTrue(AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: selfBooker))
+        XCTAssertNil(AnnualLeaveApproval.lineManagerRequiredError(for: selfBooker, users: [selfBooker]))
+
+        let admin = staff("admin-1", role: .admin, permissions: UserPermissions(adminAccess: true))
+        let report = staff("op-1", role: .operative, permissions: UserPermissions(operativeMode: true), lineManagers: ["admin-1"])
+        XCTAssertNil(AnnualLeaveApproval.lineManagerRequiredError(for: report, users: [admin, report]))
+        XCTAssertEqual(AnnualLeaveApproval.usersMissingLineManager([admin, report, director]).map(\.id).contains("dir-1"), true)
+        XCTAssertFalse(AnnualLeaveApproval.usersMissingLineManager([admin, report, director]).map(\.id).contains("op-1"))
+    }
+
+    /// `canDecideLeave` / `leaveDecisionQueue`: never your own request; admins decide any; a line manager
+    /// decides their reports'.
+    func testDecidersComeFromTheRulebook() {
+        let admin = staff("admin-1", role: .admin, permissions: UserPermissions(adminAccess: true))
+        let manager = staff("mgr-1", role: .manager, permissions: UserPermissions(manager: true), lineManagers: ["admin-1"])
+        let report = staff("op-1", role: .operative, permissions: UserPermissions(operativeMode: true), lineManagers: ["mgr-1"])
+        let users = [admin, manager, report]
+        let request = HolidayBooking(
+            organizationId: "TEST-org",
+            userId: "op-1",
+            startDate: Date(timeIntervalSince1970: 1_800_000_000),
+            endDate: Date(timeIntervalSince1970: 1_800_000_000),
+            status: .pending
+        )
+        XCTAssertTrue(AnnualLeaveApproval.canDecide(request, viewer: admin, users: users, operatives: []))
+        XCTAssertTrue(AnnualLeaveApproval.canDecide(request, viewer: manager, users: users, operatives: []))
+        XCTAssertFalse(AnnualLeaveApproval.canDecide(request, viewer: report, users: users, operatives: []))
+        XCTAssertEqual(AnnualLeaveApproval.decidableRequests([request], viewer: manager, users: users, operatives: []).count, 1)
+        XCTAssertEqual(AnnualLeaveApproval.decidableRequests([request], viewer: report, users: users, operatives: []).count, 0)
+    }
 }

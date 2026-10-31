@@ -73,7 +73,7 @@ fileprivate func segmentHoursForOperative(_ b: Booking, day: Date, policy: OrgPa
 }
 
 fileprivate struct DayHoursSegmentTotals {
-    /// Sum of paid booked hours shown in the day summary (legacy full day uses org paid hours, not raw clock span).
+    /// Hours worked shown in the day summary: `payrollHoursResult.workedHours` summed (as web's total card).
     var totalPaidHours: Double
     var early: Double
     var mid: Double
@@ -93,16 +93,20 @@ fileprivate func mergedDaySegments(
         early += s.early
         mid += s.mid
         late += s.late
-        paidSum += b.paidBookedHours(policy: policy)
-        ot += b.overtimeHoursBeyondPaidStandard(policy: policy)
+        // Same figures as web and Daily Overview: `workedHoursSplit(payrollHoursResult)` (never multiplied).
+        let split = b.workedHoursSplit(policy: policy)
+        paidSum += split?.workedHours ?? 0
+        ot += split?.outsideWorkedHours ?? 0
     }
     for b in operative {
         let s = segmentHoursForOperative(b, day: day, policy: policy)
         early += s.early
         mid += s.mid
         late += s.late
-        paidSum += b.paidBookedHours(policy: policy)
-        ot += b.overtimeHoursBeyondPaidStandard(policy: policy)
+        // Same figures as web and Daily Overview: `workedHoursSplit(payrollHoursResult)` (never multiplied).
+        let split = b.workedHoursSplit(policy: policy)
+        paidSum += split?.workedHours ?? 0
+        ot += split?.outsideWorkedHours ?? 0
     }
     return DayHoursSegmentTotals(totalPaidHours: paidSum, early: early, mid: mid, late: late, otReported: ot)
 }

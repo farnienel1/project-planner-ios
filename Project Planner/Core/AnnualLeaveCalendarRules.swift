@@ -57,26 +57,14 @@ enum AnnualLeaveCalendarRules {
 }
 
 enum AnnualLeaveSelfBookPolicy {
-    /// User decision D5: own leave is booked approved only with the `annualLeaveSelfBook` permission and
-    /// not in operative mode. Everyone else sends a pending request to `leaveApproverIds` (line managers,
-    /// else the company admins). RULEBOOK-GAP(canSelfBookAnnualLeave): replace with the canonical export
-    /// when web ships it.
+    /// `canSelfBookAnnualLeave` (§9): own leave is booked approved only with the `annualLeaveSelfBook`
+    /// permission outside operative mode. Everyone else sends a pending request to `leaveApproverIds`.
     static func canSelfBookAnnualLeave(for user: AppUser) -> Bool {
-        if user.permissions.operativeMode { return false }
-        return user.permissions.annualLeaveSelfBook
+        CanonicalBusinessEngine.canSelfBookAnnualLeave(user: AnnualLeaveApproval.selfBookPayload(user)) ?? false
     }
 
-    /// Own leave is a pending request (D5): the opposite of self-booking.
+    /// Own leave is a pending request: the opposite of self-booking.
     static func usesAnnualLeaveRequestFlow(for user: AppUser) -> Bool {
         !canSelfBookAnnualLeave(for: user)
-    }
-
-    static func requiresLineManagerForAnnualLeaveRouting(for user: AppUser) -> Bool {
-        if user.permissions.operativeMode { return true }
-        if user.hasNoLineManager { return false }
-        if user.permissions.manager || user.permissions.adminAccess {
-            return !user.permissions.annualLeaveSelfBook
-        }
-        return false
     }
 }

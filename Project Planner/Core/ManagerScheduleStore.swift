@@ -223,6 +223,12 @@ class ManagerScheduleStore: ObservableObject {
     }
 
     func deleteBooking(_ booking: ManagerSiteBooking) async {
+        // RULEBOOK §2 (`offlineAvailability("booking.delete")`): deleting a booking is online only; the
+        // delete and its tombstone are never queued.
+        guard OfflinePolicy.isEnabled(.deleteBooking, isOnline: smartCache?.isOnline ?? true) else {
+            errorMessage = OfflinePolicy.onlineOnlyMessage
+            return
+        }
         guard let fb = firebaseBackend else { return }
         guard let orgId = fb.resolvedOrganizationIdForOfflineWrites() else { return }
 
@@ -231,22 +237,17 @@ class ManagerScheduleStore: ObservableObject {
         NotificationCenter.default.post(name: didChangeNotificationName, object: nil)
         ScheduleChangeNotifier.postBookingStoreDidChange()
 
-        if smartCache?.isOnline == false {
-            OfflineOutboxStore.shared.enqueueDeleteManagerSiteBooking(booking.id, organizationId: orgId)
-            return
-        }
-
         do {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
             loadData(force: true)
         } catch {
-            if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
-                OfflineOutboxStore.shared.enqueueDeleteManagerSiteBooking(booking.id, organizationId: orgId)
-                errorMessage = "Removed locally. Will sync when you're back online."
-            } else {
-                errorMessage = error.localizedDescription
-            }
+            // Not queued (online only): the server still has it, so put it back on screen.
+            errorMessage = OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true)
+                ? OfflinePolicy.onlineOnlyMessage
+                : error.localizedDescription
+            applyLocalSave(booking, organizationId: orgId)
+            ScheduleChangeNotifier.postBookingStoreDidChange()
         }
     }
 

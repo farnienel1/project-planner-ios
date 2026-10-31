@@ -1468,39 +1468,16 @@ struct HomeView: View {
         }
     }
 
+    /// `leaveDecisionQueue` for the signed-in account (RULEBOOK §9): the same requests its approval queue lists.
     private var pendingHolidayApprovalsCount: Int {
-        guard let me = userStore.currentUser, !me.permissions.operativeMode else { return 0 }
-        let pending = holidayStore.pendingRequests
-        if me.permissions.manager && !me.isSuperAdmin && !me.permissions.adminAccess && me.role != .admin {
-            return pending.filter { request in
-                assignedApproverUserId(for: request) == me.id
-            }.count
-        }
-        if userStore.hasAdminAccess() {
-            return pending.filter { request in
-                let approver = assignedApproverUserId(for: request)
-                return approver == nil || approver == me.id
-            }.count
-        }
-        return 0
-    }
-
-    private func assignedApproverUserId(for request: HolidayBooking) -> String? {
-        if let uid = request.userId,
-           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (managerId?.isEmpty == false) ? managerId : nil
-        }
-        if let oid = request.operativeId,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let requester = userStore.organizationUsers.first(where: {
-               ($0.permissions.operativeMode || $0.role == .operative) &&
-               $0.email.lowercased() == op.email.lowercased()
-           }) {
-            let managerId = requester.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (managerId?.isEmpty == false) ? managerId : nil
-        }
-        return nil
+        guard let me = userStore.currentUser else { return 0 }
+        let viewer = userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me
+        return AnnualLeaveApproval.decidableRequests(
+            holidayStore.pendingRequests,
+            viewer: viewer,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        ).count
     }
     
     /// Upcoming qualification expiries (next 30 days) — surfaced to operatives under Tasks.

@@ -629,7 +629,7 @@ class FirebaseBackend: ObservableObject {
             throw NSError(domain: "FirebaseBackend", code: 500, userInfo: [NSLocalizedDescriptionKey: msg])
         }
         // RULEBOOK §14: `passwordPolicyError` (8 characters; the platform owner's developer account 10).
-        switch CanonicalBusinessEngine.passwordPolicyError(password, developerAccount: AppUser.isPlatformOwnerEmail(email)) {
+        switch CanonicalBusinessEngine.passwordPolicyError(password, email: email) {
         case .accepted:
             break
         case .rejected(let message):
@@ -8136,7 +8136,7 @@ class FirebaseBackend: ObservableObject {
         organizationId: String,
         userId: String?,
         operativeId: UUID?,
-        dayRate: Double,
+        dayRate: Double?,
         effectiveAt: Date,
         payBasis: String? = nil
     ) async throws {
@@ -8149,16 +8149,30 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "recordOperativeDayRateChange requires userId and/or operativeId"]
             )
         }
-        // RULEBOOK §8: { userId, operativeId, dayRate, payBasis, effectiveAt, createdAt }. `dayRate` holds the
-        // amount for either basis. The effective day is organisation-zone midnight. History is never rewritten.
-        var payload: [String: Any] = [
-            "dayRate": dayRate,
-            "payBasis": payBasis == "hourly" ? "hourly" : "day",
-            "effectiveAt": Timestamp(date: OrganizationRulebookContext.calendar.startOfDay(for: effectiveAt)),
+        // RULEBOOK §8 `payRateHistoryWriteFields`: { userId, operativeId, dayRate, payBasis, effectiveAt } with
+        // `effectiveAt` organisation-zone midnight; a nil rate writes a "rate cleared" row (dayRate and payBasis
+        // null). The app adds `createdAt` and write metadata. History is never rewritten.
+        guard let fields = CanonicalBusinessEngine.payRateHistoryWriteFields(
+            userId: uid,
+            operativeId: operativeId?.uuidString,
+            rate: dayRate,
+            payBasis: payBasis,
+            effective: effectiveAt
+        ) else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "Could not build the rate history row."]
+            )
+        }
+        let payload: [String: Any] = [
+            "dayRate": fields.dayRate.map { $0 as Any } ?? NSNull(),
+            "payBasis": fields.payBasis.map { $0 as Any } ?? NSNull(),
+            "effectiveAt": Timestamp(date: fields.effectiveAt),
+            "userId": fields.userId,
+            "operativeId": fields.operativeId,
             "createdAt": FieldValue.serverTimestamp()
         ]
-        if let uid { payload["userId"] = uid }
-        if let operativeId { payload["operativeId"] = operativeId.uuidString }
         try await db.collection("organizations")
             .document(organizationId)
             .collection("operativeDayRateHistory")
@@ -8175,7 +8189,10 @@ class FirebaseBackend: ObservableObject {
         var byOperativeId: [String: [OperativeDayRateHistoryEntry]] = [:]
         for doc in snapshot.documents {
             let data = doc.data()
-            guard let dayRate = data["dayRate"] as? Double,
+            // `dayRate: null` is a "rate cleared" row (`payRateHistoryWriteFields`), read by `payRateOnDay`.
+            let rawRate = data["dayRate"]
+            let dayRate: Double? = (rawRate as? NSNumber)?.doubleValue
+            guard dayRate != nil || rawRate is NSNull,
                   let effectiveAt = (data["effectiveAt"] as? Timestamp)?.dateValue() else { continue }
             let rawUser = data["userId"] as? String
             let userId: String? = (rawUser?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }

@@ -28,10 +28,11 @@ struct HolidayView: View {
         return AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: u)
     }
     private var isRequestMode: Bool { isOperativeMode || isManagerRequestMode }
-    /// Informational only (D5): self-book is off and no line manager is set, so `leaveApproverIds` routes to admins.
+    /// Shown while `lineManagerRequiredError` says this person is missing a current line manager, so
+    /// `leaveApproverIds` routes their requests to the admins.
     private var showsNoLineManagerNotice: Bool {
         guard isRequestMode, let user = holidayProfileUser ?? userStore.displayUser else { return false }
-        return AnnualLeaveApproval.showsNoLineManagerNotice(for: user)
+        return AnnualLeaveApproval.showsNoLineManagerNotice(for: user, users: userStore.organizationUsers)
     }
     // Admins don't show Requests by default. Requests section becomes available only when opened from a notification.
     private var canApproveRequests: Bool {

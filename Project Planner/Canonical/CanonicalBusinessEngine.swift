@@ -703,7 +703,7 @@ nonisolated enum CanonicalBusinessEngine {
     /// unbooked labour only when "Include weekends" is on; the coverage window itself stays Monday–Friday.
     /// The weekend days are the script's: `clashScanDays` for the week of `coverageEnd`, with every weekend
     /// day counted as booked. `unbookedLabourRows` itself skips weekends when the toggle is off.
-    /// RULEBOOK-GAP(unbookedScanDays): web has no export that names the unbooked days; replace this when it ships.
+    /// Kept for `WarningScanCanonicalTests`; the app's scan window now uses `unbookedScanDays` (rulebook 1.2.0).
     static func unbookedLabourWindowEnd(
         coverageEnd: Date,
         clashLookaheadMode: String,

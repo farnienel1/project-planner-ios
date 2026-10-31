@@ -1305,7 +1305,7 @@ class UserStore: ObservableObject {
         let managerIds = (assignedManagerUserIds ?? assignedManagerUserId.map { [$0] } ?? [])
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        let draftUser = AppUser(
+        var draftUser = AppUser(
             id: "invite-validation",
             email: email,
             organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "",
@@ -1313,21 +1313,12 @@ class UserStore: ObservableObject {
             permissions: permissions,
             hasNoLineManager: hasNoLineManager
         )
-        if permissions.operativeMode && managerIds.isEmpty {
-            errorMessage = "Every operative must be assigned a line manager."
+        draftUser.setLineManagerUserIds(managerIds)
+        if let annualLeaveEnabled { draftUser.annualLeaveEnabled = annualLeaveEnabled }
+        // RULEBOOK §8, §11: `lineManagerRequiredError` refuses an invite that cannot self-book and has no line manager.
+        if let lineManagerError = AnnualLeaveApproval.lineManagerRequiredError(for: draftUser, users: organizationUsers) {
+            errorMessage = lineManagerError
             return false
-        }
-        if (permissions.manager || permissions.adminAccess) && !permissions.operativeMode {
-            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: draftUser) && managerIds.isEmpty {
-                errorMessage = "This user requires a Line Manager to Approve/Decline annual leave requests. Please set their line manager above."
-                return false
-            }
-            if managerIds.isEmpty && !hasNoLineManager {
-                errorMessage = permissions.manager
-                    ? "Every manager must be assigned a line manager or choose No line manager."
-                    : "Every administrator must be assigned a line manager or choose No line manager."
-                return false
-            }
         }
         
         guard let firebaseBackend = firebaseBackend else {
@@ -2149,6 +2140,11 @@ class UserStore: ObservableObject {
         if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
             return false
         }
+        // RULEBOOK §8: employment type is pay, so it follows `canChangePersonPay`.
+        guard canChangePay(of: updated) else {
+            errorMessage = Self.payChangeRefusedMessage
+            return false
+        }
         guard let change = CanonicalBusinessEngine.applyEmploymentTypeChange(
             previousType: updated.employmentType.rawValue,
             nextType: employmentType.rawValue,
@@ -2256,7 +2252,7 @@ class UserStore: ObservableObject {
                         updateDayRate: dayRateChanged,
                         payBasis: previousPay.basis
                     )
-                    if dayRateChanged, let dayRate,
+                    if dayRateChanged,
                        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                         let emailNorm = updatedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                         let linkedOperativeId = operativeStore?.operatives.first(where: {
@@ -2353,19 +2349,31 @@ class UserStore: ObservableObject {
         return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7
     }
 
-    /// `operativeDayRateHistory` rows for a rate change, as web `recordDayRateChangeIfNeeded` writes them:
-    /// with no history yet, the previous live rate from the account's creation, then the new rate
-    /// (an explicit 0 included). Only called after `canChangePay` passed. Best effort, like web.
+    /// `operativeDayRateHistory` rows for a rate change, as web `recordDayRateChangeIfNeeded` writes them
+    /// (each through `payRateHistoryWriteFields`): with no history yet, the previous live rate from the
+    /// account's creation, then the new rate (an explicit 0 included). Clearing a saved rate (`nextAmount`
+    /// nil) writes one "rate cleared" row. Only called after `canChangePay` passed. Best effort, like web.
     private func recordRateHistory(
         organizationId: String,
         user: AppUser,
         operativeId: UUID?,
         previous: (basis: String, amount: Double?),
-        nextAmount: Double,
+        nextAmount: Double?,
         nextBasis: String,
         effectiveAt: Date
     ) async {
         guard let firebaseBackend, canChangePay(of: user) else { return }
+        guard let nextAmount else {
+            guard previous.amount != nil else { return }
+            try? await firebaseBackend.recordOperativeDayRateChange(
+                organizationId: organizationId,
+                userId: user.id,
+                operativeId: operativeId,
+                dayRate: nil,
+                effectiveAt: effectiveAt
+            )
+            return
+        }
         let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: organizationId)) ?? .empty
         let merged = collection.mergedEntries(userId: user.id, operativeId: operativeId)
         if merged.isEmpty, let previousAmount = previous.amount, previousAmount > 0 {
@@ -2505,7 +2513,7 @@ class UserStore: ObservableObject {
                 dayRate: dayRate,
                 payBasis: previousPay.basis
             )
-            if let dayRate, let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                 await recordRateHistory(
                     organizationId: orgId,
                     user: updatedUser,

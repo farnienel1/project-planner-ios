@@ -2,11 +2,9 @@
 //  OfflinePolicy.swift
 //  Project Planner
 //
-//  docs/RULEBOOK.md §2 "Offline rules" as one table, kept apart from screens so Android can port it
-//  line for line. Every action the rulebook names has exactly one row. No Firebase, no SwiftUI here.
-//
-//  RULEBOOK-GAP(offlinePolicyTable): the table and its three messages are rulebook text, not yet a
-//  packed-script export. Replace this table with the canonical export when web ships it.
+//  docs/RULEBOOK.md §2 "Offline rules". The table (`OFFLINE_ACTIONS` / `offlineAvailability`), its three
+//  messages and the "Last updated" label (`offlineLastUpdatedLabel`) come from the packed script. The Swift
+//  enums below are only the stable ids. No Firebase, no SwiftUI here.
 //
 
 import Foundation
@@ -27,7 +25,7 @@ nonisolated enum OfflineAction: String, Sendable, CaseIterable {
     case createBooking = "booking.create"
     case editBooking = "booking.edit"
     case cancelBooking = "booking.cancel"
-    /// Removing a booking queues the delete and its tombstone (§2 Conflicts).
+    /// Online only since rulebook 1.2.0: the delete and its tombstone are not queued.
     case deleteBooking = "booking.delete"
     case annualLeaveRequest = "annual_leave.request"
     case ownProfileFields = "profile.own_fields"
@@ -69,26 +67,25 @@ nonisolated enum OfflineAction: String, Sendable, CaseIterable {
 }
 
 nonisolated enum OfflinePolicy {
-    static let pendingSyncMessage = "Pending sync"
-    static let onlineOnlyMessage = "Connect to the internet to change this"
-    static let lastUpdatedPrefix = "Last updated"
+    /// `OFFLINE_PENDING_SYNC_LABEL`.
+    static let pendingSyncMessage: String =
+        CanonicalBusinessEngine.constant("OFFLINE_PENDING_SYNC_LABEL", as: String.self) ?? ""
+    /// `OFFLINE_ONLINE_ONLY_MESSAGE`.
+    static let onlineOnlyMessage: String =
+        CanonicalBusinessEngine.constant("OFFLINE_ONLINE_ONLY_MESSAGE", as: String.self) ?? ""
+    /// `OFFLINE_LAST_UPDATED_PREFIX`.
+    static let lastUpdatedPrefix: String =
+        CanonicalBusinessEngine.constant("OFFLINE_LAST_UPDATED_PREFIX", as: String.self) ?? ""
 
-    /// The table. One row per action.
+    /// `OFFLINE_ACTIONS`: action id → `allowedOffline` / `onlineOnly` / `readOnlyOffline`. Read once.
+    private static let table: [String: String] =
+        CanonicalBusinessEngine.constant("OFFLINE_ACTIONS", as: [String: String].self) ?? [:]
+
+    /// `offlineAvailability(actionId)`. An id the table does not list is online only, as the script says.
     static func availability(_ action: OfflineAction) -> OfflineAvailability {
-        switch action {
-        case .createBooking, .editBooking, .cancelBooking, .deleteBooking,
-             .annualLeaveRequest, .ownProfileFields, .ownNotificationToggles:
-            return .allowedOffline
-        case .companyDetails, .currency, .workingHoursAndOvertime, .warningSettings,
-             .paymentRuns, .materialOrderCutOff, .scheduleOptions,
-             .userRole, .userLineManager, .userEmploymentStatus, .userPayRate,
-             .userExclusions, .userInactiveFlag, .userInvites,
-             .annualLeaveApproval, .timesheetSigning, .clashApproval,
-             .signIn, .passwordChange, .switchOrganization:
-            return .onlineOnly
-        case .dailyOverview, .warnings, .weeklyReport, .mySchedule:
-            return .readOnlyOffline
-        }
+        let value = table[action.rawValue]
+            ?? (CanonicalBusinessEngine.callJSON("offlineAvailability", arguments: [action.rawValue]) as? String)
+        return OfflineAvailability(canonical: value) ?? .onlineOnly
     }
 
     /// True when the control for `action` is usable now.
@@ -111,14 +108,26 @@ nonisolated enum OfflinePolicy {
         }
     }
 
-    /// "Last updated [date/time]", in the organisation's business time zone. Nil before any sync.
+    /// `offlineLastUpdatedLabel(iso, timeZone)`: "Last updated 31 Oct 2026, 14:05" in the organisation's
+    /// business time zone. Nil before any sync.
     static func lastUpdatedMessage(_ date: Date?) -> String? {
         guard let date else { return nil }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_GB")
-        formatter.timeZone = OrganizationRulebookContext.timeZone
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return "\(lastUpdatedPrefix) \(formatter.string(from: date))"
+        return CanonicalBusinessEngine.callJSON(
+            "offlineLastUpdatedLabel",
+            arguments: [CanonicalBusinessEngine.isoString(from: date), OrganizationRulebookContext.timeZoneIdentifier]
+        ) as? String
+    }
+}
+
+extension OfflineAvailability {
+    /// The script's camelCase availability (`OFFLINE_AVAILABILITIES`).
+    nonisolated init?(canonical value: String?) {
+        guard let value else { return nil }
+        switch value {
+        case "allowedOffline": self = .allowedOffline
+        case "onlineOnly": self = .onlineOnly
+        case "readOnlyOffline": self = .readOnlyOffline
+        default: return nil
+        }
     }
 }

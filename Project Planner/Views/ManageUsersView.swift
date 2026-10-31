@@ -241,6 +241,9 @@ struct ManageUsersView: View {
                         .padding(.horizontal, 4)
                         .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
                 }
+                if userStore.hasAdminAccess() && !usersMissingLineManager.isEmpty {
+                    usersMissingLineManagerNotice
+                }
                 manageUsersListHeader
                 manageUsersCardList
             }
@@ -248,6 +251,41 @@ struct ManageUsersView: View {
             .padding(.bottom, 40)
             .ppContentSheet()
         }
+    }
+
+    /// `usersMissingLineManager` over the loaded roster: people saved before the line-manager requirement
+    /// whose leave still needs one (RULEBOOK §9, §11). Their requests reach every active admin meanwhile.
+    private var usersMissingLineManager: [AppUser] {
+        AnnualLeaveApproval.usersMissingLineManager(userStore.organizationUsers)
+    }
+
+    private var usersMissingLineManagerNotice: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(
+                usersMissingLineManager.count == 1
+                    ? "1 person needs a line manager for annual leave approval."
+                    : "\(usersMissingLineManager.count) people need a line manager for annual leave approval.",
+                systemImage: "person.crop.circle.badge.exclamationmark"
+            )
+            .font(.subheadline.weight(.semibold))
+            ForEach(usersMissingLineManager, id: \.id) { person in
+                Button {
+                    selectedUser = person
+                } label: {
+                    Text(person.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? person.email : person.fullName)
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 4)
+        .accessibilityIdentifier("manageUsers.usersMissingLineManager")
     }
 
     /// Home-style navy header: the people count the list already shows, then the existing role tabs, status chips and search.
@@ -1876,32 +1914,28 @@ struct EditUserView: View {
         var draft = displayedUser
         draft.permissions = permissions
         draft.hasNoLineManager = hasNoLineManagerDraft
+        draft.setLineManagerUserIds(Array(selectedLineManagerUserIds).sorted())
+        if !selectedLineManagerUserIds.isEmpty { draft.hasNoLineManager = false }
+        draft.annualLeaveEnabled = annualLeaveEnabledDraft
+        draft.isActive = isActive
         return draft
     }
 
+    /// `lineManagerRequiredError` for the user as it will be saved (RULEBOOK §8, §11).
+    private var lineManagerRequiredMessage: String? {
+        guard canEditPermissionsMatrix else { return nil }
+        return AnnualLeaveApproval.lineManagerRequiredError(
+            for: draftUserForAnnualLeaveValidation,
+            users: userStore.organizationUsers
+        )
+    }
+
     private var lineManagerRoutingBlocked: Bool {
-        guard canEditPermissionsMatrix else { return false }
-        if permissions.operativeMode {
-            return selectedLineManagerUserIds.isEmpty
-        }
-        if permissions.manager || permissions.adminAccess {
-            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: draftUserForAnnualLeaveValidation) {
-                return selectedLineManagerUserIds.isEmpty
-            }
-            return selectedLineManagerUserIds.isEmpty && !hasNoLineManagerDraft
-        }
-        return false
+        lineManagerRequiredMessage != nil
     }
 
     private var lineManagerValidationMessage: String? {
-        guard lineManagerRoutingBlocked else { return nil }
-        if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: draftUserForAnnualLeaveValidation) {
-            return "This user requires a Line Manager to Approve/Decline annual leave requests. Please set their line manager above."
-        }
-        if permissions.operativeMode {
-            return "Line manager is required for operatives."
-        }
-        return "Please assign a line manager or choose No line manager."
+        lineManagerRequiredMessage
     }
 
     private var willDisableAnnualLeaveSelfBookOnSave: Bool {
@@ -2704,7 +2738,8 @@ struct EditUserView: View {
                         value: lastSeenDisplay(for: displayedUser)
                     )
                     ManageUserCardDivider()
-                    if canEditPermissionsMatrix {
+                    // RULEBOOK §8: employment type is pay (`canChangePersonPay`).
+                    if canEditPermissionsMatrix && userStore.canChangePay(of: displayedUser) {
                         Menu {
                             ForEach(EmploymentType.allCases) { type in
                                 Button(type.title) {
@@ -2931,7 +2966,7 @@ struct EditUserView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     Spacer()
-                    Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))")
+                    Text(entry.dayRate.map { "\(localeCurrencySymbol())\(String(format: "%.2f", $0))" } ?? "Not set")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(ManageUserProfilePalette.textPrimary)
                 }

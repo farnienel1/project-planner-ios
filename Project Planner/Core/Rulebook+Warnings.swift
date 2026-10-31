@@ -113,8 +113,43 @@ extension CanonicalBusinessEngine {
         )
     }
 
+    /// `unbookedScanDays`: the days the unbooked-labour scan covers (weekdays, plus Saturday and Sunday when
+    /// include-weekends is on; Full week then runs to Sunday). Nil when the script did not answer.
+    nonisolated static func unbookedScanDays(
+        reference: Date,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier,
+        clashLookaheadMode: String,
+        clashLookaheadDays: Int,
+        paymentRunMode: String,
+        ranges: [(startDay: Int, endDay: Int)],
+        recurringRunStartDay: String,
+        recurringRunEndDay: String,
+        includeWeekends: Bool
+    ) -> CanonicalClashScanDays? {
+        var payload = coverageWindowPayload(
+            reference: reference,
+            timeZone: timeZone,
+            clashLookaheadMode: clashLookaheadMode,
+            clashLookaheadDays: clashLookaheadDays,
+            paymentRunMode: paymentRunMode,
+            ranges: ranges,
+            recurringRunStartDay: recurringRunStartDay,
+            recurringRunEndDay: recurringRunEndDay
+        )
+        payload["includeWeekends"] = includeWeekends
+        guard let row = callJSON("unbookedScanDays", arguments: [payload]) as? [String: Any],
+              let start = row["startDayKey"] as? String, !start.isEmpty,
+              let end = row["endDayKey"] as? String, !end.isEmpty else { return nil }
+        return CanonicalClashScanDays(
+            startDayKey: start,
+            endDayKey: end,
+            dayKeys: row["dayKeys"] as? [String] ?? [],
+            fallbackReason: row["fallbackReason"] as? String
+        )
+    }
+
     /// The whole scan window for one scan: `coverageWindow` (with its fallback reason), the unbooked end
-    /// (`unbookedLabourWindowEnd`) and the clash days (`clashScanDays` over `bookedDayKeys`).
+    /// (`unbookedScanDays`) and the clash days (`clashScanDays` over `bookedDayKeys`).
     /// Nil only when the script did not answer.
     nonisolated static func warningScanWindow(
         detection: OrgWarningDetectionSettings,
@@ -151,12 +186,19 @@ extension CanonicalBusinessEngine {
             bookedDayKeys: bookedDayKeys
         )
         let clashEnd = clash.flatMap { date(fromDayKey: $0.endDayKey, calendar: calendar) } ?? end
-        let unbookedEnd = unbookedLabourWindowEnd(
-            coverageEnd: end,
+        // `unbookedScanDays`: Full week with include-weekends runs to Sunday of the same week.
+        let unbooked = unbookedScanDays(
+            reference: reference,
+            timeZone: timeZone,
             clashLookaheadMode: detection.clashLookaheadMode.rawValue,
-            includeWeekends: detection.includeWeekendsForUnbookedLabour,
-            calendar: calendar
+            clashLookaheadDays: detection.clashLookaheadDays,
+            paymentRunMode: invoicing.paymentRunMode.rawValue,
+            ranges: ranges,
+            recurringRunStartDay: invoicing.recurringRunStartDay.rawValue,
+            recurringRunEndDay: invoicing.recurringRunEndDay.rawValue,
+            includeWeekends: detection.includeWeekendsForUnbookedLabour
         )
+        let unbookedEnd = unbooked.flatMap { date(fromDayKey: $0.endDayKey, calendar: calendar) } ?? end
         return WarningScanWindow(
             start: start,
             end: end,
@@ -212,9 +254,38 @@ extension CanonicalBusinessEngine {
         callJSON("resolvedWarningKeys", arguments: [records]) as? [String]
     }
 
-    /// `WarningDecisions` as the script reads it.
-    nonisolated static func warningDecisions(resolvedKeys: [String], acceptedClashes: [[String: Any]]) -> [String: Any] {
-        ["resolvedKeys": resolvedKeys, "acceptedClashes": acceptedClashes]
+    /// `approvedWarningKeys`: keys of `warningResolutions` records whose status is approved (never dismissed).
+    nonisolated static func approvedWarningKeys(_ records: [[String: Any]]) -> [String]? {
+        callJSON("approvedWarningKeys", arguments: [records]) as? [String]
+    }
+
+    /// `WarningDecisions` as the script reads it. `approvedKeys` (from `approvedWarningKeys`) is what
+    /// `isClashApproved` / `isClashGroupApproved` count; left out, they read `resolvedKeys`.
+    nonisolated static func warningDecisions(
+        resolvedKeys: [String],
+        approvedKeys: [String]? = nil,
+        acceptedClashes: [[String: Any]]
+    ) -> [String: Any] {
+        var decisions: [String: Any] = ["resolvedKeys": resolvedKeys, "acceptedClashes": acceptedClashes]
+        if let approvedKeys { decisions["approvedKeys"] = approvedKeys }
+        return decisions
+    }
+
+    /// `operativeClashGroups(input)`: `{ operativeBookings, people, managerIds, day }`. Nil when the script did not answer.
+    nonisolated static func operativeClashGroups(_ input: [String: Any]) -> [[String: Any]]? {
+        callJSON("operativeClashGroups", arguments: [input]) as? [[String: Any]]
+    }
+
+    /// `isClashGroupApproved({ pairs }, decisions)`: every overlapping pair of the cluster is approved.
+    /// Nil when the script did not answer.
+    nonisolated static func isClashGroupApproved(
+        pairs: [(bookingAId: String, bookingBId: String)],
+        decisions: [String: Any]
+    ) -> Bool? {
+        let group: [String: Any] = [
+            "pairs": pairs.map { ["bookingAId": $0.bookingAId, "bookingBId": $0.bookingBId] },
+        ]
+        return callJSON("isClashGroupApproved", arguments: [group, decisions]) as? Bool
     }
 
     /// `isWarningActive`: the row still counts and is listed. Nil when the script did not answer.

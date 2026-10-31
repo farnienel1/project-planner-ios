@@ -17,6 +17,50 @@ extension CanonicalBusinessEngine {
         var hourlyRate: Double?
     }
 
+    /// `payRateHistoryWriteFields` result: one new `operativeDayRateHistory` row.
+    nonisolated struct CanonicalPayRateHistoryWrite: Sendable {
+        var userId: String
+        var operativeId: String
+        /// Nil on a "rate cleared" row (written as null).
+        var dayRate: Double?
+        /// Nil on a "rate cleared" row (written as null).
+        var payBasis: String?
+        /// Organisation-zone midnight of the effective day.
+        var effectiveAt: Date
+        var effectiveDayKey: String
+    }
+
+    /// `payRateHistoryWriteFields({ userId, operativeId, rate, payBasis, effective, timeZone })`. A nil `rate`
+    /// records "rate cleared". Nil when there is no person id or the script did not answer.
+    nonisolated static func payRateHistoryWriteFields(
+        userId: String?,
+        operativeId: String?,
+        rate: Double?,
+        payBasis: String?,
+        effective: Date,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> CanonicalPayRateHistoryWrite? {
+        let input: [String: Any] = [
+            "userId": userId ?? "",
+            "operativeId": operativeId ?? "",
+            "rate": rate.map { $0 as Any } ?? NSNull(),
+            "payBasis": payBasis ?? NSNull(),
+            "effective": effective.timeIntervalSince1970 * 1000,
+            "timeZone": timeZone,
+        ]
+        guard let row = callJSON("payRateHistoryWriteFields", arguments: [input]) as? [String: Any],
+              let effectiveAtMs = jsonNumber(row["effectiveAtMs"]),
+              let dayKey = row["effectiveDayKey"] as? String else { return nil }
+        return CanonicalPayRateHistoryWrite(
+            userId: row["userId"] as? String ?? "",
+            operativeId: row["operativeId"] as? String ?? "",
+            dayRate: jsonNumber(row["dayRate"]),
+            payBasis: row["payBasis"] as? String,
+            effectiveAt: Date(timeIntervalSince1970: effectiveAtMs / 1000),
+            effectiveDayKey: dayKey
+        )
+    }
+
     /// `payRateOnDay` result.
     nonisolated struct CanonicalPayRateOnDay: Equatable, Sendable {
         /// `day` or `hourly`.
@@ -34,9 +78,9 @@ extension CanonicalBusinessEngine {
         var id: String
         var userId: String?
         var operativeId: String?
-        /// Amount per day or per hour (the field keeps its old name for both bases).
-        var dayRate: Double
-        /// Nil on old rows, which count as `day`.
+        /// Amount per day or per hour (the field keeps its old name for both bases). Nil on a "rate cleared" row.
+        var dayRate: Double?
+        /// Nil on old rows, which count as `day`, and on a "rate cleared" row.
         var payBasis: String?
         var effectiveAt: Date
         var createdAt: Date
@@ -136,7 +180,7 @@ extension CanonicalBusinessEngine {
                 "id": row.id,
                 "userId": row.userId ?? NSNull(),
                 "operativeId": row.operativeId ?? NSNull(),
-                "dayRate": row.dayRate.isFinite ? row.dayRate : 0,
+                "dayRate": row.dayRate.map { ($0.isFinite ? $0 : 0) as Any } ?? NSNull(),
                 "payBasis": row.payBasis ?? NSNull(),
                 "effectiveAt": isoString(from: row.effectiveAt),
                 "createdAt": isoString(from: row.createdAt)
@@ -198,6 +242,26 @@ extension CanonicalBusinessEngine {
         (callJSON("passwordMinLength", arguments: [["developerAccount": developerAccount]]) as? NSNumber)?.intValue
     }
 
+    /// `passwordMinLength({ email })`: the platform owner's email (`isPlatformOwnerEmail`) needs the developer minimum.
+    nonisolated static func passwordMinLength(email: String?) -> Int? {
+        (callJSON("passwordMinLength", arguments: [["email": email ?? ""]]) as? NSNumber)?.intValue
+    }
+
+    /// `passwordPolicyError(password, { email })`: the account's email decides the minimum.
+    nonisolated static func passwordPolicyError(_ password: String, email: String?) -> PasswordPolicyCheck {
+        let options: [String: Any] = ["email": email ?? ""]
+        guard let result = callJSON("passwordPolicyError", arguments: [password, options]) else {
+            return .unavailable
+        }
+        if let message = result as? String { return .rejected(message) }
+        return .accepted
+    }
+
+    /// `isPlatformOwnerEmail(email)`: the platform owner's developer account, ignoring case and spaces.
+    nonisolated static func isPlatformOwnerEmail(_ email: String?) -> Bool {
+        callJSON("isPlatformOwnerEmail", arguments: [email ?? ""]) as? Bool ?? false
+    }
+
     /// `passwordPolicyError(password, { developerAccount })`: nil when long enough, else the message to show.
     /// Returns nil only when the script answered null; if the script did not answer at all, the caller gets
     /// `.unavailable` so it does not let a password through unchecked.
@@ -220,10 +284,9 @@ extension CanonicalBusinessEngine {
 
 /// Inputs the pay and password rules need from an account. Swift only maps fields; the rules are above.
 extension AppUser {
-    /// The platform owner's developer account (web `isPlatformOwnerEmail`, `lib/platform/owner.ts`).
-    /// RULEBOOK-GAP(isPlatformOwnerEmail): the owner email is not in the packed script yet.
+    /// The platform owner's developer account: `isPlatformOwnerEmail` from the packed script.
     static func isPlatformOwnerEmail(_ email: String?) -> Bool {
-        (email ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == AccountDeletionClient.protectedEmail
+        CanonicalBusinessEngine.isPlatformOwnerEmail(email)
     }
 
     /// Stored pay as `readStoredRates` / `payRateOnDay` read it.

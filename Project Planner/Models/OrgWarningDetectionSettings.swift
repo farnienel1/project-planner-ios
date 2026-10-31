@@ -112,17 +112,11 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     // The scan window, its Full week days and its summary copy come from the script
     // (`CanonicalBusinessEngine.warningScanWindow`: `coverageWindow`, `clashScanDays`). No Swift calendar here.
 
-    /// Notice for `coverageWindow.fallbackReason` (RULEBOOK §5: never a silent fallback). Same words as web
-    /// `warningLookaheadFallbackNotice`. Nil when the saved number of days was used.
+    /// `warningLookaheadFallbackNotice(reason)` for `coverageWindow.fallbackReason` (RULEBOOK §5: never a
+    /// silent fallback). Nil when the saved number of days was used.
     static func lookaheadFallbackNotice(_ reason: String?) -> String? {
-        switch reason {
-        case "lookaheadDaysMissing":
-            return "No number of days is saved for this company, so warnings scan 7 days (today and the next 6). Choose a number and save to change it."
-        case "lookaheadDaysInvalid":
-            return "The saved number of days is not valid, so warnings scan 7 days (today and the next 6). Choose a number and save to fix it."
-        default:
-            return nil
-        }
+        guard let reason, !reason.isEmpty else { return nil }
+        return CanonicalBusinessEngine.callJSON("warningLookaheadFallbackNotice", arguments: [reason]) as? String
     }
 
     static func fromFirestore(_ data: [String: Any]) -> OrgWarningDetectionSettings {

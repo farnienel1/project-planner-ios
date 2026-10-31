@@ -262,6 +262,19 @@ private struct OperativeAnnualLeaveApprovedListView: View {
         }
     }
 
+    /// RULEBOOK §9, §16: a holiday delete follows the same deciders as approval (`canDecideLeave`).
+    private func canRemove(_ booking: HolidayBooking) -> Bool {
+        let viewer = userStore.currentUser.map { me in
+            userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me
+        }
+        return AnnualLeaveApproval.canDecide(
+            booking,
+            viewer: viewer,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
+    }
+
     var body: some View {
         List {
             if approvedBookings.isEmpty {
@@ -285,17 +298,19 @@ private struct OperativeAnnualLeaveApprovedListView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
-                        Button {
-                            bookingPendingRemoval = booking
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title3)
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(HolidayChrome.pending)
+                        if canRemove(booking) {
+                            Button {
+                                bookingPendingRemoval = booking
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title3)
+                                    .symbolRenderingMode(.hierarchical)
+                                    .foregroundStyle(HolidayChrome.pending)
+                            }
+                            .accessibilityIdentifier("operativeAnnualLeaveApprovedList.row.\(booking.id).removeAnnualLeaveBooking")
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove annual leave booking")
                         }
-                        .accessibilityIdentifier("operativeAnnualLeaveApprovedList.row.\(booking.id).removeAnnualLeaveBooking")
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Remove annual leave booking")
                     }
                     .padding(.vertical, 4)
                     .listRowBackground(PPColor.card)
@@ -735,7 +750,8 @@ struct OperativeAnnualLeaveCalendarView: View {
             .accessibilityIdentifier("operativeAnnualLeaveCalendar.confirmAnnualLeaveBookingChange")
             .buttonStyle(.plain)
             .disabled(isSaving || changeSlot == approvedBooking(on: day)?.timeSlot)
-            if let booking = approvedBooking(on: day) {
+            // RULEBOOK §9, §16: a holiday delete follows the deciders (`canDecideLeave`).
+            if let booking = approvedBooking(on: day), canDecide(booking) {
                 Button {
                     bookingPendingRemoval = booking
                 } label: {
@@ -968,7 +984,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                                 .foregroundStyle(HolidayChrome.muted)
                         }
                         Spacer(minLength: 0)
-                        if allowsRemove {
+                        if allowsRemove && canDecide(booking) {
                             Button {
                                 bookingPendingRemoval = booking
                             } label: {
@@ -1137,17 +1153,19 @@ struct OperativeAnnualLeaveCalendarView: View {
                                 .foregroundStyle(HolidayChrome.muted)
                         }
                         Spacer(minLength: 8)
-                        Button {
-                            bookingPendingRemoval = booking
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title3)
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(Color.red.opacity(0.85))
+                        if canDecide(booking) {
+                            Button {
+                                bookingPendingRemoval = booking
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title3)
+                                    .symbolRenderingMode(.hierarchical)
+                                    .foregroundStyle(Color.red.opacity(0.85))
+                            }
+                            .accessibilityIdentifier("operativeAnnualLeaveCalendar.row.\(booking.id).deleteAnnualLeave")
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Delete annual leave")
                         }
-                        .accessibilityIdentifier("operativeAnnualLeaveCalendar.row.\(booking.id).deleteAnnualLeave")
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Delete annual leave")
                     }
                     .padding(12)
                     .background(ProjectWorksRevampColors.surface)
@@ -1408,6 +1426,7 @@ struct OperativeAnnualLeaveCalendarView: View {
 
     @MainActor
     private func removeApprovedBooking(_ booking: HolidayBooking) async {
+        guard canDecide(booking) else { return }
         isSaving = true
         defer { isSaving = false }
         await holidayStore.deleteBooking(booking)

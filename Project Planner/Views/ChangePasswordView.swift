@@ -95,8 +95,8 @@ struct ChangePasswordView: View {
     /// RULEBOOK §14: `passwordPolicyError` decides the minimum (8; the platform owner's developer account 10).
     private var passwordPolicyMessage: String? {
         guard !newPassword.isEmpty else { return nil }
-        let developer = AppUser.isPlatformOwnerEmail(firebaseBackend.currentUser?.email)
-        switch CanonicalBusinessEngine.passwordPolicyError(newPassword, developerAccount: developer) {
+        // `passwordMinLength({ email })`: the account's email decides the developer minimum.
+        switch CanonicalBusinessEngine.passwordPolicyError(newPassword, email: firebaseBackend.currentUser?.email) {
         case .accepted: return nil
         case .rejected(let message): return message
         case .unavailable: return "Could not check the password. Please try again."

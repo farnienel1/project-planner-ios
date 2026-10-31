@@ -303,6 +303,12 @@ class BookingStore: ObservableObject {
     }
 
     func deleteBooking(_ booking: Booking) async {
+        // RULEBOOK §2 (`offlineAvailability("booking.delete")`): deleting a booking is online only; the
+        // delete and its tombstone are never queued.
+        guard OfflinePolicy.isEnabled(.deleteBooking, isOnline: smartCache?.isOnline ?? true) else {
+            errorMessage = OfflinePolicy.onlineOnlyMessage
+            return
+        }
         bookings.removeAll { $0.id == booking.id }
         try? await persistenceService.saveBookingData(bookings: bookings)
         smartCache?.cacheBookings(bookings)
@@ -315,30 +321,22 @@ class BookingStore: ObservableObject {
         ) ?? fb.resolvedOrganizationIdForOfflineWrites()
         guard let orgId else { return }
 
-        if smartCache?.isOnline == false {
-            OfflineOutboxStore.shared.enqueueDeleteBooking(booking.id, documentId: booking.documentId, organizationId: orgId)
-            return
-        }
-
         do {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             try await fb.deleteBooking(booking, organizationId: orgId)
         } catch {
-            if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
-                OfflineOutboxStore.shared.enqueueDeleteBooking(booking.id, documentId: booking.documentId, organizationId: orgId)
-                errorMessage = "Removed locally. Will sync when you're back online."
-            } else {
-                // Refused (for example: only an admin may delete a labour booking). It still exists on
-                // the server, so put it back on screen.
-                if !bookings.contains(where: { $0.id == booking.id }) {
-                    bookings.append(booking)
-                    smartCache?.cacheBookings(bookings)
-                    try? await persistenceService.saveBookingData(bookings: bookings)
-                    ScheduleChangeNotifier.postBookingStoreDidChange()
-                }
-                errorMessage = error.localizedDescription
-                print("🔥🔥🔥 DEBUG: Error deleting booking from Firebase: \(error)")
+            // Refused (for example: only an admin may delete a labour booking), or the connection dropped:
+            // deletes are online only, so nothing is queued. It still exists on the server; put it back.
+            if !bookings.contains(where: { $0.id == booking.id }) {
+                bookings.append(booking)
+                smartCache?.cacheBookings(bookings)
+                try? await persistenceService.saveBookingData(bookings: bookings)
+                ScheduleChangeNotifier.postBookingStoreDidChange()
             }
+            errorMessage = OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true)
+                ? OfflinePolicy.onlineOnlyMessage
+                : error.localizedDescription
+            print("🔥🔥🔥 DEBUG: Error deleting booking from Firebase: \(error)")
         }
     }
     

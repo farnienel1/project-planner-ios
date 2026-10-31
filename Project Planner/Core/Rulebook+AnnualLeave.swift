@@ -208,6 +208,43 @@ extension CanonicalBusinessEngine {
         callJSON("leaveApproverIds", arguments: [requester, roster]) as? [String]
     }
 
+    // MARK: - Self-booking, line-manager requirement, deciders (§8, §9, §11)
+
+    /// `canSelfBookAnnualLeave(user)`. Nil when the script did not answer.
+    nonisolated static func canSelfBookAnnualLeave(user: [String: Any]) -> Bool? {
+        callJSON("canSelfBookAnnualLeave", arguments: [user]) as? Bool
+    }
+
+    /// `lineManagerRequiredError(user, roster)`: `LINE_MANAGER_REQUIRED_MESSAGE` when this person needs a
+    /// current line manager and has none, else nil.
+    nonisolated static func lineManagerRequiredError(user: [String: Any], roster: [[String: Any]]) -> String? {
+        callJSON("lineManagerRequiredError", arguments: [user, roster]) as? String
+    }
+
+    /// `usersMissingLineManager(roster)`: ids that fail `lineManagerRequiredError`. Nil when the script did not answer.
+    nonisolated static func usersMissingLineManager(roster: [[String: Any]]) -> [String]? {
+        callJSON("usersMissingLineManager", arguments: [roster]) as? [String]
+    }
+
+    /// `canDecideLeave(viewer, requester, roster)`. Nil when the script did not answer.
+    nonisolated static func canDecideLeave(
+        viewer: [String: Any],
+        requester: [String: Any],
+        roster: [[String: Any]]
+    ) -> Bool? {
+        callJSON("canDecideLeave", arguments: [viewer, requester, roster]) as? Bool
+    }
+
+    /// `leaveDecisionQueue(viewer, requests, roster)`: the request rows kept, in input order (extra keys
+    /// on a row come back unchanged). Nil when the script did not answer.
+    nonisolated static func leaveDecisionQueue(
+        viewer: [String: Any],
+        requests: [[String: Any]],
+        roster: [[String: Any]]
+    ) -> [[String: Any]]? {
+        callJSON("leaveDecisionQueue", arguments: [viewer, requests, roster]) as? [[String: Any]]
+    }
+
     // MARK: - Notifications (§13)
 
     /// `notificationShowsInInbox(prefs, type)`. A toggle never hides an inbox row; true when the script did not answer.
@@ -262,21 +299,66 @@ enum AnnualLeaveApproval {
         return payload
     }
 
-    /// `LeaveApproverMember` rows for the script.
+    /// `LeaveApproverMember & LeaveRequester` rows for the script (approver flags plus each person's own
+    /// line-manager fields, as `leaveDecisionQueue` reads them).
     static func rosterPayload(_ users: [AppUser]) -> [[String: Any]] {
         users.map { user in
-            let role = UserStore.staffAccountRole(for: user)
-            return [
+            var row: [String: Any] = [
                 "id": user.id,
                 "isActive": user.isActive,
-                "role": [
-                    "isSuperAdmin": role.isSuperAdmin,
-                    "isAdmin": role.isAdmin,
-                    "isManager": role.isManager,
-                    "isOperativeMode": role.isOperativeMode,
-                ],
+                "role": rolePayload(user),
+                "assignedManagerUserIds": user.assignedManagerUserIds,
+                "hasNoLineManager": user.hasNoLineManager,
             ]
+            if let legacy = user.assignedManagerUserId { row["assignedManagerUserId"] = legacy }
+            return row
         }
+    }
+
+    /// `StaffAccountRole` for the script.
+    static func rolePayload(_ user: AppUser) -> [String: Any] {
+        let role = UserStore.staffAccountRole(for: user)
+        return [
+            "isSuperAdmin": role.isSuperAdmin,
+            "isAdmin": role.isAdmin,
+            "isManager": role.isManager,
+            "isOperativeMode": role.isOperativeMode,
+        ]
+    }
+
+    /// `LeaveDecisionViewer` for the script.
+    static func viewerPayload(_ viewer: AppUser) -> [String: Any] {
+        ["id": viewer.id, "role": rolePayload(viewer)]
+    }
+
+    /// `LeaveSelfBookUser` fields of `users/{uid}` for `canSelfBookAnnualLeave` / `lineManagerRequiredError`.
+    /// Pass the user as it will be saved (edited permissions and line managers).
+    static func selfBookPayload(_ user: AppUser) -> [String: Any] {
+        var payload: [String: Any] = [
+            "id": user.id,
+            "role": user.role.rawValue,
+            "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
+            "operativeMode": user.permissions.operativeMode,
+            "isActive": user.isActive,
+            "annualLeaveEnabled": user.annualLeaveEnabled,
+            "assignedManagerUserIds": user.assignedManagerUserIds,
+            "hasNoLineManager": user.hasNoLineManager,
+        ]
+        if let legacy = user.assignedManagerUserId { payload["assignedManagerUserId"] = legacy }
+        return payload
+    }
+
+    /// `lineManagerRequiredError(user, roster)` for a user as it will be saved. Nil when no line manager is needed.
+    static func lineManagerRequiredError(for user: AppUser, users: [AppUser]) -> String? {
+        CanonicalBusinessEngine.lineManagerRequiredError(user: selfBookPayload(user), roster: rosterPayload(users))
+    }
+
+    /// `usersMissingLineManager(roster)`: the roster people an admin still has to give a line manager.
+    static func usersMissingLineManager(_ users: [AppUser]) -> [AppUser] {
+        let roster: [[String: Any]] = users.map { selfBookPayload($0) }
+        guard let ids = CanonicalBusinessEngine.usersMissingLineManager(roster: roster) else { return [] }
+        let missing = Set(ids)
+        return users.filter { missing.contains($0.id) }
     }
 
     /// `leaveApproverIds` for this account. Nil when the script did not answer.
@@ -324,35 +406,60 @@ enum AnnualLeaveApproval {
         operatives: [Operative]
     ) -> Bool {
         guard let viewer else { return false }
+        // Identity only: same-email documents, former invite ids and the operative row's email are the
+        // viewer's own account, which `canDecideLeave` (one id) cannot see.
         if isOwnRequest(booking, viewer: viewer, users: users, operatives: operatives) { return false }
-        let role = UserStore.staffAccountRole(for: viewer)
-        if (role.isSuperAdmin || role.isAdmin) && !role.isOperativeMode { return true }
         let requesterAccount = requester(for: booking, users: users, operatives: operatives)
-        guard let approvers = approverIds(for: requesterAccount, fallbackUserId: booking.userId, users: users) else {
-            return false
-        }
-        return !viewerIds(viewer).isDisjoint(with: approvers)
+        return CanonicalBusinessEngine.canDecideLeave(
+            viewer: viewerPayload(viewer),
+            requester: requesterPayload(requesterAccount, fallbackUserId: booking.userId),
+            roster: rosterPayload(users)
+        ) ?? false
     }
 
-    /// Pending requests (new or cancellation) the viewer may decide, from `HolidayStore.pendingRequests`.
+    /// `leaveDecisionQueue`: the requests (pending, or approved with a cancellation request) the viewer
+    /// may decide. The requester is resolved to its account first, so the row's `userId` is that account.
     static func decidableRequests(
         _ pending: [HolidayBooking],
         viewer: AppUser?,
         users: [AppUser],
         operatives: [Operative]
     ) -> [HolidayBooking] {
-        pending.filter { canDecide($0, viewer: viewer, users: users, operatives: operatives) }
+        guard let viewer else { return [] }
+        let candidates = pending.filter { !isOwnRequest($0, viewer: viewer, users: users, operatives: operatives) }
+        var rows: [[String: Any]] = []
+        for (index, booking) in candidates.enumerated() {
+            var row: [String: Any] = ["queueIndex": index, "status": booking.status.rawValue]
+            let storedUid = booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let accountId = requester(for: booking, users: users, operatives: operatives)?.id ?? storedUid
+            if !accountId.isEmpty { row["userId"] = accountId }
+            if let oid = booking.operativeId { row["operativeId"] = oid.uuidString }
+            if let at = booking.cancellationRequestedAt { row["cancellationRequestedAt"] = at.timeIntervalSince1970 * 1000 }
+            if let by = booking.cancellationRequestedByUserId { row["cancellationRequestedByUserId"] = by }
+            rows.append(row)
+        }
+        guard let kept = CanonicalBusinessEngine.leaveDecisionQueue(
+            viewer: viewerPayload(viewer),
+            requests: rows,
+            roster: rosterPayload(users)
+        ) else { return [] }
+        let keptIndexes = Set(kept.compactMap { ($0["queueIndex"] as? NSNumber)?.intValue })
+        var result: [HolidayBooking] = []
+        for (index, booking) in candidates.enumerated() where keptIndexes.contains(index) {
+            result.append(booking)
+        }
+        return result
     }
 
-    /// The viewer books their own leave approved (user decision D5): the `annualLeaveSelfBook`
-    /// permission and not operative mode. RULEBOOK-GAP(canSelfBookAnnualLeave): no export yet.
+    /// `canSelfBookAnnualLeave`: the viewer books their own leave approved.
     static func selfBooksOwnLeave(_ user: AppUser) -> Bool {
         AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: user)
     }
 
-    /// Informational only: requests go to the company admins until a line manager is set.
-    static func showsNoLineManagerNotice(for user: AppUser) -> Bool {
-        !selfBooksOwnLeave(user) && !user.hasLineManager
+    /// Shown while `lineManagerRequiredError` says this person is missing a current line manager.
+    /// Their requests still reach every active admin through `leaveApproverIds` meanwhile.
+    static func showsNoLineManagerNotice(for user: AppUser, users: [AppUser]) -> Bool {
+        lineManagerRequiredError(for: user, users: users) != nil
     }
 }
 

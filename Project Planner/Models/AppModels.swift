@@ -282,7 +282,8 @@ struct OperativeDayRateHistoryEntry: Identifiable, Codable, Hashable {
     var userId: String?
     /// Local operative roster id when the change is tracked per-roster-row (including operatives without an app login).
     var operativeId: UUID?
-    var dayRate: Double
+    /// Nil on a "rate cleared" row (`dayRate: null`, RULEBOOK §8): no rate from that day.
+    var dayRate: Double?
     var effectiveAt: Date
     var createdAt: Date
     /// `day` or `hourly` (RULEBOOK §8). Nil on old rows, which count as day. `dayRate` holds the hourly figure for hourly rows.

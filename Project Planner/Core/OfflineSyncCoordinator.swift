@@ -41,10 +41,9 @@ enum OfflineSyncCoordinator {
                     failed += 1
                     continue
                 }
-                let isBookingSave = entry.operation == .saveBooking || entry.operation == .saveManagerSiteBooking
-                // An edit to a booking that is gone (deleted elsewhere before tombstones existed) must not
-                // bring it back either. RULEBOOK-GAP(bookingReplayNotFound): not in `bookingReplayRefusedIsFinal`.
-                if BookingWritePatch.isRefusedFinal(error) || (isBookingSave && BookingWritePatch.isNotFound(error)) {
+                // `bookingReplayRefusedIsFinal({ code, isCreate })`: also final is not-found on an edit replay
+                // (the booking was deleted elsewhere; an edit never turns into a create).
+                if BookingWritePatch.isRefusedFinal(error, isCreate: bookingSaveIsCreate(entry)) {
                     // RULEBOOK §2: a refused replay is final (`bookingReplayRefusedIsFinal`). The booking
                     // was deleted (tombstone) or cancelled elsewhere, or the area is online only.
                     handleRefused(entry: entry, outbox: outbox)
@@ -64,6 +63,21 @@ enum OfflineSyncCoordinator {
 
         print("🔥🔥🔥 DEBUG: [OfflineSync] Done — synced: \(synced), failed: \(failed), remaining: \(outbox.pendingCount)")
         return (synced, failed)
+    }
+
+    /// For a queued booking save: true for a create (no `changedFields`), false for an edit. Nil otherwise.
+    private static func bookingSaveIsCreate(_ entry: OfflineOutboxEntry) -> Bool? {
+        let decoder = JSONDecoder()
+        switch entry.operation {
+        case .saveBooking:
+            guard let payload = try? decoder.decode(OfflineSaveBookingPayload.self, from: entry.payload) else { return nil }
+            return payload.changedFields == nil
+        case .saveManagerSiteBooking:
+            guard let payload = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: entry.payload) else { return nil }
+            return payload.changedFields == nil
+        default:
+            return nil
+        }
     }
 
     private static func execute(entry: OfflineOutboxEntry, firebaseBackend: FirebaseBackend) async throws {

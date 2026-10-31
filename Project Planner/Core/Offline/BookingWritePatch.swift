@@ -129,9 +129,10 @@ enum BookingWritePatch {
         return CanonicalBusinessEngine.bookingReplayRefusedIsFinal(errorCode: nsError.code)
     }
 
-    /// True when `error` is Firestore not-found (an edit to a document that is not there).
-    static func isNotFound(_ error: Error) -> Bool {
+    /// `bookingReplayRefusedIsFinal({ code, isCreate })` for a Firestore error on a queued booking save.
+    static func isRefusedFinal(_ error: Error, isCreate: Bool?) -> Bool {
         let nsError = error as NSError
-        return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 5
+        guard nsError.domain == "FIRFirestoreErrorDomain" else { return false }
+        return CanonicalBusinessEngine.bookingReplayRefusedIsFinal(errorCode: nsError.code, isCreate: isCreate)
     }
 }

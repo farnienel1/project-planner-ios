@@ -198,11 +198,26 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
         var overlapDetail: String
         /// All overlapping bookings for this person on this day. Falls back to A/B for older caches.
         var entries: [ClashTimelineEntry]? = nil
+        /// Every overlapping pair in the cluster (`operativeClashGroups`): approve / un-approve write each one,
+        /// and the cluster is approved only when every pair is (`isClashGroupApproved`). Nil in older caches.
+        var pairs: [ClashPair]? = nil
 
         var allEntries: [ClashTimelineEntry] {
             if let entries, entries.count >= 2 { return entries }
             return [entryA, entryB]
         }
+
+        /// `pairs`, else the A/B pair (older caches).
+        nonisolated var approvalPairs: [ClashPair] {
+            if let pairs, !pairs.isEmpty { return pairs }
+            return [ClashPair(bookingAId: bookingAId.uuidString, bookingBId: bookingBId.uuidString)]
+        }
+    }
+
+    /// One overlapping pair of an operative clash cluster, ids as stored.
+    struct ClashPair: Hashable, Codable, Sendable {
+        var bookingAId: String
+        var bookingBId: String
     }
 
     struct ManagerClashWarningDetails: Hashable, Codable, Sendable {

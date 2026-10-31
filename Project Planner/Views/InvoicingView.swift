@@ -5408,9 +5408,8 @@ private enum InvoicePDFGenerationSupport {
             scheduleOptions: scheduleOptions,
             relatedUsers: relatedUsers
         )
-        // PAYE days are timesheet lines with no pay; a generated invoice leaves them off, as web's
-        // signed-sheet invoice does (lines at 0 are skipped). Leave rows are never collected here.
-        var rows = summary.lineItems.filter { !$0.isPayeDay }.map { InvoiceLineItem(payrollLine: $0) }
+        // PAYE and leave lines never go on an invoice: `invoiceLines` filters the rows below.
+        var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
 
         let draft = TimesheetDraftStore.load(
             userId: currentUser.id,
@@ -5451,7 +5450,7 @@ private enum InvoicePDFGenerationSupport {
             )
         }
 
-        return rows.sorted {
+        return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
             }
@@ -5476,7 +5475,8 @@ private enum InvoicePDFGenerationSupport {
             .sorted(by: { $0.effectiveAt < $1.effectiveAt })
 
         for entry in userHistory {
-            notes.append("Rate updated to \(formatCurrency(entry.dayRate)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
+            notes.append(entry.dayRate.map { "Rate updated to \(formatCurrency($0)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))." }
+                ?? "Rate not set from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
         }
 
         let matchedOperatives = operatives.filter {
@@ -5491,7 +5491,8 @@ private enum InvoicePDFGenerationSupport {
                 }
                 .sorted(by: { $0.effectiveAt < $1.effectiveAt })
             for entry in entries {
-                notes.append("Operative rate updated to \(formatCurrency(entry.dayRate)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
+                notes.append(entry.dayRate.map { "Operative rate updated to \(formatCurrency($0)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))." }
+                ?? "Operative rate not set from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
             }
         }
 
@@ -5872,9 +5873,8 @@ private struct GenerateInvoiceView: View {
             scheduleOptions: scheduleOptions,
             relatedUsers: userStore.organizationUsers
         )
-        // PAYE days are timesheet lines with no pay; a generated invoice leaves them off, as web's
-        // signed-sheet invoice does (lines at 0 are skipped). Leave rows are never collected here.
-        var rows = summary.lineItems.filter { !$0.isPayeDay }.map { InvoiceLineItem(payrollLine: $0) }
+        // PAYE and leave lines never go on an invoice: `invoiceLines` filters the rows below.
+        var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
 
         let draft = TimesheetDraftStore.load(
             userId: currentUser.id,
@@ -5915,7 +5915,7 @@ private struct GenerateInvoiceView: View {
             )
         }
 
-        return rows.sorted {
+        return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
             }
@@ -5936,7 +5936,8 @@ private struct GenerateInvoiceView: View {
             .sorted(by: { $0.effectiveAt < $1.effectiveAt })
 
         for entry in userHistory {
-            notes.append("Rate updated to \(formatCurrency(entry.dayRate)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
+            notes.append(entry.dayRate.map { "Rate updated to \(formatCurrency($0)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))." }
+                ?? "Rate not set from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
         }
 
         let matchedOperatives = operativeStore.allOperatives.filter {
@@ -5951,7 +5952,8 @@ private struct GenerateInvoiceView: View {
                 }
                 .sorted(by: { $0.effectiveAt < $1.effectiveAt })
             for entry in entries {
-                notes.append("Operative rate updated to \(formatCurrency(entry.dayRate)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
+                notes.append(entry.dayRate.map { "Operative rate updated to \(formatCurrency($0)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))." }
+                ?? "Operative rate not set from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
             }
         }
 
@@ -6103,6 +6105,15 @@ private struct TimesheetLeaveInfoRows: View {
 }
 
 private struct InvoiceLineItem {
+    /// `invoiceLines`: the rows a generated invoice carries (never PAYE or leave lines), in input order.
+    /// Empty when the script did not answer, so nothing unchecked is invoiced.
+    static func invoiceLines(_ rows: [InvoiceLineItem]) -> [InvoiceLineItem] {
+        guard let kept = CanonicalBusinessEngine.invoiceLineIndexes(
+            rows.map { (isPayeDay: $0.isPayeDay, isLeave: false) }
+        ) else { return [] }
+        return kept.compactMap { rows.indices.contains($0) ? rows[$0] : nil }
+    }
+
     let lineId: String
     let date: Date
     let jobNumber: String

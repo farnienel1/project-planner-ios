@@ -102,6 +102,19 @@ extension CanonicalBusinessEngine {
         }
     }
 
+    // MARK: - Invoice lines (§8)
+
+    /// `invoiceLines(lines)` over `(isPayeDay, isLeave)` flags: the indexes that go on a generated invoice, in
+    /// input order. PAYE and annual-leave lines never do. Nil when the script did not answer.
+    nonisolated static func invoiceLineIndexes(_ lines: [(isPayeDay: Bool, isLeave: Bool)]) -> [Int]? {
+        var rows: [[String: Any]] = []
+        for (index, line) in lines.enumerated() {
+            rows.append(["lineIndex": index, "isPayeDay": line.isPayeDay, "isLeave": line.isLeave])
+        }
+        guard let kept = callJSON("invoiceLines", arguments: [rows]) as? [[String: Any]] else { return nil }
+        return kept.compactMap { ($0["lineIndex"] as? NSNumber)?.intValue }
+    }
+
     // MARK: - Timesheet lines (§6)
 
     /// `OVERLAPPING_BOOKING_NOTE`.

@@ -1515,6 +1515,11 @@ struct ProjectBookingCard: View {
         return t
     }
 
+    /// Per-person pill: `payrollHoursResult.workedHours` (through `workedHoursSplit`), as web's Daily Overview.
+    private static func workedHoursPill(_ split: CanonicalWorkedHoursSplit?) -> String {
+        ScheduleCoverageFormat.hours(split?.workedHours ?? 0) + "h"
+    }
+
     private var mergedPersonRows: [ProjectDayPersonRow] {
         let p = payrollTimePolicy
         var keyed: [(Int, String, ProjectDayPersonRow)] = []
@@ -1530,7 +1535,7 @@ struct ProjectBookingCard: View {
                 name: personName,
                 subtitle: sub.text,
                 subtitleOvertime: sub.emphasizedOvertime,
-                pillText: b.scheduleCoveragePillHours(policy: p),
+                pillText: Self.workedHoursPill(b.workedHoursSplit(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
                 initials: PlannerUIInitials.from(personName),
                 gradientPair: initialsGradient(for: personName),
@@ -1547,7 +1552,7 @@ struct ProjectBookingCard: View {
                 name: managerName(userId: b.userId),
                 subtitle: sub.text,
                 subtitleOvertime: sub.emphasizedOvertime,
-                pillText: b.scheduleCoveragePillHours(policy: p),
+                pillText: Self.workedHoursPill(b.workedHoursSplit(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
                 initials: PlannerUIInitials.from(managerName(userId: b.userId)),
                 gradientPair: initialsGradient(for: managerName(userId: b.userId)),
@@ -1569,7 +1574,7 @@ struct ProjectBookingCard: View {
                 bookedOperativeNames: b.bookedOperativeNames(subcontractor: firm),
                 subtitle: sub.text,
                 subtitleOvertime: sub.emphasizedOvertime,
-                pillText: mirror.scheduleCoveragePillHours(policy: p),
+                pillText: Self.workedHoursPill(mirror.workedHoursSplit(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
                 initials: PlannerUIInitials.from(baseName),
                 gradientPair: initialsGradient(for: baseName),

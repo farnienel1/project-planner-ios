@@ -1213,12 +1213,13 @@ struct EditOperativeView: View {
                             payBasis: rateBasis
                         )
                     }
-                    if let newRate = newAmount {
+                    // A cleared rate writes a "rate cleared" row (`payRateHistoryWriteFields` with no rate).
+                    if newAmount != nil || previousAmount != nil {
                         try await firebaseBackend.recordOperativeDayRateChange(
                             organizationId: orgId,
                             userId: linkedUserId,
                             operativeId: operative.id,
-                            dayRate: newRate,
+                            dayRate: newAmount,
                             effectiveAt: Date(),
                             payBasis: rateBasis
                         )

@@ -387,17 +387,11 @@ struct AddUserView: View {
         )
     }
 
+    /// `lineManagerRequiredError` for the invite as it will be saved (RULEBOOK §8, §11).
     private var lineManagerSelectionValid: Bool {
-        if permissions.operativeMode {
-            return !selectedLineManagerUserIds.isEmpty
-        }
-        if permissions.manager || permissions.adminAccess {
-            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: inviteDraftUserForValidation) {
-                return !selectedLineManagerUserIds.isEmpty
-            }
-            return !selectedLineManagerUserIds.isEmpty || hasNoLineManager
-        }
-        return true
+        var draft = inviteDraftUserForValidation
+        draft.setLineManagerUserIds(Array(selectedLineManagerUserIds).sorted())
+        return AnnualLeaveApproval.lineManagerRequiredError(for: draft, users: userStore.organizationUsers) == nil
     }
 
     @ViewBuilder
@@ -443,7 +437,7 @@ struct AddUserView: View {
         if permissions.operativeMode {
             return "Holiday requests from this operative will go to their line manager(s) (and organisation admins)."
         }
-        if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: inviteDraftUserForValidation) {
+        if !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: inviteDraftUserForValidation) {
             return "Required while annual leave self-book is off. Requests route to these line manager(s)."
         }
         return "Optional for senior staff who book their own annual leave. Choose No line manager if they approve their own leave."

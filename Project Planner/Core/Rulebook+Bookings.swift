@@ -38,6 +38,14 @@ extension CanonicalBusinessEngine {
         callJSON("bookingReplayRefusedIsFinal", arguments: [errorCode]) as? Bool ?? false
     }
 
+    /// `bookingReplayRefusedIsFinal({ code, isCreate })`: permission-denied, or not-found (`5`) on an edit or
+    /// cancel replay (`isCreate` false). Nil `isCreate` means unknown (not-found is then not final).
+    nonisolated static func bookingReplayRefusedIsFinal(errorCode: Int, isCreate: Bool?) -> Bool {
+        var refusal: [String: Any] = ["code": errorCode]
+        refusal["isCreate"] = isCreate.map { $0 as Any } ?? NSNull()
+        return callJSON("bookingReplayRefusedIsFinal", arguments: [refusal]) as? Bool ?? false
+    }
+
     /// `BOOKING_REPLAY_REFUSED_MESSAGE`.
     nonisolated static var bookingReplayRefusedMessage: String {
         constant("BOOKING_REPLAY_REFUSED_MESSAGE", as: String.self)
