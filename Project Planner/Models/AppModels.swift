@@ -469,6 +469,12 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// `users/{uid}.formerUserIds` from `parseFormerUserIds`: invite placeholder ids this account replaced.
     /// Bookings stored under one still belong to this person. Append-only in Firestore; a user save does not write it.
     var formerUserIds: [String] = []
+    /// `users/{uid}.status` as stored (`pending` until sign-up finishes). `unbookedLabourRows` skips pending users (RULEBOOK §5).
+    var status: String? = nil
+    /// `users/{uid}.payBasis`: `day` or `hourly` (RULEBOOK §8). A rate save writes exactly one basis.
+    var payBasis: String? = nil
+    /// `users/{uid}.profilePhotoUpdatedAt`: refreshes a cached avatar when the photo changes (RULEBOOK §12).
+    var profilePhotoUpdatedAt: Date? = nil
     
     init(
         id: String,
@@ -595,6 +601,7 @@ extension AppUser {
         case annualLeaveCarriesOver, annualLeaveYearAllowance, annualLeaveYearAllowanceKey
         case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
         case documentName, documentDisplayName, formerUserIds, documentUpdatedAt
+        case status, payBasis, profilePhotoUpdatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -642,6 +649,9 @@ extension AppUser {
         documentName = try container.decodeIfPresent(String.self, forKey: .documentName) ?? ""
         documentDisplayName = try container.decodeIfPresent(String.self, forKey: .documentDisplayName) ?? ""
         formerUserIds = try container.decodeIfPresent([String].self, forKey: .formerUserIds) ?? []
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        payBasis = try container.decodeIfPresent(String.self, forKey: .payBasis)
+        profilePhotoUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .profilePhotoUpdatedAt)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -688,6 +698,9 @@ extension AppUser {
         try container.encode(documentName, forKey: .documentName)
         try container.encode(documentDisplayName, forKey: .documentDisplayName)
         try container.encode(formerUserIds, forKey: .formerUserIds)
+        try container.encodeIfPresent(status, forKey: .status)
+        try container.encodeIfPresent(payBasis, forKey: .payBasis)
+        try container.encodeIfPresent(profilePhotoUpdatedAt, forKey: .profilePhotoUpdatedAt)
     }
 
     /// Operatives default on; self-employed managers/admins default on; PAYE managers/admins default off.

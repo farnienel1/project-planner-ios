@@ -167,7 +167,10 @@ class FirebaseBackend: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var currentOrganization: Organization? {
-        didSet { OrganizationDocumentAbbreviation.update(from: currentOrganization) }
+        didSet {
+            OrganizationDocumentAbbreviation.update(from: currentOrganization)
+            OrganizationRulebookContext.update(from: currentOrganization)
+        }
     }
     @Published var userRole: UserRole = .basic
     /// Set after the root shell has kicked off the first org-wide store load (prevents duplicate parallel reloads on launch).
@@ -4299,6 +4302,9 @@ class FirebaseBackend: ObservableObject {
         parsed.documentDisplayName = data["displayName"] as? String ?? ""
         parsed.formerUserIds = CanonicalBusinessEngine.parseFormerUserIds(data["formerUserIds"]) ?? []
         parsed.documentUpdatedAt = (data["updatedAt"] as? Timestamp)?.dateValue()
+        parsed.status = (data["status"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        parsed.payBasis = (data["payBasis"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        parsed.profilePhotoUpdatedAt = (data["profilePhotoUpdatedAt"] as? Timestamp)?.dateValue()
         return parsed
     }
     

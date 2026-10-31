@@ -108,7 +108,7 @@ nonisolated struct CanonicalLeaveBooking: Codable, Hashable, Sendable {
 
 /// Payload for `leaveCoverageRows` (`LeaveCoverageInput` in the script).
 nonisolated struct CanonicalLeaveCoverageInput: Codable, Hashable, Sendable {
-    var timeZone: String? = "Europe/London"
+    var timeZone: String? = OrganizationRulebookContext.timeZoneIdentifier
     var startDayKey: String
     var endDayKey: String
     var day: CanonicalStandardDayInput?
@@ -290,7 +290,7 @@ nonisolated struct CanonicalPayrollHoursInput: Codable, Hashable, Sendable {
     var booking: CanonicalPayrollBooking
     var dayKey: String
     var policy: CanonicalPayrollPolicy
-    var timeZone: String = "Europe/London"
+    var timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
 }
 
 nonisolated struct CanonicalPayrollSegment: Codable, Hashable, Sendable {
@@ -343,10 +343,10 @@ nonisolated struct CanonicalUnbookedLabourRow: Codable, Equatable, Sendable {
 }
 
 nonisolated enum CanonicalBusinessEngine {
-    /// Organisation calendar. Device time zone must not decide pay periods or warning windows.
+    /// Organisation calendar in `organizationTimeZone(countryCode)` (RULEBOOK §1). Device time zone must not decide pay periods or warning windows.
     static var businessCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "Europe/London") ?? TimeZone(secondsFromGMT: 0)!
+        calendar.timeZone = OrganizationRulebookContext.timeZone
         calendar.locale = Locale(identifier: "en_GB")
         calendar.firstWeekday = 2
         return calendar
@@ -372,7 +372,7 @@ nonisolated enum CanonicalBusinessEngine {
 
     static func coverageWindow(
         reference: Date,
-        timeZone: String = "Europe/London",
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier,
         clashLookaheadMode: String,
         clashLookaheadDays: Int,
         paymentRunMode: String,
@@ -1156,7 +1156,7 @@ nonisolated enum CanonicalBusinessEngine {
     }
 
     /// Tomorrow in `timeZone`, or the next Monday when `now` is Saturday or Sunday. Nil when the script did not answer.
-    static func defaultMaterialDeliveryDayKey(now: Date, timeZone: String = "Europe/London") -> String? {
+    static func defaultMaterialDeliveryDayKey(now: Date, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> String? {
         let key = decode(
             String.self,
             function: "defaultMaterialDeliveryDayKey",
@@ -1169,13 +1169,13 @@ nonisolated enum CanonicalBusinessEngine {
     }
 
     /// The required-delivery instant for a day and clock the user chose. Nil when the script did not answer.
-    static func materialDeliveryInstant(dayKey: String, clockMinutes: Int, timeZone: String = "Europe/London") -> Date? {
+    static func materialDeliveryInstant(dayKey: String, clockMinutes: Int, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> Date? {
         guard let dayJSON = jsonFragment(dayKey), let zoneJSON = jsonFragment(timeZone) else { return nil }
         return scriptDate(from: "ProjectPlannerCanonical.materialDeliveryInstant(\(dayJSON), \(clockMinutes), \(zoneJSON))")
     }
 
     /// Default required delivery for an order opened at `now`. Nil when the script did not answer — do not invent 08:00.
-    static func defaultMaterialDeliveryRequiredAt(now: Date, timeZone: String = "Europe/London") -> Date? {
+    static func defaultMaterialDeliveryRequiredAt(now: Date, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> Date? {
         let reference = isoString(from: now)
         guard let referenceJSON = jsonFragment(reference), let zoneJSON = jsonFragment(timeZone) else { return nil }
         return scriptDate(
@@ -1184,7 +1184,7 @@ nonisolated enum CanonicalBusinessEngine {
     }
 
     /// London day key of an instant. Used when the user edits the delivery day.
-    static func dayKeyInOrganizationZone(_ date: Date, timeZone: String = "Europe/London") -> String? {
+    static func dayKeyInOrganizationZone(_ date: Date, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> String? {
         let key = decode(
             String.self,
             function: "dayKeyInOrganizationZone",
@@ -1197,7 +1197,7 @@ nonisolated enum CanonicalBusinessEngine {
     }
 
     /// Clock minutes of an instant in `timeZone`. Used when the user edits the delivery time.
-    static func clockMinutesFromDeliveryInstant(_ at: Date, timeZone: String = "Europe/London") -> Int? {
+    static func clockMinutesFromDeliveryInstant(_ at: Date, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> Int? {
         let reference = isoString(from: at)
         guard let referenceJSON = jsonFragment(reference), let zoneJSON = jsonFragment(timeZone) else { return nil }
         let expression = """
@@ -1211,7 +1211,7 @@ nonisolated enum CanonicalBusinessEngine {
     }
 
     /// "Monday 12 October at 08:00". Nil when the script did not answer.
-    static func formatMaterialDeliveryRequired(_ at: Date, timeZone: String = "Europe/London") -> String? {
+    static func formatMaterialDeliveryRequired(_ at: Date, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> String? {
         let reference = isoString(from: at)
         guard let referenceJSON = jsonFragment(reference), let zoneJSON = jsonFragment(timeZone) else { return nil }
         let expression = """
@@ -1230,7 +1230,7 @@ nonisolated enum CanonicalBusinessEngine {
     }
 
     /// The email and history line for an order. Quotes, and a missing instant, do not call the formatter.
-    static func orderDeliveryRequiredLabel(requestType: String?, at: Date?, timeZone: String = "Europe/London") -> String? {
+    static func orderDeliveryRequiredLabel(requestType: String?, at: Date?, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> String? {
         guard materialOrderIncludesDeliveryRequired(requestType) == true, let at else { return nil }
         return formatMaterialDeliveryRequired(at, timeZone: timeZone)
     }
@@ -1335,7 +1335,7 @@ nonisolated enum CanonicalBusinessEngine {
         transitionFrom: String?,
         effectiveAt: Date?,
         date: Date,
-        timeZone: String = "Europe/London"
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> String? {
         let user = CanonicalEmploymentUser(
             employmentType: employmentType,
@@ -1350,7 +1350,7 @@ nonisolated enum CanonicalBusinessEngine {
         transitionFrom: String?,
         effectiveAt: Date?,
         date: Date,
-        timeZone: String = "Europe/London"
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> Bool {
         let user = CanonicalEmploymentUser(
             employmentType: employmentType,
@@ -1368,7 +1368,7 @@ nonisolated enum CanonicalBusinessEngine {
         previousEffectiveAt: Date?,
         effectiveAt: Date?,
         now: Date = Date(),
-        timeZone: String = "Europe/London"
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> CanonicalEmploymentChange? {
         let payload = CanonicalEmploymentChangeInput(
             previousType: previousType,
@@ -1405,7 +1405,7 @@ nonisolated enum CanonicalBusinessEngine {
         transitionFrom: String?,
         effectiveAt: Date?,
         now: Date = Date(),
-        timeZone: String = "Europe/London"
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> String? {
         let user = CanonicalEmploymentUser(
             employmentType: employmentType,
@@ -1954,7 +1954,7 @@ nonisolated enum CanonicalBusinessEngine {
     /// Notices whose notify-at has arrived at `reference`. Nil when the script did not answer.
     static func dueTimesheetSubmissionNotices(
         reference: Date,
-        timeZone: String = "Europe/London",
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier,
         invoicing: OrganizationInvoicingSettings
     ) -> [CanonicalTimesheetSubmissionNotice]? {
         let referenceIso = isoString(from: reference)
@@ -2082,7 +2082,7 @@ nonisolated enum CanonicalBusinessEngine {
     }
 
     /// `timesheet_{userId}_{unixStartOfDay}` in the organisation zone. Nil when the script did not answer or the id is empty — do not build one from `Calendar.current`.
-    static func timesheetDocumentId(userId: String, startDayKey: String, timeZone: String = "Europe/London") -> String? {
+    static func timesheetDocumentId(userId: String, startDayKey: String, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> String? {
         guard let id = decode(String.self, function: "timesheetDocumentId", arguments: [userId, startDayKey, timeZone]),
               !id.isEmpty else {
             return nil
@@ -2097,7 +2097,7 @@ nonisolated enum CanonicalBusinessEngine {
         recurringRunStartDay: String,
         recurringRunEndDay: String,
         referenceDayKey: String,
-        timeZone: String = "Europe/London"
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> CanonicalTimesheetPeriod? {
         let input = CanonicalTimesheetPeriodInput(
             paymentRunMode: paymentRunMode,
@@ -2235,7 +2235,7 @@ nonisolated enum CanonicalBusinessEngine {
         observedPeriods: [CanonicalTimesheetPeriod],
         referenceDayKey: String,
         lookbackCount: Int = 120,
-        timeZone: String = "Europe/London"
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> [CanonicalSelectableTimesheetPeriod]? {
         struct Input: Codable {
             var current: CanonicalTimesheetPaymentRunWindow
@@ -2324,7 +2324,7 @@ nonisolated enum CanonicalBusinessEngine {
     static func paymentDateAfterPeriodEnd(
         periodEndDayKey: String,
         paymentDays: [Int],
-        timeZone: String = "Europe/London"
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> String? {
         decode(
             String.self,
@@ -2483,7 +2483,7 @@ nonisolated enum CanonicalBusinessEngine {
         yearAllowanceKey: String?,
         bookings: [CanonicalLeaveBooking],
         onDayKey: String,
-        timeZone: String = "Europe/London"
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> CanonicalAnnualLeaveBalance? {
         let input = CanonicalAnnualLeaveBalanceInput(
             annualLeaveEnabled: annualLeaveEnabled,
