@@ -1107,17 +1107,9 @@ class ProjectStore: ObservableObject {
                     }
                 }
                 
-                // Save job types only when the catalogue still has names. Empty overwrites
-                // were wiping Job Types Management while projects still had custom types.
-                if !jobTypes.isEmpty {
-                    do {
-                        try await firebaseBackend.saveJobTypes(organizationId: organizationId, jobTypes: jobTypes)
-                        print("🔥🔥🔥 DEBUG: Successfully saved \(jobTypes.count) job types to Firebase")
-                    } catch {
-                        let errorMsg = "Error saving job types to Firebase: \(error.localizedDescription)"
-                        print("🔥🔥🔥 DEBUG: \(errorMsg)")
-                    }
-                }
+                // Job types are not written here. `settings/jobTypes` is admins and managers only
+                // (RULEBOOK §16), so a project save by anyone else was refused. They are written only
+                // when Job Types Management edits them (`saveJobTypesCatalogue`).
                 
                 if !projectSaveErrors.isEmpty || !smallWorksSaveErrors.isEmpty || !clientSaveErrors.isEmpty {
                     let allErrors = projectSaveErrors + smallWorksSaveErrors + clientSaveErrors
@@ -1167,14 +1159,21 @@ class ProjectStore: ObservableObject {
         }
     }
 
+    /// Writes the job type list after an edit in Job Types Management (admins and managers, RULEBOOK §16).
+    /// A settings document is online only (§2): offline, the edit stays on this device and is not queued.
     private func saveJobTypesCatalogue() async {
         guard let firebaseBackend,
               firebaseBackend.isAuthenticated,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
               !jobTypes.isEmpty else { return }
+        guard firebaseBackend.userRole == .admin || firebaseBackend.userRole == .manager else {
+            errorMessage = "Only admins and managers can change job types."
+            return
+        }
         do {
             try await firebaseBackend.saveJobTypes(organizationId: organizationId, jobTypes: jobTypes)
         } catch {
+            errorMessage = "Job types were not saved: \(error.localizedDescription)"
             print("🔥🔥🔥 DEBUG: Error saving job types catalogue: \(error.localizedDescription)")
         }
     }

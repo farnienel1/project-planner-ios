@@ -12,6 +12,9 @@ import Combine
 
 struct OfflineSaveBookingPayload: Codable {
     let booking: Booking
+    /// Stored fields this queued edit changed (`BookingWritePatch.labourFieldNames`). Nil means a
+    /// create: the whole booking is written. Entries queued before this field existed decode as nil.
+    var changedFields: [String]? = nil
 }
 
 struct OfflineDeleteBookingPayload: Codable {
@@ -22,6 +25,8 @@ struct OfflineDeleteBookingPayload: Codable {
 
 struct OfflineSaveManagerSiteBookingPayload: Codable {
     let booking: ManagerSiteBooking
+    /// Changed fields (`BookingWritePatch.managerFieldNames`); nil for a create.
+    var changedFields: [String]? = nil
 }
 
 struct OfflineDeleteManagerSiteBookingPayload: Codable {
@@ -53,6 +58,12 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
         case deleteMaterialItem
         case sendMaterialRequest
         case saveDeadlines
+        /// RULEBOOK §2 allowed offline: a leave request (create, edit own pending, ask to cancel).
+        case saveAnnualLeaveRequest
+        /// RULEBOOK §2 allowed offline: the signed-in user's own profile fields.
+        case saveOwnProfileFields
+        /// RULEBOOK §2 allowed offline: the signed-in user's own notification toggles.
+        case saveOwnNotificationToggles
     }
 
     let id: UUID
@@ -75,6 +86,9 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
         case .deleteMaterialItem: return "Remove material item"
         case .sendMaterialRequest: return "Material order"
         case .saveDeadlines: return "Deadlines"
+        case .saveAnnualLeaveRequest: return "Annual leave request"
+        case .saveOwnProfileFields: return "My profile"
+        case .saveOwnNotificationToggles: return "My notifications"
         }
     }
 
@@ -114,7 +128,28 @@ final class OfflineOutboxStore: ObservableObject {
 
     @Published private(set) var entries: [OfflineOutboxEntry] = []
 
+    /// The last queued change the server refused for good (`bookingReplayRefusedIsFinal`), for the
+    /// banner to show once. `BOOKING_REPLAY_REFUSED_MESSAGE` for a booking save.
+    @Published var lastRefusalMessage: String?
+
     var pendingCount: Int { entries.count }
+
+    /// RULEBOOK §2 "Pending sync": the outbox still holds a change for this entity (booking UUID string,
+    /// material id, `deadlines_{projectId}`, or the entity id passed to an `enqueue...` call below).
+    func hasPendingSync(entityId: String) -> Bool {
+        let key = entityId.uppercased()
+        return entries.contains { $0.entityId.uppercased() == key }
+    }
+
+    /// Same as `hasPendingSync(entityId:)` for a booking or manager schedule booking id.
+    func hasPendingSync(bookingId: UUID) -> Bool {
+        hasPendingSync(entityId: bookingId.uuidString)
+    }
+
+    /// Every entity id with a queued change.
+    var pendingEntityIds: Set<String> {
+        Set(entries.map { $0.entityId.uppercased() })
+    }
     var failedCount: Int { entries.filter { ($0.lastError ?? "").isEmpty == false }.count }
 
     private let storageKey = "offline_outbox_v1"
@@ -127,8 +162,16 @@ final class OfflineOutboxStore: ObservableObject {
 
     // MARK: - Enqueue helpers
 
-    func enqueueSaveBooking(_ booking: Booking, organizationId: String) {
-        guard let payload = try? encoder.encode(OfflineSaveBookingPayload(booking: booking)) else { return }
+    /// Queues a booking save. `changedFields` nil queues a create (the whole booking); otherwise only
+    /// those fields are written on replay. A second edit before replay adds its fields to the first;
+    /// an edit after a queued create stays a create with the newer values.
+    func enqueueSaveBooking(_ booking: Booking, changedFields: Set<String>? = nil, organizationId: String) {
+        var fields: [String]? = changedFields.map { Array($0).sorted() }
+        if let existing = entries.first(where: { $0.entityId == booking.id.uuidString && $0.operation == .saveBooking }),
+           let old = try? decoder.decode(OfflineSaveBookingPayload.self, from: existing.payload) {
+            fields = Self.mergedChangedFields(old.changedFields, fields)
+        }
+        guard let payload = try? encoder.encode(OfflineSaveBookingPayload(booking: booking, changedFields: fields)) else { return }
         enqueue(
             OfflineOutboxEntry(
                 organizationId: organizationId,
@@ -154,8 +197,14 @@ final class OfflineOutboxStore: ObservableObject {
         )
     }
 
-    func enqueueSaveManagerSiteBooking(_ booking: ManagerSiteBooking, organizationId: String) {
-        guard let payload = try? encoder.encode(OfflineSaveManagerSiteBookingPayload(booking: booking)) else { return }
+    /// Queues a manager schedule booking save; `changedFields` as in `enqueueSaveBooking`.
+    func enqueueSaveManagerSiteBooking(_ booking: ManagerSiteBooking, changedFields: Set<String>? = nil, organizationId: String) {
+        var fields: [String]? = changedFields.map { Array($0).sorted() }
+        if let existing = entries.first(where: { $0.entityId == booking.id.uuidString && $0.operation == .saveManagerSiteBooking }),
+           let old = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: existing.payload) {
+            fields = Self.mergedChangedFields(old.changedFields, fields)
+        }
+        guard let payload = try? encoder.encode(OfflineSaveManagerSiteBookingPayload(booking: booking, changedFields: fields)) else { return }
         enqueue(
             OfflineOutboxEntry(
                 organizationId: organizationId,
@@ -259,6 +308,111 @@ final class OfflineOutboxStore: ObservableObject {
         )
     }
 
+    /// RULEBOOK §2: queue an annual leave request write. `fields` are the changed fields only
+    /// (dotted keys allowed unless `isCreate`). `isCreate` is true only for a new request document.
+    /// `entityId` defaults to the request id (last path segment), for `hasPendingSync(entityId:)`.
+    func enqueueAnnualLeaveRequest(
+        documentPath: String,
+        fields: [String: OfflineFieldValue],
+        isCreate: Bool,
+        userId: String,
+        organizationId: String,
+        entityId: String? = nil
+    ) {
+        enqueuePartialUpdate(
+            operation: .saveAnnualLeaveRequest,
+            documentPath: documentPath,
+            fields: fields,
+            isCreate: isCreate,
+            userId: userId,
+            organizationId: organizationId,
+            entityId: entityId
+        )
+    }
+
+    /// RULEBOOK §2: queue the signed-in user's own profile fields on `users/{userId}` (partial update).
+    /// Pay, role, line manager, active flag, employment type and permissions are not "own profile
+    /// fields" (§16) and must not be passed here.
+    func enqueueOwnProfileFields(
+        userId: String,
+        fields: [String: OfflineFieldValue],
+        organizationId: String,
+        documentPath: String? = nil
+    ) {
+        enqueuePartialUpdate(
+            operation: .saveOwnProfileFields,
+            documentPath: documentPath ?? "users/\(userId)",
+            fields: fields,
+            isCreate: false,
+            userId: userId,
+            organizationId: organizationId,
+            entityId: "profile_\(userId)"
+        )
+    }
+
+    /// RULEBOOK §2: queue the signed-in user's own notification toggles, e.g. dotted
+    /// `notificationPreferences.{key}` on `users/{userId}` (partial update).
+    func enqueueOwnNotificationToggles(
+        userId: String,
+        fields: [String: OfflineFieldValue],
+        organizationId: String,
+        documentPath: String? = nil
+    ) {
+        enqueuePartialUpdate(
+            operation: .saveOwnNotificationToggles,
+            documentPath: documentPath ?? "users/\(userId)",
+            fields: fields,
+            isCreate: false,
+            userId: userId,
+            organizationId: organizationId,
+            entityId: "notifications_\(userId)"
+        )
+    }
+
+    /// One outbox row per document: a later change merges its fields into the queued one.
+    private func enqueuePartialUpdate(
+        operation: OfflineOutboxEntry.Operation,
+        documentPath: String,
+        fields: [String: OfflineFieldValue],
+        isCreate: Bool,
+        userId: String,
+        organizationId: String,
+        entityId: String?
+    ) {
+        guard !fields.isEmpty, !documentPath.isEmpty, !userId.isEmpty else { return }
+        let key = entityId ?? documentPath.split(separator: "/").last.map(String.init) ?? documentPath
+        var merged = fields
+        var create = isCreate
+        if let existing = entries.first(where: { $0.entityId == key && $0.operation == operation }),
+           let old = try? decoder.decode(OfflinePartialUpdatePayload.self, from: existing.payload),
+           old.documentPath == documentPath {
+            merged = old.fields.merging(fields) { _, new in new }
+            create = old.isCreate || isCreate
+        }
+        let payloadModel = OfflinePartialUpdatePayload(
+            documentPath: documentPath,
+            fields: merged,
+            isCreate: create,
+            userId: userId
+        )
+        guard let payload = try? encoder.encode(payloadModel) else { return }
+        enqueue(
+            OfflineOutboxEntry(
+                organizationId: organizationId,
+                operation: operation,
+                entityId: key,
+                payload: payload
+            ),
+            dedupeSameEntity: true
+        )
+    }
+
+    /// A queued create stays a create (nil); two edits add up.
+    private static func mergedChangedFields(_ old: [String]?, _ new: [String]?) -> [String]? {
+        guard let old, let new else { return nil }
+        return Array(Set(old).union(new)).sorted()
+    }
+
     // MARK: - Queue management
 
     func removeEntry(id: UUID) {
@@ -275,6 +429,14 @@ final class OfflineOutboxStore: ObservableObject {
 
     func clearAll() {
         entries.removeAll()
+        lastRefusalMessage = nil
+        persistToDisk()
+    }
+
+    /// A refused replay is final (RULEBOOK §2): the item leaves the queue, it is not retried.
+    func removeRefused(id: UUID, message: String) {
+        entries.removeAll { $0.id == id }
+        lastRefusalMessage = message
         persistToDisk()
     }
 

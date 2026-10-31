@@ -39,6 +39,38 @@ class ManagerScheduleStore: ObservableObject {
                 self?.loadData(force: true)
             }
         }
+
+        // RULEBOOK §2: a refused replay is final. Drop the local row the server will never accept.
+        NotificationCenter.default.addObserver(
+            forName: .offlineBookingReplayRefused,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let collection = note.userInfo?["collection"] as? String
+            let bookingId = note.userInfo?["bookingId"] as? String
+            let operation = note.userInfo?["operation"] as? String
+            Task { @MainActor [weak self] in
+                guard let self, collection == "managerSiteBookings", let bookingId,
+                      operation == OfflineOutboxEntry.Operation.saveManagerSiteBooking.rawValue,
+                      let id = UUID(uuidString: bookingId) else { return }
+                self.dropLocalBooking(id: id)
+            }
+        }
+    }
+
+    /// RULEBOOK §2 "Pending sync" for a manager schedule booking row.
+    func isPendingSync(_ booking: ManagerSiteBooking) -> Bool {
+        OfflineOutboxStore.shared.hasPendingSync(bookingId: booking.id)
+    }
+
+    private func dropLocalBooking(id: UUID) {
+        guard managerSiteBookings.contains(where: { $0.id == id }) else { return }
+        managerSiteBookings.removeAll { $0.id == id }
+        if let orgId = firebaseBackend?.resolvedOrganizationIdForOfflineWrites() {
+            OfflineManagerScheduleLocalStore.remove(bookingId: id, organizationId: orgId)
+        }
+        NotificationCenter.default.post(name: didChangeNotificationName, object: nil)
+        ScheduleChangeNotifier.postBookingStoreDidChange()
     }
 
     deinit {
@@ -99,6 +131,7 @@ class ManagerScheduleStore: ObservableObject {
                 OfflineManagerScheduleLocalStore.save(self.managerSiteBookings, organizationId: orgId)
                 self.lastLoadAt = Date()
                 self.lastLoadFailed = false
+                self.smartCache?.markSynced()
                 fb.listenManagerSiteBookings(organizationId: orgId, startingOn: queryStart) { [weak self] remote in
                     guard let self else { return }
                     guard WarningsBookingScanScheduler.acceptsListener(
@@ -159,20 +192,30 @@ class ManagerScheduleStore: ObservableObject {
         pendingSemanticKeys.insert(key)
         defer { pendingSemanticKeys.remove(key) }
 
+        // RULEBOOK §1 partial writes: an edit writes only what changed against this device's copy;
+        // a new booking writes every field.
+        let changedFields: Set<String>? = managerSiteBookings.first(where: { $0.id == normalizedBooking.id })
+            .map { BookingWritePatch.changedManagerFields(from: $0, to: normalizedBooking) }
+        if let changedFields, changedFields.isEmpty { return }
+
         applyLocalSave(normalizedBooking, organizationId: orgId)
 
         if smartCache?.isOnline == false {
-            OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(normalizedBooking, organizationId: orgId)
+            OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(normalizedBooking, changedFields: changedFields, organizationId: orgId)
             return
         }
 
         do {
-            try await fb.saveManagerSiteBooking(normalizedBooking, organizationId: orgId)
+            try await fb.saveManagerSiteBooking(normalizedBooking, organizationId: orgId, changedFields: changedFields)
             loadData(force: true)
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
-                OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(normalizedBooking, organizationId: orgId)
+                OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(normalizedBooking, changedFields: changedFields, organizationId: orgId)
                 errorMessage = "Saved locally. Will sync when you're back online."
+            } else if BookingWritePatch.isRefusedFinal(error) {
+                // Tombstoned: deleted on another device. It cannot come back.
+                dropLocalBooking(id: normalizedBooking.id)
+                errorMessage = CanonicalBusinessEngine.bookingReplayRefusedMessage
             } else {
                 errorMessage = error.localizedDescription
             }
@@ -194,6 +237,7 @@ class ManagerScheduleStore: ObservableObject {
         }
 
         do {
+            // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
             loadData(force: true)
         } catch {
@@ -245,7 +289,7 @@ class ManagerScheduleStore: ObservableObject {
     }
 
     func bookings(for userId: String, on date: Date) -> [ManagerSiteBooking] {
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         return managerSiteBookings.filter {
             $0.userId == userId && cal.isDate($0.date, inSameDayAs: date)
         }
@@ -258,14 +302,14 @@ class ManagerScheduleStore: ObservableObject {
             if !trimmed.isEmpty { ids.insert(trimmed) }
         }
         guard !ids.isEmpty else { return [] }
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         return managerSiteBookings.filter {
             ids.contains($0.userId) && cal.isDate($0.date, inSameDayAs: date)
         }
     }
 
     private func semanticKey(for booking: ManagerSiteBooking) -> String {
-        let day = Calendar.current.startOfDay(for: booking.date).timeIntervalSince1970
+        let day = OrganizationRulebookContext.calendar.startOfDay(for: booking.date).timeIntervalSince1970
         let locationKey = booking.locationId?.uuidString ?? (booking.customLocationName?.lowercased() ?? booking.locationType.rawValue)
         let ws = booking.workStartTime ?? ""
         let we = booking.workEndTime ?? ""
@@ -285,7 +329,8 @@ class ManagerScheduleStore: ObservableObject {
         }
         let policy = OrgPayrollTimePolicy.default
         return latestByKey.values.sorted { lhs, rhs in
-            if Calendar.current.startOfDay(for: lhs.date) == Calendar.current.startOfDay(for: rhs.date) {
+            let cal = OrganizationRulebookContext.calendar
+            if cal.startOfDay(for: lhs.date) == cal.startOfDay(for: rhs.date) {
                 let ka = lhs.minutesSortKey(policy: policy)
                 let kb = rhs.minutesSortKey(policy: policy)
                 if ka != kb { return ka < kb }

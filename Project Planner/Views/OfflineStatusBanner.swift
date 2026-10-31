@@ -7,16 +7,32 @@ import SwiftUI
 
 struct OfflineStatusBanner: View {
     @EnvironmentObject private var smartCache: SmartCacheService
+    @ObservedObject private var outbox = OfflineOutboxStore.shared
     @State private var showingQueue = false
 
     var body: some View {
-        if smartCache.showOfflineBanner {
-            bannerContent
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .sheet(isPresented: $showingQueue) {
-                    OfflineSyncQueueSheet()
-                        .environmentObject(smartCache)
-                }
+        VStack(spacing: 0) {
+            if smartCache.showOfflineBanner {
+                bannerContent
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .sheet(isPresented: $showingQueue) {
+                        OfflineSyncQueueSheet()
+                            .environmentObject(smartCache)
+                    }
+            }
+        }
+        // RULEBOOK §2: a refused replay is final; tell the person once (`BOOKING_REPLAY_REFUSED_MESSAGE`).
+        .alert(
+            "Change not saved",
+            isPresented: Binding(
+                get: { outbox.lastRefusalMessage != nil },
+                set: { if !$0 { outbox.lastRefusalMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { outbox.lastRefusalMessage = nil }
+                .accessibilityIdentifier("offlineStatusBanner.refusedOK")
+        } message: {
+            Text(outbox.lastRefusalMessage ?? "")
         }
     }
 
@@ -145,8 +161,12 @@ struct OfflineSyncQueueSheet: View {
                     Section("Waiting to sync") {
                         ForEach(outbox.entries) { entry in
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.displayTitle)
-                                    .font(.subheadline.weight(.semibold))
+                                HStack(spacing: 6) {
+                                    Text(entry.displayTitle)
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer(minLength: 4)
+                                    PendingSyncBadge()
+                                }
                                 Text(entry.displayDetail)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
