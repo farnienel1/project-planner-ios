@@ -137,6 +137,9 @@ struct SettingsStickySaveBar: View {
     var title: String = "Save"
     var isDirty: Bool
     var isSaving: Bool
+    /// RULEBOOK §2: pass `smartCache.isOnline` for an online-only save (organisation settings,
+    /// password). Leave the default for saves that are allowed offline (own profile, own notifications).
+    var isOnline: Bool = true
     var action: () -> Void
 
     var body: some View {
@@ -164,6 +167,7 @@ struct SettingsStickySaveBar: View {
             .buttonStyle(.plain)
             .disabled(!isDirty || isSaving)
             .accessibilityIdentifier("settingsStickySaveBar.save")
+            .onlineOnly(isOnline: isOnline)
         }
         .padding(.horizontal, PPMetrics.screenGutter)
         .padding(.top, 10)

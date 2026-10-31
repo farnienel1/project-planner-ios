@@ -221,6 +221,8 @@ fileprivate struct MyScheduleBookingStripeRow: View {
     var showActions: Bool = false
     var onEdit: (() -> Void)?
     var onDelete: (() -> Void)?
+    /// RULEBOOK §2: booking UUID string; shows "Pending sync" while the outbox holds a change for it.
+    var pendingSyncEntityId: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -238,6 +240,9 @@ fileprivate struct MyScheduleBookingStripeRow: View {
                             .font(.footnote)
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
+                        if let pendingSyncEntityId {
+                            PendingSyncIndicator(entityId: pendingSyncEntityId)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -294,7 +299,8 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
     let onPrev: () -> Void
     let onNext: () -> Void
     let onSelectDay: () -> Void
-    private let cal = Calendar.current
+    /// Schedule days are organisation business days (§1).
+    private var cal: Calendar { OrganizationRulebookContext.calendar }
 
     /// Sits on the navy header (Daily overview style): round ‹ › buttons either side of a big date.
     var body: some View {
@@ -337,6 +343,8 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
 
     private var dayTitle: String {
         let f = DateFormatter()
+        f.calendar = cal
+        f.timeZone = cal.timeZone
         f.dateFormat = "EEEE, d MMM"
         return f.string(from: day)
     }
@@ -565,6 +573,7 @@ struct MyScheduleView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject private var smartCache: SmartCacheService
 
     private var isOperativeMode: Bool { userStore.isOperativeMode() }
     /// Office / site attendance booking is only for organisation admins and managers — not operatives or basic users.
@@ -576,6 +585,14 @@ struct MyScheduleView: View {
 
     var body: some View {
         NavigationStack {
+            VStack(spacing: 0) {
+            if !smartCache.isOnline {
+                // RULEBOOK §2: My Schedule is read-only offline data, labelled "Last updated".
+                LastUpdatedOfflineLabel()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, PPMetrics.screenGutter)
+                    .padding(.vertical, 6)
+            }
             Group {
                 if isOperativeMode {
                     OperativeScheduleContentView()
@@ -611,6 +628,7 @@ struct MyScheduleView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("My Schedule")
@@ -644,7 +662,8 @@ struct ManagerScheduleContentView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
 
-    private let calendar = Calendar.current
+    /// Schedule days are organisation business days (§1).
+    private var calendar: Calendar { OrganizationRulebookContext.calendar }
     @State private var weekStart: Date = Date()
     @State private var selectedDate: Date?
     /// Expanded "Book yourself in" item: true = Office, non-nil UUID = that project/small work (only one expanded at a time).
@@ -736,40 +755,14 @@ struct ManagerScheduleContentView: View {
 
     private var searchableLocationItems: [LocationSearchItem] {
         var out: [LocationSearchItem] = []
-        if appSettings.settings.myScheduleOptions.showOffice {
+        // Exactly `enabledScheduleLocations(options)` (rulebook), same rows as Book labour → Other.
+        for pick in appSettings.settings.myScheduleOptions.enabledScheduleLocationPicks() {
             out.append(LocationSearchItem(
-                id: "std:office",
-                title: "Office",
-                locationType: .office,
+                id: "std:\(pick.id.lowercased())",
+                title: pick.title,
+                locationType: pick.managerLocationType,
                 locationId: nil,
-                customLocationName: nil
-            ))
-        }
-        if appSettings.settings.myScheduleOptions.showWorkingFromHome {
-            out.append(LocationSearchItem(
-                id: "std:wfh",
-                title: "Working From Home",
-                locationType: .workingFromHome,
-                locationId: nil,
-                customLocationName: nil
-            ))
-        }
-        if appSettings.settings.myScheduleOptions.showSiteSurvey {
-            out.append(LocationSearchItem(
-                id: "std:survey",
-                title: "Site Survey",
-                locationType: .siteSurvey,
-                locationId: nil,
-                customLocationName: nil
-            ))
-        }
-        for customItem in appSettings.settings.myScheduleOptions.customItems where (appSettings.settings.myScheduleOptions.customItemEnabled[customItem] ?? true) {
-            out.append(LocationSearchItem(
-                id: "custom:\(customItem.lowercased())",
-                title: customItem,
-                locationType: .custom,
-                locationId: nil,
-                customLocationName: customItem
+                customLocationName: pick.customLocationName
             ))
         }
         for p in liveProjects {
@@ -839,29 +832,39 @@ struct ManagerScheduleContentView: View {
         !mySiteBookings(on: date).isEmpty || !myOperativeBookings(on: date).isEmpty
     }
 
+    /// This account's leave (approved and pending) whose leave days (`leaveRecordDayKeys`) include `day`.
+    /// Matched by account: every id the account has had, or its email (§10), never by name.
     private func myHolidayBookings(on day: Date) -> [HolidayBooking] {
         guard let uid = firebaseBackend.currentUser?.uid else { return [] }
-        let targetDay = calendar.startOfDay(for: day)
-        return holidayStore.myBookings(userId: uid, operativeId: nil, email: firebaseBackend.currentUser?.email)
+        let accountIds = signedInAccountIds
+        let dayKey = OrganizationRulebookContext.dayKey(day)
+        let mine = holidayStore.myBookings(userId: uid, operativeId: nil, email: firebaseBackend.currentUser?.email)
+        let byAccount = holidayStore.bookings.filter { booking in
+            guard let owner = booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+            return accountIds.contains(owner)
+        }
+        var seen = Set<UUID>()
+        return (mine + byAccount)
+            .filter { seen.insert($0.id).inserted }
             .filter { $0.status != .rejected }
-            .filter { booking in
-                let start = calendar.startOfDay(for: booking.startDate)
-                let end = calendar.startOfDay(for: booking.endDate)
-                return targetDay >= start && targetDay <= end
-            }
+            .filter { LeaveRecordDays.covers($0, dayKey: dayKey) }
             .sorted { $0.startDate < $1.startDate }
     }
 
+    /// Approved leave first; pending leave is labelled as pending (§10).
     private func annualLeaveDisplayLabel(on day: Date) -> String? {
-        guard let holiday = myHolidayBookings(on: day).first else { return nil }
+        let bookings = myHolidayBookings(on: day)
+        guard let holiday = bookings.first(where: { $0.status == .approved }) ?? bookings.first else { return nil }
+        let slot: String
         switch holiday.timeSlot {
         case .fullDay:
-            return "Annual Leave - Full Day"
+            slot = "Full Day"
         case .morning:
-            return "Annual Leave - AM"
+            slot = "AM"
         case .afternoon:
-            return "Annual Leave - PM"
+            slot = "PM"
         }
+        return holiday.status == .pending ? "Pending Annual Leave - \(slot)" : "Annual Leave - \(slot)"
     }
 
     private func annualLeaveTimeSlot(on day: Date) -> HolidayTimeSlot? {
@@ -1708,7 +1711,8 @@ struct ManagerScheduleContentView: View {
                                     },
                                     onDelete: {
                                         Task { await bookingStore.deleteBooking(b) }
-                                    }
+                                    },
+                                    pendingSyncEntityId: b.id.uuidString
                                 )
                             }
                         }
@@ -1741,7 +1745,8 @@ struct ManagerScheduleContentView: View {
             onEdit: { beginEditManagerBooking(b) },
             onDelete: {
                 Task { await managerScheduleStore.deleteBooking(b) }
-            }
+            },
+            pendingSyncEntityId: b.id.uuidString
         )
     }
 
@@ -2559,7 +2564,8 @@ struct OperativeScheduleContentView: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
 
-    private let calendar = Calendar.current
+    /// Schedule days are organisation business days (§1).
+    private var calendar: Calendar { OrganizationRulebookContext.calendar }
     @State private var weekStart: Date = Date()
     @State private var addToCalendarMessage: String?
     @State private var showingCalendarDestinationPicker = false
@@ -2628,43 +2634,49 @@ struct OperativeScheduleContentView: View {
         return "Site"
     }
 
-    private var myApprovedHolidays: [HolidayBooking] {
+    /// This account's approved and pending leave (§10: pending is shown, marked as pending).
+    private var myHolidays: [HolidayBooking] {
         guard let userId = userStore.currentUser?.id else { return [] }
         let operativeId = currentOperative?.id
-        return holidayStore.myBookings(userId: userId, operativeId: operativeId)
-            .filter { $0.status == .approved }
+        let accountIds = WorkAccess.signedInAccountIds(
+            authUid: firebaseBackend.currentUser?.uid,
+            currentUser: userStore.displayUser ?? userStore.currentUser,
+            organizationUsers: userStore.organizationUsers
+        )
+        let byAccount = holidayStore.bookings.filter { booking in
+            guard let owner = booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+            return accountIds.contains(owner)
+        }
+        var seen = Set<UUID>()
+        return (holidayStore.myBookings(userId: userId, operativeId: operativeId) + byAccount)
+            .filter { seen.insert($0.id).inserted }
+            .filter { $0.status == .approved || $0.status == .pending }
+    }
+
+    /// The leave record on this day (`leaveRecordDayKeys`), approved before pending.
+    private func holiday(on date: Date) -> HolidayBooking? {
+        let dayKey = OrganizationRulebookContext.dayKey(date)
+        let covering = myHolidays.filter { LeaveRecordDays.covers($0, dayKey: dayKey) }
+        return covering.first(where: { $0.status == .approved }) ?? covering.first
     }
 
     private func holidayCoversDay(_ date: Date) -> Bool {
-        let day = calendar.startOfDay(for: date)
-        return myApprovedHolidays.contains { holiday in
-            let start = calendar.startOfDay(for: holiday.startDate)
-            let end = calendar.startOfDay(for: holiday.endDate)
-            return day >= start && day <= end
-        }
+        holiday(on: date) != nil
     }
 
     private func approvedHolidayLabel(on date: Date) -> String? {
-        let day = calendar.startOfDay(for: date)
-        guard let holiday = myApprovedHolidays.first(where: { booking in
-            let start = calendar.startOfDay(for: booking.startDate)
-            let end = calendar.startOfDay(for: booking.endDate)
-            return day >= start && day <= end
-        }) else { return nil }
-        switch holiday.timeSlot {
-        case .fullDay: return "Annual Leave - Full Day"
-        case .morning: return "Annual Leave - AM"
-        case .afternoon: return "Annual Leave - PM"
+        guard let leave = holiday(on: date) else { return nil }
+        let slot: String
+        switch leave.timeSlot {
+        case .fullDay: slot = "Full Day"
+        case .morning: slot = "AM"
+        case .afternoon: slot = "PM"
         }
+        return leave.status == .pending ? "Pending Annual Leave - \(slot)" : "Annual Leave - \(slot)"
     }
 
     private func approvedHolidayTimeSlot(on date: Date) -> HolidayTimeSlot? {
-        let day = calendar.startOfDay(for: date)
-        return myApprovedHolidays.first(where: { booking in
-            let start = calendar.startOfDay(for: booking.startDate)
-            let end = calendar.startOfDay(for: booking.endDate)
-            return day >= start && day <= end
-        })?.timeSlot
+        holiday(on: date)?.timeSlot
     }
 
     var body: some View {
@@ -2760,7 +2772,7 @@ struct OperativeScheduleContentView: View {
             bookings.contains { calendar.isDate($0.date, inSameDayAs: date) } ||
                 attendance.contains { calendar.isDate($0.date, inSameDayAs: date) }
         }.count
-        let leaveDays = weekDates.filter { holidayCoversDay($0) }.count
+        let leaveDays = weekDates.filter { holiday(on: $0)?.status == .approved }.count
         return VStack(alignment: .leading, spacing: 0) {
             weekNavigation
 
@@ -2789,8 +2801,10 @@ struct OperativeScheduleContentView: View {
         let annualLeaveLabel = approvedHolidayLabel(on: date)
         let annualLeaveSlotForDay = approvedHolidayTimeSlot(on: date)
         let f = DateFormatter()
+        f.timeZone = calendar.timeZone
         f.dateFormat = "EEEE, d MMM"
         let weekdayFormatter = DateFormatter()
+        weekdayFormatter.timeZone = calendar.timeZone
         weekdayFormatter.dateFormat = "EEE"
         let isToday = calendar.isDateInToday(date)
         return VStack(alignment: .leading, spacing: 10) {
@@ -2814,7 +2828,7 @@ struct OperativeScheduleContentView: View {
             if isOnHoliday {
                 HStack(spacing: 13) {
                     PPIconTile(symbol: "sun.max.fill", family: .trade, size: PPMetrics.menuIcon)
-                    Text("Annual Leave")
+                    Text(holiday(on: date)?.status == .pending ? "Pending Annual Leave" : "Annual Leave")
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
                     Spacer(minLength: 0)
@@ -2858,7 +2872,8 @@ struct OperativeScheduleContentView: View {
                         title: title,
                         subtitle: managerBookingClockSubtitle(b, day: date, policy: policy),
                         otChip: managerBookingOtChipText(b, policy: policy),
-                        showActions: false
+                        showActions: false,
+                        pendingSyncEntityId: b.id.uuidString
                     )
                 }
                 if !dayBookings.isEmpty {
@@ -2876,7 +2891,8 @@ struct OperativeScheduleContentView: View {
                             title: title,
                             subtitle: operativeBookingClockSubtitle(b, day: date, policy: policy),
                             otChip: operativeBookingOtChipText(b, policy: policy),
-                            showActions: false
+                            showActions: false,
+                            pendingSyncEntityId: b.id.uuidString
                         )
                     }
                 }

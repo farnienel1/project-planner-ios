@@ -172,8 +172,9 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
-            .sheet(isPresented: $showingManageUsers) {
-            ManageUsersView()
+        // Manage Users is a pushed page with the system back button; back returns to Home (D2).
+        .fullScreenCover(isPresented: $showingManageUsers) {
+            ManageUsersPushedFromHome(isPresented: $showingManageUsers)
                 .environmentObject(userStore)
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
@@ -190,9 +191,6 @@ struct HomeView: View {
             WholesalersView(presentedAsSheet: true)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("dismissManageUsersAndSelectTab"))) { notification in
-            showingManageUsers = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("openTasksDetail"))) { _ in
             presentTasksDetail()
@@ -282,6 +280,7 @@ struct HomeView: View {
                 .environmentObject(projectStore)
                 .environmentObject(managerScheduleStore)
                 .environmentObject(notificationService)
+                .environmentObject(holidayStore)
         }
         .sheet(isPresented: $showingHomeProfileCard) {
             HomeProfileCardSheet()
@@ -323,7 +322,7 @@ struct HomeView: View {
                 if let editUserId = note.userInfo?["editUserId"] as? String, !editUserId.isEmpty {
                     WorkCatalogueDeepLink.pendingEditUserId = editUserId
                 }
-                showingManageUsers = true
+                presentManageUsers()
             case .tasksDetail: presentTasksDetail()
             case .generalAppSettings:
                 break
@@ -1122,7 +1121,7 @@ struct HomeView: View {
         case HomeQuickActionID.staffAddUser.rawValue:
             showingAddUser = true
         case HomeQuickActionID.staffManageUsersSheet.rawValue:
-            showingManageUsers = true
+            presentManageUsers()
         case HomeQuickActionID.staffHelp.rawValue:
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 6])
         case HomeQuickActionID.staffHoliday.rawValue:
@@ -1337,6 +1336,15 @@ struct HomeView: View {
             hash = hash &+ project.jobType.hashValue
         }
         return hash
+    }
+
+    /// Shows Manage Users already pushed (no slide-up), so it reads as a page with a back button.
+    private func presentManageUsers() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            showingManageUsers = true
+        }
     }
 
     private func presentTasksDetail() {

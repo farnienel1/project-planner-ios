@@ -11,6 +11,7 @@ struct OrganisationMaterialCutOffSettingsView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     private struct CutOffDraft: Equatable {
@@ -120,7 +121,7 @@ struct OrganisationMaterialCutOffSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
         .safeAreaInset(edge: .bottom) {
-            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving, isOnline: smartCache.isOnline) {
                 Task { await save() }
             }
         }

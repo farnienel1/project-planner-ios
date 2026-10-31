@@ -28,6 +28,7 @@ private enum LoginBrand {
 struct AuthenticationView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject private var smartCache: SmartCacheService
     @State private var email = ""
     @State private var password = ""
     @State private var showingForgotPassword = false
@@ -278,6 +279,8 @@ struct AuthenticationView: View {
             .accessibilityIdentifier("signIn.signIn")
             .buttonStyle(.plain)
             .disabled(firebaseBackend.isLoading)
+            // RULEBOOK §2: sign-in is online only.
+            .onlineOnly(isOnline: smartCache.isOnline)
             .padding(.bottom, 24)
 
             HStack(spacing: 12) {
@@ -387,6 +390,11 @@ struct AuthenticationView: View {
     }
 
     private func signIn() {
+        // RULEBOOK §2: sign-in is online only (covers the keyboard Return path too).
+        guard smartCache.isOnline else {
+            firebaseBackend.errorMessage = OfflinePolicy.onlineOnlyMessage
+            return
+        }
         let validationMessages = AuthFormValidation.loginMessages(email: email, password: password)
         if !validationMessages.isEmpty {
             userStore.errorMessage = nil
@@ -498,4 +506,5 @@ private struct LoginAutofillField: UIViewRepresentable {
     AuthenticationView()
         .environmentObject(FirebaseBackend())
         .environmentObject(UserStore())
+        .environmentObject(SmartCacheService())
 }

@@ -10,6 +10,7 @@ import SwiftUI
 struct AddUserView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     enum AddUserMode {
@@ -189,7 +190,24 @@ struct AddUserView: View {
         }
     }
 
+    /// RULEBOOK §2: creating the user sends the invite, so the last step is online only.
     private var wizardFooter: some View {
+        VStack(spacing: 0) {
+            if currentStep == finalReviewStep && !smartCache.isOnline {
+                Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+            }
+            wizardFooterButtons
+        }
+        .background(ProjectWorksRevampColors.surface)
+    }
+
+    private var wizardFooterButtons: some View {
         HStack(spacing: 11) {
             Button {
                 withAnimation { currentStep -= 1 }
@@ -246,7 +264,7 @@ struct AddUserView: View {
             }
             .accessibilityIdentifier("addUser.creating")
             .buttonStyle(.plain)
-            .disabled(!canProceed || isCreating)
+            .disabled(!canProceed || isCreating || (currentStep == finalReviewStep && !smartCache.isOnline))
             .opacity((canProceed && !isCreating) ? 1 : 0.55)
         }
         .padding(.horizontal, 16)
@@ -1432,4 +1450,5 @@ struct PermissionToggle: View {
     AddUserView()
         .environmentObject(UserStore())
         .environmentObject(FirebaseBackend())
+        .environmentObject(SmartCacheService())
 }

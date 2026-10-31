@@ -1755,10 +1755,14 @@ struct ProjectDetailView: View {
         return Button(action: onTap) {
             HStack(spacing: 8) {
                 schedulingAvatar(initials: initials, accent: schedulingOperativeGradient)
-                Text(name)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .lineLimit(1)
+                    // RULEBOOK §2: queued offline change not yet confirmed by the server.
+                    PendingSyncIndicator(entityId: booking.id.uuidString)
+                }
                 Spacer(minLength: 4)
                 Text(booking.scheduleLabel(policy: p))
                     .font(.system(size: 11))
@@ -1792,10 +1796,14 @@ struct ProjectDetailView: View {
         } label: {
             HStack(spacing: 8) {
                 schedulingAvatar(initials: initials, accent: schedulingSubcontractorGradient)
-                Text(managerName)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(managerName)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .lineLimit(1)
+                    // RULEBOOK §2: queued offline change not yet confirmed by the server.
+                    PendingSyncIndicator(entityId: booking.id.uuidString)
+                }
                 Spacer(minLength: 4)
                 Text(booking.scheduleLabel(policy: p))
                     .font(.system(size: 11))

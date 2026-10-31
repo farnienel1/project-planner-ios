@@ -7,6 +7,7 @@ import SwiftUI
 
 struct OrganisationAnnualLeaveDefaultsView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     @State private var daysText: String = ""
@@ -179,7 +180,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
         .safeAreaInset(edge: .bottom) {
-            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving, isOnline: smartCache.isOnline) {
                 Task { await save() }
             }
         }

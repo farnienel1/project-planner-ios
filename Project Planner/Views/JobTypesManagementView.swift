@@ -2,6 +2,7 @@ import SwiftUI
 
 struct JobTypesManagementView: View {
     @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
     @State private var showingAddJobType = false
     
@@ -35,6 +36,7 @@ struct JobTypesManagementView: View {
                             }
                             .accessibilityIdentifier("jobTypesManagement.addYourFirstJobType")
                             .ppProminentCapsule()
+                            .onlineOnly(isOnline: smartCache.isOnline)
                             .padding(.top, 4)
                         }
                         .padding(20)
@@ -44,6 +46,14 @@ struct JobTypesManagementView: View {
 
                         Spacer(minLength: 0)
                     } else {
+                        if !smartCache.isOnline {
+                            Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 12)
+                                .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+                        }
                         PPGroupLabel(text: "Job types")
                         List {
                             ForEach(projectStore.jobTypes.sorted(), id: \.self) { jobType in
@@ -56,6 +66,8 @@ struct JobTypesManagementView: View {
                                 }
                                 .padding(.vertical, 6)
                                 .listRowBackground(PPColor.card)
+                                // RULEBOOK §2: job types are organisation settings, online only.
+                                .deleteDisabled(!smartCache.isOnline)
                             }
                             .onDelete(perform: deleteJobType)
                         }
@@ -89,6 +101,7 @@ struct JobTypesManagementView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.white)
                     .accessibilityIdentifier("jobTypesManagement.addJobType")
+                    .disabled(!smartCache.isOnline)
                 }
             }
             .sheet(isPresented: $showingAddJobType) {
@@ -129,6 +142,7 @@ struct JobTypesManagementView: View {
 
 struct AddJobTypeView: View {
     @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
     @State private var jobTypeName = ""
     @State private var errorMessage: String?
@@ -171,6 +185,7 @@ struct AddJobTypeView: View {
                 .accessibilityIdentifier("addJobType.createNewJobType")
                 .buttonStyle(.borderedProminent)
                 .disabled(jobTypeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .onlineOnly(isOnline: smartCache.isOnline)
                 .padding()
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -206,5 +221,6 @@ struct AddJobTypeView: View {
 #Preview {
     JobTypesManagementView()
         .environmentObject(ProjectStore())
+        .environmentObject(SmartCacheService())
 }
 

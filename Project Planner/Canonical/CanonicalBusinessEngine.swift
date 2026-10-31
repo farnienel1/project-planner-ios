@@ -379,31 +379,30 @@ nonisolated enum CanonicalBusinessEngine {
         ranges: [(startDay: Int, endDay: Int)],
         recurringRunStartDay: String,
         recurringRunEndDay: String
-    ) -> CanonicalDayWindow? {
+    ) -> CanonicalCoverageWindow? {
         guard context != nil else { return nil }
-        let payload: [String: Any] = [
-            "referenceIso": isoString(from: reference),
-            "timeZone": timeZone,
-            "clashLookaheadMode": clashLookaheadMode,
-            "clashLookaheadDays": clashLookaheadDays,
-            "paymentRunMode": paymentRunMode,
-            "ranges": ranges.map { ["startDay": $0.startDay, "endDay": $0.endDay] },
-            "recurringRunStartDay": recurringRunStartDay,
-            "recurringRunEndDay": recurringRunEndDay,
-        ]
-        guard JSONSerialization.isValidJSONObject(payload),
-              let data = try? JSONSerialization.data(withJSONObject: payload),
-              let json = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-        let value = evaluate("ProjectPlannerCanonical.coverageWindow(\(json))")
-        guard let result = value?.toDictionary(),
+        let payload = coverageWindowPayload(
+            reference: reference,
+            timeZone: timeZone,
+            clashLookaheadMode: clashLookaheadMode,
+            clashLookaheadDays: clashLookaheadDays,
+            paymentRunMode: paymentRunMode,
+            ranges: ranges,
+            recurringRunStartDay: recurringRunStartDay,
+            recurringRunEndDay: recurringRunEndDay
+        )
+        guard let result = callJSON("coverageWindow", arguments: [payload]) as? [String: Any],
               let start = result["startDayKey"] as? String,
               let end = result["endDayKey"] as? String,
               !start.isEmpty, !end.isEmpty else {
             return nil
         }
-        return CanonicalDayWindow(startDayKey: start, endDayKey: end)
+        // "Set number of days" with no usable N: the script used 7 days and says why (RULEBOOK §5).
+        return CanonicalCoverageWindow(
+            startDayKey: start,
+            endDayKey: end,
+            fallbackReason: result["fallbackReason"] as? String
+        )
     }
 
     struct CanonicalPaymentRunRange: Codable, Equatable, Hashable, Sendable {
@@ -700,8 +699,11 @@ nonisolated enum CanonicalBusinessEngine {
         return objectDictionary("ProjectPlannerCanonical.materialCutOffToFirestore(\(json))")
     }
 
-    /// The web unbooked scan adds Saturday and Sunday after `coverageWindow` when the horizon is a working week.
-    /// The coverage window itself stays Monday–Friday.
+    /// Last day unbooked labour is checked on. RULEBOOK §5: in Full week, Saturday and Sunday are added for
+    /// unbooked labour only when "Include weekends" is on; the coverage window itself stays Monday–Friday.
+    /// The weekend days are the script's: `clashScanDays` for the week of `coverageEnd`, with every weekend
+    /// day counted as booked. `unbookedLabourRows` itself skips weekends when the toggle is off.
+    /// RULEBOOK-GAP(unbookedScanDays): web has no export that names the unbooked days; replace this when it ships.
     static func unbookedLabourWindowEnd(
         coverageEnd: Date,
         clashLookaheadMode: String,
@@ -709,16 +711,25 @@ nonisolated enum CanonicalBusinessEngine {
         calendar: Calendar = businessCalendar
     ) -> Date {
         let end = calendar.startOfDay(for: coverageEnd)
-        guard includeWeekends, clashLookaheadMode == WarningClashLookaheadMode.endOfWorkingWeek.rawValue else {
+        guard includeWeekends, clashLookaheadMode == WarningClashLookaheadMode.endOfWorkingWeek.rawValue,
+              let days = clashScanDays(
+                reference: end,
+                timeZone: calendar.timeZone.identifier,
+                clashLookaheadMode: clashLookaheadMode,
+                clashLookaheadDays: 7,
+                paymentRunMode: "",
+                ranges: [],
+                recurringRunStartDay: "",
+                recurringRunEndDay: "",
+                bookedDayKeys: nil
+              ),
+              let last = date(fromDayKey: days.endDayKey, calendar: calendar) else {
             return end
         }
-        let weekday = calendar.component(.weekday, from: end)
-        let iso = weekday == 1 ? 7 : weekday - 1
-        guard (1...5).contains(iso) else { return end }
-        return calendar.date(byAdding: .day, value: 7 - iso, to: end) ?? end
+        return max(end, last)
     }
 
-    /// Warning scan bounds from the shared script, or the same London calendar if the script is missing.
+    /// Warning scan bounds from the shared script (`coverageWindow`). Today only if the script is missing.
     static func warningBounds(
         detection: OrgWarningDetectionSettings,
         invoicing: OrganizationInvoicingSettings,
@@ -739,11 +750,9 @@ nonisolated enum CanonicalBusinessEngine {
            let end = date(fromDayKey: window.endDayKey, calendar: calendar) {
             return (start, end)
         }
+        // No Swift calendar of its own: without the script the scan is today only.
         let today = calendar.startOfDay(for: reference)
-        return (
-            detection.coverageStart(from: today, invoicing: invoicing, calendar: calendar),
-            detection.coverageEnd(from: today, invoicing: invoicing, calendar: calendar)
-        )
+        return (today, today)
     }
 
     /// JSON array returned by a canonical row function. Nil means the script did not run.

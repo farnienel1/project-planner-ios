@@ -349,43 +349,51 @@ class FirebaseBackend: ObservableObject {
                 }
                 guard let self, let snapshot, snapshot.exists, let data = snapshot.data() else { return }
                 Task { @MainActor in
+                    // A snapshot for a company the user has since left is ignored.
                     guard organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
-                    self.applyOrganizationDocumentMyScheduleOptions(from: data)
-                    self.applyOrganizationDocumentMaterialCutOff(from: data)
+                    self.applyOrganizationDocumentSettings(from: data, organizationId: orgId)
                     self.applyOrganizationDocumentBilling(from: data, organizationId: orgId)
                 }
             }
     }
 
+    /// Every snapshot of `organizations/{orgId}` re-parses ALL settings (working hours incl. prior and
+    /// scheduled, warning detection, invoicing, currency, bank holiday region, company details, annual
+    /// leave defaults, schedule options, material cut-off) with the same reader as the first load, so a
+    /// web save shows on iOS without a reload. The server always wins over the in-memory copy.
     @MainActor
-    private func applyOrganizationDocumentMyScheduleOptions(from data: [String: Any]) {
-        guard var org = currentOrganization else { return }
-        guard let settingsDict = data["settings"] as? [String: Any],
-              let raw = settingsDict["myScheduleOptions"] as? [String: Any] else {
-            return
+    private func applyOrganizationDocumentSettings(from data: [String: Any], organizationId: String) {
+        guard var org = currentOrganization,
+              organizationIdsMatch(org.firestoreDocumentId, organizationId) else { return }
+        let parsed = buildOrganizationFromDocument(orgId: org.firestoreDocumentId, data: data)
+        let previous = org
+        org.name = parsed.name
+        org.settings = parsed.settings
+        org.officeAddressLine1 = parsed.officeAddressLine1
+        org.officeAddressLine2 = parsed.officeAddressLine2
+        org.officeCity = parsed.officeCity
+        org.officeCounty = parsed.officeCounty
+        org.officePostcode = parsed.officePostcode
+        org.countryCode = parsed.countryCode
+        org.defaultLatitude = parsed.defaultLatitude
+        org.defaultLongitude = parsed.defaultLongitude
+        org.companyLogoURL = parsed.companyLogoURL
+        org.documentAbbreviation = parsed.documentAbbreviation
+        if let creator = parsed.creatorUserId, !creator.isEmpty {
+            org.creatorUserId = creator
         }
-        let options = MyScheduleOptions.fromFirestore(raw)
-        let previous = org.settings.myScheduleOptions
-        guard previous != options else { return }
-        org.settings.myScheduleOptions = options
-        organizationHasFirestoreMyScheduleOptions = true
+        org.payrollTimePolicyPrior = parsed.payrollTimePolicyPrior
+        org.payrollTimePolicyEffectiveFrom = parsed.payrollTimePolicyEffectiveFrom
+        org.payrollTimePolicyScheduled = parsed.payrollTimePolicyScheduled
+        guard org != previous else { return }
         currentOrganization = org
         storeOrganizationLocally(org)
-        NotificationCenter.default.post(name: .organizationMyScheduleOptionsDidChange, object: nil)
-    }
-
-    /// Live `settings.materialCutOff`. A web save of 15:30 must replace the in-memory 16:00 clock.
-    @MainActor
-    private func applyOrganizationDocumentMaterialCutOff(from data: [String: Any]) {
-        guard var org = currentOrganization else { return }
-        guard let settingsDict = data["settings"] as? [String: Any],
-              let raw = settingsDict["materialCutOff"] as? [String: Any] else { return }
-        guard let cutOff = OrgMaterialCutOff.fromFirestore(raw) else { return }
-        guard org.settings.materialCutOff != cutOff else { return }
-        org.settings.materialCutOff = cutOff
-        currentOrganization = org
-        storeOrganizationLocally(org)
-        NotificationCenter.default.post(name: .organizationMaterialCutOffDidChange, object: nil)
+        if previous.settings.myScheduleOptions != org.settings.myScheduleOptions {
+            NotificationCenter.default.post(name: .organizationMyScheduleOptionsDidChange, object: nil)
+        }
+        if previous.settings.materialCutOff != org.settings.materialCutOff {
+            NotificationCenter.default.post(name: .organizationMaterialCutOffDidChange, object: nil)
+        }
     }
 
     /// Re-reads nested `billing` when the organisation document changes. Does not write billing back.
@@ -619,6 +627,20 @@ class FirebaseBackend: ObservableObject {
             let msg = "Firebase did not start (missing or invalid GoogleService-Info.plist in the app). Add the plist from Firebase Console to the app target, then clean build."
             errorMessage = msg
             throw NSError(domain: "FirebaseBackend", code: 500, userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+        // RULEBOOK §14: `passwordPolicyError` (8 characters; the platform owner's developer account 10).
+        switch CanonicalBusinessEngine.passwordPolicyError(password, developerAccount: AppUser.isPlatformOwnerEmail(email)) {
+        case .accepted:
+            break
+        case .rejected(let message):
+            isLoading = false
+            errorMessage = message
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
+        case .unavailable:
+            isLoading = false
+            let message = "Could not check the password. Please try again."
+            errorMessage = message
+            throw NSError(domain: "FirebaseBackend", code: 500, userInfo: [NSLocalizedDescriptionKey: message])
         }
 
         do {
@@ -1248,8 +1270,8 @@ class FirebaseBackend: ObservableObject {
             topLevel: data["warningDetection"] as? [String: Any],
             nested: nestedWarning
         )
-        if let parsed = CanonicalBusinessEngine.parseWarningDetection(warningRaw),
-           let detection = OrgWarningDetectionSettings(canonical: parsed) {
+        // Raw value to the script, so `clashLookaheadDaysFallback` keeps the missing/invalid notice (RULEBOOK §5).
+        if let detection = OrgWarningDetectionSettings(firestoreRaw: warningRaw) {
             settings.warningDetection = detection
         }
         if let invoicingDict = data["invoicing"] as? [String: Any] {
@@ -1267,51 +1289,51 @@ class FirebaseBackend: ObservableObject {
            let cutOff = OrgMaterialCutOff.fromFirestore(raw) {
             settings.materialCutOff = cutOff
         }
-        if let settingsDict = data["settings"] as? [String: Any],
-           let regionId = (settingsDict["bankHolidayRegionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+        // Rulebook: `parseCompanyDetails` (top-level `bankHolidayRegionId`, then `settings.bankHolidayRegionId`)
+        // and `resolveOrganizationCurrency` (also honours the legacy literal "settings.currencyCode" key
+        // and falls back to `defaultCurrencyForCountry`). Both read the raw document.
+        let rawDocument = FirebaseBackend.firestoreJSON(data) as? [String: Any] ?? [:]
+        if let details = CanonicalBusinessEngine.parseCompanyDetails(orgDocument: rawDocument),
+           let regionId = (details["bankHolidayRegionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
            !regionId.isEmpty {
             settings.bankHolidayRegionId = regionId
-        } else if let regionId = (data["bankHolidayRegionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !regionId.isEmpty {
-            settings.bankHolidayRegionId = regionId
         }
-        if let settingsDict = data["settings"] as? [String: Any],
-           let currency = (settingsDict["currencyCode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let currency = CanonicalBusinessEngine.resolveOrganizationCurrency(orgDocument: rawDocument),
            !currency.isEmpty {
-            settings.currencyCode = currency.uppercased()
-        } else if let currency = (data["currencyCode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !currency.isEmpty {
-            settings.currencyCode = currency.uppercased()
+            settings.currencyCode = currency
         }
         return settings
     }
 
-    /// Reads current/prior/scheduled payroll policy fields and promotes due scheduled changes.
+    /// Reads current/prior/scheduled payroll policy fields with `payrollTimePolicyTimeline` (a due scheduled
+    /// change counts from its day on). Day keys are in this document's zone, `organizationTimeZone(countryCode)`.
     static func applyPayrollPolicyFields(from data: [String: Any], to organization: inout Organization) {
-        let current = organization.settings.payrollTimePolicy
-        var prior: OrgPayrollTimePolicy?
-        if let priorDict = data["payrollTimePolicyPrior"] as? [String: Any] {
-            prior = OrgPayrollTimePolicy.fromFirestore(priorDict)
+        let rawDocument = FirebaseBackend.firestoreJSON(data) as? [String: Any] ?? [:]
+        let zone = CanonicalBusinessEngine.organizationTimeZoneIdentifier(countryCode: data["countryCode"] as? String)
+        let todayKey = CanonicalBusinessEngine.organizationDayKey(Date(), timeZoneIdentifier: zone)
+        guard let state = CanonicalBusinessEngine.payrollTimePolicyTimeline(
+            orgDocument: rawDocument,
+            todayKey: todayKey,
+            timeZone: zone
+        ) else {
+            print("🔥🔥🔥 DEBUG: payrollTimePolicyTimeline did not answer — keeping the parsed current policy")
+            return
         }
-        var effectiveFrom = Calendar.current.startOfDay(for: Date())
-        if let key = data["payrollTimePolicyEffectiveFrom"] as? String,
-           let d = PayrollTimePolicyCatalog.date(fromDayKey: key) {
-            effectiveFrom = d
+        organization.settings.payrollTimePolicy = state.current
+        organization.settings.workingHours.startTime = state.current.standardDayStart
+        organization.settings.workingHours.endTime = state.current.standardDayEnd
+        organization.settings.workingHours.lunchBreak = state.current.unpaidBreakMinutes
+        organization.payrollTimePolicyPrior = state.prior
+        organization.payrollTimePolicyEffectiveFrom = state.effectiveFromDayKey.flatMap {
+            CanonicalBusinessEngine.organizationDate(fromDayKey: $0, timeZoneIdentifier: zone)
         }
-        var scheduled: OrgPayrollTimePolicyScheduledChange?
-        if let schedDict = data["payrollTimePolicyScheduled"] as? [String: Any] {
-            scheduled = OrgPayrollTimePolicyScheduledChange.fromFirestore(schedDict)
+        if let policy = state.scheduledPolicy,
+           let key = state.scheduledEffectiveFromDayKey,
+           let day = CanonicalBusinessEngine.organizationDate(fromDayKey: key, timeZoneIdentifier: zone) {
+            organization.payrollTimePolicyScheduled = OrgPayrollTimePolicyScheduledChange(policy: policy, effectiveFrom: day)
+        } else {
+            organization.payrollTimePolicyScheduled = nil
         }
-        let applied = PayrollTimePolicyCatalog.appliedPolicyState(
-            current: current,
-            prior: prior,
-            effectiveFrom: effectiveFrom,
-            scheduled: scheduled
-        )
-        organization.settings.payrollTimePolicy = applied.current
-        organization.payrollTimePolicyPrior = applied.prior
-        organization.payrollTimePolicyEffectiveFrom = applied.effectiveFrom
-        organization.payrollTimePolicyScheduled = applied.scheduled
     }
 
     static func organizationHasMyScheduleOptionsInDocument(_ data: [String: Any]) -> Bool {
@@ -2612,12 +2634,19 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: Refusing to overwrite job types with an empty list")
             return
         }
-        let data: [String: Any] = [
-            "jobTypes": Array(jobTypes),
-            "organizationId": orgId,
-            "updatedAt": Timestamp(date: Date())
-        ]
-        try await db.collection("organizations").document(orgId).collection("settings").document("jobTypes").setData(data)
+        // RULEBOOK §1 partial write + metadata; §16 settings documents are admins and managers only.
+        let ref = db.collection("organizations").document(orgId).collection("settings").document("jobTypes")
+        let patch = WriteMetadata.stamped(["jobTypes": Array(jobTypes).sorted()], userId: currentUser?.uid)
+        do {
+            try await ref.updateData(patch)
+        } catch {
+            let nsError = error as NSError
+            guard nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 5 else { throw error }
+            // First save for this organisation: the document does not exist yet.
+            var create = patch
+            create["organizationId"] = orgId
+            try await ref.setData(create, merge: true)
+        }
         print("🔥🔥🔥 DEBUG: Job types saved successfully to Firebase")
     }
     
@@ -3196,7 +3225,8 @@ class FirebaseBackend: ObservableObject {
         } else {
             payload["companyLogoURL"] = FieldValue.delete()
         }
-        try await db.collection("organizations").document(orgId).updateData(payload)
+        try await db.collection("organizations").document(orgId)
+            .updateData(WriteMetadata.stamped(payload, userId: auth.currentUser?.uid))
         guard var org = currentOrganization else { return }
         org.companyLogoURL = (logoURL?.isEmpty == false) ? logoURL : nil
         org.updatedAt = Date()
@@ -3261,55 +3291,100 @@ class FirebaseBackend: ObservableObject {
     #endif
     
     // MARK: - Operative Management
-    
-    func saveOperative(_ operative: Operative, organizationId: String) async throws {
-        print("🔥🔥🔥 DEBUG: saveOperative called with organizationId: \(organizationId)")
-        print("🔥🔥🔥 DEBUG: Operative details - Name: \(operative.name), ID: \(operative.id.uuidString)")
-        print("🔥🔥🔥 DEBUG: Operative email: \(operative.email), phone: \(operative.phone ?? "nil")")
-        print("🔥🔥🔥 DEBUG: Operative skills: \(Array(operative.skills))")
-        
-            let data: [String: Any] = [
-                "firstName": operative.firstName,
-                "lastName": operative.lastName,
-                "name": operative.name, // Keep for backward compatibility
-                "email": operative.email,
-                "phone": operative.phone ?? "",
-                "startDate": Timestamp(date: operative.startDate),
-                "skills": Array(operative.skills),
-                "qualifications": operative.qualifications.map { qualification in
-                    var qualificationData: [String: Any] = [
-                        "id": qualification.id,
-                        "name": qualification.name,
-                        "hasEndDate": qualification.hasEndDate,
-                        "createdAt": Timestamp(date: qualification.createdAt),
-                        "updatedAt": Timestamp(date: qualification.updatedAt)
-                    ]
-                    
-                    if let endDate = qualification.endDate {
-                        qualificationData["endDate"] = Timestamp(date: endDate)
-                    }
-                    
-                    return qualificationData
-                },
-                "isActive": operative.isActive,
-                "hourlyRate": operative.hourlyRate ?? 0,
-                "currencySymbol": operative.currencySymbol ?? "£",
+
+    /// Same value for a partial-write diff. A delete marker, a missing key and null are all "absent".
+    static func firestoreFieldValuesEqual(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        func absent(_ value: Any?) -> Bool {
+            guard let value else { return true }
+            return value is NSNull || value is FieldValue
+        }
+        let lhsAbsent = absent(lhs)
+        let rhsAbsent = absent(rhs)
+        if lhsAbsent || rhsAbsent { return lhsAbsent == rhsAbsent }
+        guard let left = lhs as? NSObject, let right = rhs as? NSObject else { return false }
+        return left.isEqual(right)
+    }
+
+    /// Keys of `payload` whose value differs from `baseline` (RULEBOOK §1 "Partial writes only").
+    static func changedFirestoreFields(_ payload: [String: Any], baseline: [String: Any], ignoring: Set<String>) -> [String: Any] {
+        var changed: [String: Any] = [:]
+        for (key, value) in payload where !ignoring.contains(key) {
+            if !firestoreFieldValuesEqual(value, baseline[key]) {
+                changed[key] = value
+            }
+        }
+        return changed
+    }
+
+    /// Roster row write: creates the document when the server says it is missing, otherwise updates only
+    /// the fields that changed (against `previousPayload` when the caller has the copy it edited, else the
+    /// server copy), with `WriteMetadata`. Never rewrites the whole document.
+    private func writeChangedRosterRow(
+        _ ref: DocumentReference,
+        payload: [String: Any],
+        previousPayload: [String: Any]?
+    ) async throws {
+        let createOnly: Set<String> = ["createdAt", "organizationId", "updatedAt"]
+        let uid = auth.currentUser?.uid
+        let snapshot = try await ref.getDocument(source: .server)
+        guard snapshot.exists, let stored = snapshot.data() else {
+            let createPayload = payload.filter { !($0.value is FieldValue) }
+            try await ref.setData(WriteMetadata.stamped(createPayload, userId: uid))
+            return
+        }
+        let changes = Self.changedFirestoreFields(payload, baseline: previousPayload ?? stored, ignoring: createOnly)
+        guard !changes.isEmpty else { return }
+        try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+    }
+
+    private static func operativeDocumentPayload(_ operative: Operative, organizationId: String) -> [String: Any] {
+        var data: [String: Any] = [
+            "firstName": operative.firstName,
+            "lastName": operative.lastName,
+            "name": operative.name, // Keep for backward compatibility
+            "email": operative.email,
+            "phone": operative.phone ?? "",
+            "startDate": Timestamp(date: operative.startDate),
+            "skills": Array(operative.skills),
+            "qualifications": operative.qualifications.map { qualification in
+                var qualificationData: [String: Any] = [
+                    "id": qualification.id,
+                    "name": qualification.name,
+                    "hasEndDate": qualification.hasEndDate,
+                    "createdAt": Timestamp(date: qualification.createdAt),
+                    "updatedAt": Timestamp(date: qualification.updatedAt)
+                ]
+                if let endDate = qualification.endDate {
+                    qualificationData["endDate"] = Timestamp(date: endDate)
+                }
+                return qualificationData
+            },
+            "isActive": operative.isActive,
+            "currencySymbol": operative.currencySymbol ?? OrgMoney.symbol(),
             "notes": operative.notes ?? "",
-            "dayRate": operative.dayRate ?? 0,
             "tradeTypePreset": operative.tradeTypePreset ?? "",
             "tradeTypeCustom": operative.tradeTypeCustom ?? "",
             "qualificationExpiryDates": Dictionary(uniqueKeysWithValues: operative.qualificationExpiryDates.map { ($0.key, Timestamp(date: $0.value)) }),
             "qualificationCertificateURLs": Dictionary(uniqueKeysWithValues: operative.qualificationCertificateURLs.map { ($0.key, $0.value) }),
             "organizationId": organizationId,
-            "createdAt": Timestamp(date: operative.createdAt),
-            "updatedAt": Timestamp(date: operative.updatedAt)
+            "createdAt": Timestamp(date: operative.createdAt)
         ]
-        
-        print("🔥🔥🔥 DEBUG: Data to save: \(data)")
-        print("🔥🔥🔥 DEBUG: Saving operative to organizations/\(organizationId)/operatives/\(operative.id.uuidString)")
-        
+        // A missing rate is removed, never written as 0 (0 is a real rate, RULEBOOK §8).
+        data["dayRate"] = operative.dayRate.map { $0 as Any } ?? FieldValue.delete()
+        data["hourlyRate"] = operative.hourlyRate.map { $0 as Any } ?? FieldValue.delete()
+        return data
+    }
+
+    /// Partial write of `operatives/{id}`: only the fields that changed (against `previous` when the caller
+    /// has the copy it edited, else the server document), plus `WriteMetadata`. A new row is created whole.
+    func saveOperative(_ operative: Operative, organizationId: String, previous: Operative? = nil) async throws {
+        print("🔥🔥🔥 DEBUG: saveOperative called with organizationId: \(organizationId)")
+        print("🔥🔥🔥 DEBUG: Operative details - Name: \(operative.name), ID: \(operative.id.uuidString)")
+        let data = Self.operativeDocumentPayload(operative, organizationId: organizationId)
+        let previousData = previous.map { Self.operativeDocumentPayload($0, organizationId: organizationId) }
+        let ref = db.collection("organizations").document(organizationId).collection("operatives").document(operative.id.uuidString)
         do {
-            try await db.collection("organizations").document(organizationId).collection("operatives").document(operative.id.uuidString).setData(data)
+            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData)
             print("🔥🔥🔥 DEBUG: Operative saved successfully to Firebase")
         } catch {
             print("🔥🔥🔥 DEBUG: ERROR saving operative: \(error.localizedDescription)")
@@ -3701,10 +3776,8 @@ class FirebaseBackend: ObservableObject {
         
         // MARK: - Manager Operations
         
-        func saveManager(_ manager: Manager, organizationId: String) async throws {
-            print("🔥🔥🔥 DEBUG: saveManager called with organizationId: \(organizationId)")
-            
-            let data: [String: Any] = [
+        private static func managerDocumentPayload(_ manager: Manager, organizationId: String) -> [String: Any] {
+            [
                 "firstName": manager.firstName,
                 "lastName": manager.lastName,
                 "email": manager.email,
@@ -3715,16 +3788,21 @@ class FirebaseBackend: ObservableObject {
                 "tradeTypePreset": manager.tradeTypePreset ?? "",
                 "tradeTypeCustom": manager.tradeTypeCustom ?? "",
                 "organizationId": organizationId,
-                "createdAt": Timestamp(date: manager.createdAt),
-                "updatedAt": Timestamp(date: Date())
+                "createdAt": Timestamp(date: manager.createdAt)
             ]
-            
+        }
+
+        /// Partial write of `managers/{id}`: only changed fields plus `WriteMetadata` (a new row is created).
+        /// It never replaces the document, so pay fields another platform stored on the row stay.
+        func saveManager(_ manager: Manager, organizationId: String, previous: Manager? = nil) async throws {
+            print("🔥🔥🔥 DEBUG: saveManager called with organizationId: \(organizationId)")
+            let data = Self.managerDocumentPayload(manager, organizationId: organizationId)
+            let previousData = previous.map { Self.managerDocumentPayload($0, organizationId: organizationId) }
             let documentId = manager.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines)
             let storageId = documentId.isEmpty ? manager.id.uuidString : documentId
             print("🔥🔥🔥 DEBUG: Saving manager to organizations/\(organizationId)/managers/\(storageId)")
-            
-            try await db.collection("organizations").document(organizationId).collection("managers").document(storageId).setData(data)
-            
+            let ref = db.collection("organizations").document(organizationId).collection("managers").document(storageId)
+            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData)
             print("🔥🔥🔥 DEBUG: Manager saved successfully to Firebase")
         }
 
@@ -4602,6 +4680,46 @@ class FirebaseBackend: ObservableObject {
         return true
     }
 
+    /// Live `users where organizationId == orgId`, the query `getOrganizationUsers` starts from (RULEBOOK §1:
+    /// the Manage Users roster is live). `onChange` gets the parsed added / modified documents and the ids that
+    /// left the query. Nil when the organisation id is blank.
+    func observeOrganizationUsers(
+        organizationId: String,
+        onChange: @escaping @MainActor (_ changed: [AppUser], _ removedIds: [String]) -> Void,
+        onError: @escaping @MainActor (Error) -> Void
+    ) -> ListenerRegistration? {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { return nil }
+        return db.collection("users")
+            .whereField("organizationId", isEqualTo: orgId)
+            .addSnapshotListener { snapshot, error in
+                if let error {
+                    Task { @MainActor in onError(error) }
+                    return
+                }
+                guard let snapshot else { return }
+                var changed: [AppUser] = []
+                var removed: [String] = []
+                for change in snapshot.documentChanges {
+                    switch change.type {
+                    case .added, .modified:
+                        var user = Self.parseAppUserDocument(
+                            userId: change.document.documentID,
+                            data: change.document.data()
+                        )
+                        if user.organizationId.isEmpty { user.organizationId = orgId }
+                        changed.append(user)
+                    case .removed:
+                        removed.append(change.document.documentID)
+                    @unknown default:
+                        break
+                    }
+                }
+                guard !changed.isEmpty || !removed.isEmpty else { return }
+                Task { @MainActor in onChange(changed, removed) }
+            }
+    }
+
     func getOrganizationUsers(organizationId: String) async throws -> OrganizationUserRoster {
         let orgId = normalizedOrganizationId(organizationId)
         print("🔥🔥🔥 DEBUG: getOrganizationUsers called with organizationId: \(orgId)")
@@ -4914,22 +5032,12 @@ class FirebaseBackend: ObservableObject {
             )
         }
         // Top-level map only. Nested settings.warningDetection is not the live document.
-        var payload: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+        var payload: [String: Any] = [:]
         for (key, value) in Self.warningDetectionFirestoreMap(settings) {
             payload["warningDetection.\(key)"] = value
         }
         let orgRef = db.collection("organizations").document(orgId)
-        do {
-            try await orgRef.updateData(payload)
-        } catch {
-            try await orgRef.setData(
-                [
-                    "warningDetection": Self.warningDetectionFirestoreMap(settings),
-                    "updatedAt": Timestamp(date: Date()),
-                ],
-                merge: true
-            )
-        }
+        try await orgRef.updateData(WriteMetadata.stamped(payload, userId: auth.currentUser?.uid))
         guard var org = currentOrganization else { return }
         org.settings.warningDetection = settings
         org.updatedAt = Date()
@@ -4937,20 +5045,17 @@ class FirebaseBackend: ObservableObject {
         storeOrganizationLocally(org)
     }
 
-    /// Keep a saved look-ahead when a later read is the factory default.
-    /// Payment runs are not decided here — they always come from the live document.
+    /// The server always wins (§4): the detection settings read from the document replace the in-memory
+    /// copy, even when they equal the factory defaults. `current` is kept only for the call signature.
     static func detectionForWarningScan(
         current: OrgWarningDetectionSettings,
         loaded: OrgWarningDetectionSettings
     ) -> OrgWarningDetectionSettings {
-        if loaded == .default, current != .default {
-            return current
-        }
+        _ = current
         return loaded
     }
 
-    /// Re-reads the organisation document. Payment runs always come from this live read.
-    /// A factory-default detection payload does not replace a saved look-ahead mode.
+    /// Re-reads the organisation document. Payment runs and warning detection always come from this live read.
     @discardableResult
     func refreshWarningDetectionFromServer() async -> Bool {
         guard let orgId = currentOrganization?.firestoreDocumentId else { return false }
@@ -4980,55 +5085,106 @@ class FirebaseBackend: ObservableObject {
         PayrollTimePolicyCatalog.policy(for: day, organization: currentOrganization)
     }
 
-    /// Admin: apply working-hours changes immediately (today onward).
-    func applyOrganizationPayrollTimePolicyImmediately(_ policy: OrgPayrollTimePolicy) async throws {
-        guard let orgId = currentOrganization?.firestoreDocumentId else {
-            throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
+    /// Server copy of the organisation document for a working-hours write. Online only: the write
+    /// functions must see the stored prior / scheduled fields, not the in-memory copy.
+    private func organizationDocumentForPayrollWrite(_ orgId: String) async throws -> [String: Any] {
+        let snapshot = try await db.collection("organizations").document(orgId).getDocument(source: .server)
+        guard let data = snapshot.data() else {
+            throw NSError(domain: "FirebaseBackend", code: 404, userInfo: [NSLocalizedDescriptionKey: "Organisation not found."])
         }
-        let today = Calendar.current.startOfDay(for: Date())
-        let prior = currentOrganization?.settings.payrollTimePolicy
-        var payload: [String: Any] = [
-            "payrollTimePolicy": policy.asFirestoreDictionary(),
-            "payrollTimePolicyEffectiveFrom": PayrollTimePolicyCatalog.dayKey(today),
-            "payrollTimePolicyScheduled": NSNull(),
-            "updatedAt": Timestamp(date: Date()),
-        ]
-        if let prior {
-            payload["payrollTimePolicyPrior"] = prior.asFirestoreDictionary()
-        }
-        try await db.collection("organizations").document(orgId).setData(payload, merge: true)
-        guard var org = currentOrganization else { return }
-        org.payrollTimePolicyPrior = prior
-        org.payrollTimePolicyEffectiveFrom = today
-        org.payrollTimePolicyScheduled = nil
-        org.settings.payrollTimePolicy = policy
-        org.settings.workingHours.startTime = policy.standardDayStart
-        org.settings.workingHours.endTime = policy.standardDayEnd
-        org.settings.workingHours.lunchBreak = policy.unpaidBreakMinutes
+        return data
+    }
+
+    /// Writes `fields` (+ `WriteMetadata`) as a partial update and re-reads the payroll state locally
+    /// through `payrollTimePolicyTimeline`, from the server document with `fields` applied.
+    private func writeOrganizationPayrollFields(_ fields: [String: Any], orgId: String, serverData: [String: Any]) async throws {
+        try await db.collection("organizations").document(orgId)
+            .updateData(WriteMetadata.stamped(fields, userId: auth.currentUser?.uid))
+        guard var org = currentOrganization, organizationIdsMatch(org.firestoreDocumentId, orgId) else { return }
+        var merged = serverData
+        for (key, value) in fields { merged[key] = value }
+        Self.applyPayrollPolicyFields(from: merged, to: &org)
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
     }
 
-    /// Admin: queue a future working-hours change (replaces any pending schedule).
+    /// Organisation-zone today for the document being written.
+    private static func payrollTodayKey(for data: [String: Any]) -> (todayKey: String, zone: String) {
+        let zone = CanonicalBusinessEngine.organizationTimeZoneIdentifier(countryCode: data["countryCode"] as? String)
+        return (CanonicalBusinessEngine.organizationDayKey(Date(), timeZoneIdentifier: zone), zone)
+    }
+
+    /// Admin: apply working-hours changes from today (`payrollTimePolicyApplyNowWriteFields`). The prior
+    /// policy is the one in force yesterday; a future scheduled change is kept, a due one is consumed.
+    func applyOrganizationPayrollTimePolicyImmediately(_ policy: OrgPayrollTimePolicy) async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
+        }
+        if let message = CanonicalBusinessEngine.validatePayrollTimePolicy(policy) {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        let serverData = try await organizationDocumentForPayrollWrite(orgId)
+        let today = Self.payrollTodayKey(for: serverData)
+        guard let fields = CanonicalBusinessEngine.payrollTimePolicyApplyNowWriteFields(
+            orgDocument: Self.firestoreJSON(serverData) as? [String: Any] ?? [:],
+            policy: policy,
+            todayKey: today.todayKey,
+            timeZone: today.zone
+        ) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Could not save these working hours."])
+        }
+        try await writeOrganizationPayrollFields(fields, orgId: orgId, serverData: serverData)
+    }
+
+    /// Admin: queue a future working-hours change (`payrollTimePolicyScheduleWriteFields`; replaces any
+    /// pending change, promotes a due one first). `effectiveFrom` comes from a date picker, so its day is
+    /// read in the picker's (device) calendar and sent as that `YYYY-MM-DD` organisation day.
     func scheduleOrganizationPayrollTimePolicyChange(_ policy: OrgPayrollTimePolicy, effectiveFrom: Date) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
         }
-        let day = Calendar.current.startOfDay(for: effectiveFrom)
-        let scheduled = OrgPayrollTimePolicyScheduledChange(policy: policy, effectiveFrom: day)
-        try await db.collection("organizations").document(orgId).setData(
-            [
-                "payrollTimePolicyScheduled": scheduled.asFirestoreDictionary(),
-                "updatedAt": Timestamp(date: Date()),
-            ],
-            merge: true
-        )
-        guard var org = currentOrganization else { return }
-        org.payrollTimePolicyScheduled = scheduled
-        org.updatedAt = Date()
-        currentOrganization = org
-        storeOrganizationLocally(org)
+        if let message = CanonicalBusinessEngine.validatePayrollTimePolicy(policy) {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        let picked = Calendar.current.dateComponents([.year, .month, .day], from: effectiveFrom)
+        let effectiveKey = String(format: "%04d-%02d-%02d", picked.year ?? 0, picked.month ?? 0, picked.day ?? 0)
+        let serverData = try await organizationDocumentForPayrollWrite(orgId)
+        let today = Self.payrollTodayKey(for: serverData)
+        if let message = CanonicalBusinessEngine.payrollTimePolicyScheduleDateError(
+            effectiveFrom: effectiveKey,
+            todayKey: today.todayKey
+        ) {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        guard let fields = CanonicalBusinessEngine.payrollTimePolicyScheduleWriteFields(
+            orgDocument: Self.firestoreJSON(serverData) as? [String: Any] ?? [:],
+            policy: policy,
+            effectiveFrom: effectiveKey,
+            todayKey: today.todayKey,
+            timeZone: today.zone
+        ) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Could not schedule these working hours."])
+        }
+        try await writeOrganizationPayrollFields(fields, orgId: orgId, serverData: serverData)
+    }
+
+    /// Admin: cancel the pending working-hours change (`payrollTimePolicyCancelScheduleWriteFields`).
+    /// A change that is already due is promoted first, never lost.
+    func cancelScheduledOrganizationPayrollTimePolicyChange() async throws {
+        guard let orgId = currentOrganization?.firestoreDocumentId else {
+            throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
+        }
+        let serverData = try await organizationDocumentForPayrollWrite(orgId)
+        let today = Self.payrollTodayKey(for: serverData)
+        guard let fields = CanonicalBusinessEngine.payrollTimePolicyCancelScheduleWriteFields(
+            orgDocument: Self.firestoreJSON(serverData) as? [String: Any] ?? [:],
+            todayKey: today.todayKey,
+            timeZone: today.zone
+        ) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Could not cancel the scheduled change."])
+        }
+        try await writeOrganizationPayrollFields(fields, orgId: orgId, serverData: serverData)
     }
 
     /// Admin: update organisation-wide payroll / working time defaults (`organizations/{orgId}.payrollTimePolicy`).
@@ -5046,7 +5202,12 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
             )
         }
-        let previous = currentOrganization?.settings.invoicing ?? settings
+        // Payment-run history is built from the server document, not the in-memory copy (§4).
+        let orgRef = db.collection("organizations").document(orgId)
+        let snap = try await orgRef.getDocument(source: .server)
+        let serverInvoicing = snap.data()?["invoicing"] as? [String: Any]
+        let previous = serverInvoicing.map { Self.organizationInvoicingFromFirestore($0) }
+            ?? OrganizationInvoicingSettings.default
         var settingsToSave = settings
         if let recordedAtDayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(Date()),
            let history = CanonicalBusinessEngine.paymentRunHistoryAfterChange(
@@ -5074,19 +5235,17 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Could not save these payment run settings."]
             )
         }
-        let snap = try await db.collection("organizations").document(orgId).getDocument()
-        var merged = (snap.data()?["invoicing"] as? [String: Any]) ?? [:]
-        for (key, value) in written {
-            merged[key] = value
+        // Partial update of the keys `invoicingToFirestore` writes; other `invoicing` keys stay as stored.
+        var patch: [String: Any] = [:]
+        if serverInvoicing == nil {
+            patch["invoicing"] = written
+        } else {
+            for (key, value) in written {
+                patch["invoicing.\(key)"] = value
+            }
         }
-        try await db.collection("organizations").document(orgId).setData(
-            [
-                "invoicing": merged,
-                "updatedAt": Timestamp(date: Date()),
-            ],
-            merge: true
-        )
-        guard var org = currentOrganization else { return }
+        try await orgRef.updateData(WriteMetadata.stamped(patch, userId: auth.currentUser?.uid))
+        guard var org = currentOrganization, organizationIdsMatch(org.firestoreDocumentId, orgId) else { return }
         org.settings.invoicing = settingsToSave
         org.updatedAt = Date()
         currentOrganization = org
@@ -5108,12 +5267,8 @@ class FirebaseBackend: ObservableObject {
             "endMonth": defaults.endMonth,
             "carriesOver": defaults.carriesOver,
         ]
-        try await db.collection("organizations").document(orgId).setData(
-            [
-                "annualLeaveDefaults": payload,
-                "updatedAt": Timestamp(date: Date()),
-            ],
-            merge: true
+        try await db.collection("organizations").document(orgId).updateData(
+            WriteMetadata.stamped(["annualLeaveDefaults": payload], userId: auth.currentUser?.uid)
         )
         guard var org = currentOrganization else { return }
         org.settings.annualLeaveDefaults = defaults
@@ -5139,13 +5294,12 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Select an annual leave / bank holiday region."]
             )
         }
-        try await db.collection("organizations").document(orgId).setData(
-            [
-                "bankHolidayRegionId": trimmed,
-                "settings.bankHolidayRegionId": trimmed,
-                "updatedAt": Timestamp(date: Date()),
-            ],
-            merge: true
+        // Dotted `settings.bankHolidayRegionId` is a path only in updateData (never setData(merge:)).
+        try await db.collection("organizations").document(orgId).updateData(
+            WriteMetadata.stamped(
+                ["bankHolidayRegionId": trimmed, "settings.bankHolidayRegionId": trimmed],
+                userId: auth.currentUser?.uid
+            )
         )
         guard var org = currentOrganization else { return }
         org.settings.bankHolidayRegionId = trimmed
@@ -5180,14 +5334,16 @@ class FirebaseBackend: ObservableObject {
             "endMonth": defaults.endMonth,
             "carriesOver": defaults.carriesOver,
         ]
-        try await db.collection("organizations").document(orgId).setData(
-            [
-                "annualLeaveDefaults": payload,
-                "bankHolidayRegionId": trimmed,
-                "settings.bankHolidayRegionId": trimmed,
-                "updatedAt": Timestamp(date: Date()),
-            ],
-            merge: true
+        // Dotted `settings.bankHolidayRegionId` is a path only in updateData (never setData(merge:)).
+        try await db.collection("organizations").document(orgId).updateData(
+            WriteMetadata.stamped(
+                [
+                    "annualLeaveDefaults": payload,
+                    "bankHolidayRegionId": trimmed,
+                    "settings.bankHolidayRegionId": trimmed,
+                ],
+                userId: auth.currentUser?.uid
+            )
         )
         guard var org = currentOrganization else { return }
         org.settings.annualLeaveDefaults = defaults
@@ -5206,24 +5362,21 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
             )
         }
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard OrganizationCurrencyCatalog.all.contains(where: { $0.code == trimmed }) else {
+        // `organizationCurrencyWriteFields`: currencyCode, currency and the dotted `settings.currencyCode`
+        // path, as a partial update (a dotted key in setData(merge:) would be a literal field name).
+        guard let fields = CanonicalBusinessEngine.organizationCurrencyWriteFields(code),
+              let saved = fields["currencyCode"] as? String else {
             throw NSError(
                 domain: "FirebaseBackend",
                 code: 400,
                 userInfo: [NSLocalizedDescriptionKey: "Select a supported currency."]
             )
         }
-        try await db.collection("organizations").document(orgId).setData(
-            [
-                "currencyCode": trimmed,
-                "settings.currencyCode": trimmed,
-                "updatedAt": Timestamp(date: Date()),
-            ],
-            merge: true
+        try await db.collection("organizations").document(orgId).updateData(
+            WriteMetadata.stamped(fields, userId: auth.currentUser?.uid)
         )
-        guard var org = currentOrganization else { return }
-        org.settings.currencyCode = trimmed
+        guard var org = currentOrganization, organizationIdsMatch(org.firestoreDocumentId, orgId) else { return }
+        org.settings.currencyCode = saved
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -5246,10 +5399,7 @@ class FirebaseBackend: ObservableObject {
             )
         }
         try await db.collection("organizations").document(orgId).updateData(
-            [
-                "settings.materialCutOff": payload,
-                "updatedAt": Timestamp(date: Date()),
-            ]
+            WriteMetadata.stamped(["settings.materialCutOff": payload], userId: auth.currentUser?.uid)
         )
         guard var org = currentOrganization else { return }
         org.settings.materialCutOff = cutOff
@@ -5268,14 +5418,14 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
             )
         }
+        // `scheduleOptionsWriteFields`: exactly the list given (trimmed, case-insensitive de-dupe), never
+        // merged with the stored list, so a deleted item stays deleted.
+        let written = CanonicalBusinessEngine.scheduleOptionsWriteFields(options) ?? options.asFirestoreDictionary()
         try await db.collection("organizations").document(orgId).updateData(
-            [
-                "settings.myScheduleOptions": options.asFirestoreDictionary(),
-                "updatedAt": Timestamp(date: Date()),
-            ]
+            WriteMetadata.stamped(["settings.myScheduleOptions": written], userId: auth.currentUser?.uid)
         )
-        guard var org = currentOrganization else { return }
-        org.settings.myScheduleOptions = options
+        guard var org = currentOrganization, organizationIdsMatch(org.firestoreDocumentId, orgId) else { return }
+        org.settings.myScheduleOptions = MyScheduleOptions.fromFirestore(written)
         org.updatedAt = Date()
         organizationHasFirestoreMyScheduleOptions = true
         currentOrganization = org
@@ -5348,7 +5498,9 @@ class FirebaseBackend: ObservableObject {
         name: String,
         hasOfficeAddress: Bool,
         officeAddressLine1: String?,
+        officeAddressLine2: String? = nil,
         officeCity: String?,
+        officeCounty: String? = nil,
         officePostcode: String?,
         countryCode: String,
         defaultLatitude: Double?,
@@ -5362,73 +5514,69 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
             )
         }
-        let existingName = CanonicalBusinessEngine.coalesceOrganizationName([currentOrganization?.name]) ?? ""
-        guard let nameFields = CanonicalBusinessEngine.organizationNameWriteFields(name, existingName: existingName) else {
+        // Rulebook: `companyDetailsValidationError` then `companyDetailsWriteFields` → `{ set, remove }`.
+        // A blank name is never written (`organizationNameWriteFields` inside it); blank optional fields and
+        // the legacy nested `officeAddress` map are removed with `FieldValue.delete()`.
+        let input = CanonicalBusinessEngine.companyDetailsInput(
+            name: name,
+            hasOfficeAddress: hasOfficeAddress,
+            officeAddressLine1: officeAddressLine1,
+            officeAddressLine2: officeAddressLine2,
+            officeCity: officeCity,
+            officeCounty: officeCounty,
+            officePostcode: officePostcode,
+            countryCode: countryCode,
+            documentAbbreviation: documentAbbreviation,
+            defaultLatitude: defaultLatitude,
+            defaultLongitude: defaultLongitude
+        )
+        if let message = CanonicalBusinessEngine.companyDetailsValidationError(input) {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        guard let write = CanonicalBusinessEngine.companyDetailsWriteFields(input) else {
             throw NSError(
                 domain: "FirebaseBackend",
                 code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Could not save the organisation name."]
+                userInfo: [NSLocalizedDescriptionKey: "Could not save the company details."]
             )
         }
-        var payload: [String: Any] = nameFields
-        payload["countryCode"] = countryCode.uppercased()
-        payload["updatedAt"] = Timestamp(date: Date())
-        if hasOfficeAddress {
-            let line1 = officeAddressLine1?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let city = officeCity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            payload["officeAddressLine1"] = line1
-            payload["officeCity"] = city
-            let pc = officePostcode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if pc.isEmpty {
-                payload["officePostcode"] = FieldValue.delete()
-            } else {
-                payload["officePostcode"] = pc
-            }
-        } else {
-            payload["officeAddressLine1"] = FieldValue.delete()
-            payload["officeCity"] = FieldValue.delete()
-            payload["officePostcode"] = FieldValue.delete()
+        var payload: [String: Any] = write.set
+        for path in write.remove where payload[path] == nil {
+            payload[path] = FieldValue.delete()
         }
-        if let defaultLatitude, let defaultLongitude {
-            payload["defaultLatitude"] = defaultLatitude
-            payload["defaultLongitude"] = defaultLongitude
+        try await db.collection("organizations").document(orgId)
+            .updateData(WriteMetadata.stamped(payload, userId: auth.currentUser?.uid))
+
+        guard var org = currentOrganization, organizationIdsMatch(org.firestoreDocumentId, orgId) else { return }
+        func written(_ key: String) -> String? {
+            let value = (write.set[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return value.isEmpty ? nil : value
         }
-        let abbreviation = OrganizationDocumentAbbreviation.normalized(documentAbbreviation)
-        if let abbreviation {
-            payload["documentAbbreviation"] = abbreviation
-        } else {
-            payload["documentAbbreviation"] = FieldValue.delete()
-        }
-        try await db.collection("organizations").document(orgId).updateData(payload)
-        
-        guard var org = currentOrganization else { return }
-        if let writtenName = nameFields["name"] as? String, !writtenName.isEmpty {
+        if let writtenName = written("name") {
             org.name = writtenName
-        } else if let kept = CanonicalBusinessEngine.coalesceOrganizationName([existingName, org.name]) {
-            org.name = kept
         }
-        org.countryCode = countryCode.uppercased()
-        org.documentAbbreviation = abbreviation
-        if hasOfficeAddress {
-            let line1 = officeAddressLine1?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let city = officeCity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let pc = officePostcode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            org.officeAddressLine1 = line1.isEmpty ? nil : line1
-            org.officeCity = city.isEmpty ? nil : city
-            org.officePostcode = pc.isEmpty ? nil : pc
-        } else {
-            org.officeAddressLine1 = nil
-            org.officeCity = nil
-            org.officePostcode = nil
+        if let country = written("countryCode") {
+            org.countryCode = country
         }
-        org.defaultLatitude = defaultLatitude
-        org.defaultLongitude = defaultLongitude
+        org.documentAbbreviation = OrganizationDocumentAbbreviation.normalized(written("documentAbbreviation"))
+        org.officeAddressLine1 = written("officeAddressLine1")
+        org.officeAddressLine2 = written("officeAddressLine2")
+        org.officeCity = written("officeCity")
+        org.officeCounty = written("officeCounty")
+        org.officePostcode = written("officePostcode")
+        if let lat = (write.set["defaultLatitude"] as? NSNumber)?.doubleValue,
+           let lon = (write.set["defaultLongitude"] as? NSNumber)?.doubleValue {
+            org.defaultLatitude = lat
+            org.defaultLongitude = lon
+        }
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
     }
     
-    func saveUser(_ user: AppUser) async throws {
+    /// Every `users/{uid}` field a profile save manages, as it is stored. `saveUser` diffs two of these
+    /// (the copy the caller edited and the edited copy) so only changed fields are written (RULEBOOK §1).
+    static func userDocumentPayload(_ user: AppUser) -> [String: Any] {
         // Operative mode does not demote an admin. Tab order is admin, then operativeMode, then manager.
         let keepAdmin = user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin
         let operativeOnly = user.permissions.operativeMode && !keepAdmin
@@ -5477,8 +5625,7 @@ class FirebaseBackend: ObservableObject {
             ] as [String: Bool],
             "isSuperAdmin": isSuperAdminToSave,
             "policyAccepted": user.policyAccepted,
-            "employmentType": user.employmentType.rawValue,
-            "updatedAt": Timestamp(date: Date())
+            "employmentType": user.employmentType.rawValue
         ]
 
         if let transitionFrom = user.employmentTypeTransitionFrom {
@@ -5517,11 +5664,16 @@ class FirebaseBackend: ObservableObject {
             userData["assignedManagerUserIds"] = lineManagerIds
         }
         
-        if let dr = user.dayRate {
-            userData["dayRate"] = dr
-        }
-        if let hr = user.hourlyRate {
-            userData["hourlyRate"] = hr
+        // RULEBOOK §8: `payBasis` plus exactly one amount (`readStoredRates` → `exclusiveRates`).
+        let storedPay = CanonicalBusinessEngine.readStoredRates(
+            payBasis: user.payBasis,
+            dayRate: user.dayRate,
+            hourlyRate: user.hourlyRate
+        )
+        let storedBasis = storedPay?.payBasis
+        let storedAmount = storedBasis == "hourly" ? storedPay?.hourlyRate : storedPay?.dayRate
+        for (key, value) in exclusivePayFields(payBasis: storedBasis, amount: storedBasis == nil ? nil : storedAmount) {
+            userData[key] = value
         }
         if let p = user.tradeTypePreset?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
             userData["tradeTypePreset"] = p
@@ -5550,14 +5702,55 @@ class FirebaseBackend: ObservableObject {
         userData["hasNoLineManager"] = user.hasNoLineManager
         userData["timesheetsEnabled"] = user.timesheetsEnabled
         // UTR and VAT number live in users/{uid}/private/taxIds. See `saveSensitiveProfile`.
+        return userData
+    }
 
+    /// Writes a profile (RULEBOOK §1, §11, §12).
+    /// - An existing document gets `updateData` of the fields that differ between `previous` (the copy the
+    ///   caller edited) and `user`, plus `WriteMetadata`. Without `previous`, the server document is read first
+    ///   and used as that copy. Never a full merge-set.
+    /// - Never `organizationId` of another user, never `createdAt`, and never a `profilePhotoURL` delete
+    ///   (a stale copy without the photo must not remove it; the photo upload path writes it).
+    /// - A document the server confirms missing is created once with the full profile.
+    func saveUser(_ user: AppUser, previous: AppUser? = nil) async throws {
+        let payload = Self.userDocumentPayload(user)
         if sessionsAreSeparate(for: user) {
-            try await saveSeparateDeviceSession(user, payload: userData)
+            var membershipPayload = payload
+            membershipPayload["updatedAt"] = Timestamp(date: Date())
+            try await saveSeparateDeviceSession(user, payload: membershipPayload)
             return
         }
-        // Merge keeps `notificationPreferences`, `pushTokens`, and `pushTokenUpdatedAt`.
-        // Those keys are on USER_DOCUMENT_FIELDS and are not part of this profile payload.
-        try await db.collection("users").document(user.id).setData(userData, merge: true)
+        let ref = db.collection("users").document(user.id)
+        let uid = auth.currentUser?.uid
+        let baseline: [String: Any]
+        if let previous, previous.id == user.id {
+            baseline = Self.userDocumentPayload(previous)
+        } else {
+            let snapshot = try await ref.getDocument(source: .server)
+            guard snapshot.exists, let stored = snapshot.data() else {
+                let create = payload.filter { !($0.value is FieldValue) }
+                try await ref.setData(WriteMetadata.stamped(create, userId: uid))
+                return
+            }
+            baseline = Self.userDocumentPayload(Self.parseAppUserDocument(userId: user.id, data: stored))
+        }
+        var changes = Self.changedFirestoreFields(payload, baseline: baseline, ignoring: ["createdAt", "updatedAt"])
+        if user.id != uid {
+            changes.removeValue(forKey: "organizationId")
+        }
+        if changes["profilePhotoURL"] is FieldValue {
+            changes.removeValue(forKey: "profilePhotoURL")
+        }
+        guard !changes.isEmpty else { return }
+        try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+    }
+
+    /// Deactivate / reactivate: only `isActive` plus `WriteMetadata` on `users/{uid}` (RULEBOOK §11).
+    func updateUserActiveFlag(userId: String, isActive: Bool) async throws {
+        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try await db.collection("users").document(trimmed)
+            .updateData(WriteMetadata.stamped(["isActive": isActive], userId: auth.currentUser?.uid))
     }
 
     /// True when this phone is in a different company from `users/{uid}.organizationId`.
@@ -5855,14 +6048,18 @@ class FirebaseBackend: ObservableObject {
         try await user.sendEmailVerification(beforeUpdatingEmail: trimmed, actionCodeSettings: nil)
     }
     
+    /// A photo upload stores the fresh download URL and `profilePhotoUpdatedAt`, which tells every screen
+    /// and web the picture changed (RULEBOOK §12, as web `SettingsScreen` writes it).
     func updateUserProfilePhotoURL(userId: String, url: String?) async throws {
-        var payload: [String: Any] = ["updatedAt": Timestamp(date: Date())]
+        var payload: [String: Any] = [:]
         if let url = url?.trimmingCharacters(in: .whitespacesAndNewlines), !url.isEmpty {
             payload["profilePhotoURL"] = url
         } else {
             payload["profilePhotoURL"] = FieldValue.delete()
         }
-        try await db.collection("users").document(userId).updateData(payload)
+        payload["profilePhotoUpdatedAt"] = FieldValue.serverTimestamp()
+        try await db.collection("users").document(userId)
+            .updateData(WriteMetadata.stamped(payload, userId: auth.currentUser?.uid))
     }
 
     func updateUserStaffTradeMetadata(userId: String, tradeTypePreset: String?, tradeTypeCustom: String?) async throws {
@@ -5884,19 +6081,37 @@ class FirebaseBackend: ObservableObject {
         try await db.collection("users").document(userId).updateData(payload)
     }
 
+    /// `payBasis` plus exactly one of `dayRate` / `hourlyRate`, the other deleted (RULEBOOK §8, `exclusiveRates`).
+    /// `amount` nil clears the rate: all three fields are deleted, as web `applyExclusiveRateFields` does.
+    static func exclusivePayFields(payBasis: String?, amount: Double?) -> [String: Any] {
+        guard let amount, amount.isFinite else {
+            return ["payBasis": FieldValue.delete(), "dayRate": FieldValue.delete(), "hourlyRate": FieldValue.delete()]
+        }
+        let requested = payBasis == "hourly" ? "hourly" : "day"
+        let pay = CanonicalBusinessEngine.exclusiveRates(
+            payBasis: requested,
+            dayRate: requested == "day" ? amount : nil,
+            hourlyRate: requested == "hourly" ? amount : nil
+        )
+        if (pay?.payBasis ?? requested) == "hourly" {
+            return ["payBasis": "hourly", "hourlyRate": pay?.hourlyRate ?? amount, "dayRate": FieldValue.delete()]
+        }
+        return ["payBasis": "day", "dayRate": pay?.dayRate ?? amount, "hourlyRate": FieldValue.delete()]
+    }
+
     /// Patch-only update for operative profile metadata managed from Manage Users.
-    /// Writes only targeted fields to avoid rules rejecting unrelated user fields.
+    /// Writes only targeted fields (line manager, and the rate when `updateDayRate`) plus `WriteMetadata`.
+    /// `dayRate` is the amount for `payBasis` (`day` when nil).
     func updateOperativeProfileMetadata(
         userId: String,
         assignedManagerUserId: String?,
         assignedManagerUserIds: [String]? = nil,
         hasNoLineManager: Bool? = nil,
         dayRate: Double?,
-        updateDayRate: Bool = true
+        updateDayRate: Bool = true,
+        payBasis: String? = nil
     ) async throws {
-        var payload: [String: Any] = [
-            "updatedAt": Timestamp(date: Date())
-        ]
+        var payload: [String: Any] = [:]
         let ids: [String] = {
             if hasNoLineManager == true { return [] }
             if let assignedManagerUserIds {
@@ -5917,25 +6132,19 @@ class FirebaseBackend: ObservableObject {
             payload["assignedManagerUserIds"] = ids
         }
         if updateDayRate {
-            if let dayRate {
-                payload["dayRate"] = dayRate
-            } else {
-                payload["dayRate"] = FieldValue.delete()
+            for (key, value) in Self.exclusivePayFields(payBasis: payBasis, amount: dayRate) {
+                payload[key] = value
             }
         }
-        try await db.collection("users").document(userId).updateData(payload)
+        try await db.collection("users").document(userId)
+            .updateData(WriteMetadata.stamped(payload, userId: auth.currentUser?.uid))
     }
 
-    func updateUserDayRateMetadata(userId: String, dayRate: Double?) async throws {
-        var payload: [String: Any] = [
-            "updatedAt": Timestamp(date: Date())
-        ]
-        if let dayRate {
-            payload["dayRate"] = dayRate
-        } else {
-            payload["dayRate"] = FieldValue.delete()
-        }
-        try await db.collection("users").document(userId).updateData(payload)
+    /// Rate-only patch on `users/{uid}`: `payBasis` plus one amount (`exclusivePayFields`) and `WriteMetadata`.
+    func updateUserDayRateMetadata(userId: String, dayRate: Double?, payBasis: String? = nil) async throws {
+        let payload = Self.exclusivePayFields(payBasis: payBasis, amount: dayRate)
+        try await db.collection("users").document(userId)
+            .updateData(WriteMetadata.stamped(payload, userId: auth.currentUser?.uid))
     }
 
     /// Client heartbeat for “last seen”; merge-only so other writes are not replaced.
@@ -5949,13 +6158,16 @@ class FirebaseBackend: ObservableObject {
         )
     }
 
-    /// Cloud fallback for operative metadata when direct users/{userId} updates are denied by rules.
-    /// Stored at organizations/{orgId}/operativeProfiles/{userId} and merged on user load.
+    /// Mirror of the person's pay and line manager at organizations/{orgId}/operativeProfiles/{userId}
+    /// (web `saveUser` writes the same mirror). It is never read over `users/{uid}` and is never a
+    /// fallback for a refused users write. Only someone who may change this person's pay writes it
+    /// (`canChangePersonPay`, checked by the caller; firestore.rules `canChangePayOf`).
     func saveOperativeProfileMetadataFallback(
         organizationId: String,
         userId: String,
         assignedManagerUserId: String?,
-        dayRate: Double?
+        dayRate: Double?,
+        payBasis: String? = nil
     ) async throws {
         let orgId = try await ensureReadableOrganization(organizationId)
         let ref = db.collection("organizations")
@@ -5963,38 +6175,25 @@ class FirebaseBackend: ObservableObject {
             .collection("operativeProfiles")
             .document(userId)
 
-        var payload: [String: Any] = [
-            "userId": userId,
-            "updatedAt": Timestamp(date: Date())
-        ]
+        var payload: [String: Any] = ["userId": userId]
         if let managerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !managerId.isEmpty {
             payload["assignedManagerUserId"] = managerId
         } else {
             payload["assignedManagerUserId"] = FieldValue.delete()
         }
-        if let dayRate {
-            payload["dayRate"] = dayRate
-        } else {
-            payload["dayRate"] = FieldValue.delete()
+        for (key, value) in Self.exclusivePayFields(payBasis: payBasis, amount: dayRate) {
+            payload[key] = value
         }
+        let stamped = WriteMetadata.stamped(payload, userId: auth.currentUser?.uid)
 
         do {
-            try await ref.updateData(payload)
+            try await ref.updateData(stamped)
         } catch {
             let nsError = error as NSError
             if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 5 {
-                var createPayload: [String: Any] = [
-                    "userId": userId,
-                    "updatedAt": Timestamp(date: Date())
-                ]
-                if let managerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !managerId.isEmpty {
-                    createPayload["assignedManagerUserId"] = managerId
-                }
-                if let dayRate {
-                    createPayload["dayRate"] = dayRate
-                }
+                // First write of the mirror: the same fields; deletes are dropped on a create.
+                let createPayload = stamped.filter { !($0.value is FieldValue) || $0.key == "updatedAt" }
                 try await ref.setData(createPayload, merge: true)
             } else {
                 throw error
@@ -6428,8 +6627,9 @@ class FirebaseBackend: ObservableObject {
         guard !owner.isEmpty else { return [] }
         let notificationsRef = db.collection("organizations").document(organizationId).collection("notifications")
             .whereField("userId", isEqualTo: owner)
-        // Equality on userId only. The script sorts; an orderBy here needs a composite index.
-        let boundedQuery = notificationsRef.limit(to: max(1, limit))
+        // Newest first (RULEBOOK §1 bounded downloads); the userId + createdAt index ships in web firestore.indexes.json.
+        // The fallbacks below keep the unordered query if the index is missing.
+        let boundedQuery = notificationsRef.order(by: "createdAt", descending: true).limit(to: max(1, limit))
         let snapshot: QuerySnapshot
         do {
             snapshot = try await boundedQuery.getDocuments(source: .server)
@@ -7151,49 +7351,34 @@ class FirebaseBackend: ObservableObject {
         )
     }
     
-    func saveBooking(_ booking: Booking, organizationId: String) async throws {
+    /// RULEBOOK §1 partial writes. `changedFields` nil is a create: every field plus `id` and `createdAt`.
+    /// Otherwise only those fields (`BookingWritePatch.labourFieldNames`) are written with `updateData`.
+    /// Both carry `WriteMetadata`. A tombstoned or (for non-managers) cancelled booking is refused by the rules.
+    func saveBooking(_ booking: Booking, organizationId: String, changedFields: Set<String>? = nil) async throws {
         print("🔥🔥🔥 DEBUG: saveBooking called with organizationId: \(organizationId), bookingId: \(booking.id.uuidString)")
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
-        
-        var bookingData: [String: Any] = [
-            "id": booking.documentKey,
-            // A Firebase Auth uid stays a uid (web #189). Writing the in-app UUID would book nobody.
-            "operativeId": booking.storedOperativeId,
-            "projectId": booking.projectId.uuidString,
-            "date": Timestamp(date: booking.date),
-            "timeSlot": booking.timeSlot.rawValue,
-            "bookedBy": booking.bookedBy,
-            "notes": booking.notes ?? "",
-            "status": booking.status.rawValue,
-            "createdAt": Timestamp(date: booking.createdAt),
-            "updatedAt": Timestamp(date: booking.updatedAt)
-        ]
-        if let ws = booking.workStartTime, !ws.isEmpty {
-            bookingData["workStartTime"] = ws
-        } else {
-            bookingData["workStartTime"] = FieldValue.delete()
-        }
-        if let we = booking.workEndTime, !we.isEmpty {
-            bookingData["workEndTime"] = we
-        } else {
-            bookingData["workEndTime"] = FieldValue.delete()
-        }
-        bookingData["isBreakRemoved"] = booking.isBreakRemoved
-        if let otm = booking.otMultiplierOverride {
-            bookingData["otMultiplierOverride"] = otm
-        } else {
-            bookingData["otMultiplierOverride"] = FieldValue.delete()
-        }
-        if let gid = booking.bookingGroupId, !gid.isEmpty {
-            bookingData["bookingGroupId"] = gid
-        } else {
-            bookingData["bookingGroupId"] = FieldValue.delete()
+        let ref = db.collection("organizations").document(orgId).collection("bookings").document(booking.documentKey)
+        let uid = currentUser?.uid
+
+        if let changedFields {
+            let patch = BookingWritePatch.patch(
+                BookingWritePatch.labourValues(booking, deletesClearedFields: true),
+                fields: changedFields
+            )
+            guard !patch.isEmpty else { return }
+            print("🔥🔥🔥 DEBUG: Updating booking fields \(patch.keys.sorted()) at organizations/\(orgId)/bookings/\(booking.documentKey)")
+            try await ref.updateData(WriteMetadata.stamped(patch, userId: uid))
+            return
         }
 
-        print("🔥🔥🔥 DEBUG: Saving booking to organizations/\(orgId)/bookings/\(booking.id.uuidString)")
-        
-        try await db.collection("organizations").document(orgId).collection("bookings").document(booking.documentKey).setData(bookingData, merge: true)
-        
+        var bookingData = BookingWritePatch.labourValues(booking, deletesClearedFields: false)
+        bookingData["id"] = booking.documentKey
+        bookingData["createdAt"] = Timestamp(date: booking.createdAt)
+
+        print("🔥🔥🔥 DEBUG: Creating booking at organizations/\(orgId)/bookings/\(booking.documentKey)")
+
+        try await ref.setData(WriteMetadata.stamped(bookingData, userId: uid), merge: true)
+
         print("🔥🔥🔥 DEBUG: Booking saved successfully to Firebase")
     }
     
@@ -7488,45 +7673,87 @@ class FirebaseBackend: ObservableObject {
     
     func deleteBooking(_ booking: Booking, organizationId: String) async throws {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
-        try await db.collection("organizations").document(orgId).collection("bookings").document(booking.documentKey).delete()
+        do {
+            try await deleteBookingWithTombstone(
+                collection: "bookings",
+                bookingId: booking.documentKey,
+                organizationId: orgId
+            )
+        } catch {
+            let nsError = error as NSError
+            // web firestore.rules: deleting a labour booking (and writing its tombstone) is admins only.
+            if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
+                throw NSError(
+                    domain: "FirebaseBackend",
+                    code: 403,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Only an organisation admin can delete a labour booking. Ask an admin, or cancel the booking instead.",
+                        NSUnderlyingErrorKey: nsError
+                    ]
+                )
+            }
+            throw error
+        }
+    }
+
+    /// RULEBOOK §2 / §16: deletes `organizations/{orgId}/{collection}/{bookingId}` and writes the tombstone
+    /// `bookingTombstonePath` with `bookingTombstoneWriteFields` plus the server `deletedAt`, in ONE batch.
+    /// The tombstone carries only its own fields (the rule allows nothing else; no write metadata).
+    private func deleteBookingWithTombstone(collection: String, bookingId: String, organizationId orgId: String) async throws {
+        guard let uid = currentUser?.uid,
+              let path = CanonicalBusinessEngine.bookingTombstonePath(organizationId: orgId, bookingId: bookingId),
+              var tombstone = CanonicalBusinessEngine.bookingTombstoneWriteFields(
+                bookingId: bookingId,
+                collection: collection,
+                deletedBy: uid,
+                deletedFrom: "ios"
+              ) else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Could not delete this booking: sign in again and retry."]
+            )
+        }
+        tombstone["deletedAt"] = FieldValue.serverTimestamp()
+        let batch = db.batch()
+        batch.deleteDocument(db.collection("organizations").document(orgId).collection(collection).document(bookingId))
+        batch.setData(tombstone, forDocument: db.document(path))
+        do {
+            try await batch.commit()
+        } catch {
+            let nsError = error as NSError
+            // Tombstones are never updated. One already there means the booking is already deleted
+            // (a second delete, or a replay whose first commit reached the server): nothing left to do.
+            if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7,
+               let existing = try? await db.document(path).getDocument(source: .server),
+               existing.exists {
+                return
+            }
+            throw error
+        }
     }
 
     // MARK: - Manager / Admin site bookings (where I'm working – AM, PM, Full Day, Office)
 
-    func saveManagerSiteBooking(_ booking: ManagerSiteBooking, organizationId: String) async throws {
-        var data: [String: Any] = [
-            "id": booking.id.uuidString,
-            "organizationId": organizationId,
-            "userId": booking.userId,
-            "date": Timestamp(date: booking.date),
-            "timeSlot": booking.timeSlot.rawValue,
-            "locationType": booking.locationType.rawValue,
-            "createdAt": Timestamp(date: booking.createdAt),
-            "updatedAt": Timestamp(date: booking.updatedAt)
-        ]
-        if let lid = booking.locationId {
-            data["locationId"] = lid.uuidString
+    /// RULEBOOK §1 partial writes. `changedFields` nil is a create (every field plus `id`, `organizationId`,
+    /// `createdAt`); otherwise only those fields (`BookingWritePatch.managerFieldNames`) with `updateData`.
+    func saveManagerSiteBooking(_ booking: ManagerSiteBooking, organizationId: String, changedFields: Set<String>? = nil) async throws {
+        let ref = db.collection("organizations").document(organizationId).collection("managerSiteBookings").document(booking.id.uuidString)
+        let uid = currentUser?.uid
+        if let changedFields {
+            let patch = BookingWritePatch.patch(
+                BookingWritePatch.managerValues(booking, deletesClearedFields: true),
+                fields: changedFields
+            )
+            guard !patch.isEmpty else { return }
+            try await ref.updateData(WriteMetadata.stamped(patch, userId: uid))
+            return
         }
-        if let customLocationName = booking.customLocationName, !customLocationName.isEmpty {
-            data["customLocationName"] = customLocationName
-        }
-        if let ws = booking.workStartTime, !ws.isEmpty {
-            data["workStartTime"] = ws
-        } else {
-            data["workStartTime"] = FieldValue.delete()
-        }
-        if let we = booking.workEndTime, !we.isEmpty {
-            data["workEndTime"] = we
-        } else {
-            data["workEndTime"] = FieldValue.delete()
-        }
-        data["isBreakRemoved"] = booking.isBreakRemoved
-        if let gid = booking.bookingGroupId, !gid.isEmpty {
-            data["bookingGroupId"] = gid
-        } else {
-            data["bookingGroupId"] = FieldValue.delete()
-        }
-        try await db.collection("organizations").document(organizationId).collection("managerSiteBookings").document(booking.id.uuidString).setData(data, merge: true)
+        var data = BookingWritePatch.managerValues(booking, deletesClearedFields: false)
+        data["id"] = booking.id.uuidString
+        data["organizationId"] = organizationId
+        data["createdAt"] = Timestamp(date: booking.createdAt)
+        try await ref.setData(WriteMetadata.stamped(data, userId: uid), merge: true)
     }
 
     func loadManagerSiteBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [ManagerSiteBooking] {
@@ -7620,43 +7847,104 @@ class FirebaseBackend: ObservableObject {
     }
 
     func deleteManagerSiteBooking(_ booking: ManagerSiteBooking, organizationId: String) async throws {
-        try await db.collection("organizations").document(organizationId).collection("managerSiteBookings").document(booking.id.uuidString).delete()
+        // Delete + `deletedBookings` tombstone in one batch (any member may write a managerSiteBookings tombstone).
+        try await deleteBookingWithTombstone(
+            collection: "managerSiteBookings",
+            bookingId: booking.id.uuidString,
+            organizationId: organizationId
+        )
     }
 
     // MARK: - Holiday Bookings
 
-    func saveHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws {
+    /// Creates ONE leave request document covering `startDate`–`endDate` (§9, `holidayRequestWriteFields`).
+    /// Use `updateHolidayBookingFields` / `decideHolidayBooking` for an existing document.
+    /// Returns the booking as stored (organisation-zone midnights, normalised slot and status).
+    @discardableResult
+    func saveHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws -> HolidayBooking {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
-        var data: [String: Any] = [
-            "id": booking.id.uuidString,
-            "organizationId": orgId,
-            "startDate": Timestamp(date: booking.startDate),
-            "endDate": Timestamp(date: booking.endDate),
-            "status": booking.status.rawValue,
-            "timeSlot": booking.timeSlot.rawValue,
-            "createdAt": Timestamp(date: booking.createdAt),
-            "updatedAt": Timestamp(date: booking.updatedAt)
-        ]
-        if let uid = booking.userId { data["userId"] = uid }
-        if let oid = booking.operativeId { data["operativeId"] = oid.uuidString }
-        if let approvedBy = booking.approvedByUserId { data["approvedByUserId"] = approvedBy }
-        if let approvedAt = booking.approvedAt { data["approvedAt"] = Timestamp(date: approvedAt) }
-        if let cancellationRequestedAt = booking.cancellationRequestedAt {
-            data["cancellationRequestedAt"] = Timestamp(date: cancellationRequestedAt)
-        } else {
-            data["cancellationRequestedAt"] = NSNull()
+        guard let fields = CanonicalBusinessEngine.holidayRequestWriteFields(
+            id: booking.id.uuidString,
+            organizationId: orgId,
+            userId: booking.userId,
+            operativeId: booking.operativeId?.uuidString,
+            startDayKey: OrganizationRulebookContext.dayKey(booking.startDate),
+            endDayKey: OrganizationRulebookContext.dayKey(booking.endDate),
+            timeSlot: booking.timeSlot.rawValue,
+            status: booking.status.rawValue,
+            approvedByUserId: booking.approvedByUserId
+        ) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "This annual leave request is not complete."])
         }
-        if let cancellationRequestedByUserId = booking.cancellationRequestedByUserId {
-            data["cancellationRequestedByUserId"] = cancellationRequestedByUserId
-        } else {
-            data["cancellationRequestedByUserId"] = NSNull()
+        let isApproved = fields.status == HolidayStatus.approved.rawValue
+        let data: [String: Any] = WriteMetadata.stamped([
+            "id": fields.id,
+            "organizationId": fields.organizationId,
+            "userId": fields.userId.map { $0 as Any } ?? NSNull(),
+            "operativeId": fields.operativeId.map { $0 as Any } ?? NSNull(),
+            "startDate": Timestamp(date: fields.startDate),
+            "endDate": Timestamp(date: fields.endDate),
+            "status": fields.status,
+            "timeSlot": fields.timeSlot,
+            "approvedByUserId": fields.approvedByUserId.map { $0 as Any } ?? NSNull(),
+            "approvedAt": isApproved ? (FieldValue.serverTimestamp() as Any) : (NSNull() as Any),
+            "cancellationRequestedAt": NSNull(),
+            "cancellationRequestedByUserId": NSNull(),
+            "decisionNote": NSNull(),
+            "createdAt": FieldValue.serverTimestamp(),
+        ], userId: auth.currentUser?.uid)
+        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(fields.id).setData(data)
+        var stored = booking
+        stored.organizationId = fields.organizationId
+        stored.startDate = fields.startDate
+        stored.endDate = fields.endDate
+        stored.status = HolidayStatus(rawValue: fields.status) ?? booking.status
+        stored.timeSlot = HolidayTimeSlot(rawValue: fields.timeSlot) ?? booking.timeSlot
+        stored.approvedByUserId = fields.approvedByUserId
+        stored.approvedAt = isApproved ? Date() : nil
+        stored.cancellationRequestedAt = nil
+        stored.cancellationRequestedByUserId = nil
+        stored.decisionNote = nil
+        return stored
+    }
+
+    /// Partial update of an existing leave document: only `fields` plus `WriteMetadata` (§1).
+    func updateHolidayBookingFields(bookingId: UUID, fields: [String: Any], organizationId: String) async throws {
+        guard !fields.isEmpty else { return }
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
+        try await db.collection("organizations").document(orgId).collection("holidayBookings")
+            .document(bookingId.uuidString)
+            .updateData(WriteMetadata.stamped(fields, userId: auth.currentUser?.uid))
+    }
+
+    /// Approve or decline in one partial update (`holidayDecisionWriteFields`): status, approver,
+    /// optional trimmed note (blank clears it), server `approvedAt`, and `WriteMetadata`.
+    @discardableResult
+    func decideHolidayBooking(
+        _ booking: HolidayBooking,
+        status: HolidayStatus,
+        approverUid: String,
+        decisionNote: String?,
+        organizationId: String
+    ) async throws -> CanonicalHolidayDecisionFields {
+        guard let decision = CanonicalBusinessEngine.holidayDecisionWriteFields(
+            status: status.rawValue,
+            approverUid: approverUid,
+            decisionNote: decisionNote
+        ) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "That decision is not valid."])
         }
-        if let note = booking.decisionNote?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
-            data["decisionNote"] = note
-        } else {
-            data["decisionNote"] = NSNull()
-        }
-        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.id.uuidString).setData(data, merge: true)
+        try await updateHolidayBookingFields(
+            bookingId: booking.id,
+            fields: [
+                "status": decision.status,
+                "approvedByUserId": decision.approvedByUserId,
+                "decisionNote": decision.decisionNote.map { $0 as Any } ?? NSNull(),
+                "approvedAt": FieldValue.serverTimestamp(),
+            ],
+            organizationId: organizationId
+        )
+        return decision
     }
 
     /// Document ids in `organizations/{orgId}/dismissedWarnings`. Empty when the read fails,
@@ -7849,7 +8137,8 @@ class FirebaseBackend: ObservableObject {
         userId: String?,
         operativeId: UUID?,
         dayRate: Double,
-        effectiveAt: Date
+        effectiveAt: Date,
+        payBasis: String? = nil
     ) async throws {
         let trimmedUser = userId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let uid = (trimmedUser?.isEmpty == false) ? trimmedUser : nil
@@ -7860,10 +8149,13 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "recordOperativeDayRateChange requires userId and/or operativeId"]
             )
         }
+        // RULEBOOK §8: { userId, operativeId, dayRate, payBasis, effectiveAt, createdAt }. `dayRate` holds the
+        // amount for either basis. The effective day is organisation-zone midnight. History is never rewritten.
         var payload: [String: Any] = [
             "dayRate": dayRate,
-            "effectiveAt": Timestamp(date: effectiveAt),
-            "createdAt": Timestamp(date: Date())
+            "payBasis": payBasis == "hourly" ? "hourly" : "day",
+            "effectiveAt": Timestamp(date: OrganizationRulebookContext.calendar.startOfDay(for: effectiveAt)),
+            "createdAt": FieldValue.serverTimestamp()
         ]
         if let uid { payload["userId"] = uid }
         if let operativeId { payload["operativeId"] = operativeId.uuidString }
@@ -7871,7 +8163,7 @@ class FirebaseBackend: ObservableObject {
             .document(organizationId)
             .collection("operativeDayRateHistory")
             .document(UUID().uuidString)
-            .setData(payload, merge: true)
+            .setData(WriteMetadata.stamped(payload, userId: auth.currentUser?.uid))
     }
 
     func loadOperativeDayRateHistory(organizationId: String) async throws -> OperativeDayRateHistoryCollection {
@@ -7896,7 +8188,8 @@ class FirebaseBackend: ObservableObject {
                 operativeId: operativeId,
                 dayRate: dayRate,
                 effectiveAt: effectiveAt,
-                createdAt: createdAt
+                createdAt: createdAt,
+                payBasis: (data["payBasis"] as? String).flatMap { $0 == "hourly" || $0 == "day" ? $0 : nil }
             )
             if let userId {
                 byUserId[userId, default: []].append(entry)
@@ -10072,12 +10365,19 @@ extension FirebaseBackend {
         return snapshot.data()
     }
 
+    /// Writes the changed timesheet fields only (rulebook §6, §1 "Writes carry metadata").
+    /// `payload` is what changed (dotted `extraEntryReviews.{id}` keys allowed). An existing document
+    /// gets `updateData`; a new one gets `setData(merge:)` with dotted keys nested, never dotted.
+    /// `storedDocument` is the server copy the caller just read (period fields are written only when
+    /// they differ from it); `documentExists` nil reads the document first.
     func saveTimesheetState(
         organizationId: String,
         userId: String,
         weekStart: Date,
         weekEnd: Date,
-        payload: [String: Any]
+        payload: [String: Any],
+        storedDocument: [String: Any]? = nil,
+        documentExists: Bool? = nil
     ) async throws {
         guard let startDayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart),
               let endDayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekEnd),
@@ -10094,18 +10394,53 @@ extension FirebaseBackend {
                 userInfo: [NSLocalizedDescriptionKey: "Could not identify this timesheet period."]
             )
         }
-        var data = payload
-        data["userId"] = periodFields.userId
-        data["weekStartKey"] = periodFields.weekStartKey
-        data["weekEndKey"] = periodFields.weekEndKey
-        data["weekStart"] = Timestamp(date: startInstant)
-        data["weekEnd"] = Timestamp(date: endInstant)
-        data["updatedAt"] = Timestamp(date: Date())
-        try await timesheetStateDocumentRef(
+        let ref = try timesheetStateDocumentRef(
             organizationId: organizationId,
             userId: userId,
             weekStart: weekStart
-        ).setData(data, merge: true)
+        )
+        let exists: Bool
+        if let documentExists {
+            exists = documentExists
+        } else {
+            exists = try await ref.getDocument().exists
+        }
+        let stored = exists ? storedDocument : nil
+        var data = payload
+        func putIfChanged(_ key: String, _ value: String) {
+            if (stored?[key] as? String) != value { data[key] = value }
+        }
+        func putInstantIfChanged(_ key: String, _ value: Date) {
+            let storedDate = (stored?[key] as? Timestamp)?.dateValue()
+            if storedDate.map({ abs($0.timeIntervalSince(value)) >= 0.001 }) ?? true {
+                data[key] = Timestamp(date: value)
+            }
+        }
+        putIfChanged("userId", periodFields.userId)
+        putIfChanged("weekStartKey", periodFields.weekStartKey)
+        putIfChanged("weekEndKey", periodFields.weekEndKey)
+        putInstantIfChanged("weekStart", startInstant)
+        putInstantIfChanged("weekEnd", endInstant)
+        // Nothing changed on an existing sheet: no write at all.
+        if exists && data.isEmpty { return }
+        let stamped = WriteMetadata.stamped(data, userId: Auth.auth().currentUser?.uid)
+        if exists {
+            try await ref.updateData(stamped)
+        } else {
+            // A new document: nest any dotted key (`extraEntryReviews.{id}`) so setData never sees one.
+            var nested: [String: Any] = [:]
+            for (key, value) in stamped {
+                let parts = key.split(separator: ".", maxSplits: 1).map(String.init)
+                if parts.count == 2 {
+                    var inner = nested[parts[0]] as? [String: Any] ?? [:]
+                    inner[parts[1]] = value
+                    nested[parts[0]] = inner
+                } else {
+                    nested[key] = value
+                }
+            }
+            try await ref.setData(nested, merge: true)
+        }
     }
 
     func listTimesheetStates(

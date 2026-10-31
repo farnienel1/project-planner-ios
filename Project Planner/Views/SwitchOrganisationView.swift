@@ -10,6 +10,7 @@ import SwiftUI
 struct SwitchOrganisationView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     /// When set, that organisation is omitted from the list (last-used org on the deactivated gate).
@@ -40,6 +41,8 @@ struct SwitchOrganisationView: View {
                 } else {
                     sectionTitle("Your organisations")
                     membershipList
+                        // RULEBOOK §2: switching organisation is online only.
+                        .onlineOnly(isOnline: smartCache.isOnline)
                 }
 
                 webSetupNote
@@ -142,7 +145,7 @@ struct SwitchOrganisationView: View {
         let isBusy = isSwitching && switchingOrgId == membership.id
         let canEnter = membership.isActive && membership.subscriptionHasAccess
         return Button {
-            guard !isCurrent, !isSwitching, canEnter else { return }
+            guard !isCurrent, !isSwitching, canEnter, smartCache.isOnline else { return }
             Task { await switchToOrganisation(membership) }
         } label: {
             HStack(spacing: 13) {
