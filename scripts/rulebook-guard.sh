@@ -54,6 +54,10 @@ pack_problems() {
 # without a CanonicalBusinessEngine call in the same change is flagged.
 AREA='overtime|unbooked|clash|payRate|dayRate|hourlyRate|payBasis|annualLeave|leaveBalance|cutOff|coverageWindow|paymentRun|invoicingPeriod|workedHours|timesheetPeriod|payrollTimePolicy|lineManager|notificationPreference|passwordMin|currencyCode|formatMoney'
 CALC='Calendar|dateComponents|\.weekday|startOfDay|[^=!<>]=[^=]|\+=|-=|\*|/ |max\(|min\(|filter|reduce'
+# A change passes when it calls the packed script, directly or through the typed wrappers built on it
+# (Core/RulebookFoundation.swift, Core/Rulebook+*.swift), or names the missing rule with a
+# RULEBOOK-GAP(<function>) marker that the web agent hand-off lists.
+CANONICAL='CanonicalBusinessEngine|RULEBOOK-GAP|OrgMoney|OrganizationRulebookContext|WriteMetadata|AnnualLeaveApproval'
 
 swift_problems() {
   local files f added
@@ -69,7 +73,7 @@ swift_problems() {
     fi
     if printf '%s\n' "$added" | grep -Eiq "$AREA" \
       && printf '%s\n' "$added" | grep -Ei "$AREA" | grep -Eq "$CALC" \
-      && ! printf '%s\n' "$added" | grep -q 'CanonicalBusinessEngine'; then
+      && ! printf '%s\n' "$added" | grep -Eq "$CANONICAL"; then
       echo "$f adds logic for a rulebook-owned area without a CanonicalBusinessEngine call. Call the packed rule, or name the rulebook function in your report (none exists → it goes to web lib/canonical first)."
     fi
   done <<< "$files"

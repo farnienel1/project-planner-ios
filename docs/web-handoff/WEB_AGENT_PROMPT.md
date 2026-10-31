@@ -10,6 +10,36 @@ Paste this whole file into the agent working in **project-planner-web**. It come
 
 Where iOS needed a rule the pack does not export, the Swift code carries a `RULEBOOK-GAP(<name>)` marker. Each marker is listed below and should become a `lib/canonical` export, after which iOS replaces the Swift stopgap with a call.
 
+## Firestore rules deploy: iOS status (read before `firebase deploy`)
+
+The 1.1.0 brief said the new `firestore.rules` would refuse several iOS writes (§C.8 / §C.9 of the iOS prompt). All of them are fixed on the iOS branch:
+
+| Refused write | iOS fix (branch `main-vr2rt0-uoqzwv`) |
+|---|---|
+| `settings/jobTypes` written on every save (operatives refused) | Written only from the job-type editor, admins and managers only |
+| Owner timesheet saves resending sign-off, export or review fields after sign-off | Reload first; `timesheetOwnerWriteFields`; changed fields only; error shown |
+| `syncActiveOperativesWithUserAccounts` mirroring pay into `operatives` rows from every device | Pay mirrored only when `canChangePersonPay`; non-pay fields as partial updates |
+| Pay fallback into `operativeProfiles` after a refused `users` write | Fallback removed; pay writes gated on `canChangePersonPay` |
+| `acceptedBookingClashes` / `warningResolutions` writes from non-staff | Staff-only guard in the store and UI |
+| Leave and timesheet decisions by a non-line-manager manager | Gated with `leaveApproverIds` and `timesheetWriterIsReviewer` |
+| Booking deletes without a tombstone | Delete and tombstone in one batch |
+
+**Two caveats before deploying:**
+1. **Not built yet.** That iOS branch has not been compiled or run against the emulator rules. Run `npm run test:rules` here against these writes, and wait for an iOS build that passes its tests.
+2. **Old App Store builds.** iOS builds already installed keep making the old writes until people update. After deploy, on those builds:
+   - Operatives' job-type writes fail. Only a log line; harmless.
+   - An owner's timesheet save after their manager has signed fails silently.
+   - Operatives' devices fail to mirror roster pay. Harmless; the data was wrong anyway.
+   - Non-admin managers' booking deletes fail. This already happens under today's rules.
+
+   Nothing becomes wrong in the database; the risk is lost owner edits after sign-off. Recommended order: ship the iOS build, let it roll out, then deploy the rules. If you deploy first, tell staff to update the app.
+
+**Rules changes this hand-off asks for** (items 2, 3, 5 and 7 below) should go in the same deploy, so iOS and web aren't refused for things the rulebook allows:
+- `hbCallerSelfBooks` becomes permission-only.
+- `hbCanDecide` refuses a person's own request.
+- Managers may delete `acceptedBookingClashes` (un-approve).
+- Decide whether managers may delete labour bookings.
+
 ## How to handle this hand-off
 
 For every item: decide, change `lib/canonical` (with a `canonical.test.ts` case) and/or `firestore.rules` and/or `docs/RULEBOOK.md`, bump the rulebook version, re-pack, and write the iOS hand-off as usual. Items marked **User decision** were decided by the product owner in the iOS session and should be written into the rulebook as stated.
