@@ -230,12 +230,20 @@ struct SettingsProfileDetailView: View {
                     } else {
                         profileValueRow("Organisation", "Not linked", valueColor: PPColor.danger)
                     }
-                    if let dayRate = userStore.currentUser?.dayRate {
-                        SettingsHubChrome.divider()
-                        profileValueRow("Day rate", String(format: "£%.2f", dayRate))
-                    } else if let hourly = userStore.currentUser?.hourlyRate {
-                        SettingsHubChrome.divider()
-                        profileValueRow("Hourly rate", String(format: "£%.2f", hourly))
+                    // Read-only rate (§12): `readStoredRates` honours `payBasis`; `formatMoney` in the organisation currency.
+                    if let user = userStore.currentUser,
+                       let stored = CanonicalBusinessEngine.readStoredRates(
+                           payBasis: user.payBasis,
+                           dayRate: user.dayRate,
+                           hourlyRate: user.hourlyRate
+                       ) {
+                        if stored.payBasis == "hourly", let hourly = stored.hourlyRate {
+                            SettingsHubChrome.divider()
+                            profileValueRow("Hourly rate", OrgMoney.format(hourly))
+                        } else if let dayRate = stored.dayRate {
+                            SettingsHubChrome.divider()
+                            profileValueRow("Day rate", OrgMoney.format(dayRate))
+                        }
                     }
                 }
 
@@ -318,20 +326,16 @@ struct SettingsProfileDetailView: View {
 
     @ViewBuilder
     private var profileAvatar: some View {
-        if let url = URL(string: userStore.currentUser?.profilePhotoURL ?? "") {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                default:
-                    Circle()
-                        .fill(PPColor.brand.opacity(0.2))
-                        .overlay(
-                            Text(PlannerUIInitials.from(displayName))
-                                .font(.headline)
-                                .foregroundStyle(PPColor.brand)
-                        )
-                }
+        if let urlString = userStore.currentUser?.profilePhotoURL, URL(string: urlString) != nil {
+            // `profilePhotoUpdatedAt` refreshes the cached picture; a stale URL is re-fetched (§12).
+            ProfilePhotoAvatar(urlString: urlString, updatedAt: userStore.currentUser?.profilePhotoUpdatedAt) {
+                Circle()
+                    .fill(PPColor.brand.opacity(0.2))
+                    .overlay(
+                        Text(PlannerUIInitials.from(displayName))
+                            .font(.headline)
+                            .foregroundStyle(PPColor.brand)
+                    )
             }
             .frame(width: 52, height: 52)
             .clipShape(Circle())

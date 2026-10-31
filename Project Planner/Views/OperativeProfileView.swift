@@ -83,7 +83,7 @@ struct OperativeProfileView: View {
             operative: linkedOperative,
             standardDayHours: max(standardHours, 0.01)
         )
-        if let label = resolved.displayRateLabel(currencySymbol: "£") {
+        if let label = resolved.displayRateLabel() {
             return label
         }
         return "Not set"
@@ -227,21 +227,10 @@ struct OperativeProfileView: View {
     private var avatarView: some View {
         ZStack {
             if let urlString = displayedUser.profilePhotoURL,
-               let url = URL(string: urlString),
                !urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView().tint(.white)
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure:
-                        initialsPlaceholder
-                    @unknown default:
-                        initialsPlaceholder
-                    }
+                // `profilePhotoUpdatedAt` refreshes the cached picture; a stale URL is re-fetched (§12).
+                ProfilePhotoAvatar(urlString: urlString, updatedAt: displayedUser.profilePhotoUpdatedAt) {
+                    initialsPlaceholder
                 }
             } else {
                 initialsPlaceholder

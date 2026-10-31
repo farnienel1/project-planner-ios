@@ -17,6 +17,7 @@ struct ManageUsersView: View {
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
     
     @State private var showingAddUser = false
@@ -54,8 +55,10 @@ struct ManageUsersView: View {
         selectedUser = user
     }
     
+    /// Always a pushed full page in the caller's navigation stack, with the system back button
+    /// (no Done button, no nested NavigationStack). Home and the Settings hub both push it.
     var body: some View {
-        NavigationStack {
+        Group {
             VStack(spacing: 0) {
                 if needsProfileBeforeManageUsersGate {
                     VStack(spacing: 16) {
@@ -95,15 +98,6 @@ struct ManageUsersView: View {
             .navigationBarTitleDisplayMode(.inline)
             .ppNavyNavigationBar()
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .accessibilityIdentifier("manageUsers.done")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                }
-                
                 if userStore.canManageUsers() {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Add") {
@@ -112,6 +106,8 @@ struct ManageUsersView: View {
                         .accessibilityIdentifier("manageUsers.add")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.white)
+                        // RULEBOOK §2: invites are online only.
+                        .disabled(!smartCache.isOnline)
                     }
                 }
             }
@@ -119,6 +115,7 @@ struct ManageUsersView: View {
                 AddUserView(mode: .admin)
                     .environmentObject(userStore)
                     .environmentObject(firebaseBackend)
+                    .environmentObject(smartCache)
             }
             .onAppear {
                 openPendingUserEdit()
@@ -136,6 +133,7 @@ struct ManageUsersView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
+                .environmentObject(smartCache)
             }
             .alert("Delete User", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {
@@ -157,6 +155,7 @@ struct ManageUsersView: View {
                     }
                 }
                     .accessibilityIdentifier("manageUsers.delete")
+                    .disabled(!smartCache.isOnline)
             } message: {
                 if let user = userToDelete {
                     if !userStore.canDeleteUser(user) {
@@ -234,11 +233,16 @@ struct ManageUsersView: View {
             manageUsersNavyHeader
 
             VStack(alignment: .leading, spacing: 14) {
+                if !smartCache.isOnline {
+                    // RULEBOOK §2: every Manage Users change is online only.
+                    Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                        .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+                }
                 manageUsersListHeader
                 manageUsersCardList
-                if userStore.canManageUsers() {
-                    manageUsersFooterLinks
-                }
             }
             .padding(.top, 18)
             .padding(.bottom, 40)
@@ -422,7 +426,7 @@ struct ManageUsersView: View {
                     }
                     .environmentObject(userStore)
                     .contextMenu {
-                        if userStore.canDeleteUser(user) {
+                        if userStore.canDeleteUser(user) && smartCache.isOnline {
                             Button(role: .destructive) {
                                 userToDelete = user
                                 showingDeleteConfirmation = true
@@ -476,41 +480,6 @@ struct ManageUsersView: View {
         .padding(.vertical, 36)
         .padding(.horizontal, 20)
         .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
-    }
-
-    private var manageUsersFooterLinks: some View {
-        PPGroupedCard {
-            Button {
-                dismiss()
-                NotificationCenter.default.post(
-                    name: NSNotification.Name("dismissManageUsersAndSelectTab"),
-                    object: nil,
-                    userInfo: ["tab": 3]
-                )
-            } label: {
-                PPMenuRowLabel(title: "View on Operatives page", symbol: "person.3.fill", family: .people)
-            }
-            .accessibilityIdentifier("manageUsers.dismissmanageusersandselecttab")
-            .buttonStyle(PPMenuRowButtonStyle())
-
-            if userStore.hasAdminAccess() {
-                PPRowDivider()
-                Button {
-                    dismiss()
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("dismissManageUsersAndSelectTab"),
-                        object: nil,
-                        userInfo: ["tab": 4]
-                    )
-                } label: {
-                    PPMenuRowLabel(title: "View on Managers page", symbol: "person.badge.key.fill", family: .people)
-                }
-                .accessibilityIdentifier("manageUsers.dismissmanageusersandselecttab2")
-                .buttonStyle(PPMenuRowButtonStyle())
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
-        .padding(.top, 8)
     }
 
     private var roleSectionTitle: String {
@@ -596,6 +565,7 @@ struct ManageUsersView: View {
             }
             .accessibilityIdentifier("manageUsers.addFirstUser")
             .ppProminentCapsule()
+            .onlineOnly(isOnline: smartCache.isOnline)
             }
             
             Spacer()
@@ -656,7 +626,7 @@ struct ManageUsersView: View {
                 }
                 .environmentObject(userStore)
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    if userStore.canDeleteUser(user) {
+                    if userStore.canDeleteUser(user) && smartCache.isOnline {
                         Button(role: .destructive, action: {
                             userToDelete = user
                             showingDeleteConfirmation = true
@@ -684,7 +654,7 @@ struct ManageUsersView: View {
                 }
                 .environmentObject(userStore)
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    if userStore.canDeleteUser(user) {
+                    if userStore.canDeleteUser(user) && smartCache.isOnline {
                         Button(role: .destructive, action: {
                             userToDelete = user
                             showingDeleteConfirmation = true
@@ -712,7 +682,7 @@ struct ManageUsersView: View {
                 }
                 .environmentObject(userStore)
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    if userStore.canDeleteUser(user) {
+                    if userStore.canDeleteUser(user) && smartCache.isOnline {
                         Button(role: .destructive, action: {
                             userToDelete = user
                             showingDeleteConfirmation = true
@@ -813,6 +783,7 @@ private struct FlowLayout: Layout {
 
 struct ManageUserRowView: View {
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject private var smartCache: SmartCacheService
     
     let user: AppUser
     var showAdminBadge: Bool = false
@@ -983,7 +954,7 @@ struct ManageUserRowView: View {
         }
         .accessibilityIdentifier("manageUserRow.sendPasswordReset")
         .buttonStyle(.plain)
-        .disabled(isSendingResetPassword || isSendingSignUpEmail)
+        .disabled(isSendingResetPassword || isSendingSignUpEmail || !smartCache.isOnline)
         .accessibilityLabel("Send password reset email")
     }
 
@@ -1005,7 +976,7 @@ struct ManageUserRowView: View {
         }
         .accessibilityIdentifier("manageUserRow.resendSignUp")
         .buttonStyle(.plain)
-        .disabled(isSendingSignUpEmail || isSendingResetPassword)
+        .disabled(isSendingSignUpEmail || isSendingResetPassword || !smartCache.isOnline)
         .accessibilityLabel("Resend sign-up email with verification code")
     }
     
@@ -1342,6 +1313,7 @@ struct EditUserView: View {
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
     
     let user: AppUser
@@ -1435,7 +1407,7 @@ struct EditUserView: View {
         self._selectedLineManagerUserIds = State(initialValue: Set(user.lineManagerUserIds))
         self._hasNoLineManagerDraft = State(initialValue: user.hasNoLineManager)
         self._managerSelfBookDraft = State(initialValue: user.permissions.annualLeaveSelfBook)
-        self._dayRateText = State(initialValue: Self.formatPayrollRateText(dayRate: user.dayRate, hourlyRate: user.hourlyRate))
+        self._dayRateText = State(initialValue: Self.formatPayrollRateText(user: user))
         self._tradePresetRaw = State(initialValue: user.tradeTypePreset ?? "")
         self._tradeCustomText = State(initialValue: user.tradeTypeCustom ?? "")
         self._editFirstName = State(initialValue: user.firstName)
@@ -2052,7 +2024,19 @@ struct EditUserView: View {
 
     private var editUserScrollView: some View {
         ScrollView {
-            editUserFormSections
+            VStack(alignment: .leading, spacing: 0) {
+                if !smartCache.isOnline {
+                    // RULEBOOK §2: every Manage Users change is online only.
+                    Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, PPMetrics.screenGutter)
+                        .padding(.top, 12)
+                        .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+                }
+                editUserFormSections
+            }
         }
         .onAppear(perform: syncEditUserDraftsFromStore)
         .alert("Admin Access", isPresented: $showingAdminAccessLockedMessage) {
@@ -2141,7 +2125,7 @@ struct EditUserView: View {
                         Capsule(style: .continuous)
                             .fill(hasChanges ? ManageUserProfilePalette.primaryBlue : Color(.systemGray5))
                     )
-                    .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked)
+                    .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline)
             }
         }
     }
@@ -2537,21 +2521,10 @@ struct EditUserView: View {
                 ZStack(alignment: .bottomTrailing) {
                     ZStack {
                         if let urlString = displayedUser.profilePhotoURL,
-                           let url = URL(string: urlString) {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .empty:
-                                    ProgressView()
-                                        .tint(.white)
-                                case .success(let image):
-                                    image
-                                        .resizable()
-                                        .scaledToFill()
-                                case .failure:
-                                    profileInitialsPlaceholder
-                                @unknown default:
-                                    profileInitialsPlaceholder
-                                }
+                           URL(string: urlString) != nil {
+                            // `profilePhotoUpdatedAt` refreshes the cached picture; a stale URL is re-fetched (§12).
+                            ProfilePhotoAvatar(urlString: urlString, updatedAt: displayedUser.profilePhotoUpdatedAt) {
+                                profileInitialsPlaceholder
                             }
                         } else {
                             profileInitialsPlaceholder
@@ -3020,9 +2993,7 @@ struct EditUserView: View {
 
     /// Single edit field shows day or hourly — dirty must compare against whichever is currently displayed.
     private func displayedPayrollRate(for user: AppUser) -> Double? {
-        if let day = user.dayRate { return day }
-        if let hourly = user.hourlyRate { return hourly }
-        return nil
+        UserStore.storedPay(of: user).amount
     }
 
     private func isPayrollRateDirty(versus user: AppUser) -> Bool {
@@ -3083,6 +3054,7 @@ struct EditUserView: View {
                             action: { sendResetPasswordEmail() },
                             isBusy: isSendingResetPassword
                         )
+                        .disabled(!smartCache.isOnline)
                     } else {
                         let isPendingManagerOrOperative = (user.permissions.manager || user.permissions.operativeMode) &&
                             !user.permissions.adminAccess && !user.isSuperAdmin
@@ -3096,6 +3068,7 @@ struct EditUserView: View {
                             action: { resendVerificationEmail() },
                             isBusy: isResendingEmail || isSendingSignUpEmail
                         )
+                        .disabled(!smartCache.isOnline)
                         Text("They have not finished setting a password yet. Resend the invitation email so they receive a new code and setup link.")
                             .font(.system(size: 11))
                             .foregroundStyle(ManageUserProfilePalette.textSecondary)
@@ -3126,6 +3099,7 @@ struct EditUserView: View {
                         },
                         isBusy: isTransferringSuperAdmin
                     )
+                    .disabled(!smartCache.isOnline)
                 }
 
                 if let message = transferSuperAdminMessage {
@@ -3165,6 +3139,7 @@ struct EditUserView: View {
                             showingChangeUserType = true
                         }
                     )
+                    .disabled(!smartCache.isOnline)
                 }
 
                 if canUseAdminAccountTools,
@@ -3187,6 +3162,7 @@ struct EditUserView: View {
                         },
                         isBusy: isUpdatingActiveStatus
                     )
+                    .disabled(!smartCache.isOnline)
 
                     if let message = activeStatusMessage {
                         Text(message)
@@ -3210,6 +3186,7 @@ struct EditUserView: View {
                         showsChevron: false,
                         action: { showingDeleteConfirmation = true }
                     )
+                    .disabled(!smartCache.isOnline)
                 }
             }
         }
@@ -3677,7 +3654,8 @@ struct EditUserView: View {
                 dayRate: permissions.operativeMode ? rateToPersist : subjectUser.dayRate,
                 operativeStore: operativeStore,
                 dayRateEffectiveAt: effectiveForHistory,
-                updateDayRate: operativeDayRateChanged
+                // Only an operative's rate is saved here; staff rates go through `updateManagerDayRate`.
+                updateDayRate: permissions.operativeMode && operativeDayRateChanged
             )
         }
 
@@ -3843,10 +3821,10 @@ struct EditUserView: View {
         }
     }
 
-    private static func formatPayrollRateText(dayRate: Double?, hourlyRate: Double?) -> String {
-        if let dayRate { return String(format: "%.2f", dayRate) }
-        if let hourlyRate { return String(format: "%.2f", hourlyRate) }
-        return ""
+    /// The stored amount for the stored basis (`readStoredRates`), as the single rate field shows it.
+    private static func formatPayrollRateText(user: AppUser) -> String {
+        guard let amount = UserStore.storedPay(of: user).amount else { return "" }
+        return String(format: "%.2f", amount)
     }
 
     private func parseDayRate(_ input: String) -> Double? {
@@ -3859,11 +3837,9 @@ struct EditUserView: View {
         return Double(normalized)
     }
 
+    /// Organisation currency symbol (RULEBOOK §4.2), stripped from a typed rate.
     private func localeCurrencySymbol() -> String {
-        if #available(iOS 16.0, *) {
-            return Locale.current.currency?.identifier == nil ? (Locale.current.currencySymbol ?? "£") : (Locale.current.currencySymbol ?? "£")
-        }
-        return Locale.current.currencySymbol ?? "£"
+        OrgMoney.symbol()
     }
     
     private func sendResetPasswordEmail() {
@@ -4090,4 +4066,35 @@ struct TabButton: View {
         .environmentObject(OperativeStore())
         .environmentObject(HolidayStore())
         .environmentObject(FirebaseBackend())
+        .environmentObject(SmartCacheService())
+}
+
+/// Manage Users opened from Home (decision D2). Home is not inside a navigation stack (ContentView keeps
+/// tab 0 out of one), so Home shows this stack with Manage Users already pushed. The system back button
+/// pops it, and an empty path closes the stack without animation, so back returns to Home.
+struct ManageUsersPushedFromHome: View {
+    enum Route: Hashable {
+        case manageUsers
+    }
+
+    @Binding var isPresented: Bool
+    @State private var path: [Route] = [.manageUsers]
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            PPColor.page
+                .ignoresSafeArea()
+                .navigationDestination(for: Route.self) { _ in
+                    ManageUsersView()
+                }
+        }
+        .onChange(of: path) { _, newValue in
+            guard newValue.isEmpty else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                isPresented = false
+            }
+        }
+    }
 }

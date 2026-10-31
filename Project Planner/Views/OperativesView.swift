@@ -8,8 +8,20 @@
 import SwiftUI
 import UIKit
 
+/// Organisation currency symbol (`currencySymbol` of the organisation currency, RULEBOOK §4.2).
 private func defaultCurrencySymbol() -> String {
-    Locale.current.currencySymbol ?? "£"
+    OrgMoney.symbol()
+}
+
+/// Reads a typed amount: any currency symbol, letters, spaces and thousands commas are dropped.
+/// The stored symbol is always the organisation currency.
+private func parseOrganisationAmount(_ input: String) -> (amount: Double?, symbol: String?) {
+    let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty { return (nil, nil) }
+    let cleaned = trimmed
+        .replacingOccurrences(of: ",", with: "")
+        .replacingOccurrences(of: "[^0-9.\\-]", with: "", options: .regularExpression)
+    return (Double(cleaned), defaultCurrencySymbol())
 }
 
 struct OperativesView: View {
@@ -704,8 +716,7 @@ struct OperativeDetailRowView: View {
                     }
                     
                     if let dayRate = operative.dayRate ?? operative.hourlyRate {
-                        let currencySymbol = operative.currencySymbol ?? defaultCurrencySymbol()
-                        Text("\(currencySymbol)\(String(format: "%.0f", dayRate))/day")
+                        Text("\(OrgMoney.format(dayRate))\(operative.dayRate == nil ? "/hr" : "/day")")
                             .font(.caption)
                             .foregroundColor(.blue)
                             .fontWeight(.medium)
@@ -864,7 +875,7 @@ struct AddOperativeView: View {
                 }
                 
                 Section("Additional Info") {
-                    TextField("Day Rate (e.g., £45, $50)", text: $hourlyRate)
+                    TextField("Day rate (\(OrgMoney.symbol()))", text: $hourlyRate)
                         .accessibilityIdentifier("addOperative.dayRateEG4550")
                     TextField("Notes", text: $notes, axis: .vertical)
                         .accessibilityIdentifier("addOperative.notes")
@@ -911,7 +922,8 @@ struct AddOperativeView: View {
             startDate: startDate,
             skills: [],
             qualifications: Array(selectedQualifications),
-            hourlyRate: parsedRate.amount,
+            // A day rate, so exactly one amount is stored (RULEBOOK §8).
+            hourlyRate: nil,
             dayRate: parsedRate.amount,
             currencySymbol: parsedRate.symbol,
             tradeTypePreset: tp.isEmpty ? nil : tp,
@@ -927,30 +939,7 @@ struct AddOperativeView: View {
     }
     
     private func parseCurrencyAmount(_ input: String) -> (amount: Double?, symbol: String?) {
-        if input.isEmpty { return (nil, nil) }
-        
-        // Extract currency symbol
-        let currencyPattern = "[£$€¥₹₽₩₪₫₨₴₸₺₼₾₿]"
-        guard let regex = try? NSRegularExpression(pattern: currencyPattern) else {
-            let cleanedInput = input
-                .replacingOccurrences(of: ",", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return (Double(cleanedInput), defaultCurrencySymbol())
-        }
-        let range = NSRange(location: 0, length: input.utf16.count)
-        let matches = regex.matches(in: input, range: range)
-        
-        var currencySymbol: String?
-        if let match = matches.first, let symbolRange = Range(match.range, in: input) {
-            currencySymbol = String(input[symbolRange])
-        }
-        
-        // Remove currency symbols and extract the number
-        let cleanedInput = input.replacingOccurrences(of: currencyPattern, with: "", options: .regularExpression)
-            .replacingOccurrences(of: ",", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        return (Double(cleanedInput), currencySymbol ?? defaultCurrencySymbol())
+        parseOrganisationAmount(input)
     }
 }
 
@@ -969,6 +958,8 @@ struct EditOperativeView: View {
     @State private var startDate: Date
     @State private var selectedQualifications: Set<Qualification>
     @State private var dayRate: String
+    /// Shown when the signed-in user may not change this person's pay (`canChangePersonPay`).
+    @State private var payErrorMessage: String?
     @State private var notes: String
     @State private var isActive: Bool
     @State private var showingDeleteConfirmation = false
@@ -986,8 +977,7 @@ struct EditOperativeView: View {
         self._dayRate = State(initialValue: {
             let amount = operative.dayRate ?? operative.hourlyRate
             guard let amount else { return "" }
-            let symbol = operative.currencySymbol ?? defaultCurrencySymbol()
-            return "\(symbol)\(String(format: "%.0f", amount))"
+            return OrgMoney.format(amount)
         }())
         self._notes = State(initialValue: operative.notes ?? "")
         self._isActive = State(initialValue: operative.isActive)
@@ -1089,8 +1079,13 @@ struct EditOperativeView: View {
                         title: "Trade type *",
                         footnote: "Required."
                     )
-                    TextField("Day Rate (e.g., £45, $50)", text: $dayRate)
+                    TextField("Day rate (\(OrgMoney.symbol()))", text: $dayRate)
                         .accessibilityIdentifier("editOperative.dayRateEG4550")
+                    if let payErrorMessage {
+                        Text(payErrorMessage)
+                            .font(.footnote)
+                            .foregroundColor(.red)
+                    }
                     TextField("Notes", text: $notes, axis: .vertical)
                         .accessibilityIdentifier("editOperative.notes")
                         .lineLimit(3...6)
@@ -1170,37 +1165,52 @@ struct EditOperativeView: View {
         updatedOperative.startDate = startDate
         updatedOperative.skills = operative.skills  // skills UI removed; preserve existing
         updatedOperative.qualifications = selectedQualifications
-        updatedOperative.dayRate = parsedRate.amount
-        updatedOperative.hourlyRate = parsedRate.amount
-        updatedOperative.currencySymbol = parsedRate.symbol
+        // One field edits the row's own basis: hourly when only an hourly rate is stored, else day (§8).
+        let rowIsHourly = operative.dayRate == nil && operative.hourlyRate != nil
+        let previousAmount = rowIsHourly ? operative.hourlyRate : operative.dayRate
+        let newAmount = parsedRate.amount
+        let emailNorm = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let linkedUser = userStore.organizationUsers.first(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
+        })
+        // Compared in hundredths: the field shows two decimals, so an untouched field is not a change.
+        let payChanged = previousAmount.map { ($0 * 100).rounded() } != newAmount.map { ($0 * 100).rounded() }
+        if payChanged && !userStore.canChangePay(of: linkedUser) {
+            payErrorMessage = UserStore.payChangeRefusedMessage
+            return
+        }
+        payErrorMessage = nil
+        if payChanged {
+            updatedOperative.dayRate = rowIsHourly ? nil : newAmount
+            updatedOperative.hourlyRate = rowIsHourly ? newAmount : nil
+            updatedOperative.currencySymbol = parsedRate.symbol
+        }
         updatedOperative.notes = notes.isEmpty ? nil : notes
         updatedOperative.isActive = isActive
         updatedOperative.tradeTypePreset = tp.isEmpty ? nil : tp
         updatedOperative.tradeTypeCustom = tc.isEmpty ? nil : tc
         updatedOperative.updatedAt = Date()
 
-        let previousAmount = operative.dayRate ?? operative.hourlyRate
-        let newAmount = parsedRate.amount
+        let linkedUserId = linkedUser?.id
+        let rateBasis = rowIsHourly ? "hourly" : "day"
 
         Task {
             await operativeStore.updateOperative(updatedOperative)
 
+            // History rows only for someone who may change this person's pay (checked above).
             if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
-               previousAmount != newAmount {
-                let emailNorm = updatedOperative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                let linkedUserId = userStore.organizationUsers.first(where: {
-                    $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
-                })?.id
+               payChanged {
                 do {
                     let collection = try await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)
                     let merged = collection.mergedEntries(userId: linkedUserId, operativeId: operative.id)
-                    if merged.isEmpty, let prev = previousAmount {
+                    if merged.isEmpty, let prev = previousAmount, prev > 0 {
                         try await firebaseBackend.recordOperativeDayRateChange(
                             organizationId: orgId,
                             userId: linkedUserId,
                             operativeId: operative.id,
                             dayRate: prev,
-                            effectiveAt: operative.createdAt
+                            effectiveAt: operative.createdAt,
+                            payBasis: rateBasis
                         )
                     }
                     if let newRate = newAmount {
@@ -1209,7 +1219,8 @@ struct EditOperativeView: View {
                             userId: linkedUserId,
                             operativeId: operative.id,
                             dayRate: newRate,
-                            effectiveAt: Date()
+                            effectiveAt: Date(),
+                            payBasis: rateBasis
                         )
                     }
                 } catch {
@@ -1224,36 +1235,12 @@ struct EditOperativeView: View {
     }
     
     private func parseCurrencyAmount(_ input: String) -> (amount: Double?, symbol: String?) {
-        if input.isEmpty { return (nil, nil) }
-        
-        // Extract currency symbol
-        let currencyPattern = "[£$€¥₹₽₩₪₫₨₴₸₺₼₾₿]"
-        guard let regex = try? NSRegularExpression(pattern: currencyPattern) else {
-            let cleanedInput = input
-                .replacingOccurrences(of: ",", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return (Double(cleanedInput), defaultCurrencySymbol())
-        }
-        let range = NSRange(location: 0, length: input.utf16.count)
-        let matches = regex.matches(in: input, range: range)
-        
-        var currencySymbol: String?
-        if let match = matches.first, let symbolRange = Range(match.range, in: input) {
-            currencySymbol = String(input[symbolRange])
-        }
-        
-        // Remove currency symbols and extract the number
-        let cleanedInput = input.replacingOccurrences(of: currencyPattern, with: "", options: .regularExpression)
-            .replacingOccurrences(of: ",", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        return (Double(cleanedInput), currencySymbol ?? defaultCurrencySymbol())
+        parseOrganisationAmount(input)
     }
     
     private func formatCurrencyDisplay(amount: Double?, symbol: String?) -> String {
         guard let amount = amount else { return "" }
-        let symbol = symbol ?? defaultCurrencySymbol()
-        return "\(symbol)\(String(format: "%.0f", amount))"
+        return OrgMoney.format(amount)
     }
 }
 

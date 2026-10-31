@@ -48,8 +48,20 @@ extension AppUser {
         }
     }
 
+    /// `lineManagerIds(user)` from the packed script (RULEBOOK §8): `assignedManagerUserIds`, else the
+    /// legacy single id, and none when `hasNoLineManager`.
+    var canonicalLineManagerIds: [String] {
+        CanonicalBusinessEngine.lineManagerIds(
+            assignedManagerUserIds: assignedManagerUserIds,
+            assignedManagerUserId: assignedManagerUserId,
+            hasNoLineManager: hasNoLineManager
+        ) ?? (hasNoLineManager ? [] : lineManagerUserIds)
+    }
+
     func isLineManager(_ managerUserId: String) -> Bool {
-        lineManagerUserIds.contains(managerUserId)
+        let wanted = managerUserId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return false }
+        return canonicalLineManagerIds.contains(wanted)
     }
 }
 
