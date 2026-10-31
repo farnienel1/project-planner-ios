@@ -48,6 +48,8 @@ private enum WarningsUI {
 
 struct WarningsDetailView: View {
     @Environment(\.dismiss) private var dismiss
+    /// Online state: approving and un-approving a clash are online only (RULEBOOK §5).
+    @EnvironmentObject private var smartCache: SmartCacheService
     @ObservedObject var warningsService: WarningsService
     let projectStore: ProjectStore
     let userStore: UserStore
@@ -71,6 +73,8 @@ struct WarningsDetailView: View {
     @State private var isRefreshingWarnings = false
     @State private var refreshMessage: String?
     @State private var operativeUserToEdit: AppUser?
+    /// The approved clash whose un-approve is being written.
+    @State private var unapprovingKey: String?
 
     private var organisationSubtitle: String {
         firebaseBackend.currentOrganization?.name ?? "Organisation"
@@ -151,12 +155,43 @@ struct WarningsDetailView: View {
         .accessibilityIdentifier("warnings.incompleteData")
     }
 
+    private func lookaheadFallbackBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(PPColor.warningAmber)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(Color.white.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(PPColor.onNavyFill))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .accessibilityIdentifier("warnings.lookaheadFallback")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
                 VStack(spacing: 0) {
                     warningsNavBar
                     if let incomplete = warningsService.incompleteDataMessage {
                         incompleteDataBanner(incomplete)
+                            .padding(.bottom, 8)
+                    }
+                    // RULEBOOK §5: a "Set number of days" fallback to 7 days is always said.
+                    if let notice = OrgWarningDetectionSettings.lookaheadFallbackNotice(warningsService.scanFallbackReason) {
+                        lookaheadFallbackBanner(notice)
+                            .padding(.bottom, 8)
+                    }
+                    if !smartCache.isOnline {
+                        // RULEBOOK §2: warnings are read-only offline data, labelled "Last updated".
+                        LastUpdatedOfflineLabel()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, PPMetrics.screenGutter)
                             .padding(.bottom, 8)
                     }
                 }
@@ -188,6 +223,8 @@ struct WarningsDetailView: View {
             .background(WarningsUI.screenBg.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
+                // Writes from this screen (approve, dismiss, un-approve) are for this person only if staff.
+                WarningResolutionStore.shared.setActor(userStore.displayUser)
                 WarningsRefreshHelper.isWarningsSheetVisible = true
                 print("🔥🔥🔥 DEBUG: WARNINGS_SHEET_APPEARED count=\(warningsService.activeWarnings.count) completed=\(warningsService.hasCompletedLiveDetection)")
             }
@@ -405,6 +442,8 @@ struct WarningsDetailView: View {
                 .padding(.top, 40)
                 .padding(.bottom, 32)
                 .ppContentSheet()
+                approvedClashesSection
+                    .padding(.bottom, 32)
             }
         }
         .scrollBounceBehavior(.basedOnSize)
@@ -431,6 +470,9 @@ struct WarningsDetailView: View {
                     warningsSortControl
                     ForEach(filteredWarnings) { warning in
                         warningCard(warning)
+                    }
+                    if filterChip == .all || filterChip == .clashes {
+                        approvedClashesSection
                     }
                 }
                 .padding(.top, 20)
@@ -628,7 +670,7 @@ struct WarningsDetailView: View {
             OperativeClashWarningCard(
                 warning: warning,
                 onRemove: { removeClashEntry(warning, entry: $0) },
-                onApprove: { warningsService.approveWarning(warning) },
+                onApprove: { approveClash(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
             )
@@ -636,7 +678,7 @@ struct WarningsDetailView: View {
             ManagerClashWarningCard(
                 warning: warning,
                 onRemove: { removeClashEntry(warning, entry: $0) },
-                onApprove: { warningsService.approveWarning(warning) },
+                onApprove: { approveClash(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
             )
@@ -1109,6 +1151,105 @@ struct WarningsDetailView: View {
         }
     }
 
+    // MARK: - Clash approval (online, staff only)
+
+    /// `clashApprovalWrites` through the store. Online only; the store refuses anyone who is not staff.
+    private func approveClash(_ warning: Warning) {
+        guard smartCache.isOnline else {
+            refreshMessage = OfflinePolicy.onlineOnlyMessage
+            return
+        }
+        WarningResolutionStore.shared.setActor(userStore.displayUser)
+        if !warningsService.approveWarning(warning) {
+            refreshMessage = "Only admins and managers can approve clashes."
+        }
+    }
+
+    /// Deletes both approval documents. Online only, admins and managers.
+    private func unapproveClash(_ warning: Warning) {
+        guard smartCache.isOnline else {
+            refreshMessage = OfflinePolicy.onlineOnlyMessage
+            return
+        }
+        guard unapprovingKey == nil else { return }
+        WarningResolutionStore.shared.setActor(userStore.displayUser)
+        unapprovingKey = warning.resolutionKey
+        let started = warningsService.unapproveWarning(warning) { error in
+            unapprovingKey = nil
+            if error != nil {
+                refreshMessage = "Could not un-approve this clash. Check your connection, or ask an admin."
+            }
+        }
+        if !started {
+            unapprovingKey = nil
+            refreshMessage = "Only admins and managers can un-approve clashes."
+        }
+    }
+
+    private func approvedClashSubtitle(_ warning: Warning) -> String {
+        guard let date = warning.clashDate else { return warning.title }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        formatter.timeZone = OrganizationRulebookContext.timeZone
+        return "\(warning.title) · \(formatter.string(from: date))"
+    }
+
+    /// Clashes approved on any device (`isClashApproved`), each with Un-approve for staff.
+    @ViewBuilder
+    private var approvedClashesSection: some View {
+        let approved = userStore.canViewStaffWarnings() ? warningsService.approvedClashWarnings() : []
+        if !approved.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Approved clashes")
+                    .font(.headline)
+                    .foregroundStyle(WarningsUI.textPrimary)
+                Text("Noted on the weekly report. Un-approve to list a clash as a warning again.")
+                    .font(.caption)
+                    .foregroundStyle(WarningsUI.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(approved) { warning in
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(warning.clashPersonName ?? warning.title)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(WarningsUI.textPrimary)
+                            Text(approvedClashSubtitle(warning))
+                                .font(.caption)
+                                .foregroundStyle(WarningsUI.textMuted)
+                        }
+                        Spacer(minLength: 8)
+                        Button {
+                            unapproveClash(warning)
+                        } label: {
+                            if unapprovingKey == warning.resolutionKey {
+                                ProgressView()
+                            } else {
+                                Text("Un-approve")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!smartCache.isOnline || unapprovingKey != nil)
+                        .accessibilityIdentifier("warnings.unapprove")
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(PPColor.card))
+                }
+                if !smartCache.isOnline {
+                    // RULEBOOK §2: clash approval is online only.
+                    Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                        .font(.caption)
+                        .foregroundStyle(WarningsUI.textMuted)
+                        .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+                }
+            }
+            .padding(.horizontal, PPMetrics.screenGutter)
+            .padding(.top, 8)
+        }
+    }
+
     private func startManualRefresh() {
         Task { @MainActor in
             await refreshWarningsTodayOnly()
@@ -1144,6 +1285,7 @@ struct WarningsDetailView: View {
             let end = bounds.end
             let formatter = DateFormatter()
             formatter.dateFormat = "d MMM"
+            formatter.timeZone = OrganizationRulebookContext.timeZone
             let mode = detection.clashLookaheadMode.displayName
             let window = "\(formatter.string(from: start))–\(formatter.string(from: end))"
             refreshMessage = "Updated · \(warningsService.activeWarnings.count) active · \(mode) · \(window)"
@@ -1296,4 +1438,5 @@ private enum WarningsFullScreenCover: Identifiable {
         subcontractorStore: SubcontractorStore(),
         taskStore: ProjectTaskStore()
     )
+    .environmentObject(SmartCacheService())
 }

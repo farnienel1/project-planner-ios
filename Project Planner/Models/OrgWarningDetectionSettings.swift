@@ -32,6 +32,10 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     var includeWeekendsForUnbookedLabour: Bool
     /// Org user ids omitted from unbooked-labour warnings (e.g. PAYE staff).
     var excludedUserIdsFromUnbookedWarnings: [String]
+    /// `parseWarningDetection(raw).clashLookaheadDaysFallback` (`lookaheadDaysMissing` / `lookaheadDaysInvalid`):
+    /// the saved "Set number of days" could not be used, so the scan used 7. Never written to Firestore;
+    /// cleared when the user picks a mode or a number on the settings screen.
+    var clashLookaheadDaysFallback: String? = nil
 
     nonisolated static let `default` = OrgWarningDetectionSettings(
         detectClashes: true,
@@ -47,9 +51,10 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         case clashLookaheadDays
         case includeWeekendsForUnbookedLabour
         case excludedUserIdsFromUnbookedWarnings
+        case clashLookaheadDaysFallback
     }
 
-    init?(canonical: CanonicalBusinessEngine.CanonicalWarningDetection) {
+    init?(canonical: CanonicalBusinessEngine.CanonicalWarningDetection, clashLookaheadDaysFallback: String? = nil) {
         guard let mode = WarningClashLookaheadMode(rawValue: canonical.clashLookaheadMode) else { return nil }
         self.init(
             detectClashes: canonical.detectClashes,
@@ -57,6 +62,16 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
             clashLookaheadDays: canonical.clashLookaheadDays,
             includeWeekendsForUnbookedLabour: canonical.includeWeekendsForUnbookedLabour,
             excludedUserIdsFromUnbookedWarnings: canonical.excludedUserIdsFromUnbookedWarnings
+        )
+        self.clashLookaheadDaysFallback = clashLookaheadDaysFallback
+    }
+
+    /// `parseWarningDetection(raw)` with its fallback reason kept. Nil when the script did not answer.
+    init?(firestoreRaw raw: [String: Any]?) {
+        guard let parsed = CanonicalBusinessEngine.parseWarningDetection(raw) else { return nil }
+        self.init(
+            canonical: parsed,
+            clashLookaheadDaysFallback: CanonicalBusinessEngine.warningLookaheadDaysFallback(raw: raw)
         )
     }
 
@@ -81,6 +96,7 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         clashLookaheadDays = try c.decodeIfPresent(Int.self, forKey: .clashLookaheadDays) ?? 7
         includeWeekendsForUnbookedLabour = try c.decodeIfPresent(Bool.self, forKey: .includeWeekendsForUnbookedLabour) ?? false
         excludedUserIdsFromUnbookedWarnings = try c.decodeIfPresent([String].self, forKey: .excludedUserIdsFromUnbookedWarnings) ?? []
+        clashLookaheadDaysFallback = try c.decodeIfPresent(String.self, forKey: .clashLookaheadDaysFallback)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -90,139 +106,23 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         try c.encode(clashLookaheadDays, forKey: .clashLookaheadDays)
         try c.encode(includeWeekendsForUnbookedLabour, forKey: .includeWeekendsForUnbookedLabour)
         try c.encode(excludedUserIdsFromUnbookedWarnings, forKey: .excludedUserIdsFromUnbookedWarnings)
+        try c.encodeIfPresent(clashLookaheadDaysFallback, forKey: .clashLookaheadDaysFallback)
     }
 
-    /// Inclusive end of the warnings scan window.
-    /// - numberOfDays: today through today+(N-1)  (N calendar days)
-    /// - endOfWorkingWeek ("Full week"): Sunday of the current week (Mon–Sun)
-    /// - endOfInvoicingPeriod: end of the payment-run segment that contains today
-    func coverageEnd(
-        from today: Date,
-        invoicing: OrganizationInvoicingSettings = .default,
-        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
-    ) -> Date {
-        let start = calendar.startOfDay(for: today)
-        switch clashLookaheadMode {
-        case .numberOfDays:
-            let days = max(1, min(clashLookaheadDays, 366))
-            // Inclusive window: N=1 → today only; N=7 → today … today+6.
-            return calendar.startOfDay(
-                for: calendar.date(byAdding: .day, value: days - 1, to: start) ?? start
-            )
-        case .endOfWorkingWeek:
-            // Full calendar week ending Sunday. Weekend unbooked warnings use the toggle below.
-            return Self.endOfCalendarWeek(from: start, calendar: calendar)
-        case .endOfInvoicingPeriod:
-            // Active payment-run segment only (e.g. 1–16 while today is in that range).
-            return calendar.startOfDay(
-                for: InvoicingPeriodResolver.warningScanBounds(
-                    invoicing: invoicing,
-                    referenceDate: start,
-                    calendar: calendar
-                ).end
-            )
+    // The scan window, its Full week days and its summary copy come from the script
+    // (`CanonicalBusinessEngine.warningScanWindow`: `coverageWindow`, `clashScanDays`). No Swift calendar here.
+
+    /// Notice for `coverageWindow.fallbackReason` (RULEBOOK §5: never a silent fallback). Same words as web
+    /// `warningLookaheadFallbackNotice`. Nil when the saved number of days was used.
+    static func lookaheadFallbackNotice(_ reason: String?) -> String? {
+        switch reason {
+        case "lookaheadDaysMissing":
+            return "No number of days is saved for this company, so warnings scan 7 days (today and the next 6). Choose a number and save to change it."
+        case "lookaheadDaysInvalid":
+            return "The saved number of days is not valid, so warnings scan 7 days (today and the next 6). Choose a number and save to fix it."
+        default:
+            return nil
         }
-    }
-
-    /// Inclusive start of the warnings scan window.
-    /// - numberOfDays: today (forward look-ahead)
-    /// - endOfWorkingWeek ("Full week"): Monday of the current week (includes past days this week)
-    /// - endOfInvoicingPeriod: start of the active payment-run segment containing today
-    func coverageStart(
-        from today: Date,
-        invoicing: OrganizationInvoicingSettings = .default,
-        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
-    ) -> Date {
-        let start = calendar.startOfDay(for: today)
-        switch clashLookaheadMode {
-        case .endOfInvoicingPeriod:
-            return calendar.startOfDay(
-                for: InvoicingPeriodResolver.warningScanBounds(
-                    invoicing: invoicing,
-                    referenceDate: start,
-                    calendar: calendar
-                ).start
-            )
-        case .endOfWorkingWeek:
-            return Self.startOfCalendarWeek(from: start, calendar: calendar)
-        case .numberOfDays:
-            return start
-        }
-    }
-
-    func isUnbookedLabourWeekday(_ weekday: Int) -> Bool {
-        if includeWeekendsForUnbookedLabour {
-            return weekday >= 1 && weekday <= 7
-        }
-        return weekday >= 2 && weekday <= 6
-    }
-
-    /// Human-readable end of the detection window (from today).
-    func detectionHorizonEndLabel(
-        from today: Date = Date(),
-        invoicing: OrganizationInvoicingSettings = .default,
-        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
-    ) -> String {
-        let end = coverageEnd(from: today, invoicing: invoicing, calendar: calendar)
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter.string(from: end)
-    }
-
-    /// Inclusive number of calendar days in the detection window.
-    func detectionHorizonDayCount(
-        from today: Date = Date(),
-        invoicing: OrganizationInvoicingSettings = .default,
-        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
-    ) -> Int {
-        let start = coverageStart(from: today, invoicing: invoicing, calendar: calendar)
-        let end = coverageEnd(from: today, invoicing: invoicing, calendar: calendar)
-        let days = calendar.dateComponents([.day], from: start, to: end).day ?? 0
-        return max(1, days + 1)
-    }
-
-    /// Scan window description for the settings UI.
-    func detectionScanSummary(
-        from today: Date = Date(),
-        invoicing: OrganizationInvoicingSettings = .default,
-        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
-    ) -> String {
-        let start = coverageStart(from: today, invoicing: invoicing, calendar: calendar)
-        let end = coverageEnd(from: today, invoicing: invoicing, calendar: calendar)
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        let startLabel = formatter.string(from: start)
-        let endLabel = formatter.string(from: end)
-        switch clashLookaheadMode {
-        case .numberOfDays:
-            let count = max(1, min(clashLookaheadDays, 366))
-            return "Scans \(count) calendar day\(count == 1 ? "" : "s"): \(startLabel) through \(endLabel). Includes clashes, unbooked labour, and materials cut-off in that window."
-        case .endOfInvoicingPeriod:
-            let bounds = InvoicingPeriodResolver.warningScanBounds(invoicing: invoicing, referenceDate: today, calendar: calendar)
-            return "Scans the active payment-run period (\(bounds.label)): \(startLabel) through \(endLabel). Includes past, present, and future clashes and unbooked labour inside this timeframe."
-        case .endOfWorkingWeek:
-            return "Scans your current week (\(startLabel) through \(endLabel)). To exclude weekends, use the toggle below."
-        }
-    }
-
-    // MARK: - Private
-
-    /// Monday of the week containing `date` (Calendar weekday: 1 = Sun … 2 = Mon).
-    private static func startOfCalendarWeek(from date: Date, calendar: Calendar) -> Date {
-        let weekday = calendar.component(.weekday, from: date)
-        let monday = 2
-        var subtract = weekday - monday
-        if subtract < 0 { subtract += 7 }
-        return calendar.startOfDay(for: calendar.date(byAdding: .day, value: -subtract, to: date) ?? date)
-    }
-
-    /// Sunday of the week containing `date` (Calendar weekday: 1 = Sun).
-    private static func endOfCalendarWeek(from date: Date, calendar: Calendar) -> Date {
-        let weekday = calendar.component(.weekday, from: date)
-        let add = (8 - weekday) % 7  // days until Sunday; 0 when already Sunday
-        return calendar.startOfDay(for: calendar.date(byAdding: .day, value: add, to: date) ?? date)
     }
 
     static func fromFirestore(_ data: [String: Any]) -> OrgWarningDetectionSettings {

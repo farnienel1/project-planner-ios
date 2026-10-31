@@ -21,6 +21,7 @@ struct OrganisationWarningsSettingsView: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject private var smartCache: SmartCacheService
 
     @State private var draft = OrgWarningDetectionSettings.default
     @State private var baseline = OrgWarningDetectionSettings.default
@@ -36,13 +37,57 @@ struct OrganisationWarningsSettingsView: View {
         firebaseBackend.currentOrganization?.settings.invoicing ?? .default
     }
 
-    private var invoicingPeriod: InvoicingPeriodInfo {
-        InvoicingPeriodResolver.resolve(invoicing: invoicingSettings)
+    /// `activePaymentRunSummary` over the organisation's `invoicing` map. Nil when the script did not answer.
+    private var paymentRunSummary: WarningsPaymentRunSummary? {
+        let invoicing = firebaseBackend.currentOrganization.map { FirebaseBackend.invoicingFirestoreMap($0.settings.invoicing) }
+        return CanonicalBusinessEngine.warningsPaymentRunSummary(invoicing: invoicing)
     }
 
-    /// Active payment-run segment used by Warnings “Invoicing period” mode (from Organisation Hub).
-    private var warningsInvoicingScanLabel: String {
-        InvoicingPeriodResolver.warningScanBounds(invoicing: invoicingSettings).label
+    /// The draft's scan window from the script (`coverageWindow`, with its fallback reason).
+    private var draftScanWindow: WarningScanWindow? {
+        CanonicalBusinessEngine.warningScanWindow(detection: draft, invoicing: invoicingSettings)
+    }
+
+    /// The draft scan window in words. Dates are the script's; only the wording is here.
+    private var scanSummary: String {
+        guard let window = draftScanWindow else {
+            return "The scan window could not be worked out right now. Save still updates the setting."
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        formatter.timeZone = OrganizationRulebookContext.timeZone
+        let startLabel = formatter.string(from: window.start)
+        let endLabel = formatter.string(from: window.end)
+        switch draft.clashLookaheadMode {
+        case .numberOfDays:
+            return "Scans \(startLabel) through \(endLabel), today included. Includes clashes, unbooked labour, and materials cut-off in that window."
+        case .endOfInvoicingPeriod:
+            return "Scans the active payment run: \(startLabel) through \(endLabel). Every past, present, and future day in it is included."
+        case .endOfWorkingWeek:
+            return "Monday–Friday of this week, including days already past (\(startLabel) through \(endLabel)). Saturday and Sunday are added for unbooked labour when Include weekends is on."
+        }
+    }
+
+    /// RULEBOOK §5: a "Set number of days" fallback is always said, never silent.
+    @ViewBuilder
+    private var lookaheadFallbackNotice: some View {
+        if let notice = OrgWarningDetectionSettings.lookaheadFallbackNotice(draftScanWindow?.fallbackReason) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Text(notice)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .background(Color.orange.opacity(0.10))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.orange.opacity(0.3), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityIdentifier("organisationWarningsSettings.lookaheadFallback")
+        }
     }
 
     var body: some View {
@@ -82,7 +127,7 @@ struct OrganisationWarningsSettingsView: View {
         .navigationBarBackButtonHidden(true)
         .background(SettingsSwipeBackGuard(disabled: isDirty))
         .safeAreaInset(edge: .bottom) {
-            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving, isOnline: smartCache.isOnline) {
                 Task { await save() }
             }
         }
@@ -154,9 +199,11 @@ struct OrganisationWarningsSettingsView: View {
 
             VStack(spacing: 10) {
                 modeOption(.numberOfDays, label: "Set number of days", description: "Scan today through the next N calendar days (inclusive). Example: 7 days = today + the next 6 days.")
-                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan the active payment-run timeframe from Organisation Hub (e.g. 1–16 or 17–31) — every past, present, and future day inside that timeframe.")
-                modeOption(.endOfWorkingWeek, label: "Full week", description: "This option will include any warnings for your current working week. To exclude weekends, please use the toggle below.")
+                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan the active payment run from Organisation Hub — every past, present, and future day inside it.")
+                modeOption(.endOfWorkingWeek, label: "Full week", description: "Monday–Friday of this week, including days already past. Saturday and Sunday are added for unbooked labour when Include weekends is on.")
             }
+
+            lookaheadFallbackNotice
 
             if draft.clashLookaheadMode == .numberOfDays {
                 daysStepperBox
@@ -167,7 +214,7 @@ struct OrganisationWarningsSettingsView: View {
             }
 
             if draft.clashLookaheadMode == .endOfWorkingWeek {
-                infoBox(text: draft.detectionScanSummary(invoicing: invoicingSettings))
+                infoBox(text: scanSummary)
             }
 
             Text("Save updates the organisation setting. The Warnings list refreshes automatically when you leave settings; you can also tap Refresh anytime.")
@@ -181,6 +228,7 @@ struct OrganisationWarningsSettingsView: View {
         Button {
             markEdited()
             draft.clashLookaheadMode = mode
+            draft.clashLookaheadDaysFallback = nil
         } label: {
             HStack(alignment: .top, spacing: 12) {
                 ZStack {
@@ -235,6 +283,7 @@ struct OrganisationWarningsSettingsView: View {
                     stepButton(systemName: "minus") {
                         markEdited()
                         draft.clashLookaheadDays = max(1, draft.clashLookaheadDays - 1)
+                        draft.clashLookaheadDaysFallback = nil
                     }
                     Text("\(draft.clashLookaheadDays)")
                         .font(.title3.bold())
@@ -242,10 +291,11 @@ struct OrganisationWarningsSettingsView: View {
                     stepButton(systemName: "plus") {
                         markEdited()
                         draft.clashLookaheadDays = min(365, draft.clashLookaheadDays + 1)
+                        draft.clashLookaheadDaysFallback = nil
                     }
                 }
             }
-            infoBox(text: draft.detectionScanSummary(invoicing: invoicingSettings))
+            infoBox(text: scanSummary)
         }
         .padding(14)
         .background(Color(.secondarySystemBackground))
@@ -253,58 +303,63 @@ struct OrganisationWarningsSettingsView: View {
         .padding(.top, 8)
     }
 
+    /// "Invoicing period" only (RULEBOOK §4.5, §5): the active payment run from `activePaymentRunSummary`,
+    /// or a prompt to set payment runs up when the organisation has none.
+    @ViewBuilder
     private var invoicingPeriodPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("YOUR INVOICING SCHEDULE")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color(.tertiarySystemBackground))
-
-                ForEach(Array(invoicingPeriod.scheduleRows.enumerated()), id: \.offset) { index, row in
-                    if index > 0 { Divider() }
+            switch paymentRunSummary {
+            case .configured(let label, _):
+                VStack(spacing: 0) {
                     HStack {
-                        Text(row.label)
-                            .font(.subheadline)
+                        Text("YOUR INVOICING SCHEDULE")
+                            .font(.caption2.weight(.bold))
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Text(row.summary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color(.tertiarySystemBackground))
+
+                    HStack(alignment: .top) {
+                        Text("Active payment run")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 12)
+                        Text(label)
                             .font(.subheadline.weight(.medium))
+                            .multilineTextAlignment(.trailing)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                 }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
+                .accessibilityIdentifier("organisationWarningsSettings.invoicingSchedule")
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: "calendar")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.green)
-                    Text("ACTIVE PAYMENT-RUN PERIOD")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.green)
+                infoBox(text: scanSummary)
+            case .notConfigured:
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("No payment runs are set up for this company, so there is no invoicing period to scan.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    NavigationLink {
+                        OrganisationInvoicingSettingsView()
+                            .environmentObject(firebaseBackend)
+                    } label: {
+                        Text("Set up payment runs")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(PPColor.brand)
+                    }
+                    .accessibilityIdentifier("organisationWarningsSettings.setUpPaymentRuns")
                 }
-                Text(warningsInvoicingScanLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color(red: 0.08, green: 0.33, blue: 0.18))
-                Text("From Organisation Hub payment-run settings. While you are in this timeframe, warnings include every day from period start through period end — past, present, and future.")
-                    .font(.caption)
-                    .foregroundStyle(Color(red: 0.09, green: 0.40, blue: 0.20))
+                .padding(14)
+                .background(Color(.secondarySystemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            case nil:
+                infoBox(text: scanSummary)
             }
-            .padding(14)
-            .background(Color(red: 0.94, green: 0.99, blue: 0.95))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.green.opacity(0.35), lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-            infoBox(text: draft.detectionScanSummary(invoicing: invoicingSettings))
         }
         .padding(.top, 8)
     }
@@ -440,7 +495,7 @@ struct OrganisationWarningsSettingsView: View {
 
             toggleRow(
                 title: "Booking clashes",
-                subtitle: "Flags when a person is double-booked on the same date. Operative, manager, and admin clashes are high-urgency; each can be approved for the weekly report.",
+                subtitle: "Flags when a person is double-booked on the same date. Operative clashes are high; manager and admin overlaps are medium. Each can be approved for the weekly report.",
                 isOn: $draft.detectClashes
             )
 

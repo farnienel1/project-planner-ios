@@ -129,6 +129,8 @@ final class WarningsLogicTests: XCTestCase {
         let store = WarningResolutionStore(defaults: defaults)
         Self.retained.append(store)
         store.adoptOrganization("unit-test-org")
+        // Decisions are staff-only (RULEBOOK §16); act as an admin.
+        store.setActor(AppUser(id: "admin-1", email: "admin@example.com", organizationId: "unit-test-org", role: .admin))
         XCTAssertTrue(store.shouldShowActive("qual-soon"))
         XCTAssertTrue(store.shouldShowActive("qual-expired"))
         store.dismiss("qual-expired")

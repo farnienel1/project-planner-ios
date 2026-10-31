@@ -156,6 +156,9 @@ class WarningsService: ObservableObject {
         guard incompleteDataMessage != message else { return }
         incompleteDataMessage = message
     }
+    /// `coverageWindow.fallbackReason` of the last live scan (`lookaheadDaysMissing` / `lookaheadDaysInvalid`).
+    /// The Warnings screen says the scan used 7 days instead of the saved number.
+    @Published private(set) var scanFallbackReason: String?
     /// High, medium, low, and the total. One value, written once per live update.
     private(set) var totals = WarningTotals()
     var warningCount: Int { totals.total }
@@ -212,23 +215,33 @@ class WarningsService: ObservableObject {
         scheduleLivePublish()
     }
 
-    /// Drops schedule rows whose London day is outside the scan window. Qualification and
-    /// unverified rows have no day in that window and stay.
+    /// Drops schedule rows whose organisation day is outside the scan window. Qualification and
+    /// unverified rows have no day in that window and stay. Unbooked rows run to `unbookedEnd`, clash rows to
+    /// `clashEnd` (`clashScanDays`: a booked Saturday or Sunday in Full week), material rows are for tomorrow.
     static func warningsInsideCoverageWindow(
         _ warnings: [Warning],
         start: Date,
         end: Date,
         unbookedEnd: Date,
+        clashEnd: Date? = nil,
         calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> [Warning] {
         let startKey = CanonicalBusinessEngine.dayKey(for: start, calendar: calendar)
         let endKey = CanonicalBusinessEngine.dayKey(for: end, calendar: calendar)
         let unbookedEndKey = CanonicalBusinessEngine.dayKey(for: unbookedEnd, calendar: calendar)
+        let clashEndKey = clashEnd.map { CanonicalBusinessEngine.dayKey(for: $0, calendar: calendar) } ?? endKey
         return warnings.filter { warning in
             guard warning.isCorePriorityWarning else { return true }
+            // `materialCutOffWarningRows` rows are for tomorrow, which can sit after the scan window.
+            if warning.type == .materialsCutoff { return true }
             guard let date = warning.occurrenceDate ?? warning.clashDate else { return true }
             let key = CanonicalBusinessEngine.dayKey(for: date, calendar: calendar)
-            let limit = warning.type == .unbookedLabour ? unbookedEndKey : endKey
+            let limit: String
+            switch warning.type {
+            case .unbookedLabour: limit = unbookedEndKey
+            case .operativeBookingClash, .managerLocationClash: limit = max(clashEndKey, endKey)
+            default: limit = endKey
+            }
             return key >= startKey && key <= limit
         }
     }
@@ -309,10 +322,21 @@ class WarningsService: ObservableObject {
         warningsInRange(range, types: [.managerLocationClash], activeOnly: true, source: source)
     }
 
-    /// Booking clashes ticked on Warnings — included on weekly report CSV.
+    /// Booking clashes approved on any device (`isClashApproved`) — included on weekly report CSV.
     func approvedManagerClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
-        warningsInRange(range, types: [.operativeBookingClash, .managerLocationClash], activeOnly: false, source: source)
-            .filter { resolutionStore.isApproved($0.resolutionKey) }
+        var seen = Set<String>()
+        return warningsInRange(range, types: [.operativeBookingClash, .managerLocationClash], activeOnly: false, source: source)
+            .filter { resolutionStore.isClashApproved($0) && seen.insert($0.resolutionKey).inserted }
+    }
+
+    /// Every approved clash in the live scan, for the Un-approve list on Warnings.
+    func approvedClashWarnings() -> [Warning] {
+        var seen = Set<String>()
+        return allGeneratedWarnings.filter { warning in
+            warning.requiresWeeklyReportApproval
+                && resolutionStore.isClashApproved(warning)
+                && seen.insert(warning.resolutionKey).inserted
+        }
     }
 
     func unresolvedBookingClashes(in range: ClosedRange<Date>, source: WarningListSource = .live) -> [Warning] {
@@ -341,7 +365,8 @@ class WarningsService: ObservableObject {
             guard let day = w.occurrenceDate else { return false }
             guard range.contains(day) else { return false }
             if activeOnly {
-                return resolutionStore.shouldShowActive(w.resolutionKey)
+                // `isWarningActive` over `resolvedWarningKeys` and `acceptedBookingClashes`.
+                return resolutionStore.shouldShowActive(w)
             }
             return true
         }
@@ -368,7 +393,10 @@ class WarningsService: ObservableObject {
         materialCutOffLabel: String = "",
         projectsWithTomorrowBookings: [Project] = [],
         materialItemsForTomorrow: [MaterialItem] = [],
-        dismissedQualificationKeys: Set<String> = []
+        dismissedQualificationKeys: Set<String> = [],
+        materialCutOff: OrgMaterialCutOff? = nil,
+        materialCutOffBookings: [Booking] = [],
+        materialSendRecords: [MaterialSendRecord] = []
     ) {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
         let resolvedWarningDetection = warningDetection ?? .default
@@ -397,6 +425,9 @@ class WarningsService: ObservableObject {
                 projectsWithTomorrowBookings: projectsWithTomorrowBookings,
                 materialItemsForTomorrow: materialItemsForTomorrow,
                 dismissedQualificationKeys: dismissedQualificationKeys,
+                materialCutOff: materialCutOff,
+                materialCutOffBookings: materialCutOffBookings,
+                materialSendRecords: materialSendRecords,
                 publishToLiveCache: true
             )
         }
@@ -424,6 +455,9 @@ class WarningsService: ObservableObject {
         projectsWithTomorrowBookings: [Project] = [],
         materialItemsForTomorrow: [MaterialItem] = [],
         dismissedQualificationKeys: Set<String> = [],
+        materialCutOff: OrgMaterialCutOff? = nil,
+        materialCutOffBookings: [Booking] = [],
+        materialSendRecords: [MaterialSendRecord] = [],
         publishToLiveCache: Bool = true
     ) async {
         let resolvedPayrollTimePolicy = payrollTimePolicy ?? .default
@@ -452,6 +486,9 @@ class WarningsService: ObservableObject {
             projectsWithTomorrowBookings: projectsWithTomorrowBookings,
             materialItemsForTomorrow: materialItemsForTomorrow,
             dismissedQualificationKeys: dismissedQualificationKeys,
+            materialCutOff: materialCutOff,
+            materialCutOffBookings: materialCutOffBookings,
+            materialSendRecords: materialSendRecords,
             publishToLiveCache: publishToLiveCache
         )
     }
@@ -477,27 +514,43 @@ class WarningsService: ObservableObject {
         projectsWithTomorrowBookings: [Project],
         materialItemsForTomorrow: [MaterialItem],
         dismissedQualificationKeys: Set<String>,
+        materialCutOff: OrgMaterialCutOff?,
+        materialCutOffBookings: [Booking],
+        materialSendRecords: [MaterialSendRecord],
         publishToLiveCache: Bool
     ) async {
         if Task.isCancelled { return }
         updateGeneration += 1
         let generation = updateGeneration
         let cal = CanonicalBusinessEngine.businessCalendar
-        let canonical = CanonicalBusinessEngine.warningBounds(
+        // `coverageWindow` + `clashScanDays` (a booked Saturday or Sunday joins the clash days in Full week).
+        var bookedDayKeySet = Set<String>()
+        for booking in bookings { bookedDayKeySet.insert(CanonicalBusinessEngine.dayKey(for: booking.date, calendar: cal)) }
+        for booking in managerSiteBookings { bookedDayKeySet.insert(CanonicalBusinessEngine.dayKey(for: booking.date, calendar: cal)) }
+        let scanWindow = CanonicalBusinessEngine.warningScanWindow(
             detection: warningDetection,
-            invoicing: invoicingSettings
+            invoicing: invoicingSettings,
+            bookedDayKeys: bookedDayKeySet.sorted()
         )
+        let canonical = scanWindow.map { (start: $0.start, end: $0.end) }
+            ?? CanonicalBusinessEngine.warningBounds(detection: warningDetection, invoicing: invoicingSettings)
         // Explicit coverage (from refresh helper) still publishes to the live Warnings list
         // when publishToLiveCache is true. Period-only callers can set it false.
         let isLiveScan = publishToLiveCache
         let coverageStart = cal.startOfDay(for: labourCoverageStart ?? canonical.start)
         let coverageEnd = cal.startOfDay(for: labourCoverageEnd ?? canonical.end)
-        let unbookedEnd = cal.startOfDay(for: unbookedCoverageEnd ?? CanonicalBusinessEngine.unbookedLabourWindowEnd(
-            coverageEnd: coverageEnd,
-            clashLookaheadMode: warningDetection.clashLookaheadMode.rawValue,
-            includeWeekends: warningDetection.includeWeekendsForUnbookedLabour
-        ))
-        let dataEnd = max(coverageEnd, unbookedEnd)
+        let unbookedEnd = cal.startOfDay(for: unbookedCoverageEnd ?? scanWindow?.unbookedEnd ?? coverageEnd)
+        // The script's clash days only when this scan is the script's window.
+        let usesScriptWindow = scanWindow.map {
+            CanonicalBusinessEngine.dayKey(for: coverageStart, calendar: cal) == $0.startDayKey
+                && CanonicalBusinessEngine.dayKey(for: coverageEnd, calendar: cal) == $0.endDayKey
+        } ?? false
+        let clashDayKeys = usesScriptWindow ? scanWindow?.clashDayKeys : nil
+        let clashEnd = usesScriptWindow ? (scanWindow?.clashEnd ?? coverageEnd) : coverageEnd
+        if isLiveScan, self === WarningsService.shared, scanFallbackReason != scanWindow?.fallbackReason {
+            scanFallbackReason = scanWindow?.fallbackReason
+        }
+        let dataEnd = max(coverageEnd, max(unbookedEnd, clashEnd))
         let windowedBookings = bookings.filter {
             let day = cal.startOfDay(for: $0.date)
             return day >= coverageStart && day <= dataEnd
@@ -515,10 +568,11 @@ class WarningsService: ObservableObject {
         let referencedProjectIds = Set(windowedBookings.map(\.projectId))
             .union(windowedManager.compactMap(\.locationId))
             .union(projectsWithTomorrowBookings.map(\.id))
+            .union(materialCutOffBookings.map(\.projectId))
         let slimProjects = referencedProjectIds.isEmpty
             ? projects
             : projects.filter { referencedProjectIds.contains($0.id) }
-        let input = WarningsComputationInput(
+        var input = WarningsComputationInput(
             operatives: operatives,
             bookings: windowedBookings,
             projects: slimProjects,
@@ -539,6 +593,10 @@ class WarningsService: ObservableObject {
             materialItemsForTomorrow: materialItemsForTomorrow,
             dismissedQualificationKeys: dismissedQualificationKeys
         )
+        input.materialCutOff = materialCutOff
+        input.materialCutOffBookings = materialCutOffBookings
+        input.materialSendRecords = materialSendRecords
+        input.clashDayKeys = clashDayKeys
         // Snapshot on MainActor (Swift 6 default isolation) over the *windowed* arrays.
         // Detach only generate. Extra yields stop Home quiet-expired jetsam.
         await Task.yield()
@@ -546,16 +604,22 @@ class WarningsService: ObservableObject {
         await Task.yield()
         let snapshot = WarningsComputation.makeSnapshot(from: input)
         await Task.yield()
-        let generated = await Task.detached(priority: .utility) {
-            WarningsComputation.generate(snapshot)
+        let result = await Task.detached(priority: .utility) {
+            WarningsComputation.generateWithLegacyKeys(snapshot)
         }.value
         guard generation == updateGeneration else { return }
+        let generated = result.warnings
         let generatedInWindow = Self.warningsInsideCoverageWindow(
             generated,
             start: coverageStart,
             end: coverageEnd,
-            unbookedEnd: unbookedEnd
+            unbookedEnd: unbookedEnd,
+            clashEnd: clashEnd
         )
+        // D3: rows whose approval or dismissal was saved under an older iOS key.
+        if isLiveScan || self !== WarningsService.shared {
+            resolutionStore.updateLegacyKeys(result.legacyKeys, warnings: generatedInWindow)
+        }
         if isLiveScan {
             let active = uniqueActive(generatedInWindow)
             let organizationId = cacheOrganizationId
@@ -596,12 +660,30 @@ class WarningsService: ObservableObject {
         print("🔥🔥🔥 DEBUG: WarningsService cancelInFlightUpdate")
     }
 
-    /// Approve a booking clash so it is noted on the weekly report.
-    func approveWarning(_ warning: Warning) {
-        guard warning.requiresWeeklyReportApproval else { return }
-        resolutionStore.approve(warning)
+    /// Approve a booking clash so it is noted on the weekly report (`clashApprovalWrites`). Staff only:
+    /// the store refuses anyone `canViewStaffWarnings` says no to.
+    @discardableResult
+    func approveWarning(_ warning: Warning) -> Bool {
+        guard warning.requiresWeeklyReportApproval else { return false }
+        guard resolutionStore.approve(warning) else { return false }
         refreshActiveFromGenerated()
         WarningsRefreshHelper.postWarningsCountDidChange()
+        return true
+    }
+
+    /// Un-approve a booking clash: deletes both approval documents. Staff only, online only (the screen checks).
+    @discardableResult
+    func unapproveWarning(_ warning: Warning, completion: ((Error?) -> Void)? = nil) -> Bool {
+        guard warning.requiresWeeklyReportApproval else { return false }
+        let started = resolutionStore.unapprove(warning) { [weak self] error in
+            self?.refreshActiveFromGenerated()
+            WarningsRefreshHelper.postWarningsCountDidChange()
+            completion?(error)
+        }
+        guard started else { return false }
+        refreshActiveFromGenerated()
+        WarningsRefreshHelper.postWarningsCountDidChange()
+        return true
     }
 
     /// Approvals and accepted clashes loaded from Firestore (web or another phone) hide their warnings now.
@@ -610,10 +692,13 @@ class WarningsService: ObservableObject {
         WarningsRefreshHelper.postWarningsCountDidChange()
     }
 
-    func dismissWarning(_ warning: Warning) {
-        resolutionStore.dismiss(warning.resolutionKey)
+    /// Staff only: the store refuses anyone `canViewStaffWarnings` says no to.
+    @discardableResult
+    func dismissWarning(_ warning: Warning) -> Bool {
+        guard resolutionStore.dismiss(warning.resolutionKey) else { return false }
         refreshActiveFromGenerated()
         WarningsRefreshHelper.postWarningsCountDidChange()
+        return true
     }
 
     private func uniqueActive(_ warnings: [Warning]) -> [Warning] {
