@@ -149,12 +149,8 @@ struct EditProjectView: View {
                         .accessibilityIdentifier("editProject.textEditor")
                         .frame(minHeight: 100)
                         .padding(12)
-                        .background(ProjectWorksRevampColors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-                        )
+                        .background(PPColor.card)
+                        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                         .overlay(alignment: .topLeading) {
                             if projectDescription.isEmpty {
                                 Text("Add notes, scope, key contacts…")
@@ -175,29 +171,30 @@ struct EditProjectView: View {
                 .padding(.horizontal, 18)
                 .padding(.bottom, 28)
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(screenTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .accessibilityIdentifier("editProject.cancel")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 7)
-                        .background(ProjectWorksRevampColors.surface)
+                        .background(PPColor.onNavyFill)
                         .clipShape(Capsule())
-                        .overlay(Capsule().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
+                        .overlay(Capsule().stroke(PPColor.onNavyStroke, lineWidth: 0.5))
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveProject() }
                         .accessibilityIdentifier("editProject.save")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 7)
-                        .background(canSaveEdits ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.placeholderInk)
+                        .background(canSaveEdits ? PPColor.brand : ProjectWorksRevampColors.placeholderInk)
                         .clipShape(Capsule())
                         .disabled(!canSaveEdits)
                 }
@@ -274,18 +271,17 @@ struct EditProjectView: View {
 
     private var heroHeader: some View {
         VStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(heroGradient)
-                    .frame(width: 64, height: 64)
-                Image(systemName: project.jobType == .smallWorks ? "hammer.fill" : "folder.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.white)
-            }
+            PPIconTile(
+                symbol: project.jobType == .smallWorks ? "hammer.fill" : "folder.fill",
+                family: project.jobType == .smallWorks ? PPFamily.trade : PPFamily.sites,
+                size: 64,
+                lifted: true
+            )
             HStack(spacing: 8) {
                 Text(projectJobNumber)
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .font(.system(.title3, design: .rounded))
+                    .fontWeight(.bold)
+                    .foregroundStyle(.primary)
                 if !projectWorksType.isEmpty {
                     Text(projectWorksType.uppercased())
                         .font(.system(size: 9, weight: .medium))
@@ -297,24 +293,19 @@ struct EditProjectView: View {
                 }
             }
             Text("Update details, dates and team")
-                .font(.system(size: 13))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(18)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func sectionLabel(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .tracking(0.4)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .tracking(0.8)
             .padding(.leading, 4)
     }
 
@@ -335,12 +326,8 @@ struct EditProjectView: View {
                 .font(.system(size: 13, weight: .medium))
         }
         .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var addressFieldsCard: some View {
@@ -357,12 +344,8 @@ struct EditProjectView: View {
         }
         .textFieldStyle(.roundedBorder)
         .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var mapPinLocationCard: some View {
@@ -415,12 +398,8 @@ struct EditProjectView: View {
             .buttonStyle(.plain)
         }
         .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var timelineCard: some View {
@@ -449,12 +428,8 @@ struct EditProjectView: View {
             .padding(.vertical, 12)
             .padding(.horizontal, 14)
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var durationBanner: some View {
@@ -480,12 +455,8 @@ struct EditProjectView: View {
             Divider().overlay(ProjectWorksRevampColors.border)
             jobTypeMenuRow
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var clientMenuRow: some View {
@@ -582,16 +553,22 @@ struct EditProjectView: View {
                     .accessibilityIdentifier("editProject.postcode2")
                     .textInputAutocapitalization(.characters)
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Set address")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showingQuickAddressForm = false }
                         .accessibilityIdentifier("editProject.cancel2")
+                        .foregroundStyle(.white)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { showingQuickAddressForm = false }
                         .accessibilityIdentifier("editProject.save2")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                 }
             }
         }

@@ -11,7 +11,7 @@ enum AnnualLeaveDayBlockReason: Equatable {
 }
 
 enum AnnualLeaveCalendarRules {
-    static func isWeekend(_ date: Date, calendar: Calendar = .current) -> Bool {
+    static func isWeekend(_ date: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> Bool {
         let weekday = calendar.component(.weekday, from: date)
         return weekday == 1 || weekday == 7 // Sunday = 1, Saturday = 7
     }
@@ -19,7 +19,7 @@ enum AnnualLeaveCalendarRules {
     static func blockReason(
         for date: Date,
         bankHolidays: [String: BankHolidayDay],
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> AnnualLeaveDayBlockReason? {
         let day = calendar.startOfDay(for: date)
         if let holiday = bankHolidays[BankHolidayDay.dayKey(for: day, calendar: calendar)] {
@@ -29,7 +29,7 @@ enum AnnualLeaveCalendarRules {
         return nil
     }
 
-    static func bookingContainsWeekend(_ booking: HolidayBooking, calendar: Calendar = .current) -> Bool {
+    static func bookingContainsWeekend(_ booking: HolidayBooking, calendar: Calendar = OrganizationRulebookContext.calendar) -> Bool {
         var day = calendar.startOfDay(for: booking.startDate)
         let end = calendar.startOfDay(for: booking.endDate)
         while day <= end {
@@ -43,7 +43,7 @@ enum AnnualLeaveCalendarRules {
     static func bookingContainsBankHoliday(
         _ booking: HolidayBooking,
         bankHolidays: [String: BankHolidayDay],
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> Bool {
         var day = calendar.startOfDay(for: booking.startDate)
         let end = calendar.startOfDay(for: booking.endDate)
@@ -57,27 +57,19 @@ enum AnnualLeaveCalendarRules {
 }
 
 enum AnnualLeaveSelfBookPolicy {
-    static func canSelfBookAnnualLeave(for user: AppUser) -> Bool {
-        if user.permissions.operativeMode { return false }
-        if user.hasNoLineManager { return true }
-        return user.permissions.annualLeaveSelfBook
+    /// `canSelfBookAnnualLeave(user, roster)` (§9): own leave is booked approved with the `annualLeaveSelfBook`
+    /// permission outside operative mode, or as an admin / super admin outside operative mode with no active
+    /// line manager (self-approved). Everyone else sends a pending request to `leaveApproverIds`.
+    /// `users` is the organisation roster (`UserStore.organizationUsers`).
+    static func canSelfBookAnnualLeave(for user: AppUser, users: [AppUser]) -> Bool {
+        CanonicalBusinessEngine.canSelfBookAnnualLeave(
+            user: RulebookPeople.person(user),
+            roster: RulebookPeople.roster(users)
+        ) ?? false
     }
 
-    static func usesAnnualLeaveRequestFlow(for user: AppUser) -> Bool {
-        if user.permissions.operativeMode { return true }
-        if user.hasNoLineManager { return false }
-        if user.permissions.manager || user.permissions.adminAccess {
-            return !user.permissions.annualLeaveSelfBook
-        }
-        return false
-    }
-
-    static func requiresLineManagerForAnnualLeaveRouting(for user: AppUser) -> Bool {
-        if user.permissions.operativeMode { return true }
-        if user.hasNoLineManager { return false }
-        if user.permissions.manager || user.permissions.adminAccess {
-            return !user.permissions.annualLeaveSelfBook
-        }
-        return false
+    /// Own leave is a pending request: the opposite of self-booking.
+    static func usesAnnualLeaveRequestFlow(for user: AppUser, users: [AppUser]) -> Bool {
+        !canSelfBookAnnualLeave(for: user, users: users)
     }
 }

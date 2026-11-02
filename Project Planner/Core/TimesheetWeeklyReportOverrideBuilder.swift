@@ -23,8 +23,13 @@ enum TimesheetWeeklyReportOverrideBuilder {
         organization: Organization?,
         scheduleOptions: MyScheduleOptions,
         viewer: AppUser?,
-        relatedUsers: [AppUser] = []
+        relatedUsers: [AppUser] = [],
+        writerIsReviewer: Bool? = nil
     ) {
+        // `timesheetOwnerWriteFields`: the owner writes the approved snapshot only when the sheet is self-signed
+        // (`CanonicalBusinessEngine.timesheetSelfSigned` through `TimesheetApprovalPolicy`), i.e. no line manager. An owner save (writerIsReviewer == false) with a line manager leaves the
+        // stored snapshot exactly as the line manager wrote it.
+        if writerIsReviewer == false, TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) { return }
         guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else {
             draft.weeklyReportOverride = nil
             return
@@ -90,7 +95,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
         )
         let managerHasSigned = draft.managerSignedAt != nil
         let applyLiveReview = true
-        let selfSigned = !user.hasLineManager
+        let selfSigned = !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user)
         let approvedByUserId = draft.managerSignedByUserId
             ?? viewer?.id
             ?? user.id
@@ -193,7 +198,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
             approvedAt: draft.managerSignedAt ?? draft.operativeSignedAt ?? existing.approvedAt,
             approvedByUserId: approvedByUserId,
             approvedByName: approvedByName,
-            selfSigned: !user.hasLineManager,
+            selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user),
             lines: lines,
             priceWork: money.priceWork,
             expenses: money.expenses

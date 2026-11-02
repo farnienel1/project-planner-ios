@@ -22,6 +22,15 @@ class SmartCacheService: ObservableObject {
     @Published var isSyncing = false
     @Published private(set) var pendingSyncCount = 0
     @Published private(set) var failedSyncCount = 0
+    /// RULEBOOK §2: when this device last had server data for the current organisation. Daily Overview,
+    /// warnings, weekly report and My Schedule show "Last updated [date/time]" from it while offline
+    /// (`OfflinePolicy.lastUpdatedMessage`, `LastUpdatedOfflineLabel`). A per-device cache marker only.
+    @Published private(set) var lastSyncedAt: Date?
+
+    /// "Last updated [date/time]" while offline, else nil.
+    var lastUpdatedOfflineMessage: String? {
+        isOnline ? nil : OfflinePolicy.lastUpdatedMessage(lastSyncedAt)
+    }
 
     var showOfflineBanner: Bool {
         !isOnline || isSyncing || pendingSyncCount > 0 || failedSyncCount > 0
@@ -48,6 +57,7 @@ class SmartCacheService: ObservableObject {
     private var qualificationsByOrganization: [String: [Qualification]] = [:]
 
     init() {
+        lastSyncedAt = Self.storedLastSync(organizationId: resolvedOrganizationId())
         refreshOutboxCounts()
         outboxCancellable = OfflineOutboxStore.shared.$entries
             .receive(on: DispatchQueue.main)
@@ -154,11 +164,13 @@ class SmartCacheService: ObservableObject {
         }
 
         print("🔥🔥🔥 DEBUG: 🔄 Syncing offline outbox (\(OfflineOutboxStore.shared.pendingCount) entries)")
-        _ = await OfflineSyncCoordinator.processOutbox(firebaseBackend: firebaseBackend, outbox: OfflineOutboxStore.shared)
+        let result = await OfflineSyncCoordinator.processOutbox(firebaseBackend: firebaseBackend, outbox: OfflineOutboxStore.shared)
+        if result.synced > 0 { markSynced() }
         refreshOutboxCounts()
         await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)
 
-        // Legacy fallback: stores still push in-memory state for any data not yet in the outbox.
+        // Stores reload after a sync. Booking stores no longer push in-memory state here (RULEBOOK §1
+        // partial writes); queued changes replay only from the outbox.
         NotificationCenter.default.post(name: .syncOfflineChanges, object: nil)
         print("🔥🔥🔥 DEBUG: ✅ Offline sync pass finished — remaining: \(OfflineOutboxStore.shared.pendingCount)")
     }
@@ -167,6 +179,23 @@ class SmartCacheService: ObservableObject {
 
     func useOrganization(_ organizationId: String) {
         cacheOrganizationId = organizationId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        lastSyncedAt = Self.storedLastSync(organizationId: resolvedOrganizationId())
+    }
+
+    // MARK: - Last synced (RULEBOOK §2 read-only offline)
+
+    private static let lastSyncStoragePrefix = "offline_last_synced_at_"
+
+    /// Call when a server (not cache) snapshot or a server read for the current organisation arrives.
+    func markSynced(at date: Date = Date()) {
+        lastSyncedAt = date
+        let key = Self.lastSyncStoragePrefix + resolvedOrganizationId()
+        UserDefaults.standard.set(date.timeIntervalSince1970, forKey: key)
+    }
+
+    private static func storedLastSync(organizationId: String) -> Date? {
+        let seconds = UserDefaults.standard.double(forKey: lastSyncStoragePrefix + organizationId)
+        return seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
     }
 
     /// Explicit switch wins. Otherwise the organisation id already stored for this device.
@@ -247,6 +276,7 @@ class SmartCacheService: ObservableObject {
 
     func clearAllCache() {
         cacheOrganizationId = ""
+        lastSyncedAt = nil
         projectsByOrganization.removeAll()
         clientsByOrganization.removeAll()
         operativesByOrganization.removeAll()

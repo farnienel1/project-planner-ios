@@ -7,9 +7,12 @@ import SwiftUI
 
 struct OrganisationCurrencyView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     @State private var currencyCode = OrganizationCurrencyCatalog.defaultCode
+    /// Last value read from the organisation; the draft follows the server only while it equals this.
+    @State private var baselineCode = OrganizationCurrencyCatalog.defaultCode
     @State private var isSaving = false
     @State private var errorMessage: String?
 
@@ -30,9 +33,9 @@ struct OrganisationCurrencyView: View {
                     }
                     .accessibilityIdentifier("organisationCurrency.currency")
                     .pickerStyle(.menu)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .padding(.vertical, 12)
-                    .tint(ProjectWorksRevampColors.blue)
+                    .tint(PPColor.brand)
                 }
                 SettingsHubChrome.footer("Used for rates, reports, and invoicing defaults. Country and address are set in Company details.")
 
@@ -42,13 +45,13 @@ struct OrganisationCurrencyView: View {
                     SettingsHubChrome.divider()
                     previewRow("Code", resolvedCurrency.code)
                     SettingsHubChrome.divider()
-                    previewRow("Example", "\(resolvedCurrency.symbol)1,250.00")
+                    previewRow("Example", OrgMoney.format(1250, currencyCode: resolvedCurrency.code))
                 }
 
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 12))
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
+                        .font(.footnote)
+                        .foregroundStyle(PPColor.danger)
                         .padding(.horizontal, 4)
                         .padding(.bottom, 8)
                 }
@@ -56,31 +59,42 @@ struct OrganisationCurrencyView: View {
                 SettingsHubChrome.saveButton("Save currency", isSaving: isSaving) {
                     Task { await save() }
                 }
+                .onlineOnly(isOnline: smartCache.isOnline)
             }
             .padding(16)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Currency")
         .navigationBarTitleDisplayMode(.inline)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
         .onAppear {
-            let org = firebaseBackend.currentOrganization
-            let saved = org?.settings.currencyCode
-            currencyCode = saved?.isEmpty == false
-                ? saved!
-                : OrganizationCurrencyCatalog.defaultCode(forCountryCode: org?.countryCode ?? "GB")
+            currencyCode = serverCurrencyCode
+            baselineCode = currencyCode
         }
+        .onChange(of: serverCurrencyCode) { _, server in
+            // §4: keep an unsaved choice; follow the server only while the draft is unchanged.
+            guard !isSaving, currencyCode == baselineCode else { return }
+            currencyCode = server
+            baselineCode = server
+        }
+    }
+
+    /// `resolveOrganizationCurrency` (read into `settings.currencyCode`), else `defaultCurrencyForCountry`.
+    private var serverCurrencyCode: String {
+        let org = firebaseBackend.currentOrganization
+        if let saved = org?.settings.currencyCode, !saved.isEmpty { return saved }
+        return OrganizationCurrencyCatalog.defaultCode(forCountryCode: org?.countryCode ?? "GB")
     }
 
     private func previewRow(_ title: String, _ value: String) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.primary)
             Spacer()
             Text(value)
-                .font(.system(size: 13))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .font(.subheadline)
+                .foregroundStyle(Color.secondary)
         }
         .padding(.vertical, 12)
     }

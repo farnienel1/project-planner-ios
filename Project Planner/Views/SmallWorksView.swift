@@ -39,13 +39,12 @@ struct SmallWorksView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ZStack {
-                WorksDashboardPalette.bg.ignoresSafeArea()
+                PPColor.page.ignoresSafeArea()
                 smallWorksRootContent
             }
             .navigationTitle("Small works")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(WorksDashboardPalette.bg, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("")
@@ -56,12 +55,8 @@ struct SmallWorksView: View {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }) {
                         Image(systemName: "chevron.left")
-                            .foregroundStyle(WorksDashboardPalette.ink)
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(width: 36, height: 36)
-                            .background(WorksDashboardPalette.soft)
-                            .clipShape(Circle())
                     }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("smallWorks.gobacktoprevioustab")
                 }
                 if canCreateSmallWorks {
@@ -70,12 +65,8 @@ struct SmallWorksView: View {
                             showingCreateSmallWorks = true
                         } label: {
                             Image(systemName: "plus")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 36, height: 36)
-                                .background(WorksDashboardListStyle.smallWorks.accent)
-                                .clipShape(Circle())
                         }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("smallWorks.add")
                         .accessibilityLabel("New small work")
                     }
@@ -170,59 +161,12 @@ struct SmallWorksView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        WorksDashboardHero(style: .smallWorks)
-                        WorksDashboardStatsRow(counts: listCounts, selectedStatus: $selectedStatus)
-                            .padding(.bottom, 14)
-                        WorksDashboardSearchRow(text: $searchText, placeholder: WorksDashboardListStyle.smallWorks.searchPlaceholder) {
-                            Menu {
-                                Button("All · \(listCounts.all)") { selectedStatus = nil }
-                                    .accessibilityIdentifier("smallWorks.filter.all")
-                                Button("Active · \(listCounts.active)") { selectedStatus = .active }
-                                    .accessibilityIdentifier("smallWorks.filter.active")
-                                Button("Upcoming · \(listCounts.upcoming)") { selectedStatus = .upcoming }
-                                    .accessibilityIdentifier("smallWorks.filter.upcoming")
-                                Button("Completed · \(listCounts.completed)") { selectedStatus = .completed }
-                                    .accessibilityIdentifier("smallWorks.filter.completed")
-                            } label: {
-                                Image(systemName: "line.3.horizontal.decrease.circle")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(WorksDashboardListStyle.smallWorks.accent)
-                            }
-                                .accessibilityIdentifier("smallWorks.all")
-                        }
-                        .padding(.bottom, 12)
-                        filterChipsRow
-                            .padding(.bottom, 14)
-                        if isWaitingForVisibilityData {
-                            ProgressView("Finding jobs assigned to you...")
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 28)
-                        } else if searchFilteredSmallWorks.isEmpty {
-                            if filteredSmallWorks.isEmpty {
-                                emptyStateView
-                            } else {
-                                emptySearchState
-                            }
-                        } else {
-                            LazyVStack(spacing: 13) {
-                                ForEach(searchFilteredSmallWorks) { project in
-                                    NavigationLink(value: project) {
-                                        WorksDashboardCard(
-                                            project: project,
-                                            listAccent: WorksDashboardListStyle.smallWorks.accent,
-                                            showsClientAndManager: !userStore.isOperativeMode()
-                                        )
-                                        .environmentObject(operativeStore)
-                                    }
-                                    .accessibilityIdentifier("smallWorks.row.\(project.id)")
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.bottom, 8)
-                        }
+                        smallWorksNavyHeader
+                        smallWorksSheetContent
+                            .padding(.top, 18)
+                            .padding(.bottom, 24)
+                            .ppContentSheet()
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 2)
                 }
                 .navigationDestination(for: Project.self) { project in
                     ProjectDetailView(project: project)
@@ -238,6 +182,76 @@ struct SmallWorksView: View {
                     projectStore.loadData()
                 }
             }
+        }
+    }
+
+    /// Home-style navy header: title, the existing Active / Upcoming / Completed tiles, search and filter chips.
+    private var smallWorksNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PPNavyPageTitle(
+                title: WorksDashboardListStyle.smallWorks.title,
+                subtitle: WorksDashboardListStyle.smallWorks.subtitle
+            )
+            .accessibilityAddTraits(.isHeader)
+            WorksDashboardStatsRow(counts: listCounts, selectedStatus: $selectedStatus)
+                .padding(.top, 18)
+            WorksDashboardSearchRow(text: $searchText, placeholder: WorksDashboardListStyle.smallWorks.searchPlaceholder) {
+                Menu {
+                    Button("All · \(listCounts.all)") { selectedStatus = nil }
+                        .accessibilityIdentifier("smallWorks.filter.all")
+                    Button("Active · \(listCounts.active)") { selectedStatus = .active }
+                        .accessibilityIdentifier("smallWorks.filter.active")
+                    Button("Upcoming · \(listCounts.upcoming)") { selectedStatus = .upcoming }
+                        .accessibilityIdentifier("smallWorks.filter.upcoming")
+                    Button("Completed · \(listCounts.completed)") { selectedStatus = .completed }
+                        .accessibilityIdentifier("smallWorks.filter.completed")
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(WorksDashboardListStyle.smallWorks.accent)
+                }
+                    .accessibilityIdentifier("smallWorks.all")
+            }
+            .padding(.top, 14)
+            filterChipsRow
+                .padding(.top, 12)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 8)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
+    /// Light sheet: the job cards, or the existing loading / empty states.
+    @ViewBuilder
+    private var smallWorksSheetContent: some View {
+        if isWaitingForVisibilityData {
+            ProgressView("Finding jobs assigned to you...")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+        } else if searchFilteredSmallWorks.isEmpty {
+            if filteredSmallWorks.isEmpty {
+                emptyStateView
+            } else {
+                emptySearchState
+            }
+        } else {
+            LazyVStack(spacing: 13) {
+                ForEach(searchFilteredSmallWorks) { project in
+                    NavigationLink(value: project) {
+                        WorksDashboardCard(
+                            project: project,
+                            listAccent: WorksDashboardListStyle.smallWorks.accent,
+                            showsClientAndManager: !userStore.isOperativeMode()
+                        )
+                        .environmentObject(operativeStore)
+                    }
+                    .accessibilityIdentifier("smallWorks.row.\(project.id)")
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.bottom, 8)
         }
     }
 
@@ -309,26 +323,30 @@ struct SmallWorksView: View {
     }
 
     private var emptySearchState: some View {
-        Text("No small works match your search.")
-            .font(.subheadline)
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 24)
+        VStack(spacing: 12) {
+            PPIconTile(symbol: "magnifyingglass", family: .system, size: 44)
+            Text("No small works match your search.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
     }
     
     private var emptyStateView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: emptyStateIcon)
-                .font(.system(size: 48))
-                .foregroundColor(.secondary)
+        VStack(spacing: 14) {
+            PPIconTile(symbol: emptyStateIcon, family: .trade, size: PPMetrics.quickActionIcon, lifted: true)
             
             Text(emptyStateTitle)
-                .font(.headline)
-                .foregroundColor(.secondary)
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
             
             Text(emptyStateMessage)
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
             if isEmptyDueToStatusFilterOnly {
@@ -337,12 +355,16 @@ struct SmallWorksView: View {
                 }
                 .accessibilityIdentifier("smallWorks.showAllSmallWorks")
                 .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(PPColor.brand)
             } else if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil || isUnmatchedOperativeWithJobs {
                 Button("Retry") {
                     projectStore.loadData()
                 }
                 .accessibilityIdentifier("smallWorks.retry")
                 .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(PPColor.brand)
             }
         }
         .frame(maxWidth: .infinity)

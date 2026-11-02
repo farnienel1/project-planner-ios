@@ -40,24 +40,19 @@ struct ProjectsView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ZStack {
-                WorksDashboardPalette.bg.ignoresSafeArea()
+                PPColor.page.ignoresSafeArea()
                 projectsRootContent
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(WorksDashboardPalette.bg, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     }) {
                         Image(systemName: "chevron.left")
-                            .foregroundStyle(WorksDashboardPalette.ink)
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(width: 36, height: 36)
-                            .background(WorksDashboardPalette.soft)
-                            .clipShape(Circle())
                     }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("projects.gobacktoprevioustab")
                 }
                 if canCreateProjects {
@@ -66,12 +61,8 @@ struct ProjectsView: View {
                             showingCreateProject = true
                         } label: {
                             Image(systemName: "plus")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 36, height: 36)
-                                .background(WorksDashboardListStyle.projects.accent)
-                                .clipShape(Circle())
                         }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("projects.add")
                         .accessibilityLabel("New project")
                     }
@@ -163,66 +154,89 @@ struct ProjectsView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        WorksDashboardHero(style: .projects)
-                        WorksDashboardStatsRow(counts: listCounts, selectedStatus: $selectedStatus)
-                            .padding(.bottom, 14)
-                        WorksDashboardSearchRow(text: $searchText, placeholder: WorksDashboardListStyle.projects.searchPlaceholder) {
-                            Menu {
-                                Button("All · \(listCounts.all)") { selectedStatus = nil }
-                                    .accessibilityIdentifier("projects.filter.all")
-                                Button("Active · \(listCounts.active)") { selectedStatus = .active }
-                                    .accessibilityIdentifier("projects.filter.active")
-                                Button("Upcoming · \(listCounts.upcoming)") { selectedStatus = .upcoming }
-                                    .accessibilityIdentifier("projects.filter.upcoming")
-                                Button("Completed · \(listCounts.completed)") { selectedStatus = .completed }
-                                    .accessibilityIdentifier("projects.filter.completed")
-                            } label: {
-                                Image(systemName: "line.3.horizontal.decrease.circle")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(WorksDashboardListStyle.projects.accent)
-                            }
-                                .accessibilityIdentifier("projects.all")
-                        }
-                        .padding(.bottom, 12)
-                        filterChipsRow
-                            .padding(.bottom, 14)
-                        if isWaitingForVisibilityData {
-                            ProgressView("Finding jobs assigned to you...")
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 28)
-                        } else if searchFilteredProjects.isEmpty {
-                            if filteredProjects.isEmpty {
-                                emptyStateView
-                            } else {
-                                emptySearchState
-                            }
-                        } else {
-                            LazyVStack(spacing: 13) {
-                                ForEach(searchFilteredProjects) { project in
-                                    Button {
-                                        navigationPath.append(OpenedProjectToken(projectId: project.id))
-                                    } label: {
-                                        WorksDashboardCard(
-                                            project: project,
-                                            listAccent: WorksDashboardListStyle.projects.accent,
-                                            showsClientAndManager: !userStore.isOperativeMode()
-                                        )
-                                        .environmentObject(operativeStore)
-                                    }
-                                    .accessibilityIdentifier("projects.row.\(project.id)")
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.bottom, 8)
-                        }
+                        projectsNavyHeader
+                        projectsSheetContent
+                            .padding(.top, 18)
+                            .padding(.bottom, 24)
+                            .ppContentSheet()
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 2)
                 }
                 .refreshable {
                     projectStore.loadData()
                 }
             }
+        }
+    }
+
+    /// Home-style navy header: title, the existing Active / Upcoming / Completed tiles, search and filter chips.
+    private var projectsNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PPNavyPageTitle(
+                title: WorksDashboardListStyle.projects.title,
+                subtitle: WorksDashboardListStyle.projects.subtitle
+            )
+            .accessibilityAddTraits(.isHeader)
+            WorksDashboardStatsRow(counts: listCounts, selectedStatus: $selectedStatus)
+                .padding(.top, 18)
+            WorksDashboardSearchRow(text: $searchText, placeholder: WorksDashboardListStyle.projects.searchPlaceholder) {
+                Menu {
+                    Button("All · \(listCounts.all)") { selectedStatus = nil }
+                        .accessibilityIdentifier("projects.filter.all")
+                    Button("Active · \(listCounts.active)") { selectedStatus = .active }
+                        .accessibilityIdentifier("projects.filter.active")
+                    Button("Upcoming · \(listCounts.upcoming)") { selectedStatus = .upcoming }
+                        .accessibilityIdentifier("projects.filter.upcoming")
+                    Button("Completed · \(listCounts.completed)") { selectedStatus = .completed }
+                        .accessibilityIdentifier("projects.filter.completed")
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(WorksDashboardListStyle.projects.accent)
+                }
+                    .accessibilityIdentifier("projects.all")
+            }
+            .padding(.top, 14)
+            filterChipsRow
+                .padding(.top, 12)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 8)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
+    /// Light sheet: the job cards, or the existing loading / empty states.
+    @ViewBuilder
+    private var projectsSheetContent: some View {
+        if isWaitingForVisibilityData {
+            ProgressView("Finding jobs assigned to you...")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+        } else if searchFilteredProjects.isEmpty {
+            if filteredProjects.isEmpty {
+                emptyStateView
+            } else {
+                emptySearchState
+            }
+        } else {
+            LazyVStack(spacing: 13) {
+                ForEach(searchFilteredProjects) { project in
+                    Button {
+                        navigationPath.append(OpenedProjectToken(projectId: project.id))
+                    } label: {
+                        WorksDashboardCard(
+                            project: project,
+                            listAccent: WorksDashboardListStyle.projects.accent,
+                            showsClientAndManager: !userStore.isOperativeMode()
+                        )
+                        .environmentObject(operativeStore)
+                    }
+                    .accessibilityIdentifier("projects.row.\(project.id)")
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.bottom, 8)
         }
     }
 
@@ -294,26 +308,30 @@ struct ProjectsView: View {
     }
 
     private var emptySearchState: some View {
-        Text("No projects match your search.")
-            .font(.subheadline)
-            .foregroundStyle(ProjectWorksRevampColors.muted)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 24)
+        VStack(spacing: 12) {
+            PPIconTile(symbol: "magnifyingglass", family: .system, size: 44)
+            Text("No projects match your search.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
     }
     
     private var emptyStateView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: emptyStateIcon)
-                .font(.system(size: 48))
-                .foregroundColor(.secondary)
+        VStack(spacing: 14) {
+            PPIconTile(symbol: emptyStateIcon, family: .sites, size: PPMetrics.quickActionIcon, lifted: true)
             
             Text(emptyStateTitle)
-                .font(.headline)
-                .foregroundColor(.secondary)
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
             
             Text(emptyStateMessage)
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
             if isEmptyDueToStatusFilterOnly {
@@ -322,12 +340,16 @@ struct ProjectsView: View {
                 }
                 .accessibilityIdentifier("projects.showAll")
                 .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(PPColor.brand)
             } else if projectStore.lastWorkLoadUnreliable || projectStore.errorMessage != nil || isUnmatchedOperativeWithJobs {
                 Button("Retry") {
                     projectStore.loadData()
                 }
                 .accessibilityIdentifier("projects.retry")
                 .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(PPColor.brand)
             }
         }
         .frame(maxWidth: .infinity)

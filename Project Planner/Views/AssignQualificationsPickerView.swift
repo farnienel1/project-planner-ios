@@ -42,12 +42,25 @@ struct AssignQualificationsPickerView: View {
                     )
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Color(.systemBackground))   // matches the plain List inside the library browser
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: PPMetrics.contentCornerRadius,
+                    topTrailingRadius: PPMetrics.contentCornerRadius,
+                    style: .continuous
+                )
+            )
+            .padding(.top, 8)
+            .background(PPNavyBackdrop().ignoresSafeArea())
             .navigationTitle("Add qualifications")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                        .tint(.white)
                         .accessibilityIdentifier("assignQualificationsPicker.done")
                 }
                 if canCreateOrganisationTypes {
@@ -55,6 +68,8 @@ struct AssignQualificationsPickerView: View {
                         Button("Add") {
                             showingAddOrganisationType = true
                         }
+                        .fontWeight(.semibold)
+                        .tint(.white)
                         .accessibilityIdentifier("assignQualificationsPicker.add")
                     }
                 }

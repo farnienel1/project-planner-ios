@@ -6,6 +6,7 @@
 import Foundation
 import Combine
 import FirebaseAuth
+import FirebaseFirestore
 
 @MainActor
 class HolidayStore: ObservableObject {
@@ -97,15 +98,87 @@ class HolidayStore: ObservableObject {
         }
     }
 
+    /// A new booking creates one document (`holidayRequestWriteFields`). A booking already in the store
+    /// writes only the fields that changed (partial update + `WriteMetadata`), never a full merge-set.
     func saveBooking(_ booking: HolidayBooking) async throws {
         guard let fb = firebaseBackend else { return }
         let orgId = try await resolveOrganizationId()
-        try await fb.saveHolidayBooking(booking, organizationId: orgId)
-        if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
-            bookings[index] = booking
-        } else {
-            bookings.append(booking)
+        if let previous = bookings.first(where: { $0.id == booking.id }) {
+            let fields = Self.changedFields(from: previous, to: booking)
+            try await fb.updateHolidayBookingFields(bookingId: booking.id, fields: fields, organizationId: orgId)
+            if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
+                bookings[index] = booking
+            }
+            return
         }
+        let stored = try await fb.saveHolidayBooking(booking, organizationId: orgId)
+        bookings.removeAll { $0.id == stored.id }
+        bookings.append(stored)
+    }
+
+    /// One document per request range (`holidayRequestRanges` → `holidayRequestWriteFields`, §9).
+    /// `picks` are the chosen days (any time of day; the organisation-zone day key is used) with their slot.
+    /// Returns the saved bookings in date order.
+    @discardableResult
+    func createRequests(
+        picks: [(day: Date, timeSlot: HolidayTimeSlot)],
+        userId: String?,
+        operativeId: UUID?,
+        status: HolidayStatus,
+        approvedByUserId: String?
+    ) async throws -> [HolidayBooking] {
+        guard let fb = firebaseBackend else { return [] }
+        let orgId = try await resolveOrganizationId()
+        let keyed = picks.map { (dayKey: OrganizationRulebookContext.dayKey($0.day), timeSlot: $0.timeSlot.rawValue) }
+        guard let ranges = CanonicalBusinessEngine.holidayRequestRanges(picks: keyed) else {
+            throw NSError(domain: "HolidayStore", code: 500, userInfo: [NSLocalizedDescriptionKey: "Annual leave could not be prepared. Please try again."])
+        }
+        var saved: [HolidayBooking] = []
+        for range in ranges {
+            guard let start = OrganizationRulebookContext.date(fromDayKey: range.startDayKey),
+                  let end = OrganizationRulebookContext.date(fromDayKey: range.endDayKey) else { continue }
+            let draft = HolidayBooking(
+                organizationId: orgId,
+                userId: userId,
+                operativeId: operativeId,
+                startDate: start,
+                endDate: end,
+                status: status,
+                timeSlot: HolidayTimeSlot(rawValue: range.timeSlot) ?? .fullDay,
+                approvedByUserId: status == .approved ? approvedByUserId : nil
+            )
+            let stored = try await fb.saveHolidayBooking(draft, organizationId: orgId)
+            bookings.removeAll { $0.id == stored.id }
+            bookings.append(stored)
+            saved.append(stored)
+        }
+        return saved.sorted { $0.startDate < $1.startDate }
+    }
+
+    /// Firestore values for the keys that differ between two versions of one booking.
+    private static func changedFields(from old: HolidayBooking, to new: HolidayBooking) -> [String: Any] {
+        func timestamp(_ date: Date?) -> Any { date.map { Timestamp(date: $0) as Any } ?? NSNull() }
+        func text(_ value: String?) -> Any {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? (NSNull() as Any) : (trimmed as Any)
+        }
+        var fields: [String: Any] = [:]
+        if old.startDate != new.startDate { fields["startDate"] = timestamp(new.startDate) }
+        if old.endDate != new.endDate { fields["endDate"] = timestamp(new.endDate) }
+        if old.timeSlot != new.timeSlot { fields["timeSlot"] = new.timeSlot.rawValue }
+        if old.status != new.status { fields["status"] = new.status.rawValue }
+        if old.approvedByUserId != new.approvedByUserId { fields["approvedByUserId"] = text(new.approvedByUserId) }
+        if old.approvedAt != new.approvedAt { fields["approvedAt"] = timestamp(new.approvedAt) }
+        if old.cancellationRequestedAt != new.cancellationRequestedAt {
+            fields["cancellationRequestedAt"] = timestamp(new.cancellationRequestedAt)
+        }
+        if old.cancellationRequestedByUserId != new.cancellationRequestedByUserId {
+            fields["cancellationRequestedByUserId"] = text(new.cancellationRequestedByUserId)
+        }
+        if old.decisionNote != new.decisionNote {
+            fields["decisionNote"] = CanonicalBusinessEngine.parseHolidayDecisionNote(new.decisionNote).map { $0 as Any } ?? NSNull()
+        }
+        return fields
     }
 
     func deleteBooking(_ booking: HolidayBooking) async {
@@ -119,10 +192,14 @@ class HolidayStore: ObservableObject {
         }
     }
 
-    /// Removes weekend annual leave bookings (early-days cleanup; restores allowance).
+    /// Removes single-day annual leave records that fall on a weekend (early-days cleanup; restores allowance).
+    /// A multi-day record (one document per request, §9) may span a weekend and is kept.
     func purgeInvalidWeekendBookingsIfNeeded() async {
-        let cal = Calendar.current
-        let invalid = bookings.filter { AnnualLeaveCalendarRules.bookingContainsWeekend($0, calendar: cal) }
+        let cal = OrganizationRulebookContext.calendar
+        let invalid = bookings.filter {
+            cal.isDate($0.startDate, inSameDayAs: $0.endDate) &&
+            AnnualLeaveCalendarRules.bookingContainsWeekend($0, calendar: cal)
+        }
         for booking in invalid {
             await deleteBooking(booking)
         }
@@ -160,29 +237,38 @@ class HolidayStore: ObservableObject {
         }
     }
 
+    /// Approve in one partial update (`holidayDecisionWriteFields`).
     func approveBooking(_ booking: HolidayBooking, approvedByUserId: String) async {
-        var updated = booking
-        updated.status = .approved
-        updated.approvedByUserId = approvedByUserId
-        updated.approvedAt = Date()
-        updated.updatedAt = Date()
-        do {
-            try await saveBooking(updated)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        await decide(booking, status: .approved, approverUid: approvedByUserId, note: nil)
     }
 
+    /// Decline in one partial update (`holidayDecisionWriteFields`). A blank reason clears the note.
     func rejectBooking(_ booking: HolidayBooking, rejectedByUserId: String, reason: String = "") async {
-        var updated = booking
-        updated.status = .rejected
-        updated.approvedByUserId = rejectedByUserId
-        updated.approvedAt = Date()
-        updated.updatedAt = Date()
-        let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
-        updated.decisionNote = trimmedReason.isEmpty ? nil : trimmedReason
+        await decide(booking, status: .rejected, approverUid: rejectedByUserId, note: reason)
+    }
+
+    private func decide(_ booking: HolidayBooking, status: HolidayStatus, approverUid: String, note: String?) async {
+        guard let fb = firebaseBackend else { return }
         do {
-            try await saveBooking(updated)
+            let orgId = try await resolveOrganizationId()
+            let decision = try await fb.decideHolidayBooking(
+                booking,
+                status: status,
+                approverUid: approverUid,
+                decisionNote: note,
+                organizationId: orgId
+            )
+            var updated = booking
+            updated.status = HolidayStatus(rawValue: decision.status) ?? status
+            updated.approvedByUserId = decision.approvedByUserId
+            updated.approvedAt = Date()
+            updated.decisionNote = decision.decisionNote
+            updated.updatedAt = Date()
+            if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
+                bookings[index] = updated
+            } else {
+                bookings.append(updated)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -207,14 +293,11 @@ class HolidayStore: ObservableObject {
         }
     }
 
+    /// Approved records whose leave days (`leaveRecordDayKeys`) include the organisation day of `date`.
     func approvedBookings(covering date: Date) -> [HolidayBooking] {
-        let cal = Calendar.current
-        let day = cal.startOfDay(for: date)
+        let dayKey = OrganizationRulebookContext.dayKey(date)
         return bookings.filter { b in
-            guard b.status == .approved else { return false }
-            let start = cal.startOfDay(for: b.startDate)
-            let end = cal.startOfDay(for: b.endDate)
-            return day >= start && day <= end
+            b.status == .approved && LeaveRecordDays.covers(b, dayKey: dayKey)
         }
     }
 

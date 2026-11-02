@@ -56,21 +56,26 @@ struct CreateClientView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(isFormValid ? Color.blue : Color.gray)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
+                        .background(isFormValid ? PPColor.brand : Color.gray,
+                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .foregroundStyle(.white)
                     }
                     .accessibilityIdentifier("createClient.createClient")
                     .disabled(!isFormValid || isLoading)
                 }
                 .listRowBackground(Color.clear)
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("New Client")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .navigationBarItems(
                 leading: Button("Cancel") {
                     presentationMode.wrappedValue.dismiss()
                 }
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
                     .accessibilityIdentifier("createClient.cancel")
             )
             .alert("Client Created", isPresented: $showingAlert) {

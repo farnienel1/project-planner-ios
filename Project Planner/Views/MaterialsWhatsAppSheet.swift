@@ -95,9 +95,9 @@ struct MaterialsWhatsAppSheet: View {
                             .font(.system(size: 13, design: .monospaced))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                            .background(MaterialsOrderingTheme.cardBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .padding(14)
+                            .background(PPColor.card)
+                            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
                     } else {
                         Text("WhatsApp messages are not available yet. Update the app, or email the list instead.")
                             .font(.system(size: 13))
@@ -121,6 +121,7 @@ struct MaterialsWhatsAppSheet: View {
                         }
                         .accessibilityIdentifier("materialsWhatsApp.copy")
                         .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
                         .disabled(row == nil)
 
                         Button {
@@ -131,18 +132,21 @@ struct MaterialsWhatsAppSheet: View {
                         }
                         .accessibilityIdentifier("materialsWhatsApp.open")
                         .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
                         .tint(MaterialsOrderingTheme.success)
                         .disabled(row?.ok != true)
                     }
                 }
                 .padding(16)
             }
-            .background(MaterialsOrderingTheme.pageBackground)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("WhatsApp message")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Back") { dismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("materialsWhatsApp.back")
                 }
             }
@@ -194,9 +198,9 @@ struct MaterialsWhatsAppSheet: View {
                 .disabled(isSavingPhone)
             }
         }
-        .padding(12)
-        .background(MaterialsOrderingTheme.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(14)
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private func openWhatsApp() {

@@ -7,6 +7,7 @@ import SwiftUI
 import UIKit
 import PencilKit
 import FirebaseFirestore
+import FirebaseAuth
 import PhotosUI
 
 struct InvoicingView: View {
@@ -46,31 +47,37 @@ struct InvoicingView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
-                        timesheetsDisabledMessageCard
-                    } else if !userStore.canAccessTimesheetsSurface() {
-                        ContentUnavailableView(
-                            "Timesheets unavailable",
-                            systemImage: "lock.fill",
-                            description: Text("No timesheet section is available for this account.")
-                        )
-                    } else {
-                        paymentSummaryCard
-                        if canShowOperativeTimesheets {
-                            managerLandingCards
-                        } else if canShowMyTimesheets {
-                            operativeLandingCard
-                        } else if showTimesheetsDisabledMessage {
+                VStack(alignment: .leading, spacing: 0) {
+                    hubNavyHeader
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
                             timesheetsDisabledMessageCard
+                        } else if !userStore.canAccessTimesheetsSurface() {
+                            ContentUnavailableView(
+                                "Timesheets unavailable",
+                                systemImage: "lock.fill",
+                                description: Text("No timesheet section is available for this account.")
+                            )
+                        } else {
+                            if canShowOperativeTimesheets {
+                                managerLandingCards
+                            } else if canShowMyTimesheets {
+                                operativeLandingCard
+                            } else if showTimesheetsDisabledMessage {
+                                timesheetsDisabledMessageCard
+                            }
                         }
                     }
+                    .padding(.top, 20)
+                    .padding(.bottom, 28)
+                    .ppContentSheet()
                 }
-                .padding(16)
             }
-            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Timesheets")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .navigationDestination(isPresented: $pushMyTimesheets) {
                 MyTimesheetsHubView(settings: settings)
                     .environmentObject(firebaseBackend)
@@ -129,96 +136,100 @@ struct InvoicingView: View {
         _initialSurface = initialSurface
     }
 
+    /// Home-style navy header. Shows the current payment run when the timesheet surface is available,
+    /// following the same branches as the sheet below it.
+    private var hubNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
+                PPNavyPageTitle(title: "Timesheets")
+            } else if !userStore.canAccessTimesheetsSurface() {
+                PPNavyPageTitle(title: "Timesheets")
+            } else {
+                paymentSummaryCard
+            }
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
+    private var paymentRunTitle: String {
+        if settings.paymentRunMode == .dateRanges, let first = settings.normalizedRanges.first {
+            return "Day \(first.startDay) - Day \(first.endDay)"
+        }
+        return settings.recurringRunDisplaySummary
+    }
+
+    private var paymentDateLine: String {
+        if settings.paymentDateMode == .specificDates {
+            return "Paid on day \(settings.normalizedPaymentDates.map(String.init).joined(separator: " & "))"
+        }
+        return "Paid every \(settings.recurringPaymentDay.title)"
+    }
+
     private var paymentSummaryCard: some View {
         let note = settings.normalizedUserNote
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 0) {
             Text("CURRENT PAYMENT RUN")
-                .font(.caption.weight(.heavy))
-                .tracking(1.2)
-                .foregroundStyle(Color.white.opacity(0.85))
+                .font(.caption2.weight(.semibold))
+                .tracking(1.1)
+                .foregroundStyle(PPColor.onNavySecondary)
 
-            if settings.paymentRunMode == .dateRanges, let first = settings.normalizedRanges.first {
-                Text("Day \(first.startDay) - Day \(first.endDay)")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white)
-            } else {
-                Text(settings.recurringRunDisplaySummary)
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white)
-            }
+            Text(paymentRunTitle)
+                .font(.system(.title, design: .rounded))
+                .fontWeight(.bold)
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+                .padding(.top, 2)
 
-            if settings.paymentDateMode == .specificDates {
-                Text("Paid on day \(settings.normalizedPaymentDates.map(String.init).joined(separator: " & "))")
-                    .font(.subheadline)
-                    .foregroundStyle(Color.white.opacity(0.82))
-            } else {
-                Text("Paid every \(settings.recurringPaymentDay.title)")
-                    .font(.subheadline)
-                    .foregroundStyle(Color.white.opacity(0.82))
-            }
+            PPOnNavyPill(text: paymentDateLine, symbol: "banknote")
+                .padding(.top, 12)
 
             if !note.isEmpty {
-                Divider().overlay(Color.white.opacity(0.28))
-                Text(note)
-                    .font(.footnote)
-                    .foregroundStyle(Color.white.opacity(0.9))
-                    .lineLimit(3)
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "text.quote")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(PPColor.onNavySecondary)
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(PPColor.onNavyFill)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
+                )
+                .padding(.top, 16)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(
-            LinearGradient(
-                colors: [Color(red: 0.184, green: 0.435, blue: 0.839), Color(red: 0.114, green: 0.306, blue: 0.847)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     @ViewBuilder
     private func timesheetEntryCard(title: String, detail: String, symbol: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.blue)
-                .frame(width: 34, height: 34)
-                .background(Color.blue.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Text(detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+        PPGroupedCard {
+            PPMenuRowLabel(title: title, symbol: symbol, family: .plan, subtitle: detail)
+                .padding(.vertical, 4)
         }
-        .padding(14)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(.separator), lineWidth: 0.5)
-        )
     }
 
     private var timesheetsDisabledMessageCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                Image(systemName: "clock.badge.xmark")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.orange)
-                    .frame(width: 40, height: 40)
-                    .background(Color.orange.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                PPIconTile(symbol: "clock.badge.xmark", family: .trade, size: 38)
                 Text("Timesheets follow employment type")
                     .font(.headline)
+                    .foregroundStyle(.primary)
             }
             Text("My Timesheets is for self-employed pay. PAYE accounts keep the current pay run until it is paid, then schedule hours no longer fill the next timesheet. Switch the person back to self-employed if they need timesheets again.")
                 .font(.subheadline)
@@ -227,12 +238,7 @@ struct InvoicingView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color(.separator), lineWidth: 0.5)
-        )
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     @ViewBuilder
@@ -254,7 +260,7 @@ struct InvoicingView: View {
             )
         }
         .accessibilityIdentifier("invoicing.myTimesheets")
-        .buttonStyle(.plain)
+        .buttonStyle(PPPressableButtonStyle())
     }
 
     @ViewBuilder
@@ -314,10 +320,31 @@ struct InvoicingView: View {
             TimesheetApprovalPolicy.isExported(TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start))
         }.count
 
-        VStack(spacing: 12) {
-            if canShowMyTimesheets {
+        VStack(alignment: .leading, spacing: 14) {
+            PPGroupedCard {
+                if canShowMyTimesheets {
+                    NavigationLink {
+                        MyTimesheetsHubView(settings: settings)
+                            .environmentObject(firebaseBackend)
+                            .environmentObject(userStore)
+                            .environmentObject(bookingStore)
+                            .environmentObject(operativeStore)
+                            .environmentObject(projectStore)
+                            .environmentObject(managerScheduleStore)
+                            .environmentObject(notificationService)
+                    } label: {
+                        managerTile(title: "My Timesheets", subtitle: "Your own hours, expenses and price work", symbol: "clock.fill", badge: nil)
+                    }
+                    .accessibilityIdentifier("invoicing.myTimesheets2")
+                    .buttonStyle(PPMenuRowButtonStyle())
+                    PPRowDivider()
+                }
                 NavigationLink {
-                    MyTimesheetsHubView(settings: settings)
+                    OperativeTimesheetsView(
+                        settings: settings,
+                        week: pendingReviewWeek,
+                        initialReviewUserId: pendingReviewUserId
+                    )
                         .environmentObject(firebaseBackend)
                         .environmentObject(userStore)
                         .environmentObject(bookingStore)
@@ -326,97 +353,92 @@ struct InvoicingView: View {
                         .environmentObject(managerScheduleStore)
                         .environmentObject(notificationService)
                 } label: {
-                    managerTile(title: "My Timesheets", subtitle: "Your own hours, expenses and price work", symbol: "clock.fill", badge: nil)
+                    managerTile(
+                        title: isAdminViewer ? "User Timesheets" : "Operative Timesheets",
+                        subtitle: isAdminViewer
+                            ? "Review, sign off and export company timesheets"
+                            : "Review, sign off and export your team's sheets",
+                        symbol: "person.3.fill",
+                        badge: awaiting > 0 ? "\(awaiting) new" : nil,
+                        family: .people
+                    )
                 }
-                .accessibilityIdentifier("invoicing.myTimesheets2")
-                .buttonStyle(.plain)
+                .accessibilityIdentifier("invoicing.userTimesheets")
+                .buttonStyle(PPMenuRowButtonStyle())
             }
-            NavigationLink {
-                OperativeTimesheetsView(
-                    settings: settings,
-                    week: pendingReviewWeek,
-                    initialReviewUserId: pendingReviewUserId
-                )
-                    .environmentObject(firebaseBackend)
-                    .environmentObject(userStore)
-                    .environmentObject(bookingStore)
-                    .environmentObject(operativeStore)
-                    .environmentObject(projectStore)
-                    .environmentObject(managerScheduleStore)
-                    .environmentObject(notificationService)
-            } label: {
-                managerTile(
-                    title: isAdminViewer ? "User Timesheets" : "Operative Timesheets",
-                    subtitle: isAdminViewer
-                        ? "Review, sign off and export company timesheets"
-                        : "Review, sign off and export your team's sheets",
-                    symbol: "person.3.fill",
-                    badge: awaiting > 0 ? "\(awaiting) new" : nil
-                )
-            }
-            .accessibilityIdentifier("invoicing.userTimesheets")
-            .buttonStyle(.plain)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
 
-            HStack(spacing: 10) {
-                statMiniCard(value: "\(awaiting)", label: "Awaiting sign-off", color: .orange)
-                statMiniCard(value: "\(signed)", label: "Signed off", color: .green)
+            HStack(alignment: .top, spacing: 0) {
+                statMiniCard(value: "\(awaiting)", label: "Awaiting sign-off", color: PPFamily.trade.bottom)
+                Rectangle()
+                    .fill(Color(.separator))
+                    .frame(width: 0.5)
+                    .padding(.vertical, 12)
+                    .accessibilityHidden(true)
+                statMiniCard(value: "\(signed)", label: "Signed off", color: PPFamily.sites.bottom)
+                Rectangle()
+                    .fill(Color(.separator))
+                    .frame(width: 0.5)
+                    .padding(.vertical, 12)
+                    .accessibilityHidden(true)
                 statMiniCard(value: "\(exported)", label: "Exported", color: .secondary)
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
     }
 
     @ViewBuilder
-    private func managerTile(title: String, subtitle: String, symbol: String, badge: String?) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.blue)
-                .frame(width: 48, height: 48)
-                .background(Color.blue.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            VStack(alignment: .leading, spacing: 4) {
+    private func managerTile(title: String, subtitle: String, symbol: String, badge: String?, family: PPFamily = .plan) -> some View {
+        HStack(spacing: 13) {
+            PPIconTile(symbol: symbol, family: family, size: PPMetrics.menuIcon)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.title3.weight(.bold))
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
                 Text(subtitle)
-                    .font(.subheadline)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
+            Spacer(minLength: 8)
             if let badge {
                 Text(badge)
                     .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(Color.blue)
+                    .background(PPColor.brand, in: Capsule())
                     .foregroundStyle(.white)
-                    .clipShape(Capsule())
             }
             Image(systemName: "chevron.right")
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
         }
-        .padding(16)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.04), radius: 6, y: 1)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(minHeight: 64)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
     private func statMiniCard(value: String, label: String, color: Color) -> some View {
-        VStack(spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(value)
-                .font(.title2.weight(.bold))
+                .font(.system(.title, design: .rounded))
+                .fontWeight(.bold)
+                .monospacedDigit()
                 .foregroundStyle(color)
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
                 .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity)
-        .padding(10)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     private var usersForManagerTimesheetScope: [AppUser] {
@@ -537,8 +559,31 @@ enum TimesheetApprovalPolicy {
         user.lineManagerUserIds
     }
 
+    /// RULEBOOK §8: the sheet waits for a line manager (or, with none, an admin) unless it is self-signed —
+    /// `timesheetSelfSigned(user, roster)`: an admin or super admin outside operative mode with no active line
+    /// manager. Every operative and manager needs a counter-signature. The stored line managers decide only
+    /// when the script did not answer.
     static func requiresLineManagerCounterSign(for user: AppUser) -> Bool {
-        user.hasLineManager
+        guard let selfSigned = RulebookRosterSnapshot.timesheetSelfSigned(user) else { return user.hasLineManager }
+        return !selfSigned
+    }
+
+    /// `timesheetWriterIsReviewer`: whether this save is the reviewer's (line manager or admin), the
+    /// same test as firestore.rules `isTimesheetReviewer`. Without the subject's profile (or when the
+    /// script did not answer) a write by anyone other than the subject counts as the reviewer's, as
+    /// web's `saveTimesheetDraft` does, since only a reviewer may write someone else's sheet.
+    static func writerIsReviewer(writerId: String, writer: AppUser?, subjectUserId: String, subject: AppUser?) -> Bool {
+        let fallback = !writerId.isEmpty && writerId != subjectUserId
+        let answer = CanonicalBusinessEngine.timesheetWriterIsReviewer(
+            writerUserId: writerId,
+            subjectUserId: subjectUserId,
+            writerIsAdmin: writer?.isRosterAdmin ?? false,
+            writerFormerIds: writer?.formerUserIds ?? [],
+            subjectLineManagerIds: subject?.lineManagerUserIds ?? []
+        )
+        if answer == true { return true }
+        if subject == nil || answer == nil { return fallback }
+        return false
     }
 
     /// A stored instant the script still treats as a signature. Nil when the script did not answer.
@@ -566,11 +611,11 @@ enum TimesheetApprovalPolicy {
 
     static func isTimesheetFullyApproved(draft: TimesheetDraft, user: AppUser) -> Bool {
         guard let fields = TimesheetDraftStore.statusFields(for: draft) else { return false }
-        return CanonicalBusinessEngine.isTimesheetFullySigned(fields, hasLineManager: user.hasLineManager) == true
+        return CanonicalBusinessEngine.isTimesheetFullySigned(fields, hasLineManager: requiresLineManagerCounterSign(for: user)) == true
     }
 
     static func awaitingManagerSignOff(draft: TimesheetDraft, user: AppUser) -> Bool {
-        TimesheetDraftStore.listBucket(for: draft, hasLineManager: user.hasLineManager) == "awaiting"
+        TimesheetDraftStore.listBucket(for: draft, hasLineManager: requiresLineManagerCounterSign(for: user)) == "awaiting"
     }
 
     /// One row per pay period. An exported copy of that period never waits for sign-off.
@@ -815,23 +860,160 @@ enum TimesheetDraftStore {
         return decoded
     }
 
+    /// Manager counter-sign and export fields. The owner never sends them (firestore.rules
+    /// `timesheetManagerFieldsUnchanged`); only the reviewer's save writes them.
+    private static let managerSignOffKeys: [String] = [
+        "managerSignedAt",
+        "managerSignedByName",
+        "managerSignedByUserId",
+        "managerSignatureImageBase64",
+        "approvedAt",
+        "approvedByName",
+        "exportedAt"
+    ]
+
+    /// Saves a timesheet (rulebook §6). Reloads the server copy first, decides owner or reviewer with
+    /// `timesheetWriterIsReviewer`, passes an owner save through `timesheetOwnerWriteFields`, writes
+    /// only the fields that changed (`updateData`), and for a reviewer also writes the changed entry
+    /// decisions from `timesheetEntryReviewWriteFields` (inline values stay for older builds).
+    /// Returns a message to show when the save failed; nil on success.
+    @discardableResult
     static func saveToCloud(
         _ draft: TimesheetDraft,
         userId: String,
         weekStart: Date,
         weekEnd: Date? = nil,
         firebaseBackend: FirebaseBackend,
-        organizationId: String
-    ) async {
-        let payload = asFirestoreMap(draft)
+        organizationId: String,
+        writer: AppUser? = nil,
+        subject: AppUser? = nil
+    ) async -> String? {
         let end = weekEnd ?? storedPeriodEnd(userId: userId, weekStart: weekStart) ?? weekStart
-        try? await firebaseBackend.saveTimesheetState(
-            organizationId: organizationId,
-            userId: userId,
-            weekStart: weekStart,
-            weekEnd: end,
-            payload: payload
+        let writerId = Auth.auth().currentUser?.uid ?? writer?.id ?? ""
+        let server: [String: Any]?
+        do {
+            server = try await firebaseBackend.loadTimesheetState(
+                organizationId: organizationId,
+                userId: userId,
+                weekStart: weekStart
+            )
+        } catch {
+            return "Couldn't save your timesheet: \(error.localizedDescription)"
+        }
+        let reviewer = TimesheetApprovalPolicy.writerIsReviewer(
+            writerId: writerId,
+            writer: writer,
+            subjectUserId: userId,
+            subject: subject
         )
+        var fields = asFirestoreMap(draft)
+        var frozenEntriesChanged = false
+        if !reviewer {
+            for key in managerSignOffKeys { fields.removeValue(forKey: key) }
+            let storedManagerSigned = server.flatMap { statusFields(fromFirestore: $0)?.managerSignedAtMs } != nil
+            guard let keep = CanonicalBusinessEngine.timesheetOwnerWritableKeys(
+                Array(fields.keys),
+                // Unknown counts as having one: the snapshot is then left to the line manager (web).
+                subjectHasLineManager: subject.map { TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? true,
+                managerSigned: storedManagerSigned || draft.managerSignedAt != nil
+            ) else {
+                return "Couldn't save your timesheet: the timesheet rules did not load. Try again."
+            }
+            // Signed-off price work / expenses are frozen for the owner; say so instead of dropping silently.
+            frozenEntriesChanged = ["expenseEntries", "priceWorkEntries"].contains { key in
+                guard !keep.contains(key), let value = fields[key] else { return false }
+                return !firestoreValuesEqual(value, server?[key])
+            }
+            fields = fields.filter { keep.contains($0.key) }
+        }
+        var changed: [String: Any] = [:]
+        for (key, value) in fields where server == nil || !firestoreValuesEqual(value, server?[key]) {
+            changed[key] = value
+        }
+        if reviewer {
+            let storedIds = storedEntryIds(server)
+            func entryId(_ id: UUID) -> String { storedIds[id.uuidString.lowercased()] ?? id.uuidString }
+            let entries: [(id: String, amount: Double, managerDecision: String, managerRevisedAmount: Double?)] = draft.expenseEntries.map {
+                (id: entryId($0.id), amount: $0.amount, managerDecision: $0.managerDecision.rawValue, managerRevisedAmount: $0.managerRevisedAmount)
+            } + draft.priceWorkEntries.map {
+                (id: entryId($0.id), amount: $0.amount, managerDecision: $0.managerDecision.rawValue, managerRevisedAmount: $0.managerRevisedAmount)
+            }
+            if let reviewFields = CanonicalBusinessEngine.timesheetEntryReviewWriteFields(
+                storedSheet: server,
+                entries: entries,
+                reviewedByUserId: writerId,
+                reviewedAtMs: Date().timeIntervalSince1970 * 1000
+            ) {
+                for (key, value) in reviewFields { changed[key] = value }
+            }
+        }
+        do {
+            try await firebaseBackend.saveTimesheetState(
+                organizationId: organizationId,
+                userId: userId,
+                weekStart: weekStart,
+                weekEnd: end,
+                payload: changed,
+                storedDocument: server,
+                documentExists: server != nil
+            )
+        } catch {
+            return "Couldn't save your timesheet: \(error.localizedDescription)"
+        }
+        if frozenEntriesChanged {
+            return "Price work and expenses can't be changed after your line manager has signed. Ask them to amend it."
+        }
+        return nil
+    }
+
+    /// Stored entry ids by lowercased id, so a decision is written under the id the sheet stores.
+    private static func storedEntryIds(_ server: [String: Any]?) -> [String: String] {
+        var ids: [String: String] = [:]
+        for key in ["expenseEntries", "priceWorkEntries"] {
+            for row in (server?[key] as? [[String: Any]]) ?? [] {
+                if let id = row["id"] as? String, !id.isEmpty { ids[id.lowercased()] = id }
+            }
+        }
+        return ids
+    }
+
+    /// Whether a value about to be written equals the stored one (missing, null and nil are the same;
+    /// instants within a millisecond are the same). A comparison for a partial update, not a rule.
+    static func firestoreValuesEqual(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        let a = unwrapFirestoreValue(lhs)
+        let b = unwrapFirestoreValue(rhs)
+        if a == nil && b == nil { return true }
+        guard let a, let b else { return false }
+        if let x = a as? Timestamp, let y = b as? Timestamp {
+            return abs(x.dateValue().timeIntervalSince(y.dateValue())) < 0.001
+        }
+        if let x = a as? [String: Any], let y = b as? [String: Any] {
+            for key in Set(x.keys).union(y.keys) where !firestoreValuesEqual(x[key], y[key]) {
+                return false
+            }
+            return true
+        }
+        if let x = a as? [Any], let y = b as? [Any] {
+            guard x.count == y.count else { return false }
+            for index in x.indices where !firestoreValuesEqual(x[index], y[index]) {
+                return false
+            }
+            return true
+        }
+        if let x = a as? String, let y = b as? String { return x == y }
+        if let x = a as? NSNumber, let y = b as? NSNumber { return x == y }
+        return false
+    }
+
+    private static func unwrapFirestoreValue(_ value: Any?) -> Any? {
+        guard let value else { return nil }
+        if value is NSNull { return nil }
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            guard let child = mirror.children.first else { return nil }
+            return unwrapFirestoreValue(child.value)
+        }
+        return value
     }
 
     static func asFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
@@ -922,6 +1104,7 @@ enum TimesheetDraftStore {
             guard let idRaw = row["id"] as? String,
                   let id = UUID(uuidString: idRaw),
                   let title = row["title"] as? String else { return nil }
+            let resolved = resolvedEntryDecision(sheet: map, row: row)
             return TimesheetExpenseEntry(
                 id: id,
                 title: title,
@@ -930,8 +1113,8 @@ enum TimesheetDraftStore {
                 date: (row["date"] as? Timestamp)?.dateValue() ?? Date(),
                 amount: row["amount"] as? Double ?? 0,
                 receiptName: row["receiptName"] as? String,
-                managerDecision: TimesheetManagerDecision(rawValue: row["managerDecision"] as? String ?? "") ?? .approved,
-                managerRevisedAmount: row["managerRevisedAmount"] as? Double
+                managerDecision: resolved.decision,
+                managerRevisedAmount: resolved.revisedAmount
             )
         }
 
@@ -939,6 +1122,7 @@ enum TimesheetDraftStore {
             guard let idRaw = row["id"] as? String,
                   let id = UUID(uuidString: idRaw),
                   let title = row["title"] as? String else { return nil }
+            let resolved = resolvedEntryDecision(sheet: map, row: row)
             return TimesheetPriceWorkEntry(
                 id: id,
                 title: title,
@@ -948,8 +1132,8 @@ enum TimesheetDraftStore {
                 startDate: (row["startDate"] as? Timestamp)?.dateValue() ?? Date(),
                 endDate: (row["endDate"] as? Timestamp)?.dateValue(),
                 amount: row["amount"] as? Double ?? 0,
-                managerDecision: TimesheetManagerDecision(rawValue: row["managerDecision"] as? String ?? "") ?? .approved,
-                managerRevisedAmount: row["managerRevisedAmount"] as? Double
+                managerDecision: resolved.decision,
+                managerRevisedAmount: resolved.revisedAmount
             )
         }
 
@@ -970,6 +1154,22 @@ enum TimesheetDraftStore {
         }
 
         return output
+    }
+
+    /// The decision in effect for one stored entry (`timesheetEntryDecision`): the reviewer's
+    /// `extraEntryReviews` entry; the owner-writable inline value only when it lowers the amount, or on a
+    /// manager-signed legacy sheet. The inline value is read only when the script did not answer.
+    private static func resolvedEntryDecision(
+        sheet: [String: Any],
+        row: [String: Any]
+    ) -> (decision: TimesheetManagerDecision, revisedAmount: Double?) {
+        if let resolved = CanonicalBusinessEngine.timesheetEntryDecision(sheet: sheet, entry: row) {
+            return (TimesheetManagerDecision(rawValue: resolved.decision) ?? .approved, resolved.revisedAmount)
+        }
+        return (
+            TimesheetManagerDecision(rawValue: row["managerDecision"] as? String ?? "") ?? .approved,
+            row["managerRevisedAmount"] as? Double
+        )
     }
 
     static func decodeFirestoreMap(_ map: [String: Any]) -> TimesheetDraft? {
@@ -1187,7 +1387,7 @@ private struct MyTimesheetsHubView: View {
 
     private var pendingWeeks: [WeekRange] {
         guard let user = userStore.displayUser else { return [] }
-        guard user.hasLineManager else { return [] }
+        guard TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) else { return [] }
         var weeks: [WeekRange] = [currentWeek]
         weeks.append(contentsOf: TimesheetPayrollPolicy.previousPayPeriods(count: 24, settings: settings))
         return weeks.filter { week in
@@ -1296,97 +1496,102 @@ private struct MyTimesheetsHubView: View {
     }
 
     var body: some View {
+        let pending = pendingWeeks
         ScrollView {
-            VStack(spacing: 12) {
-                hubCard(
-                    title: "Current pay run period",
-                    subtitle: currentWeek.title,
-                    detail: "Review bookings, add extras, and sign your timesheet.",
-                    symbol: "calendar",
-                    tint: .blue
-                ) {
-                    MyTimesheetView(settings: settings, week: currentWeek)
-                        .environmentObject(firebaseBackend)
-                        .environmentObject(userStore)
-                        .environmentObject(bookingStore)
-                        .environmentObject(operativeStore)
-                        .environmentObject(projectStore)
-                        .environmentObject(managerScheduleStore)
-                        .environmentObject(notificationService)
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                myTimesheetsNavyHeader(pendingCount: pending.count)
 
-                if !pendingWeeks.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Pending timesheets")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
-                            .padding(.horizontal, 4)
-                        ForEach(pendingWeeks, id: \.start) { week in
-                            hubCard(
-                                title: week.title,
-                                subtitle: "Timesheet pending manager signature",
-                                detail: "You signed — waiting for your line manager to counter-sign.",
-                                symbol: "clock.fill",
-                                tint: .orange
-                            ) {
-                                MyTimesheetView(settings: settings, week: week)
-                                    .environmentObject(firebaseBackend)
-                                    .environmentObject(userStore)
-                                    .environmentObject(bookingStore)
-                                    .environmentObject(operativeStore)
-                                    .environmentObject(projectStore)
-                                    .environmentObject(managerScheduleStore)
-                                    .environmentObject(notificationService)
+                VStack(alignment: .leading, spacing: 0) {
+                    hubCard(
+                        title: "Current pay run period",
+                        subtitle: currentWeek.title,
+                        detail: "Review bookings, add extras, and sign your timesheet.",
+                        symbol: "calendar",
+                        tint: PPColor.brand,
+                        family: .plan
+                    ) {
+                        MyTimesheetView(settings: settings, week: currentWeek)
+                            .environmentObject(firebaseBackend)
+                            .environmentObject(userStore)
+                            .environmentObject(bookingStore)
+                            .environmentObject(operativeStore)
+                            .environmentObject(projectStore)
+                            .environmentObject(managerScheduleStore)
+                            .environmentObject(notificationService)
+                    }
+                    .padding(.top, 20)
+
+                    if !pending.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            PPGroupLabel(text: "Pending timesheets")
+                                .padding(.bottom, -10)
+                            ForEach(pending, id: \.start) { week in
+                                hubCard(
+                                    title: week.title,
+                                    subtitle: "Timesheet pending manager signature",
+                                    detail: "You signed — waiting for your line manager to counter-sign.",
+                                    symbol: "clock.fill",
+                                    tint: PPFamily.trade.bottom,
+                                    family: .trade
+                                ) {
+                                    MyTimesheetView(settings: settings, week: week)
+                                        .environmentObject(firebaseBackend)
+                                        .environmentObject(userStore)
+                                        .environmentObject(bookingStore)
+                                        .environmentObject(operativeStore)
+                                        .environmentObject(projectStore)
+                                        .environmentObject(managerScheduleStore)
+                                        .environmentObject(notificationService)
+                                }
+                            }
+                        }
+                    }
+
+                    if isLoadingPastWeeks && pastWeeks.isEmpty {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Loading past pay runs…")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                    }
+
+                    if !pastWeeks.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            PPGroupLabel(text: "Past timesheets")
+                                .padding(.bottom, -10)
+                            ForEach(pastWeeks, id: \.self) { week in
+                                hubCard(
+                                    title: week.title,
+                                    subtitle: pastSubtitle(for: week),
+                                    detail: "View breakdown, signatures, and generate invoice again.",
+                                    symbol: "clock.arrow.circlepath",
+                                    tint: .secondary,
+                                    family: .system
+                                ) {
+                                    MyTimesheetView(settings: settings, week: week)
+                                        .environmentObject(firebaseBackend)
+                                        .environmentObject(userStore)
+                                        .environmentObject(bookingStore)
+                                        .environmentObject(operativeStore)
+                                        .environmentObject(projectStore)
+                                        .environmentObject(managerScheduleStore)
+                                        .environmentObject(notificationService)
+                                }
                             }
                         }
                     }
                 }
-
-                if isLoadingPastWeeks && pastWeeks.isEmpty {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text("Loading past pay runs…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                }
-
-                if !pastWeeks.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Past timesheets")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
-                            .padding(.horizontal, 4)
-                        ForEach(pastWeeks, id: \.self) { week in
-                            hubCard(
-                                title: week.title,
-                                subtitle: pastSubtitle(for: week),
-                                detail: "View breakdown, signatures, and generate invoice again.",
-                                symbol: "clock.arrow.circlepath",
-                                tint: .secondary
-                            ) {
-                                MyTimesheetView(settings: settings, week: week)
-                                    .environmentObject(firebaseBackend)
-                                    .environmentObject(userStore)
-                                    .environmentObject(bookingStore)
-                                    .environmentObject(operativeStore)
-                                    .environmentObject(projectStore)
-                                    .environmentObject(managerScheduleStore)
-                                    .environmentObject(notificationService)
-                            }
-                        }
-                    }
-                }
+                .padding(.bottom, 28)
+                .ppContentSheet()
             }
-            .padding(16)
         }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("My Timesheets")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .onAppear {
             if let userId = userStore.displayUser?.id {
                 refreshPastWeeksFromLocalCache(userId: userId)
@@ -1409,6 +1614,26 @@ private struct MyTimesheetsHubView: View {
         return "Saved draft"
     }
 
+    /// Home-style navy header: the current pay run and counts the hub already lists.
+    private func myTimesheetsNavyHeader(pendingCount: Int) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PPNavyPageTitle(eyebrow: "Current pay run period", title: currentWeek.title)
+
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(pendingCount)", label: "Pending manager signature", highlight: pendingCount > 0)
+                PPStatDivider()
+                PPStat(value: "\(pastWeeks.count)", label: "Past timesheets")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 18)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
     @ViewBuilder
     private func hubCard<Destination: View>(
         title: String,
@@ -1416,53 +1641,51 @@ private struct MyTimesheetsHubView: View {
         detail: String,
         symbol: String,
         tint: Color,
+        family: PPFamily,
         @ViewBuilder destination: () -> Destination
     ) -> some View {
         NavigationLink {
             destination()
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(tint)
-                    .frame(width: 44, height: 44)
-                    .background(tint.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 13) {
+                PPIconTile(symbol: symbol, family: family, size: 38)
+                VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.headline)
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text(subtitle)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.footnote.weight(.semibold))
                         .foregroundStyle(tint)
                     Text(detail)
-                        .font(.caption)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer()
+                Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .background(Color(.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
         .accessibilityIdentifier("timesheets.chevronRight")
-        .buttonStyle(.plain)
+        .buttonStyle(PPPressableButtonStyle())
     }
 }
 
 private struct MyTimesheetView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject private var smartCache: SmartCacheService
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var holidayStore: HolidayStore
 
     let settings: OrganizationInvoicingSettings
 
@@ -1483,6 +1706,8 @@ private struct MyTimesheetView: View {
     @State private var generatedInvoiceURL: URL?
     @State private var isGeneratingInvoice = false
     @State private var invoiceErrorMessage: String?
+    /// Shown when the cloud save failed (it used to fail silently).
+    @State private var saveErrorMessage: String?
 
     private enum TimesheetExtraMode {
         case priceWork, expense
@@ -1562,12 +1787,34 @@ private struct MyTimesheetView: View {
         return summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
     }
 
+    /// Approved annual leave in this period (`timesheetLeaveLines`): information rows only.
+    private var leaveLines: [CanonicalTimesheetLeaveLine] {
+        guard let currentUser = userStore.displayUser else { return [] }
+        return TimesheetPayrollCollector.leaveLines(
+            for: currentUser,
+            in: week.start...week.end,
+            holidays: holidayStore.bookings,
+            operatives: operativeStore.allOperatives
+        )
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text(week.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
+
+                if let saveErrorMessage {
+                    Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(Color.red.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .accessibilityIdentifier("timesheets.saveError")
+                }
 
                 if managerHasSigned, TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft) > 0 {
                     TimesheetManagerAdjustmentSummaryCard(
@@ -1579,7 +1826,7 @@ private struct MyTimesheetView: View {
                 sectionHeader("This period")
 
                 VStack(alignment: .leading, spacing: 0) {
-                    if invoiceRows.isEmpty {
+                    if invoiceRows.isEmpty && leaveLines.isEmpty {
                         Text("No bookings found for this payment period yet. Hours from site, office, site survey and other schedule entries will appear here automatically.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -1615,6 +1862,11 @@ private struct MyTimesheetView: View {
                                     .font(.caption.weight(.medium))
                                     .foregroundStyle(row.shouldHighlightRateInOrange ? Color.orange : Color.primary)
                                     .strikethrough(removed)
+                                if row.isOverlapping {
+                                    Text(CanonicalBusinessEngine.overlappingBookingNote)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(PPColor.warningAmber)
+                                }
                             }
                             Spacer()
                             TimesheetAdjustedAmountText(
@@ -1626,15 +1878,20 @@ private struct MyTimesheetView: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
+                        .background(row.isOverlapping ? PPColor.warningAmber.opacity(0.12) : Color.clear)
                         .opacity(removed ? 0.55 : 1)
                         if index < invoiceRows.count - 1 { Divider().padding(.horizontal, 14) }
                     }
+                    }
+                    if !leaveLines.isEmpty {
+                        if !invoiceRows.isEmpty { Divider().padding(.horizontal, 14) }
+                        TimesheetLeaveInfoRows(lines: leaveLines)
                     }
                     HStack {
                         Text("Hours subtotal")
                             .font(.headline)
                         Spacer()
-                        Text(String(format: "£%.2f", effectiveWorkAmount))
+                        Text(OrgMoney.format(effectiveWorkAmount))
                             .font(.headline)
                     }
                     .padding(.horizontal, 14)
@@ -1646,16 +1903,16 @@ private struct MyTimesheetView: View {
                             Spacer()
                             if managerHasSigned && effectiveExtrasTotal != draft.additionalTotal {
                                 VStack(alignment: .trailing, spacing: 2) {
-                                    Text(String(format: "£%.2f", draft.additionalTotal))
+                                    Text(OrgMoney.format(draft.additionalTotal))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                         .strikethrough()
-                                    Text(String(format: "£%.2f", effectiveExtrasTotal))
+                                    Text(OrgMoney.format(effectiveExtrasTotal))
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.green)
                                 }
                             } else {
-                                Text(String(format: "£%.2f", managerHasSigned ? effectiveExtrasTotal : draft.additionalTotal))
+                                Text(OrgMoney.format(managerHasSigned ? effectiveExtrasTotal : draft.additionalTotal))
                                     .font(.subheadline.weight(.semibold))
                             }
                         }
@@ -1667,7 +1924,7 @@ private struct MyTimesheetView: View {
                         Text("Total")
                             .font(.headline)
                         Spacer()
-                        Text(String(format: "£%.2f", grandTotal))
+                        Text(OrgMoney.format(grandTotal))
                             .font(.title3.weight(.bold))
                         if managerHasSigned && grandTotal != (workAmount + draft.additionalTotal) {
                             Text("Includes line manager adjustments")
@@ -1758,7 +2015,8 @@ private struct MyTimesheetView: View {
                     .buttonStyle(.plain)
                 }
 
-                if let user = userStore.displayUser, user.hasLineManager {
+                // RULEBOOK §8: no "note to manager" on a self-signed sheet (`timesheetSelfSigned`).
+                if let user = userStore.displayUser, TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Note to manager")
                             .font(.subheadline.weight(.semibold))
@@ -1779,7 +2037,7 @@ private struct MyTimesheetView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.red)
                     Text(
-                        (userStore.displayUser?.hasLineManager == true)
+                        (userStore.displayUser.map { TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } == true)
                         ? "If you don't agree with the hours shown, contact your line manager to amend your booking schedule before signing. Agreed changes appear on a new timesheet."
                         : "If you don't agree with the hours shown, amend your booking schedule before signing. Agreed changes appear on a new timesheet."
                     )
@@ -1870,7 +2128,7 @@ private struct MyTimesheetView: View {
 
                 if let currentUser = userStore.displayUser,
                    TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: currentUser) {
-                    if currentUser.hasLineManager {
+                    if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser) {
                         Text("To edit this timesheet, please go to the signed off timesheets page, export it and then edit within the exported timesheets tab.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1960,6 +2218,8 @@ private struct MyTimesheetView: View {
                         .accessibilityIdentifier("timesheets.signTimesheet")
                         .buttonStyle(.borderedProminent)
                         .tint(.green)
+                        // RULEBOOK §2: timesheet signing is online only.
+                        .onlineOnly(isOnline: smartCache.isOnline)
                     } else {
                         Text("Signed on \(draft.operativeSignedAt?.formatted(date: .abbreviated, time: .shortened) ?? "")")
                             .font(.footnote)
@@ -1974,6 +2234,8 @@ private struct MyTimesheetView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadDraft() }
         .task { await loadDayRateHistory() }
+        // Approved leave rows read the holiday list (read only); load it when nothing is cached yet.
+        .task { if holidayStore.bookings.isEmpty { await holidayStore.loadData() } }
         .confirmationDialog(
             "Re-sign required",
             isPresented: $showPostSignExtraWarning,
@@ -2254,20 +2516,19 @@ private struct MyTimesheetView: View {
         saveDraft()
         guard let current = userStore.displayUser else { return }
         guard TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: current) else { return }
-        let managerIds = TimesheetApprovalPolicy.lineManagerUserIds(for: current)
+        // `timesheetSubmittedRecipients(subject, roster)`: active line managers, else the admins; never the owner.
+        let weekStart = week.start
         Task {
-            for managerId in managerIds {
-                await notificationService.notifyTimesheetPendingManagerSignoff(
-                    signedByUser: current,
-                    lineManagerUserId: managerId,
-                    weekStart: week.start
-                )
-            }
+            await notificationService.notifyTimesheetSubmitted(
+                signedByUser: current,
+                weekStart: weekStart
+            )
         }
     }
 
     private func saveDraft() {
         if let current = userStore.displayUser {
+            // The owner's own save: with a line manager it never builds the approved snapshot.
             TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                 to: &draft,
                 user: current,
@@ -2282,20 +2543,29 @@ private struct MyTimesheetView: View {
                 organization: firebaseBackend.currentOrganization,
                 scheduleOptions: firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions(),
                 viewer: current,
-                relatedUsers: userStore.organizationUsers
+                relatedUsers: userStore.organizationUsers,
+                writerIsReviewer: TimesheetApprovalPolicy.writerIsReviewer(
+                    writerId: current.id,
+                    writer: current,
+                    subjectUserId: current.id,
+                    subject: current
+                )
             )
         }
         TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let snapshot = draft
+        let current = userStore.displayUser
         Task {
-            await TimesheetDraftStore.saveToCloud(
+            saveErrorMessage = await TimesheetDraftStore.saveToCloud(
                 snapshot,
                 userId: currentUserId,
                 weekStart: week.start,
                 weekEnd: week.end,
                 firebaseBackend: firebaseBackend,
-                organizationId: orgId
+                organizationId: orgId,
+                writer: current,
+                subject: current
             )
         }
     }
@@ -2587,10 +2857,10 @@ private struct PreviousTimesheetsView: View {
             }
             row("Hours", "\(formatHours(summary.hours))h")
             row("Overtime", "\(formatHours(summary.overtimeHours))h")
-            row("Price work", String(format: "£%.2f", run.draft.priceWorkEntries.reduce(0) { $0 + $1.amount }))
-            row("Expenses", String(format: "£%.2f", run.draft.expenseEntries.reduce(0) { $0 + $1.amount }))
+            row("Price work", OrgMoney.format(run.draft.priceWorkEntries.reduce(0) { $0 + $1.amount }))
+            row("Expenses", OrgMoney.format(run.draft.expenseEntries.reduce(0) { $0 + $1.amount }))
             Divider()
-            row("Summary total", String(format: "£%.2f", summary.baseAmount + summary.overtimeAmount + run.draft.priceWorkEntries.reduce(0) { $0 + $1.amount } + run.draft.expenseEntries.reduce(0) { $0 + $1.amount }))
+            row("Summary total", OrgMoney.format(summary.baseAmount + summary.overtimeAmount + run.draft.priceWorkEntries.reduce(0) { $0 + $1.amount } + run.draft.expenseEntries.reduce(0) { $0 + $1.amount }))
         }
         .padding(14)
         .background(Color(.systemBackground))
@@ -2767,6 +3037,7 @@ private struct PreviousTimesheetRun: Identifiable {
 
 private struct OperativeTimesheetsView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject private var smartCache: SmartCacheService
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -2848,7 +3119,7 @@ private struct OperativeTimesheetsView: View {
         let _ = refreshVersion
         return directReports.filter { user in
             let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
-            let bucket = TimesheetDraftStore.listBucket(for: draft, hasLineManager: user.hasLineManager)
+            let bucket = TimesheetDraftStore.listBucket(for: draft, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user))
             switch selectedTab {
             case .awaiting:
                 return bucket == "awaiting"
@@ -2862,6 +3133,9 @@ private struct OperativeTimesheetsView: View {
 
     var body: some View {
         ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                userTimesheetsNavyHeader
+
             VStack(alignment: .leading, spacing: 12) {
                 Picker("Status", selection: $selectedTab) {
                     Text("Awaiting sign-off").tag(ManagerTimesheetListTab.awaiting)
@@ -2914,14 +3188,7 @@ private struct OperativeTimesheetsView: View {
                                         .environmentObject(notificationService)
                                 } label: {
                                     HStack(spacing: 12) {
-                                        Circle()
-                                            .fill(Color.blue.opacity(0.85))
-                                            .frame(width: 38, height: 38)
-                                            .overlay(
-                                                Text(initials(for: row.user))
-                                                    .font(.caption.weight(.bold))
-                                                    .foregroundStyle(.white)
-                                            )
+                                        initialsAvatar(for: row.user)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
                                                 .font(.subheadline.weight(.semibold))
@@ -2939,15 +3206,16 @@ private struct OperativeTimesheetsView: View {
                                         statusPill(for: row.draft, user: row.user)
                                         Image(systemName: "chevron.right")
                                             .font(.footnote.weight(.semibold))
-                                            .foregroundStyle(.secondary)
+                                            .foregroundStyle(.tertiary)
                                     }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 11)
+                                    .contentShape(Rectangle())
                                 }
                                 .accessibilityIdentifier("timesheets.row.\(row.id).exported")
-                                .buttonStyle(.plain)
+                                .buttonStyle(PPMenuRowButtonStyle())
                                 if row.id != filteredExportedHistory.last?.id {
-                                    Divider().padding(.leading, 60)
+                                    Divider().padding(.leading, 66)
                                 }
                             }
                         }
@@ -2972,21 +3240,14 @@ private struct OperativeTimesheetsView: View {
                                 .environmentObject(notificationService)
                         } label: {
                             HStack(spacing: 12) {
-                                Circle()
-                                    .fill(Color.blue.opacity(0.85))
-                                    .frame(width: 38, height: 38)
-                                    .overlay(
-                                        Text(initials(for: row.user))
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(.white)
-                                    )
+                                initialsAvatar(for: row.user)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
                                     let draft = TimesheetDraftStore.load(userId: row.user.id, weekStart: row.week.start)
                                     let summary = operativeSummary(for: row.user, draft: draft, week: row.week)
-                                    Text("\(row.week.title) · Hrs \(formatHours(summary.hours)) · OT \(formatHours(summary.overtimeHours)) · PW \(String(format: "£%.2f", summary.priceWork)) · Exp \(String(format: "£%.2f", summary.expenses))")
+                                    Text("\(row.week.title) · Hrs \(formatHours(summary.hours)) · OT \(formatHours(summary.overtimeHours)) · PW \(OrgMoney.format(summary.priceWork)) · Exp \(OrgMoney.format(summary.expenses))")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     if isAdminViewer {
@@ -3002,15 +3263,16 @@ private struct OperativeTimesheetsView: View {
                                 )
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.tertiary)
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .contentShape(Rectangle())
                         }
                         .accessibilityIdentifier("timesheets.row.\(row.id).hrsOTPWExp")
-                        .buttonStyle(.plain)
+                        .buttonStyle(PPMenuRowButtonStyle())
                         if row.id != awaitingRows.last?.id {
-                            Divider().padding(.leading, 60)
+                            Divider().padding(.leading, 66)
                         }
                     }
                     }
@@ -3027,21 +3289,14 @@ private struct OperativeTimesheetsView: View {
                                 .environmentObject(notificationService)
                         } label: {
                             HStack(spacing: 12) {
-                                Circle()
-                                    .fill(Color.blue.opacity(0.85))
-                                    .frame(width: 38, height: 38)
-                                    .overlay(
-                                        Text(initials(for: operative))
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(.white)
-                                    )
+                                initialsAvatar(for: operative)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(operative.fullName.isEmpty ? operative.email : operative.fullName)
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
                                     let draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start)
                                     let summary = operativeSummary(for: operative, draft: draft, week: week)
-                                    Text("\(week.title) · Hrs \(formatHours(summary.hours)) · OT \(formatHours(summary.overtimeHours)) · PW \(String(format: "£%.2f", summary.priceWork)) · Exp \(String(format: "£%.2f", summary.expenses))")
+                                    Text("\(week.title) · Hrs \(formatHours(summary.hours)) · OT \(formatHours(summary.overtimeHours)) · PW \(OrgMoney.format(summary.priceWork)) · Exp \(OrgMoney.format(summary.expenses))")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     if isAdminViewer {
@@ -3057,30 +3312,29 @@ private struct OperativeTimesheetsView: View {
                                 )
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.tertiary)
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 11)
+                            .contentShape(Rectangle())
                         }
                         .accessibilityIdentifier("timesheets.row.\(operative.id).hrsOTPWExp")
-                        .buttonStyle(.plain)
+                        .buttonStyle(PPMenuRowButtonStyle())
                         if operative.id != filteredReports.last?.id {
-                            Divider().padding(.leading, 60)
+                            Divider().padding(.leading, 66)
                         }
                     }
                     }
                 }
-                .padding(8)
-                .background(Color(.systemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
 
                 if selectedTab == .signedOff && !filteredReports.isEmpty {
                     // Admins only: managers cannot see other people's tax identifiers.
                     if userStore.canViewSensitiveProfile(of: "") {
                         SensitiveExportToggle(isOn: $includeTaxIdsInExport, accessibilityToken: "signedTimesheetsExport")
                             .padding(14)
-                            .background(Color(.systemBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                     }
                     Button {
                         Task { await exportSignedTimesheets() }
@@ -3089,22 +3343,28 @@ private struct OperativeTimesheetsView: View {
                             isExporting ? "Sending timesheets…" : "Email and export \(filteredReports.count) timesheets",
                             systemImage: "envelope.fill"
                         )
+                            .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
+                            .padding(.vertical, 15)
                             .foregroundStyle(.white)
-                            .background(Color.blue)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(PPColor.brand, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                     .accessibilityIdentifier("timesheets.sendingTimesheets")
-                    .buttonStyle(.plain)
+                    .buttonStyle(PPPressableButtonStyle())
                     .disabled(isExporting)
+                    // RULEBOOK §2: timesheet sign-off and export are online only.
+                    .onlineOnly(isOnline: smartCache.isOnline)
                 }
             }
-            .padding(16)
+            .padding(.top, 20)
+            .padding(.bottom, 28)
+            .ppContentSheet()
+            }
         }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("User Timesheets")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .navigationDestination(item: $autoOpenReview) { target in
             if let operative = userStore.organizationUsers.first(where: { $0.id == target.userId }) {
                 let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: operative.id, weekStart: target.weekStart)
@@ -3220,45 +3480,71 @@ private struct OperativeTimesheetsView: View {
             }
             .accessibilityIdentifier("timesheets.exportedRun")
         }
-        .padding(12)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(14)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+
+    /// Home-style navy header: the pay period this list opens on and counts the screen already holds.
+    private var userTimesheetsNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PPNavyPageTitle(eyebrow: "Pay period", title: week.title)
+
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(directReports.count)", label: "People")
+                PPStatDivider()
+                PPStat(value: "\(awaitingRows.count)", label: "Awaiting sign-off", highlight: !awaitingRows.isEmpty)
+                PPStatDivider()
+                PPStat(value: "\(exportedHistory.count)", label: "Exported, all runs")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 18)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
+    /// Gradient initials avatar for a person row.
+    private func initialsAvatar(for user: AppUser) -> some View {
+        Text(initials(for: user))
+            .font(.system(.footnote, design: .rounded))
+            .fontWeight(.bold)
+            .foregroundStyle(.white)
+            .frame(width: 40, height: 40)
+            .background(PPFamily.people.gradient, in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
+            .accessibilityHidden(true)
+    }
+
+    private func statusPillLabel(_ text: String, symbol: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.caption2.weight(.bold))
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 24)
+        .foregroundStyle(color)
+        .background(Capsule().fill(color.opacity(0.14)))
     }
 
     @ViewBuilder
     private func statusPill(for draft: TimesheetDraft, user: AppUser) -> some View {
         if TimesheetApprovalPolicy.isExported(draft) {
-            Label("Exported", systemImage: "tray.and.arrow.up.fill")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.14))
-                .foregroundStyle(.secondary)
-                .clipShape(Capsule())
+            statusPillLabel("Exported", symbol: "tray.and.arrow.up.fill", color: .secondary)
         } else if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) {
-            Label("Signed off", systemImage: "checkmark.circle.fill")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.green.opacity(0.14))
-                .foregroundStyle(.green)
-                .clipShape(Capsule())
+            statusPillLabel("Signed off", symbol: "checkmark.circle.fill", color: PPFamily.sites.bottom)
         } else if TimesheetApprovalPolicy.operativeHasSigned(draft) {
-            Label("Pending", systemImage: "clock.fill")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.orange.opacity(0.14))
-                .foregroundStyle(.orange)
-                .clipShape(Capsule())
+            statusPillLabel("Pending", symbol: "clock.fill", color: PPFamily.trade.bottom)
         } else {
-            Label("Not signed", systemImage: "circle")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.12))
-                .foregroundStyle(.secondary)
-                .clipShape(Capsule())
+            statusPillLabel("Not signed", symbol: "circle", color: .secondary)
         }
     }
 
@@ -3413,6 +3699,7 @@ private struct OperativeTimesheetsView: View {
             return
         }
 
+        var markFailures: [String] = []
         for op in targets where result.emailedUserIds.contains(op.id) {
             var d = TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
             guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
@@ -3434,14 +3721,18 @@ private struct OperativeTimesheetsView: View {
             )
             TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start, weekEnd: week.end)
             let snapshot = d
-            await TimesheetDraftStore.saveToCloud(
+            if let failure = await TimesheetDraftStore.saveToCloud(
                 snapshot,
                 userId: op.id,
                 weekStart: week.start,
                 weekEnd: week.end,
                 firebaseBackend: firebaseBackend,
-                organizationId: orgId
-            )
+                organizationId: orgId,
+                writer: exporter,
+                subject: op
+            ) {
+                markFailures.append("\(op.fullName.isEmpty ? op.email : op.fullName): \(failure)")
+            }
         }
 
         refreshVersion += 1
@@ -3452,6 +3743,9 @@ private struct OperativeTimesheetsView: View {
             exportMessage = "Emailed \(result.emailed) timesheet PDF\(result.emailed == 1 ? "" : "s") to \(recipientEmail) for filing."
         } else {
             exportMessage = "Emailed \(result.emailed) to \(recipientEmail). Skipped: \(result.failed.joined(separator: ", "))."
+        }
+        if !markFailures.isEmpty {
+            exportMessage = (exportMessage ?? "") + " Not marked exported: \(markFailures.joined(separator: "; "))."
         }
     }
 
@@ -3490,7 +3784,7 @@ private struct OperativeTimesheetsView: View {
                     TimesheetDraftStore.rememberBounds(from: row, userId: user.id, weekStart: day)
                     weekStarts.insert(day)
                     if let decoded = TimesheetDraftStore.decodeFirestoreMap(row),
-                       TimesheetDraftStore.listBucket(for: decoded, hasLineManager: user.hasLineManager) == "exported" {
+                       TimesheetDraftStore.listBucket(for: decoded, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user)) == "exported" {
                         let end = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: day)
                         TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, weekEnd: end)
                     }
@@ -3499,7 +3793,7 @@ private struct OperativeTimesheetsView: View {
 
             for start in weekStarts {
                 let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
-                guard TimesheetDraftStore.listBucket(for: draft, hasLineManager: user.hasLineManager) == "exported" else { continue }
+                guard TimesheetDraftStore.listBucket(for: draft, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user)) == "exported" else { continue }
                 let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: start)
                 let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, storedEnd: storedEnd, settings: settings)
                 let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? ""
@@ -3619,12 +3913,14 @@ private enum ManagerTimesheetListTab {
 
 private struct OperativeTimesheetReviewView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject private var smartCache: SmartCacheService
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var holidayStore: HolidayStore
     let operative: AppUser
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
@@ -3635,6 +3931,8 @@ private struct OperativeTimesheetReviewView: View {
     @State private var editingExpenseId: UUID?
     @State private var editingPriceWorkId: UUID?
     @State private var showExtrasReviewRequiredAlert = false
+    /// Shown when the cloud save failed.
+    @State private var saveErrorMessage: String?
 
     private var canManagerReview: Bool {
         guard let viewer = userStore.displayUser else { return false }
@@ -3644,7 +3942,7 @@ private struct OperativeTimesheetReviewView: View {
         if TimesheetApprovalPolicy.isExported(draft) {
             return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative)
         }
-        return operative.hasLineManager
+        return TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative)
             && TimesheetApprovalPolicy.recordedSignatureDate(draft.managerSignedAt) == nil
             && TimesheetApprovalPolicy.operativeHasSigned(draft)
             && !TimesheetApprovalPolicy.isExported(draft)
@@ -3673,6 +3971,7 @@ private struct OperativeTimesheetReviewView: View {
                 Task { await refreshDraftFromCloud() }
             }
             .task { await loadDayRateHistory() }
+            .task { if holidayStore.bookings.isEmpty { await holidayStore.loadData() } }
             .alert("Review required", isPresented: $showExtrasReviewRequiredAlert) {
                 Button("OK", role: .cancel) {}
                     .accessibilityIdentifier("operativeTimesheetReview.ok")
@@ -3719,6 +4018,12 @@ private struct OperativeTimesheetReviewView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             statusLine
+            if let saveErrorMessage {
+                Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("operativeTimesheetReview.saveError")
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3738,7 +4043,10 @@ private struct OperativeTimesheetReviewView: View {
             ForEach(payrollSummary.lineItems) { row in
                 managerPayrollLineRow(row)
             }
-            if payrollSummary.lineItems.isEmpty {
+            if !leaveLines.isEmpty {
+                TimesheetLeaveInfoRows(lines: leaveLines)
+            }
+            if payrollSummary.lineItems.isEmpty && leaveLines.isEmpty {
                 Text("No bookings found for this period.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -3840,7 +4148,7 @@ private struct OperativeTimesheetReviewView: View {
             Text("Signatures")
                 .font(.headline)
             operativeSignatureBlock
-            if operative.hasLineManager {
+            if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative) {
                 managerSignatureBlock
             }
         }
@@ -3863,7 +4171,7 @@ private struct OperativeTimesheetReviewView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        } else if operative.hasLineManager, draft.managerSignedAt == nil {
+        } else if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative), draft.managerSignedAt == nil {
             if needsExtrasReviewMessage {
                 Text("Approve, decline or edit every expense and price-work line before signing off.")
                     .font(.caption)
@@ -3881,6 +4189,8 @@ private struct OperativeTimesheetReviewView: View {
             .buttonStyle(.plain)
             .disabled(!TimesheetApprovalPolicy.operativeHasSigned(draft))
             .opacity(TimesheetApprovalPolicy.operativeHasSigned(draft) ? 1 : 0.5)
+            // RULEBOOK §2: timesheet signing is online only.
+            .onlineOnly(isOnline: smartCache.isOnline)
         }
     }
 
@@ -4014,6 +4324,12 @@ private struct OperativeTimesheetReviewView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .strikethrough(removed)
+                if row.isOverlapping {
+                    // `overlappingBookingIds`: still paid; the line manager checks it.
+                    Text(CanonicalBusinessEngine.overlappingBookingNote)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(PPColor.warningAmber)
+                }
             }
             Spacer()
             TimesheetAdjustedAmountText(
@@ -4040,6 +4356,7 @@ private struct OperativeTimesheetReviewView: View {
             }
         }
         .padding(.vertical, 4)
+        .background(row.isOverlapping ? PPColor.warningAmber.opacity(0.12) : Color.clear)
         .opacity(removed ? 0.55 : 1)
     }
 
@@ -4057,14 +4374,13 @@ private struct OperativeTimesheetReviewView: View {
     ) -> some View {
         let displayDecision = decision.reviewSelection
         let declined = displayDecision == .declined
-        let effectiveAmount: Double = {
-            guard canReview else { return amount }
-            switch decision {
-            case .declined: return 0
-            case .edited: return revisedAmount ?? amount
-            case .approved, .pending: return amount
-            }
-        }()
+        // `timesheetEntryEffectiveAmount`: what the entry pays under the decision.
+        let decidedAmount = CanonicalBusinessEngine.timesheetEntryEffectiveAmount(
+            decision: decision.rawValue,
+            revisedAmount: revisedAmount,
+            amount: amount
+        ) ?? amount
+        let effectiveAmount: Double = canReview ? decidedAmount : amount
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
@@ -4079,27 +4395,27 @@ private struct OperativeTimesheetReviewView: View {
             if canReview {
                 VStack(alignment: .trailing, spacing: 2) {
                     if decision == .edited, let revised = revisedAmount, abs(revised - amount) >= 0.01 {
-                        Text(String(format: "£%.2f", amount))
+                        Text(OrgMoney.format(amount))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .strikethrough(true, color: .secondary)
-                        Text(String(format: "£%.2f", revised))
+                        Text(OrgMoney.format(revised))
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(.blue)
                     } else if declined {
-                        Text(String(format: "£%.2f", amount))
+                        Text(OrgMoney.format(amount))
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(.secondary)
                             .strikethrough(true, color: .secondary)
                     } else {
-                        Text(String(format: "£%.2f", effectiveAmount))
+                        Text(OrgMoney.format(effectiveAmount))
                             .font(.subheadline.weight(.bold))
                     }
                 }
             } else {
                 TimesheetAdjustedAmountText(
                     original: amount,
-                    effective: decision == .edited ? (revisedAmount ?? amount) : (declined ? 0 : amount),
+                    effective: decidedAmount,
                     decision: decision,
                     managerHasSigned: !canReview && decision != .pending
                 )
@@ -4144,7 +4460,7 @@ private struct OperativeTimesheetReviewView: View {
         HStack {
             Text(title)
             Spacer()
-            Text(String(format: "£%.2f", amount))
+            Text(OrgMoney.format(amount))
                 .fontWeight(.semibold)
         }
         .padding(.vertical, 2)
@@ -4165,19 +4481,32 @@ private struct OperativeTimesheetReviewView: View {
             organization: firebaseBackend.currentOrganization,
             scheduleOptions: firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions(),
             viewer: userStore.displayUser,
-            relatedUsers: userStore.organizationUsers
+            relatedUsers: userStore.organizationUsers,
+            writerIsReviewer: userStore.displayUser.map {
+                TimesheetApprovalPolicy.writerIsReviewer(
+                    writerId: $0.id,
+                    writer: $0,
+                    subjectUserId: operative.id,
+                    subject: operative
+                )
+            }
         )
         TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let snapshot = draft
+        let writer = userStore.displayUser
+        let subject = operative
         Task {
-            await TimesheetDraftStore.saveToCloud(
+            // Owner-or-reviewer partial write, plus changed `extraEntryReviews` (`timesheetEntryReviewWriteFields`).
+            saveErrorMessage = await TimesheetDraftStore.saveToCloud(
                 snapshot,
-                userId: operative.id,
+                userId: subject.id,
                 weekStart: week.start,
                 weekEnd: week.end,
                 firebaseBackend: firebaseBackend,
-                organizationId: orgId
+                organizationId: orgId,
+                writer: writer,
+                subject: subject
             )
         }
     }
@@ -4205,6 +4534,16 @@ private struct OperativeTimesheetReviewView: View {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
         await MainActor.run { dayRateHistoryCollection = history }
+    }
+
+    /// The person's approved leave in this period (`timesheetLeaveLines`), for the line manager.
+    private var leaveLines: [CanonicalTimesheetLeaveLine] {
+        TimesheetPayrollCollector.leaveLines(
+            for: operative,
+            in: week.start...week.end,
+            holidays: holidayStore.bookings,
+            operatives: operativeStore.allOperatives
+        )
     }
 
     private var payrollSummary: TimesheetPayrollSummary {
@@ -4426,7 +4765,6 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 ) else { return }
                 onSaveDraft()
                 let signer = draft.managerSignedByName ?? "Line manager"
-                let signerId = userStore.displayUser?.id ?? ""
                 let operativeName = operative.fullName.isEmpty ? operative.email : operative.fullName
                 Task {
                     await notificationService.notifyTimesheetSignedByManager(
@@ -4434,16 +4772,13 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                         signedByName: signer,
                         weekStart: week.start
                     )
-                    let peers = operative.lineManagerUserIds.filter { $0 != signerId }
-                    if !peers.isEmpty {
-                        await notificationService.notifyLineManagerPeerAction(
-                            actorName: signer,
-                            actionSummary: "\(operativeName)'s timesheet (\(week.title))",
-                            peerManagerUserIds: peers,
-                            excludingActorUserId: signerId,
-                            actionVerb: "signed"
-                        )
-                    }
+                    // `lineManagerPeerRecipients(operative, signer, roster)` picks the other line managers.
+                    await notificationService.notifyLineManagerPeerAction(
+                        actorName: signer,
+                        actionSummary: "\(operativeName)'s timesheet (\(week.title))",
+                        subject: operative,
+                        actionVerb: "signed"
+                    )
                 }
                 showingManagerSignSheet = false
             }
@@ -4472,7 +4807,7 @@ private struct TimesheetMoneyEntrySheet: View {
     @State private var receiptName: String?
 
     private var amount: Double? {
-        Double(amountText.replacingOccurrences(of: "£", with: "").trimmingCharacters(in: .whitespacesAndNewlines))
+        Double(amountText.replacingOccurrences(of: OrgMoney.symbol(), with: "").trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private var managerSuggestions: [String] {
@@ -4712,6 +5047,7 @@ private struct TimesheetMoneyEntrySheet: View {
 
 private struct SignTimesheetView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var smartCache: SmartCacheService
     let week: WeekRange
     let hoursAmount: Double
     let priceWorkAmount: Double
@@ -4738,14 +5074,14 @@ private struct SignTimesheetView: View {
                         .font(.headline)
                     Divider()
                     stat("Period", week.title)
-                    stat("Hours", String(format: "£%.2f", hoursAmount))
-                    stat("Price work", String(format: "£%.2f", priceWorkAmount))
-                    stat("Expenses", String(format: "£%.2f", expensesAmount))
+                    stat("Hours", OrgMoney.format(hoursAmount))
+                    stat("Price work", OrgMoney.format(priceWorkAmount))
+                    stat("Expenses", OrgMoney.format(expensesAmount))
                     HStack {
                         Text("Timesheet total")
                             .foregroundStyle(.white.opacity(0.75))
                         Spacer()
-                        Text(String(format: "£%.2f", total))
+                        Text(OrgMoney.format(total))
                             .foregroundStyle(.white)
                             .font(.title3.weight(.bold))
                     }
@@ -4800,6 +5136,8 @@ private struct SignTimesheetView: View {
                 .buttonStyle(.plain)
                 .disabled(signatureImageData == nil)
                 .opacity(signatureImageData == nil ? 0.5 : 1)
+                // RULEBOOK §2: timesheet signing is online only.
+                .onlineOnly(isOnline: smartCache.isOnline)
             }
             .padding(16)
         }
@@ -4820,6 +5158,7 @@ private struct SignTimesheetView: View {
 
 private struct ManagerTimesheetSignOffView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var smartCache: SmartCacheService
     let signerName: String
     let onApprove: (Data) -> Void
     @State private var signatureImageData: Data?
@@ -4852,6 +5191,8 @@ private struct ManagerTimesheetSignOffView: View {
                 .buttonStyle(.plain)
                 .disabled(signatureImageData == nil)
                 .opacity(signatureImageData == nil ? 0.5 : 1)
+                // RULEBOOK §2: timesheet signing is online only.
+                .onlineOnly(isOnline: smartCache.isOnline)
             }
             .padding(16)
         }
@@ -5067,11 +5408,12 @@ private enum InvoicePDFGenerationSupport {
             scheduleOptions: scheduleOptions,
             relatedUsers: relatedUsers
         )
+        // PAYE and leave lines never go on an invoice: `invoiceLines` filters the rows below.
         var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
 
         let draft = TimesheetDraftStore.load(
             userId: currentUser.id,
-            weekStart: Calendar.current.startOfDay(for: period.startDate)
+            weekStart: OrganizationRulebookContext.calendar.startOfDay(for: period.startDate)
         )
         for entry in draft.priceWorkEntries {
             rows.append(
@@ -5108,7 +5450,7 @@ private enum InvoicePDFGenerationSupport {
             )
         }
 
-        return rows.sorted {
+        return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
             }
@@ -5122,7 +5464,7 @@ private enum InvoicePDFGenerationSupport {
         operatives: [Operative],
         dayRateHistoryCollection: OperativeDayRateHistoryCollection
     ) -> [String] {
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar  // pay periods are organisation-zone days
         var notes: [String] = []
 
         let userHistory = (dayRateHistoryCollection.byUserId[currentUser.id] ?? [])
@@ -5133,7 +5475,8 @@ private enum InvoicePDFGenerationSupport {
             .sorted(by: { $0.effectiveAt < $1.effectiveAt })
 
         for entry in userHistory {
-            notes.append("Rate updated to \(formatCurrency(entry.dayRate)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
+            notes.append(entry.dayRate.map { "Rate updated to \(formatCurrency($0)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))." }
+                ?? "Rate not set from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
         }
 
         let matchedOperatives = operatives.filter {
@@ -5148,7 +5491,8 @@ private enum InvoicePDFGenerationSupport {
                 }
                 .sorted(by: { $0.effectiveAt < $1.effectiveAt })
             for entry in entries {
-                notes.append("Operative rate updated to \(formatCurrency(entry.dayRate)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
+                notes.append(entry.dayRate.map { "Operative rate updated to \(formatCurrency($0)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))." }
+                ?? "Operative rate not set from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
             }
         }
 
@@ -5156,7 +5500,7 @@ private enum InvoicePDFGenerationSupport {
     }
 
     private static func formatCurrency(_ value: Double) -> String {
-        String(format: "£%.2f", value)
+        OrgMoney.format(value)
     }
 }
 
@@ -5194,7 +5538,7 @@ private struct GenerateInvoiceView: View {
         if !historical.isEmpty { return historical }
 
         // Fallback keeps Generate Invoice usable even when historic periods are unavailable.
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar  // pay periods are organisation-zone days
         let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: Date())) ?? Date()
         let monthLabel = monthStart.formatted(.dateTime.month(.abbreviated).year())
         guard let firstRange = settings.normalizedRanges.first,
@@ -5529,11 +5873,12 @@ private struct GenerateInvoiceView: View {
             scheduleOptions: scheduleOptions,
             relatedUsers: userStore.organizationUsers
         )
+        // PAYE and leave lines never go on an invoice: `invoiceLines` filters the rows below.
         var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
 
         let draft = TimesheetDraftStore.load(
             userId: currentUser.id,
-            weekStart: Calendar.current.startOfDay(for: period.startDate)
+            weekStart: OrganizationRulebookContext.calendar.startOfDay(for: period.startDate)
         )
         for entry in draft.priceWorkEntries {
             rows.append(
@@ -5570,7 +5915,7 @@ private struct GenerateInvoiceView: View {
             )
         }
 
-        return rows.sorted {
+        return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
             }
@@ -5580,7 +5925,7 @@ private struct GenerateInvoiceView: View {
 
     private func rateChangeNotes(for period: InvoicePeriodOption) -> [String] {
         guard let currentUser = userStore.displayUser else { return [] }
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar  // pay periods are organisation-zone days
         var notes: [String] = []
 
         let userHistory = (dayRateHistoryCollection.byUserId[currentUser.id] ?? [])
@@ -5591,7 +5936,8 @@ private struct GenerateInvoiceView: View {
             .sorted(by: { $0.effectiveAt < $1.effectiveAt })
 
         for entry in userHistory {
-            notes.append("Rate updated to \(formatCurrency(entry.dayRate)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
+            notes.append(entry.dayRate.map { "Rate updated to \(formatCurrency($0)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))." }
+                ?? "Rate not set from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
         }
 
         let matchedOperatives = operativeStore.allOperatives.filter {
@@ -5606,7 +5952,8 @@ private struct GenerateInvoiceView: View {
                 }
                 .sorted(by: { $0.effectiveAt < $1.effectiveAt })
             for entry in entries {
-                notes.append("Operative rate updated to \(formatCurrency(entry.dayRate)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
+                notes.append(entry.dayRate.map { "Operative rate updated to \(formatCurrency($0)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))." }
+                ?? "Operative rate not set from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
             }
         }
 
@@ -5628,7 +5975,7 @@ private struct GenerateInvoiceView: View {
     }
 
     private func historicalDateRangePeriods(limit: Int) -> [InvoicePeriodOption] {
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar  // pay periods are organisation-zone days
         let today = cal.startOfDay(for: Date())
         let monthStartToday = cal.date(from: cal.dateComponents([.year, .month], from: today)) ?? today
         var periods: [InvoicePeriodOption] = []
@@ -5649,7 +5996,7 @@ private struct GenerateInvoiceView: View {
     }
 
     private func makePeriodOption(for range: PaymentRunDateRange, monthDate: Date, monthLabel: String) -> InvoicePeriodOption? {
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar  // pay periods are organisation-zone days
         guard let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: monthDate)),
               let daysInMonth = cal.range(of: .day, in: .month, for: monthStart)?.count else {
             return nil
@@ -5709,7 +6056,7 @@ private struct GenerateInvoiceView: View {
     }
 
     private func formatCurrency(_ value: Double) -> String {
-        String(format: "£%.2f", value)
+        OrgMoney.format(value)
     }
 }
 
@@ -5721,7 +6068,52 @@ private struct InvoicePeriodOption: Identifiable, Hashable {
     let endDate: Date
 }
 
+/// Approved annual leave on a timesheet (`timesheetLeaveLines`): no hours, no pay, no edit control,
+/// never on an invoice. Shown to the person and to their line manager.
+private struct TimesheetLeaveInfoRows: View {
+    let lines: [CanonicalTimesheetLeaveLine]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(lines) { line in
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(Self.dayText(line.dayKey))
+                            .font(.subheadline.weight(.bold))
+                        Text(line.label)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Color.blue)
+                    }
+                    Spacer()
+                    Text("No hours or pay")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.blue.opacity(0.06))
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .accessibilityIdentifier("timesheets.leaveRows")
+    }
+
+    private static func dayText(_ dayKey: String) -> String {
+        guard let date = OrganizationRulebookContext.date(fromDayKey: dayKey) else { return dayKey }
+        return date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone))
+    }
+}
+
 private struct InvoiceLineItem {
+    /// `invoiceLines`: the rows a generated invoice carries (never PAYE or leave lines), in input order.
+    /// Empty when the script did not answer, so nothing unchecked is invoiced.
+    static func invoiceLines(_ rows: [InvoiceLineItem]) -> [InvoiceLineItem] {
+        guard let kept = CanonicalBusinessEngine.invoiceLineIndexes(
+            rows.map { (isPayeDay: $0.isPayeDay, isLeave: false) }
+        ) else { return [] }
+        return kept.compactMap { rows.indices.contains($0) ? rows[$0] : nil }
+    }
+
     let lineId: String
     let date: Date
     let jobNumber: String
@@ -5734,6 +6126,9 @@ private struct InvoiceLineItem {
     let amount: Double
     let isPayeDay: Bool
     let isOvertimeLine: Bool
+    /// `overlappingBookingIds`: shown amber with `OVERLAPPING_BOOKING_NOTE`; still paid.
+    var isOverlapping: Bool = false
+    var bookingId: String? = nil
 
     init(
         lineId: String,
@@ -5776,7 +6171,9 @@ private struct InvoiceLineItem {
             hourlyRate: hourlyRate,
             amount: amount,
             isPayeDay: isPayeDay,
-            isOvertimeLine: isOvertimeLine
+            isOvertimeLine: isOvertimeLine,
+            bookingId: bookingId,
+            isOverlapping: isOverlapping
         )
     }
 
@@ -5813,6 +6210,8 @@ private struct InvoiceLineItem {
             isPayeDay: payrollLine.isPayeDay,
             isOvertimeLine: payrollLine.isOvertimeLine
         )
+        self.isOverlapping = payrollLine.isOverlapping
+        self.bookingId = payrollLine.bookingId
     }
 }
 
@@ -6152,7 +6551,7 @@ private enum InvoicePDFBuilder {
     }
 
     private static func currency(_ value: Double) -> String {
-        String(format: "£%.2f", value)
+        OrgMoney.format(value)
     }
 
     private static func hoursString(_ value: Double) -> String {

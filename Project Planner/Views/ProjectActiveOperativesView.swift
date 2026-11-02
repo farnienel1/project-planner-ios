@@ -144,102 +144,107 @@ struct ProjectActiveOperativesView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 12) {
+            VStack(spacing: 0) {
                 headerCard
 
-                if summaries.isEmpty {
-                    ContentUnavailableView(
-                        "No booking history",
-                        systemImage: "person.3",
-                        description: Text("Operatives, staff and subcontractors booked onto \(project.siteName) will appear here.")
-                    )
-                    .padding(.top, 24)
-                } else {
-                    ForEach(summaries) { summary in
-                        NavigationLink {
-                            ProjectBookedPersonHistoryView(
-                                project: project,
-                                summary: summary,
-                                payrollPolicy: payrollPolicy
-                            )
-                            .environmentObject(bookingStore)
-                            .environmentObject(managerScheduleStore)
-                            .environmentObject(subcontractorStore)
-                        } label: {
-                            bookedPersonRow(summary)
+                VStack(spacing: 12) {
+                    if summaries.isEmpty {
+                        ContentUnavailableView(
+                            "No booking history",
+                            systemImage: "person.3",
+                            description: Text("Operatives, staff and subcontractors booked onto \(project.siteName) will appear here.")
+                        )
+                        .padding(.top, 24)
+                    } else {
+                        ForEach(summaries) { summary in
+                            NavigationLink {
+                                ProjectBookedPersonHistoryView(
+                                    project: project,
+                                    summary: summary,
+                                    payrollPolicy: payrollPolicy
+                                )
+                                .environmentObject(bookingStore)
+                                .environmentObject(managerScheduleStore)
+                                .environmentObject(subcontractorStore)
+                            } label: {
+                                bookedPersonRow(summary)
+                            }
+                            .accessibilityIdentifier("projectActiveOperatives.row.\(summary.id)")
+                            .buttonStyle(PPPressableButtonStyle())
                         }
-                        .accessibilityIdentifier("projectActiveOperatives.row.\(summary.id)")
-                        .buttonStyle(.plain)
                     }
                 }
+                .padding(.top, 16)
+                .padding(.bottom, 28)
+                .ppContentSheet()
             }
-            .padding(16)
         }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Active users")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .onAppear {
             managerScheduleStore.loadData()
             Task { await subcontractorStore.loadData() }
         }
     }
 
+    /// Navy header: job number, site name and the existing "previously booked" line.
     private var headerCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(project.jobNumber)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(ProjectWorksRevampColors.blue)
-            Text(project.siteName)
-                .font(.headline)
-            Text("\(summaries.count) user\(summaries.count == 1 ? "" : "s") previously booked on this job")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        let count = summaries.count
+        return VStack(alignment: .leading, spacing: 0) {
+            PPNavyPageTitle(
+                eyebrow: project.jobNumber,
+                title: project.siteName,
+                subtitle: "\(count) user\(count == 1 ? "" : "s") previously booked on this job"
+            )
         }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .ppNavyHeader()
     }
 
     private func bookedPersonRow(_ summary: ProjectBookedPersonSummary) -> some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(rowTint(for: summary.kind).opacity(0.15))
+        HStack(spacing: 13) {
+            Text(summary.initials)
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
-                .overlay(
-                    Text(summary.initials)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(rowTint(for: summary.kind))
-                )
+                .background(rowFamily(for: summary.kind).gradient, in: Circle())
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
             VStack(alignment: .leading, spacing: 3) {
                 Text(summary.displayName)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
                 Text(summary.subtitle)
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("\(summary.bookingCount) day\(summary.bookingCount == 1 ? "" : "s") · \(formatHours(summary.totalHours))h")
-                    .font(.caption2)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
                 Text("\(summary.firstDate.formatted(date: .abbreviated, time: .omitted)) – \(summary.lastDate.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.caption2)
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
         .padding(14)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
-    private func rowTint(for kind: ProjectBookedPersonKind) -> Color {
+    /// Icon colour family per person kind (operative blue, staff indigo, subcontractor amber).
+    private func rowFamily(for kind: ProjectBookedPersonKind) -> PPFamily {
         switch kind {
-        case .operative: return ProjectWorksRevampColors.blue
-        case .staff: return .purple
-        case .subcontractor: return .orange
+        case .operative: return .plan
+        case .staff: return .people
+        case .subcontractor: return .trade
         }
     }
 
@@ -332,6 +337,7 @@ private struct ProjectBookedPersonHistoryView: View {
                     Spacer()
                     Text("\(formatHours(dayRows.reduce(0) { $0 + $1.hours }))h")
                         .fontWeight(.semibold)
+                        .monospacedDigit()
                 }
                 HStack {
                     Text("Days booked")
@@ -348,6 +354,7 @@ private struct ProjectBookedPersonHistoryView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .listRowBackground(PPColor.card)
 
             Section("Day by day") {
                 if dayRows.isEmpty {
@@ -363,15 +370,19 @@ private struct ProjectBookedPersonHistoryView: View {
                                 .foregroundStyle(.secondary)
                             Text("\(formatHours(row.hours))h")
                                 .font(.caption.weight(.medium))
-                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                                .foregroundStyle(PPColor.brand)
                         }
                         .padding(.vertical, 2)
                     }
                 }
             }
+            .listRowBackground(PPColor.card)
         }
+        .scrollContentBackground(.hidden)
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle(summary.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
     }
 
     private func formatHours(_ value: Double) -> String {

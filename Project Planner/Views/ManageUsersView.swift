@@ -17,6 +17,7 @@ struct ManageUsersView: View {
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
     
     @State private var showingAddUser = false
@@ -54,8 +55,10 @@ struct ManageUsersView: View {
         selectedUser = user
     }
     
+    /// Always a pushed full page in the caller's navigation stack, with the system back button
+    /// (no Done button, no nested NavigationStack). Home and the Settings hub both push it.
     var body: some View {
-        NavigationStack {
+        Group {
             VStack(spacing: 0) {
                 if needsProfileBeforeManageUsersGate {
                     VStack(spacing: 16) {
@@ -73,7 +76,7 @@ struct ManageUsersView: View {
                         ScrollView {
                             manageUsersScrollContent
                         }
-                        .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+                        .background(PPColor.page.ignoresSafeArea())
                     } else {
                         // Only admins can manage users – hide content from everyone else
                         manageUsersAccessDeniedView
@@ -84,25 +87,17 @@ struct ManageUsersView: View {
                     ScrollView {
                         manageUsersScrollContent
                     }
-                    .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+                    .background(PPColor.page.ignoresSafeArea())
                     .refreshable {
                         await userStore.loadOrganizationUsers()
                     }
                 }
             }
-            .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(isManagerOperativeManagement && !userStore.canManageUsers() ? "Manage Operatives" : "Manage Users")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .accessibilityIdentifier("manageUsers.done")
-                    .font(.system(size: 17))
-                    .foregroundStyle(ManageUserProfilePalette.listBlue)
-                }
-                
                 if userStore.canManageUsers() {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Add") {
@@ -110,7 +105,9 @@ struct ManageUsersView: View {
                         }
                         .accessibilityIdentifier("manageUsers.add")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(ManageUserProfilePalette.listBlue)
+                        .foregroundStyle(.white)
+                        // RULEBOOK §2: invites are online only.
+                        .disabled(!smartCache.isOnline)
                     }
                 }
             }
@@ -118,6 +115,7 @@ struct ManageUsersView: View {
                 AddUserView(mode: .admin)
                     .environmentObject(userStore)
                     .environmentObject(firebaseBackend)
+                    .environmentObject(smartCache)
             }
             .onAppear {
                 openPendingUserEdit()
@@ -135,6 +133,7 @@ struct ManageUsersView: View {
                 .environmentObject(holidayStore)
                 .environmentObject(firebaseBackend)
                 .environmentObject(notificationService)
+                .environmentObject(smartCache)
             }
             .alert("Delete User", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {
@@ -156,6 +155,7 @@ struct ManageUsersView: View {
                     }
                 }
                     .accessibilityIdentifier("manageUsers.delete")
+                    .disabled(!smartCache.isOnline)
             } message: {
                 if let user = userToDelete {
                     if !userStore.canDeleteUser(user) {
@@ -229,7 +229,75 @@ struct ManageUsersView: View {
     // MARK: - Revamped list (matches manage-users-iphone.html / ManageUsers.tsx)
 
     private var manageUsersScrollContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            manageUsersNavyHeader
+
+            VStack(alignment: .leading, spacing: 14) {
+                if !smartCache.isOnline {
+                    // RULEBOOK §2: every Manage Users change is online only.
+                    Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                        .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+                }
+                if userStore.hasAdminAccess() && !usersMissingLineManager.isEmpty {
+                    usersMissingLineManagerNotice
+                }
+                manageUsersListHeader
+                manageUsersCardList
+            }
+            .padding(.top, 18)
+            .padding(.bottom, 40)
+            .ppContentSheet()
+        }
+    }
+
+    /// `usersMissingLineManager` over the loaded roster: operatives and managers saved before the line-manager
+    /// requirement (RULEBOOK §8, §11). Their timesheets and requests reach every active admin meanwhile.
+    private var usersMissingLineManager: [AppUser] {
+        AnnualLeaveApproval.usersMissingLineManager(userStore.organizationUsers)
+    }
+
+    private var usersMissingLineManagerNotice: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(
+                usersMissingLineManager.count == 1
+                    ? "1 person needs a line manager for timesheet and annual leave approval."
+                    : "\(usersMissingLineManager.count) people need a line manager for timesheet and annual leave approval.",
+                systemImage: "person.crop.circle.badge.exclamationmark"
+            )
+            .font(.subheadline.weight(.semibold))
+            ForEach(usersMissingLineManager, id: \.id) { person in
+                Button {
+                    selectedUser = person
+                } label: {
+                    Text(person.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? person.email : person.fullName)
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 4)
+        .accessibilityIdentifier("manageUsers.usersMissingLineManager")
+    }
+
+    /// Home-style navy header: the people count the list already shows, then the existing role tabs, status chips and search.
+    private var manageUsersNavyHeader: some View {
         VStack(alignment: .leading, spacing: 14) {
+            PPOverviewTitle(
+                eyebrow: manageUsersHeaderEyebrow,
+                count: "\(filteredUsers.count)",
+                countLabel: rosterSegment.title.lowercased()
+            )
+            .padding(.bottom, 4)
+
             if userStore.canManageUsers() {
                 manageUsersRoleSegment
                 manageUsersStatusChips
@@ -239,26 +307,28 @@ struct ManageUsersView: View {
                 manageUsersSearchBar
                 manageUsersStatusChips
             }
-            manageUsersListHeader
-            manageUsersCardList
-            if userStore.canManageUsers() {
-                manageUsersFooterLinks
-            }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, PPMetrics.screenGutter)
         .padding(.top, 14)
-        .padding(.bottom, 40)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
+    /// Header caption only. Manage Operatives always lists operatives (same tab rule as `filteredUsers`).
+    private var manageUsersHeaderEyebrow: String {
+        userStore.canManageUsers() ? roleSectionTitle : "Operatives"
     }
 
     private var manageUsersRoleSegment: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 4) {
             manageUsersRoleButton(title: "Admins", tab: 0)
             manageUsersRoleButton(title: "Managers", tab: 1)
             manageUsersRoleButton(title: "Operatives", tab: 2)
         }
-        .padding(2)
-        .background(ManageUserProfilePalette.segmentedBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(4)
+        .background(Capsule(style: .continuous).fill(PPColor.onNavyFill))
+        .overlay(Capsule(style: .continuous).strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
     }
 
     private func manageUsersRoleButton(title: String, tab: Int) -> some View {
@@ -266,15 +336,15 @@ struct ManageUsersView: View {
             withAnimation(.easeInOut(duration: 0.2)) { selectedTab = tab }
         } label: {
             Text(title)
-                .font(.system(size: 13.5, weight: .semibold))
-                .foregroundStyle(selectedTab == tab ? ManageUserProfilePalette.textPrimary : ManageUserProfilePalette.textPrimary.opacity(0.8))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(selectedTab == tab ? PPColor.navy : Color.white.opacity(0.82))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
+                .padding(.vertical, 9)
                 .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    Capsule(style: .continuous)
                         .fill(selectedTab == tab ? Color.white : Color.clear)
-                        .shadow(color: selectedTab == tab ? Color.black.opacity(0.08) : .clear, radius: 2, y: 1)
                 )
+                .contentShape(Capsule(style: .continuous))
         }
         .accessibilityIdentifier("manageUsers.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
@@ -291,27 +361,27 @@ struct ManageUsersView: View {
                     HStack(spacing: 6) {
                         Text(segment.title)
                         Text("\(count)")
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.caption2.weight(.bold))
+                            .monospacedDigit()
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
                             .background(
                                 Capsule(style: .continuous)
-                                    .fill(selected ? Color.white.opacity(0.25) : Color.black.opacity(0.07))
+                                    .fill(selected ? PPColor.navy.opacity(0.10) : Color.white.opacity(0.12))
                             )
                     }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(selected ? Color.white : ManageUserProfilePalette.textSecondary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(selected ? PPColor.navy : Color.white.opacity(0.85))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                     .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(selected ? ManageUserProfilePalette.listBlue : Color.white)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(selected ? Color.white : PPColor.onNavyFill)
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(selected ? ManageUserProfilePalette.listBlue : ProjectWorksRevampColors.searchBorder, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(selected ? Color.clear : PPColor.onNavyStroke, lineWidth: 0.5)
                     )
-                    .shadow(color: selected ? ManageUserProfilePalette.listBlue.opacity(0.25) : .clear, radius: 4, y: 2)
                 }
                 .accessibilityIdentifier("manageUsers.row.\(segment.id)")
                 .buttonStyle(.plain)
@@ -323,7 +393,7 @@ struct ManageUsersView: View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(ManageUserProfilePalette.listBlue)
+                .foregroundStyle(PPColor.onNavySecondary)
             TextField(searchPlaceholder, text: $searchText)
                 .accessibilityIdentifier("manageUsers.\(AccessibilityID.token(searchPlaceholder))")
                 .font(.system(size: 16))
@@ -336,7 +406,7 @@ struct ManageUsersView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 16))
-                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .foregroundStyle(PPColor.onNavySecondary)
                 }
                 .accessibilityIdentifier("manageUsers.clearSearch")
                 .buttonStyle(.plain)
@@ -345,13 +415,12 @@ struct ManageUsersView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .foregroundStyle(.white)
+        .background(PPColor.onNavyFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(ManageUserProfilePalette.cardBorder, lineWidth: 0.5)
+                .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
         )
-        .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
     }
 
     private var searchPlaceholder: String {
@@ -368,14 +437,15 @@ struct ManageUsersView: View {
     private var manageUsersListHeader: some View {
         HStack {
             Text(roleSectionTitle.uppercased())
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                .tracking(0.5)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.8)
             Spacer()
             if !filteredUsers.isEmpty {
                 Text("\(filteredUsers.count) \(filteredUsers.count == 1 ? "person" : "people")")
-                    .font(.system(size: 13))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .font(.footnote)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 4)
@@ -386,7 +456,7 @@ struct ManageUsersView: View {
         if filteredUsers.isEmpty {
             manageUsersEmptyCard
         } else {
-            LazyVStack(spacing: 11) {
+            LazyVStack(spacing: 10) {
                 ForEach(filteredUsers) { user in
                     ManageUserRowView(user: user, showAdminBadge: selectedTab == 1 && (user.permissions.adminAccess || user.isSuperAdmin)) {
                         guard user.isStoredUserDocument else { return }
@@ -394,7 +464,7 @@ struct ManageUsersView: View {
                     }
                     .environmentObject(userStore)
                     .contextMenu {
-                        if userStore.canDeleteUser(user) {
+                        if userStore.canDeleteUser(user) && smartCache.isOnline {
                             Button(role: .destructive) {
                                 userToDelete = user
                                 showingDeleteConfirmation = true
@@ -410,88 +480,44 @@ struct ManageUsersView: View {
     }
 
     private var manageUsersEmptyCard: some View {
-        VStack(spacing: 16) {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(ProjectWorksRevampColors.surface)
-                .frame(width: 64, height: 64)
-                .overlay {
-                    Image(systemName: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "person.3.fill" : "magnifyingglass")
-                        .font(.system(size: 28))
-                        .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.45))
-                }
-                .shadow(color: Color.black.opacity(0.05), radius: 3, y: 1)
+        VStack(spacing: 14) {
+            PPIconTile(
+                symbol: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "person.3.fill" : "magnifyingglass",
+                family: .people,
+                size: PPMetrics.quickActionIcon,
+                lifted: true
+            )
             if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("No matches for “\(searchText.trimmingCharacters(in: .whitespacesAndNewlines))”")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .font(.system(.title3, design: .rounded))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
                 Text("Try another spelling, first name, surname, or email.")
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.75))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 260)
             } else {
                 Text("No \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased())")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .font(.system(.title3, design: .rounded))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.primary)
                 Text(
                     userStore.canManageUsers()
                     ? "There are no \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased()) right now. Try another filter or add someone new."
                     : "There are no \(rosterSegment.title.lowercased()) \(roleSectionTitle.lowercased()) right now. Ask an admin if someone is missing."
                 )
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary.opacity(0.75))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 260)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 56)
-    }
-
-    private var manageUsersFooterLinks: some View {
-        VStack(spacing: 10) {
-            Button {
-                dismiss()
-                NotificationCenter.default.post(
-                    name: NSNotification.Name("dismissManageUsersAndSelectTab"),
-                    object: nil,
-                    userInfo: ["tab": 3]
-                )
-            } label: {
-                Label("View on Operatives page", systemImage: "person.3.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-            }
-            .accessibilityIdentifier("manageUsers.dismissmanageusersandselecttab")
-            .buttonStyle(.plain)
-            .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
-            .background(ManageUserProfilePalette.chipPurpleBg)
-            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-
-            if userStore.hasAdminAccess() {
-                Button {
-                    dismiss()
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("dismissManageUsersAndSelectTab"),
-                        object: nil,
-                        userInfo: ["tab": 4]
-                    )
-                } label: {
-                    Label("View on Managers page", systemImage: "person.badge.key.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 13)
-                }
-                .accessibilityIdentifier("manageUsers.dismissmanageusersandselecttab2")
-                .buttonStyle(.plain)
-                .foregroundStyle(ManageUserProfilePalette.chipPurpleFg)
-                .background(ManageUserProfilePalette.chipPurpleBg)
-                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-            }
-        }
-        .padding(.top, 8)
+        .padding(.vertical, 36)
+        .padding(.horizontal, 20)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var roleSectionTitle: String {
@@ -537,17 +563,15 @@ struct ManageUsersView: View {
     // MARK: - Access Denied (non-admins)
     
     private var manageUsersAccessDeniedView: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 18) {
             Spacer()
-            Image(systemName: "lock.shield.fill")
-                .font(.system(size: 56))
-                .foregroundColor(.secondary)
+            PPIconTile(symbol: "lock.shield.fill", family: .system, size: PPMetrics.quickActionIcon, lifted: true)
             Text("Manage Users")
-                .font(.title2)
+                .font(.system(.title2, design: .rounded))
                 .fontWeight(.bold)
             Text("Only users with admin access can manage users. If you need access, ask an administrator.")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
             Spacer()
@@ -561,18 +585,16 @@ struct ManageUsersView: View {
         VStack(spacing: 24) {
             Spacer()
             
-            Image(systemName: "person.3")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
+            PPIconTile(symbol: "person.3.fill", family: .people, size: PPMetrics.quickActionIcon, lifted: true)
             
             VStack(spacing: 8) {
                 Text("No Users Yet")
-                    .font(.title2)
+                    .font(.system(.title2, design: .rounded))
                     .fontWeight(.bold)
                 
                 Text("Add your first user to get started")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
             
             if userStore.canManageUsers() {
@@ -580,8 +602,8 @@ struct ManageUsersView: View {
                 showingAddUser = true
             }
             .accessibilityIdentifier("manageUsers.addFirstUser")
-            .buttonStyle(.borderedProminent)
-            .tint(.indigo)
+            .ppProminentCapsule()
+            .onlineOnly(isOnline: smartCache.isOnline)
             }
             
             Spacer()
@@ -642,7 +664,7 @@ struct ManageUsersView: View {
                 }
                 .environmentObject(userStore)
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    if userStore.canDeleteUser(user) {
+                    if userStore.canDeleteUser(user) && smartCache.isOnline {
                         Button(role: .destructive, action: {
                             userToDelete = user
                             showingDeleteConfirmation = true
@@ -670,7 +692,7 @@ struct ManageUsersView: View {
                 }
                 .environmentObject(userStore)
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    if userStore.canDeleteUser(user) {
+                    if userStore.canDeleteUser(user) && smartCache.isOnline {
                         Button(role: .destructive, action: {
                             userToDelete = user
                             showingDeleteConfirmation = true
@@ -698,7 +720,7 @@ struct ManageUsersView: View {
                 }
                 .environmentObject(userStore)
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    if userStore.canDeleteUser(user) {
+                    if userStore.canDeleteUser(user) && smartCache.isOnline {
                         Button(role: .destructive, action: {
                             userToDelete = user
                             showingDeleteConfirmation = true
@@ -799,6 +821,7 @@ private struct FlowLayout: Layout {
 
 struct ManageUserRowView: View {
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject private var smartCache: SmartCacheService
     
     let user: AppUser
     var showAdminBadge: Bool = false
@@ -835,12 +858,12 @@ struct ManageUserRowView: View {
                     avatarView
                     VStack(alignment: .leading, spacing: 2) {
                         Text(user.fullName.isEmpty ? user.email : user.fullName)
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
                         Text(user.email)
-                            .font(.system(size: 13))
-                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
@@ -851,8 +874,8 @@ struct ManageUserRowView: View {
                             signUpActionButton
                         }
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Color(red: 0xC4 / 255, green: 0xC4 / 255, blue: 0xCC / 255))
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
                     }
                 }
                 if !badges.isEmpty {
@@ -862,14 +885,10 @@ struct ManageUserRowView: View {
                         .padding(.top, 12)
                 }
             }
-            .padding(15)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.black.opacity(0.02), lineWidth: 0.5)
-            )
-            .shadow(color: Color.black.opacity(0.04), radius: 2, y: 1)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
         .accessibilityIdentifier("manageUserRow.chevronRight")
         .buttonStyle(.plain)
@@ -887,20 +906,19 @@ struct ManageUserRowView: View {
     }
 
     private var avatarView: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: avatarGradientColors,
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: 46, height: 46)
-            Text(userInitials)
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.white)
-        }
+        Text(userInitials)
+            .font(.system(size: 16, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: 46, height: 46)
+            .background(avatarFamily.gradient, in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
+    }
+
+    /// Same role order as the old avatar colours: operative, then admin, then everyone else.
+    private var avatarFamily: PPFamily {
+        if user.permissions.operativeMode { return .sites }
+        if user.permissions.adminAccess || user.isSuperAdmin { return .people }
+        return .plan
     }
 
     private var userInitials: String {
@@ -911,16 +929,6 @@ struct ManageUserRowView: View {
             return String(user.email.prefix(2)).uppercased()
         }
         return combined
-    }
-
-    private var avatarGradientColors: [Color] {
-        if user.permissions.operativeMode {
-            return [Color(red: 0x16 / 255, green: 0xA3 / 255, blue: 0x4A / 255), Color(red: 0x0D / 255, green: 0x94 / 255, blue: 0x88 / 255)]
-        }
-        if user.permissions.adminAccess || user.isSuperAdmin {
-            return [Color(red: 0x4F / 255, green: 0x46 / 255, blue: 0xE5 / 255), Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255)]
-        }
-        return [Color(red: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255), Color(red: 0x3B / 255, green: 0x82 / 255, blue: 0xF6 / 255)]
     }
 
     private struct RowBadge: Identifiable {
@@ -984,7 +992,7 @@ struct ManageUserRowView: View {
         }
         .accessibilityIdentifier("manageUserRow.sendPasswordReset")
         .buttonStyle(.plain)
-        .disabled(isSendingResetPassword || isSendingSignUpEmail)
+        .disabled(isSendingResetPassword || isSendingSignUpEmail || !smartCache.isOnline)
         .accessibilityLabel("Send password reset email")
     }
 
@@ -1006,7 +1014,7 @@ struct ManageUserRowView: View {
         }
         .accessibilityIdentifier("manageUserRow.resendSignUp")
         .buttonStyle(.plain)
-        .disabled(isSendingSignUpEmail || isSendingResetPassword)
+        .disabled(isSendingSignUpEmail || isSendingResetPassword || !smartCache.isOnline)
         .accessibilityLabel("Resend sign-up email with verification code")
     }
     
@@ -1343,6 +1351,7 @@ struct EditUserView: View {
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
     
     let user: AppUser
@@ -1436,7 +1445,7 @@ struct EditUserView: View {
         self._selectedLineManagerUserIds = State(initialValue: Set(user.lineManagerUserIds))
         self._hasNoLineManagerDraft = State(initialValue: user.hasNoLineManager)
         self._managerSelfBookDraft = State(initialValue: user.permissions.annualLeaveSelfBook)
-        self._dayRateText = State(initialValue: Self.formatPayrollRateText(dayRate: user.dayRate, hourlyRate: user.hourlyRate))
+        self._dayRateText = State(initialValue: Self.formatPayrollRateText(user: user))
         self._tradePresetRaw = State(initialValue: user.tradeTypePreset ?? "")
         self._tradeCustomText = State(initialValue: user.tradeTypeCustom ?? "")
         self._editFirstName = State(initialValue: user.firstName)
@@ -1905,46 +1914,35 @@ struct EditUserView: View {
         var draft = displayedUser
         draft.permissions = permissions
         draft.hasNoLineManager = hasNoLineManagerDraft
+        draft.setLineManagerUserIds(Array(selectedLineManagerUserIds).sorted())
+        if !selectedLineManagerUserIds.isEmpty { draft.hasNoLineManager = false }
+        draft.annualLeaveEnabled = annualLeaveEnabledDraft
+        draft.isActive = isActive
         return draft
     }
 
+    /// `lineManagerRequiredError` for the user as it will be saved (RULEBOOK §8, §11).
+    private var lineManagerRequiredMessage: String? {
+        guard canEditPermissionsMatrix else { return nil }
+        return AnnualLeaveApproval.lineManagerRequiredError(
+            for: draftUserForAnnualLeaveValidation,
+            users: userStore.organizationUsers
+        )
+    }
+
     private var lineManagerRoutingBlocked: Bool {
-        guard canEditPermissionsMatrix else { return false }
-        if permissions.operativeMode {
-            return selectedLineManagerUserIds.isEmpty
-        }
-        if permissions.manager || permissions.adminAccess {
-            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: draftUserForAnnualLeaveValidation) {
-                return selectedLineManagerUserIds.isEmpty
-            }
-            return selectedLineManagerUserIds.isEmpty && !hasNoLineManagerDraft
-        }
-        return false
+        lineManagerRequiredMessage != nil
     }
 
     private var lineManagerValidationMessage: String? {
-        guard lineManagerRoutingBlocked else { return nil }
-        if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: draftUserForAnnualLeaveValidation) {
-            return "This user requires a Line Manager to Approve/Decline annual leave requests. Please set their line manager above."
-        }
-        if permissions.operativeMode {
-            return "Line manager is required for operatives."
-        }
-        return "Please assign a line manager or choose No line manager."
+        lineManagerRequiredMessage
     }
 
+    /// `CanonicalBusinessEngine.canSelfBookAnnualLeave(user, roster)` before and after this save (RULEBOOK §9).
     private var willDisableAnnualLeaveSelfBookOnSave: Bool {
-        let subject = displayedUser
-        let oldDraft = AppUser(
-            id: subject.id,
-            email: subject.email,
-            organizationId: subject.organizationId,
-            role: subject.role,
-            permissions: subject.permissions,
-            hasNoLineManager: subject.hasNoLineManager
-        )
-        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: oldDraft)
-            && !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: draftUserForAnnualLeaveValidation)
+        let roster = userStore.organizationUsers
+        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: displayedUser, users: roster)
+            && !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: draftUserForAnnualLeaveValidation, users: roster)
     }
 
     private var lineManagerCandidates: [AppUser] {
@@ -2053,7 +2051,19 @@ struct EditUserView: View {
 
     private var editUserScrollView: some View {
         ScrollView {
-            editUserFormSections
+            VStack(alignment: .leading, spacing: 0) {
+                if !smartCache.isOnline {
+                    // RULEBOOK §2: every Manage Users change is online only.
+                    Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, PPMetrics.screenGutter)
+                        .padding(.top, 12)
+                        .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+                }
+                editUserFormSections
+            }
         }
         .onAppear(perform: syncEditUserDraftsFromStore)
         .alert("Admin Access", isPresented: $showingAdminAccessLockedMessage) {
@@ -2062,9 +2072,10 @@ struct EditUserView: View {
         } message: {
             Text(UserRoleTransitionPolicy.adminAccessLockedUntilAccountTypeChanges)
         }
-        .background(ManageUserProfilePalette.pageBackground.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle(editNavigationTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .toolbar { editUserToolbarContent }
     }
 
@@ -2141,7 +2152,7 @@ struct EditUserView: View {
                         Capsule(style: .continuous)
                             .fill(hasChanges ? ManageUserProfilePalette.primaryBlue : Color(.systemGray5))
                     )
-                    .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked)
+                    .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline)
             }
         }
     }
@@ -2537,21 +2548,10 @@ struct EditUserView: View {
                 ZStack(alignment: .bottomTrailing) {
                     ZStack {
                         if let urlString = displayedUser.profilePhotoURL,
-                           let url = URL(string: urlString) {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .empty:
-                                    ProgressView()
-                                        .tint(.white)
-                                case .success(let image):
-                                    image
-                                        .resizable()
-                                        .scaledToFill()
-                                case .failure:
-                                    profileInitialsPlaceholder
-                                @unknown default:
-                                    profileInitialsPlaceholder
-                                }
+                           URL(string: urlString) != nil {
+                            // `profilePhotoUpdatedAt` refreshes the cached picture; a stale URL is re-fetched (§12).
+                            ProfilePhotoAvatar(urlString: urlString, updatedAt: displayedUser.profilePhotoUpdatedAt) {
+                                profileInitialsPlaceholder
                             }
                         } else {
                             profileInitialsPlaceholder
@@ -2731,7 +2731,8 @@ struct EditUserView: View {
                         value: lastSeenDisplay(for: displayedUser)
                     )
                     ManageUserCardDivider()
-                    if canEditPermissionsMatrix {
+                    // RULEBOOK §8: employment type is pay (`canChangePersonPay`).
+                    if canEditPermissionsMatrix && userStore.canChangePay(of: displayedUser) {
                         Menu {
                             ForEach(EmploymentType.allCases) { type in
                                 Button(type.title) {
@@ -2958,7 +2959,7 @@ struct EditUserView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     Spacer()
-                    Text("\(localeCurrencySymbol())\(String(format: "%.2f", entry.dayRate))")
+                    Text(entry.dayRate.map { "\(localeCurrencySymbol())\(String(format: "%.2f", $0))" } ?? "Not set")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(ManageUserProfilePalette.textPrimary)
                 }
@@ -3020,9 +3021,7 @@ struct EditUserView: View {
 
     /// Single edit field shows day or hourly — dirty must compare against whichever is currently displayed.
     private func displayedPayrollRate(for user: AppUser) -> Double? {
-        if let day = user.dayRate { return day }
-        if let hourly = user.hourlyRate { return hourly }
-        return nil
+        UserStore.storedPay(of: user).amount
     }
 
     private func isPayrollRateDirty(versus user: AppUser) -> Bool {
@@ -3083,6 +3082,7 @@ struct EditUserView: View {
                             action: { sendResetPasswordEmail() },
                             isBusy: isSendingResetPassword
                         )
+                        .disabled(!smartCache.isOnline)
                     } else {
                         let isPendingManagerOrOperative = (user.permissions.manager || user.permissions.operativeMode) &&
                             !user.permissions.adminAccess && !user.isSuperAdmin
@@ -3096,6 +3096,7 @@ struct EditUserView: View {
                             action: { resendVerificationEmail() },
                             isBusy: isResendingEmail || isSendingSignUpEmail
                         )
+                        .disabled(!smartCache.isOnline)
                         Text("They have not finished setting a password yet. Resend the invitation email so they receive a new code and setup link.")
                             .font(.system(size: 11))
                             .foregroundStyle(ManageUserProfilePalette.textSecondary)
@@ -3126,6 +3127,7 @@ struct EditUserView: View {
                         },
                         isBusy: isTransferringSuperAdmin
                     )
+                    .disabled(!smartCache.isOnline)
                 }
 
                 if let message = transferSuperAdminMessage {
@@ -3165,6 +3167,7 @@ struct EditUserView: View {
                             showingChangeUserType = true
                         }
                     )
+                    .disabled(!smartCache.isOnline)
                 }
 
                 if canUseAdminAccountTools,
@@ -3187,6 +3190,7 @@ struct EditUserView: View {
                         },
                         isBusy: isUpdatingActiveStatus
                     )
+                    .disabled(!smartCache.isOnline)
 
                     if let message = activeStatusMessage {
                         Text(message)
@@ -3210,6 +3214,7 @@ struct EditUserView: View {
                         showsChevron: false,
                         action: { showingDeleteConfirmation = true }
                     )
+                    .disabled(!smartCache.isOnline)
                 }
             }
         }
@@ -3677,7 +3682,8 @@ struct EditUserView: View {
                 dayRate: permissions.operativeMode ? rateToPersist : subjectUser.dayRate,
                 operativeStore: operativeStore,
                 dayRateEffectiveAt: effectiveForHistory,
-                updateDayRate: operativeDayRateChanged
+                // Only an operative's rate is saved here; staff rates go through `updateManagerDayRate`.
+                updateDayRate: permissions.operativeMode && operativeDayRateChanged
             )
         }
 
@@ -3817,11 +3823,17 @@ struct EditUserView: View {
 
         let finalPermissions = didPersistPermissions ? permissions : subjectUser.permissions
         let finalHasNoLineManager = hasNoLineManagerChanged ? hasNoLineManagerDraft : subjectUser.hasNoLineManager
+        let finalLineManagerUserIds = managerAssignmentChanged
+            ? Array(selectedLineManagerUserIds).sorted()
+            : subjectUser.lineManagerUserIds
         let needsSelfBookClear = UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
             old: previousPermissions,
             new: finalPermissions,
             oldHasNoLineManager: previousHasNoLineManager,
-            newHasNoLineManager: finalHasNoLineManager
+            newHasNoLineManager: finalHasNoLineManager,
+            oldLineManagerUserIds: subjectUser.lineManagerUserIds,
+            newLineManagerUserIds: finalLineManagerUserIds,
+            users: userStore.organizationUsers
         )
         if needsSelfBookClear && permissionsSuccess && operativeDetailsSuccess {
             await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: user.id)
@@ -3843,10 +3855,10 @@ struct EditUserView: View {
         }
     }
 
-    private static func formatPayrollRateText(dayRate: Double?, hourlyRate: Double?) -> String {
-        if let dayRate { return String(format: "%.2f", dayRate) }
-        if let hourlyRate { return String(format: "%.2f", hourlyRate) }
-        return ""
+    /// The stored amount for the stored basis (`readStoredRates`), as the single rate field shows it.
+    private static func formatPayrollRateText(user: AppUser) -> String {
+        guard let amount = UserStore.storedPay(of: user).amount else { return "" }
+        return String(format: "%.2f", amount)
     }
 
     private func parseDayRate(_ input: String) -> Double? {
@@ -3859,11 +3871,9 @@ struct EditUserView: View {
         return Double(normalized)
     }
 
+    /// Organisation currency symbol (RULEBOOK §4.2), stripped from a typed rate.
     private func localeCurrencySymbol() -> String {
-        if #available(iOS 16.0, *) {
-            return Locale.current.currency?.identifier == nil ? (Locale.current.currencySymbol ?? "£") : (Locale.current.currencySymbol ?? "£")
-        }
-        return Locale.current.currencySymbol ?? "£"
+        OrgMoney.symbol()
     }
     
     private func sendResetPasswordEmail() {
@@ -4090,4 +4100,35 @@ struct TabButton: View {
         .environmentObject(OperativeStore())
         .environmentObject(HolidayStore())
         .environmentObject(FirebaseBackend())
+        .environmentObject(SmartCacheService())
+}
+
+/// Manage Users opened from Home (decision D2). Home is not inside a navigation stack (ContentView keeps
+/// tab 0 out of one), so Home shows this stack with Manage Users already pushed. The system back button
+/// pops it, and an empty path closes the stack without animation, so back returns to Home.
+struct ManageUsersPushedFromHome: View {
+    enum Route: Hashable {
+        case manageUsers
+    }
+
+    @Binding var isPresented: Bool
+    @State private var path: [Route] = [.manageUsers]
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            PPColor.page
+                .ignoresSafeArea()
+                .navigationDestination(for: Route.self) { _ in
+                    ManageUsersView()
+                }
+        }
+        .onChange(of: path) { _, newValue in
+            guard newValue.isEmpty else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                isPresented = false
+            }
+        }
+    }
 }

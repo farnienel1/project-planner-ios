@@ -10,10 +10,10 @@ import SwiftUI
 // MARK: - Palette (TSX reference)
 
 private enum WorkingHoursPalette {
-    static let canvas = ProjectWorksRevampColors.canvas
+    static let canvas = PPColor.page
     static let cardBorder = ProjectWorksRevampColors.searchBorder
-    static let ink = ProjectWorksRevampColors.ink
-    static let muted = ProjectWorksRevampColors.muted
+    static let ink = Color.primary
+    static let muted = Color.secondary
     static let indigo = Color(red: 0.310, green: 0.275, blue: 0.898) // #4f46e5
     static let amber = Color(red: 0.851, green: 0.467, blue: 0.024) // #d97706
     static let rose = Color(red: 0.882, green: 0.114, blue: 0.282) // #e11d48
@@ -49,6 +49,7 @@ struct OrganisationWorkingHoursView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft = OrgPayrollTimePolicy.default
@@ -58,8 +59,26 @@ struct OrganisationWorkingHoursView: View {
     @State private var showingImmediateSaveWarning = false
     @State private var showingScheduleSheet = false
     @State private var showingCancelConfirm = false
-    @State private var scheduleEffectiveDate = Calendar.current.startOfDay(for: Date())
+    /// Date-picker value (device calendar, UI only); sent as that `YYYY-MM-DD` organisation day.
+    @State private var scheduleEffectiveDate = Self.firstSchedulableDay
     @State private var saveSucceeded = false
+    @State private var showingCancelScheduledConfirm = false
+
+    /// A scheduled change must start after today (`payrollTimePolicyScheduleDateError`).
+    private static var firstSchedulableDay: Date {
+        let today = Calendar.current.startOfDay(for: Date())
+        return Calendar.current.date(byAdding: .day, value: 1, to: today) ?? today
+    }
+
+    /// `PAYROLL_POLICY_LIMITS` (break 0–120 min, paid and counts-as 1–12 h, multipliers ×1–×3).
+    private var limits: CanonicalBusinessEngine.PayrollPolicyLimits? {
+        CanonicalBusinessEngine.payrollPolicyLimits
+    }
+
+    /// `validatePayrollTimePolicy(draft)`. Nil when the draft can be saved.
+    private var validationMessage: String? {
+        CanonicalBusinessEngine.validatePayrollTimePolicy(draft)
+    }
 
     private var scheduledChange: OrgPayrollTimePolicyScheduledChange? {
         firebaseBackend.currentOrganization?.payrollTimePolicyScheduled
@@ -115,10 +134,17 @@ struct OrganisationWorkingHoursView: View {
                         .foregroundStyle(.red)
                         .padding(.horizontal, 20)
                         .padding(.top, 12)
+                } else if isDirty, let validationMessage {
+                    Text(validationMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+                        .accessibilityIdentifier("organisationWorkingHours.validation")
                 }
 
                 Text("Changes apply to new timesheet entries from today. Existing approved timesheets aren't recalculated.")
-                    .font(.system(size: 11.5))
+                    .font(.caption)
                     .foregroundStyle(Color(.systemGray))
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
@@ -127,11 +153,10 @@ struct OrganisationWorkingHoursView: View {
                     .padding(.bottom, 100)
             }
         }
-        .background(WorkingHoursPalette.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationBarBackButtonHidden(true)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(WorkingHoursPalette.canvas.opacity(0.92), for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button {
@@ -142,19 +167,19 @@ struct OrganisationWorkingHoursView: View {
                     }
                 } label: {
                     Text("Cancel")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(WorkingHoursPalette.ink)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
                 }
                     .accessibilityIdentifier("organisationWorkingHours.cancel")
             }
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
                     Text("Working hours")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(WorkingHoursPalette.ink)
+                        .font(.headline)
+                        .foregroundStyle(.white)
                     Text("Organisation default")
-                        .font(.system(size: 11))
-                        .foregroundStyle(WorkingHoursPalette.muted)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(PPColor.onNavySecondary)
                 }
             }
         }
@@ -162,6 +187,21 @@ struct OrganisationWorkingHoursView: View {
             bottomActionBar
         }
         .task { loadDraft() }
+        .onChange(of: firebaseBackend.currentOrganization?.settings.payrollTimePolicy) { _, _ in
+            // §4: keep an unsaved draft; follow the server only while nothing has been changed here.
+            guard !isDirty, !isSaving else { return }
+            loadDraft()
+        }
+        .alert("Cancel scheduled change?", isPresented: $showingCancelScheduledConfirm) {
+            Button("Keep", role: .cancel) {}
+                .accessibilityIdentifier("organisationWorkingHours.keepScheduled")
+            Button("Cancel change", role: .destructive) {
+                Task { await cancelScheduledChange() }
+            }
+                .accessibilityIdentifier("organisationWorkingHours.confirmCancelScheduled")
+        } message: {
+            Text("The queued working hours will not take effect. The current working hours stay in place.")
+        }
         .sheet(isPresented: $showingScheduleSheet) {
             scheduleChangeSheet
         }
@@ -193,7 +233,7 @@ struct OrganisationWorkingHoursView: View {
 
     private var introText: some View {
         Text("These rules apply across the firm and decide how hours are costed on every timesheet — set the standard week, then how Saturday and Sunday are treated.")
-            .font(.system(size: 13))
+            .font(.subheadline)
             .foregroundStyle(WorkingHoursPalette.muted)
             .lineSpacing(2)
             .fixedSize(horizontal: false, vertical: true)
@@ -207,9 +247,18 @@ struct OrganisationWorkingHoursView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Scheduled change")
                     .font(.subheadline.weight(.semibold))
-                Text("New working hours take effect on \(scheduled.effectiveFrom.formatted(date: .abbreviated, time: .omitted)).")
+                Text("New working hours take effect on \(scheduled.effectiveFrom.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone))).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button("Cancel scheduled change") {
+                    showingCancelScheduledConfirm = true
+                }
+                .accessibilityIdentifier("organisationWorkingHours.cancelScheduled")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(WorkingHoursPalette.rose)
+                .disabled(isSaving)
+                .onlineOnly(isOnline: smartCache.isOnline)
+                .padding(.top, 2)
             }
         }
         .padding(14)
@@ -227,7 +276,7 @@ struct OrganisationWorkingHoursView: View {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(Color(red: 0.063, green: 0.725, blue: 0.506))
             Text("Working hours saved. New bookings will use these rules.")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Color(red: 0.047, green: 0.459, blue: 0.294))
         }
         .padding(14)
@@ -245,7 +294,7 @@ struct OrganisationWorkingHoursView: View {
     private var weekAtAGlanceCard: some View {
         workingHoursCard {
             Text("WEEK AT A GLANCE")
-                .font(.system(size: 11, weight: .bold))
+                .font(.caption.weight(.bold))
                 .foregroundStyle(WorkingHoursPalette.muted)
                 .tracking(1.2)
                 .padding(.bottom, 2)
@@ -302,11 +351,11 @@ struct OrganisationWorkingHoursView: View {
                 .frame(width: 8, height: 8)
                 .padding(.top, 4)
             Text(label)
-                .font(.system(size: 12.5, weight: .bold))
+                .font(.footnote.weight(.bold))
                 .foregroundStyle(Color(red: 0.2, green: 0.255, blue: 0.333))
                 .frame(width: 64, alignment: .leading)
             Text(text)
-                .font(.system(size: 12.5))
+                .font(.footnote)
                 .foregroundStyle(WorkingHoursPalette.muted)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -332,11 +381,11 @@ struct OrganisationWorkingHoursView: View {
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Lunch break")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.body.weight(.semibold))
                         Text(draft.breakPaid
                              ? "Paid — counts toward hours worked"
                              : "Unpaid — deducted from paid hours")
-                            .font(.system(size: 12))
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
@@ -360,8 +409,8 @@ struct OrganisationWorkingHoursView: View {
                         }
                     ),
                     step: 5,
-                    min: 0,
-                    max: 90,
+                    min: limits?.breakMinutes.min ?? 0,
+                    max: limits?.breakMinutes.max ?? 120,
                     suffix: " min"
                 )
 
@@ -421,7 +470,7 @@ struct OrganisationWorkingHoursView: View {
                     Spacer(minLength: 0)
                     Text("21:00")
                 }
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(WorkingHoursPalette.muted)
                 .padding(.top, 2)
 
@@ -439,7 +488,7 @@ struct OrganisationWorkingHoursView: View {
                 .padding(.top, 8)
             } else {
                 Text("Enter valid 24h times to see the day.")
-                    .font(.system(size: 13))
+                    .font(.subheadline)
                     .foregroundStyle(WorkingHoursPalette.muted)
             }
         }
@@ -451,7 +500,7 @@ struct OrganisationWorkingHoursView: View {
                 .fill(color)
                 .frame(width: 10, height: 10)
             Text(text)
-                .font(.system(size: 12.5))
+                .font(.footnote)
                 .foregroundStyle(WorkingHoursPalette.ink)
         }
     }
@@ -487,7 +536,7 @@ struct OrganisationWorkingHoursView: View {
                             .foregroundStyle(WorkingHoursPalette.amber)
                     }
                     Text("Choose how a Saturday shift is paid — a fixed-length day on a defined window, or every hour worked at the multiplier.")
-                        .font(.system(size: 13))
+                        .font(.subheadline)
                         .foregroundStyle(Color(.systemGray))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -536,8 +585,8 @@ struct OrganisationWorkingHoursView: View {
                 set: { settings.wrappedValue.countsAsHours = $0 }
             ),
             step: 0.5,
-            min: 1,
-            max: 14,
+            min: limits?.paidHours.min ?? 1,
+            max: limits?.paidHours.max ?? 12,
             suffix: "h"
         )
 
@@ -610,7 +659,7 @@ struct OrganisationWorkingHoursView: View {
                             .foregroundStyle(WorkingHoursPalette.rose)
                     }
                     Text("Sunday is usually the simplest rule of the week — most firms either pay every hour at a flat multiplier, or pay a fixed day regardless of hours worked.")
-                        .font(.system(size: 13))
+                        .font(.subheadline)
                         .foregroundStyle(Color(.systemGray))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -618,9 +667,9 @@ struct OrganisationWorkingHoursView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Same setup as Saturday")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.body.weight(.semibold))
                         Text("Mirror Saturday's pay rules on Sunday")
-                            .font(.system(size: 12))
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -690,7 +739,7 @@ struct OrganisationWorkingHoursView: View {
                                 .tint(.white)
                         } else {
                             Text("Save")
-                                .font(.system(size: 14, weight: .bold))
+                                .font(.body.weight(.bold))
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -704,12 +753,13 @@ struct OrganisationWorkingHoursView: View {
                 .shadow(color: isDirty ? WorkingHoursPalette.indigo.opacity(0.25) : .clear, radius: 4, y: 2)
                 .disabled(!isDirty || !isFormValid || isSaving)
                 .opacity((!isDirty || !isFormValid || isSaving) ? 0.85 : 1)
+                .onlineOnly(isOnline: smartCache.isOnline, showsMessage: false)
 
                 Button {
                     showingScheduleSheet = true
                 } label: {
                     Text("Schedule")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.body.weight(.bold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
@@ -724,12 +774,13 @@ struct OrganisationWorkingHoursView: View {
                 )
                 .disabled(!isFormValid || isSaving)
                 .opacity(!isFormValid || isSaving ? 0.55 : 1)
+                .onlineOnly(isOnline: smartCache.isOnline, showsMessage: false)
 
                 Button {
                     clearDraft()
                 } label: {
                     Text("Clear")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.body.weight(.bold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
@@ -746,6 +797,17 @@ struct OrganisationWorkingHoursView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(.ultraThinMaterial)
+            if !smartCache.isOnline {
+                // RULEBOOK §2: Save and Schedule are online only.
+                Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .background(.ultraThinMaterial)
+                    .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+            }
         }
     }
 
@@ -756,13 +818,8 @@ struct OrganisationWorkingHoursView: View {
             content()
         }
         .padding(16)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func sectionLabel(color: Color, title: String) -> some View {
@@ -771,7 +828,7 @@ struct OrganisationWorkingHoursView: View {
                 .fill(color)
                 .frame(width: 6, height: 6)
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .bold))
+                .font(.caption.weight(.bold))
                 .foregroundStyle(WorkingHoursPalette.muted)
                 .tracking(1.1)
         }
@@ -787,7 +844,7 @@ struct OrganisationWorkingHoursView: View {
     private func timeFieldColumn(label: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(WorkingHoursPalette.muted)
             WorkingHoursTimeField(text: text)
         }
@@ -797,7 +854,7 @@ struct OrganisationWorkingHoursView: View {
     private func stepperRow(label: String, value: Binding<Double>, step: Double, min: Double, max: Double, suffix: String) -> some View {
         HStack {
             Text(label)
-                .font(.system(size: 13, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(WorkingHoursPalette.muted)
             Spacer()
             WorkingHoursStepper(value: value, step: step, min: min, max: max, suffix: suffix)
@@ -816,10 +873,10 @@ struct OrganisationWorkingHoursView: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.body.weight(.semibold))
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 12))
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -832,10 +889,10 @@ struct OrganisationWorkingHoursView: View {
     private func tintedInfoBox(text: String, tint: Color) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text("ⓘ")
-                .font(.system(size: 13))
+                .font(.subheadline)
                 .foregroundStyle(tint)
             Text(text)
-                .font(.system(size: 12))
+                .font(.footnote)
                 .foregroundStyle(tint.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -861,11 +918,11 @@ struct OrganisationWorkingHoursView: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 HStack {
                     Text(row.0)
-                        .font(.system(size: 13))
+                        .font(.subheadline)
                         .foregroundStyle(WorkingHoursPalette.muted)
                     Spacer()
                     Text(row.1)
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.body.weight(.bold))
                         .foregroundStyle(WorkingHoursPalette.ink)
                 }
                 .padding(.vertical, 10)
@@ -878,7 +935,7 @@ struct OrganisationWorkingHoursView: View {
             }
             HStack {
                 Text(footerLabel)
-                    .font(.system(size: 13.5, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(accent.opacity(0.9))
                 Spacer()
                 Text(footerValue)
@@ -906,7 +963,7 @@ struct OrganisationWorkingHoursView: View {
                 DatePicker(
                     "Effective from",
                     selection: $scheduleEffectiveDate,
-                    in: Calendar.current.startOfDay(for: Date())...,
+                    in: Self.firstSchedulableDay...,
                     displayedComponents: .date
                 )
                     .accessibilityIdentifier("organisationWorkingHours.effectiveFrom")
@@ -916,19 +973,26 @@ struct OrganisationWorkingHoursView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Schedule change")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { showingScheduleSheet = false }
                         .accessibilityIdentifier("organisationWorkingHours.cancel2")
+                        .tint(.white)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Schedule") {
                         Task { await saveScheduled() }
                     }
                     .accessibilityIdentifier("organisationWorkingHours.schedule2")
+                    .font(.body.weight(.semibold))
+                    .tint(.white)
                     .disabled(!isFormValid || isSaving)
+                    .onlineOnly(isOnline: smartCache.isOnline, showsMessage: false)
                 }
             }
         }
@@ -953,8 +1017,10 @@ struct OrganisationWorkingHoursView: View {
         if !isValidHM(out.standardDayEnd) {
             out.standardDayEnd = OrgPayrollTimePolicy.default.standardDayEnd
         }
-        out.unpaidBreakMinutes = Swift.max(0, Swift.min(90, out.unpaidBreakMinutes))
-        out.standardPaidHours = Swift.max(1, Swift.min(24, out.standardPaidHours))
+        let breakLimits = limits?.breakMinutes
+        let paidLimits = limits?.paidHours
+        out.unpaidBreakMinutes = Swift.max(Int(breakLimits?.min ?? 0), Swift.min(Int(breakLimits?.max ?? 120), out.unpaidBreakMinutes))
+        out.standardPaidHours = Swift.max(paidLimits?.min ?? 1, Swift.min(paidLimits?.max ?? 12, out.standardPaidHours))
         out.weekdayOutsideStandardMultiplier = clampMultiplier(out.weekdayOutsideStandardMultiplier)
         out.saturday = sanitizeWeekendSettings(out.saturday, fallbackPaid: out.standardPaidHours)
         out.sunday = sanitizeWeekendSettings(out.sunday, fallbackPaid: out.standardPaidHours)
@@ -968,7 +1034,7 @@ struct OrganisationWorkingHoursView: View {
         if let start = out.customStandardStart, !isValidHM(start) { out.customStandardStart = nil }
         if let end = out.customStandardEnd, !isValidHM(end) { out.customStandardEnd = nil }
         if let counts = out.countsAsHours {
-            out.countsAsHours = Swift.max(1, Swift.min(24, counts))
+            out.countsAsHours = Swift.max(limits?.paidHours.min ?? 1, Swift.min(limits?.paidHours.max ?? 12, counts))
         }
         if !out.allHoursAtMultiplierMode,
            out.customStandardStart == nil,
@@ -982,7 +1048,7 @@ struct OrganisationWorkingHoursView: View {
 
     private func clampMultiplier(_ value: Double) -> Double {
         guard value.isFinite else { return 1.5 }
-        return Swift.max(1, Swift.min(3, value))
+        return Swift.max(limits?.multiplier.min ?? 1, Swift.min(limits?.multiplier.max ?? 3, value))
     }
 
     private func clearDraft() {
@@ -1008,7 +1074,9 @@ struct OrganisationWorkingHoursView: View {
         errorMessage = nil
         saveSucceeded = false
         let priorPolicy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        let effectiveDay = Calendar.current.startOfDay(for: Date())
+        // Organisation-zone today (§1), not the device day.
+        let effectiveDay = OrganizationRulebookContext.date(fromDayKey: OrganizationRulebookContext.dayKey(Date()))
+            ?? CanonicalBusinessEngine.businessCalendar.startOfDay(for: Date())
         do {
             try await firebaseBackend.applyOrganizationPayrollTimePolicyImmediately(draft)
             await PayrollPolicyBookingRecalibrator.apply(
@@ -1022,6 +1090,8 @@ struct OrganisationWorkingHoursView: View {
                 isSaving = false
                 baselineDraft = draft
                 saveSucceeded = true
+                // Saved: back to the previous screen.
+                dismiss()
             }
         } catch {
             await MainActor.run {
@@ -1043,11 +1113,29 @@ struct OrganisationWorkingHoursView: View {
                 showingScheduleSheet = false
                 saveSucceeded = true
             }
+            // Let the sheet close, then go back to the previous screen.
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            await MainActor.run { dismiss() }
         } catch {
             await MainActor.run {
                 isSaving = false
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    /// Online, after confirmation: `payrollTimePolicyCancelScheduleWriteFields` on the server document.
+    private func cancelScheduledChange() async {
+        guard !isSaving else { return }
+        isSaving = true
+        errorMessage = nil
+        do {
+            try await firebaseBackend.cancelScheduledOrganizationPayrollTimePolicyChange()
+            isSaving = false
+            if !isDirty { loadDraft() }
+        } catch {
+            isSaving = false
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -1069,22 +1157,9 @@ struct OrganisationWorkingHoursView: View {
         return Double(em - sm) / 60.0
     }
 
+    /// `validatePayrollTimePolicy` (rulebook limits and clock checks).
     private var isFormValid: Bool {
-        isValidHM(draft.standardDayStart)
-            && isValidHM(draft.standardDayEnd)
-            && isValidHM(draft.breakWindowStart)
-            && isValidHM(draft.breakWindowEnd)
-            && draft.weekdayOutsideStandardMultiplier > 0
-            && weekendValid(draft.saturday)
-            && (draft.sundaySameAsSaturday || weekendValid(draft.sunday))
-    }
-
-    private func weekendValid(_ w: OrgWeekendDayPayrollSettings) -> Bool {
-        if w.allHoursMultiplier <= 0 || w.outsideStandardWindowMultiplier <= 0 { return false }
-        if w.allHoursAtMultiplierMode { return true }
-        guard let s = w.customStandardStart, let e = w.customStandardEnd,
-              isValidHM(s), isValidHM(e) else { return false }
-        return (w.countsAsHours ?? draft.standardPaidHours) > 0
+        validationMessage == nil
     }
 
     private func isValidHM(_ s: String) -> Bool {
@@ -1144,7 +1219,7 @@ private struct WorkingHoursSegmentedPicker: View {
                     selection.wrappedValue = option.0
                 } label: {
                     Text(option.1)
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.footnote.weight(.semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 7)
                         .background(selection.wrappedValue == option.0 ? Color(.systemBackground) : Color.clear)
@@ -1206,7 +1281,7 @@ private struct WorkingHoursStepper: View {
             .buttonStyle(.plain)
 
             Text(displayValue)
-                .font(.system(size: 13.5, weight: .bold))
+                .font(.subheadline.weight(.bold))
                 .monospacedDigit()
                 .frame(minWidth: 52)
 
@@ -1250,7 +1325,7 @@ private struct WorkingHoursMultiplierField: View {
                 .accessibilityIdentifier("workingHoursMultiplierField.textField")
                 .keyboardType(.decimalPad)
                 .multilineTextAlignment(.center)
-                .font(.system(size: 15, weight: .bold))
+                .font(.body.weight(.bold))
                 .foregroundStyle(accent)
                 .frame(width: 56)
                 .padding(.vertical, 8)
@@ -1261,7 +1336,7 @@ private struct WorkingHoursMultiplierField: View {
                         .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
                 )
             Text("x")
-                .font(.system(size: 13, weight: .bold))
+                .font(.subheadline.weight(.bold))
                 .foregroundStyle(Color(red: 0.580, green: 0.639, blue: 0.722))
         }
     }
@@ -1278,7 +1353,7 @@ private struct WorkingHoursTimeField: View {
                 .accessibilityIdentifier("workingHoursTimeField.n0730")
                 .keyboardType(.numbersAndPunctuation)
                 .multilineTextAlignment(.center)
-                .font(.system(size: 15, weight: .bold))
+                .font(.body.weight(.bold))
                 .monospacedDigit()
                 .focused($focused)
                 .onSubmit { commit() }
@@ -1286,7 +1361,7 @@ private struct WorkingHoursTimeField: View {
                     if !isFocused { commit() }
                 }
             Image(systemName: "clock")
-                .font(.system(size: 13))
+                .font(.subheadline)
                 .foregroundStyle(Color(.systemGray3))
         }
         .padding(.horizontal, 12)

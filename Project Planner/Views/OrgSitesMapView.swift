@@ -33,14 +33,28 @@ struct OrgSitesMapView: View {
                 if let selectedPin {
                     infoCard(for: selectedPin)
                 } else {
-                    Text("Tap a pin to view job info")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .padding()
+                    HStack(spacing: 12) {
+                        PPIconTile(symbol: "mappin.and.ellipse", family: .sites, size: PPMetrics.menuIcon)
+                        Text("Tap a pin to view job info")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, PPMetrics.screenGutter)
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(PPColor.page)
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(Color(.separator))
+                            .frame(height: 0.5)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .navigationTitle("Site Map")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") {
@@ -53,11 +67,14 @@ struct OrgSitesMapView: View {
                             }
                         }
                     }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("orgSitesMap.done")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if isLoading {
                         ProgressView()
+                            .tint(.white)
                     }
                 }
             }
@@ -70,30 +87,37 @@ struct OrgSitesMapView: View {
 
     private func infoCard(for pin: SiteMapPin) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            HStack(spacing: 12) {
+                PPIconTile(symbol: "mappin.circle.fill", family: .sites, size: 36)
                 Text(pin.siteName)
-                    .font(.headline)
+                    .font(.system(.headline, design: .rounded))
+                    .fontWeight(.bold)
                 Spacer()
                 Text(pin.pinKind.displayName)
-                    .font(.caption2)
-                    .padding(.horizontal, 8)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(pin.pinKind.color.opacity(0.15))
                     .foregroundColor(pin.pinKind.color)
                     .clipShape(Capsule())
             }
 
-            Group {
+            VStack(alignment: .leading, spacing: 8) {
                 infoRow(label: "Job Number", value: pin.jobNumber)
                 infoRow(label: "Job Name", value: pin.siteName)
                 infoRow(label: "Client", value: pin.clientName)
                 infoRow(label: "Manager", value: pin.managerName)
                 infoRow(label: "Operatives On Site", value: "\(pin.operativeCount)")
             }
+            .padding(12)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-            HStack {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(PPFamily.plan.bottom)
                 Text(dayLabel(selectedDate))
-                    .font(.caption2)
+                    .font(.footnote.weight(.semibold))
                     .foregroundColor(.secondary)
                 Spacer()
             }
@@ -106,6 +130,8 @@ struct OrgSitesMapView: View {
                 }
                 .accessibilityIdentifier("orgSitesMap.previous")
                 .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(PPColor.brand)
 
                 Button {
                     selectedDate = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
@@ -114,11 +140,13 @@ struct OrgSitesMapView: View {
                 }
                 .accessibilityIdentifier("orgSitesMap.next")
                 .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(PPColor.brand)
             }
 
             if pin.scheduleRows.isEmpty {
                 Text("No bookings for this day.")
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundColor(.secondary)
             } else {
                 ForEach(pin.scheduleRows, id: \.self) { row in
@@ -127,14 +155,21 @@ struct OrgSitesMapView: View {
                 }
             }
         }
-        .padding()
-        .background(Color(.secondarySystemBackground))
+        .padding(PPMetrics.screenGutter)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PPColor.page)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color(.separator))
+                .frame(height: 0.5)
+                .accessibilityHidden(true)
+        }
     }
 
     private func infoRow(label: String, value: String) -> some View {
         HStack {
             Text(label)
-                .font(.caption)
+                .font(.footnote)
                 .foregroundColor(.secondary)
             Spacer()
             Text(value.isEmpty ? "N/A" : value)

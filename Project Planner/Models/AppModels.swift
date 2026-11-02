@@ -282,9 +282,12 @@ struct OperativeDayRateHistoryEntry: Identifiable, Codable, Hashable {
     var userId: String?
     /// Local operative roster id when the change is tracked per-roster-row (including operatives without an app login).
     var operativeId: UUID?
-    var dayRate: Double
+    /// Nil on a "rate cleared" row (`dayRate: null`, RULEBOOK §8): no rate from that day.
+    var dayRate: Double?
     var effectiveAt: Date
     var createdAt: Date
+    /// `day` or `hourly` (RULEBOOK §8). Nil on old rows, which count as day. `dayRate` holds the hourly figure for hourly rows.
+    var payBasis: String? = nil
 }
 
 /// Loaded `operativeDayRateHistory` documents bucketed for lookups (a single doc may appear in both maps).
@@ -469,6 +472,12 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// `users/{uid}.formerUserIds` from `parseFormerUserIds`: invite placeholder ids this account replaced.
     /// Bookings stored under one still belong to this person. Append-only in Firestore; a user save does not write it.
     var formerUserIds: [String] = []
+    /// `users/{uid}.status` as stored (`pending` until sign-up finishes). `unbookedLabourRows` skips pending users (RULEBOOK §5).
+    var status: String? = nil
+    /// `users/{uid}.payBasis`: `day` or `hourly` (RULEBOOK §8). A rate save writes exactly one basis.
+    var payBasis: String? = nil
+    /// `users/{uid}.profilePhotoUpdatedAt`: refreshes a cached avatar when the photo changes (RULEBOOK §12).
+    var profilePhotoUpdatedAt: Date? = nil
     
     init(
         id: String,
@@ -595,6 +604,7 @@ extension AppUser {
         case annualLeaveCarriesOver, annualLeaveYearAllowance, annualLeaveYearAllowanceKey
         case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
         case documentName, documentDisplayName, formerUserIds, documentUpdatedAt
+        case status, payBasis, profilePhotoUpdatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -642,6 +652,9 @@ extension AppUser {
         documentName = try container.decodeIfPresent(String.self, forKey: .documentName) ?? ""
         documentDisplayName = try container.decodeIfPresent(String.self, forKey: .documentDisplayName) ?? ""
         formerUserIds = try container.decodeIfPresent([String].self, forKey: .formerUserIds) ?? []
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        payBasis = try container.decodeIfPresent(String.self, forKey: .payBasis)
+        profilePhotoUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .profilePhotoUpdatedAt)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -688,6 +701,9 @@ extension AppUser {
         try container.encode(documentName, forKey: .documentName)
         try container.encode(documentDisplayName, forKey: .documentDisplayName)
         try container.encode(formerUserIds, forKey: .formerUserIds)
+        try container.encodeIfPresent(status, forKey: .status)
+        try container.encodeIfPresent(payBasis, forKey: .payBasis)
+        try container.encodeIfPresent(profilePhotoUpdatedAt, forKey: .profilePhotoUpdatedAt)
     }
 
     /// Operatives default on; self-employed managers/admins default on; PAYE managers/admins default off.
@@ -1650,7 +1666,7 @@ nonisolated struct MyScheduleOptions: Codable, Sendable, Hashable {
         self.showSiteSurvey = showSiteSurvey
         self.customItems = customItems
         if customItemEnabled.isEmpty {
-            self.customItemEnabled = Dictionary(uniqueKeysWithValues: customItems.map { ($0, true) })
+            self.customItemEnabled = Dictionary(customItems.map { ($0, true) }, uniquingKeysWith: { first, _ in first })
         } else {
             self.customItemEnabled = customItemEnabled
         }
@@ -1668,10 +1684,10 @@ nonisolated struct MyScheduleOptions: Codable, Sendable, Hashable {
         customItems = try container.decodeIfPresent([String].self, forKey: .customItems) ?? []
         let rawMap = try container.decodeIfPresent([String: Bool].self, forKey: .customItemEnabled) ?? [:]
         if rawMap.isEmpty {
-            customItemEnabled = Dictionary(uniqueKeysWithValues: customItems.map { ($0, true) })
+            customItemEnabled = Dictionary(customItems.map { ($0, true) }, uniquingKeysWith: { first, _ in first })
         } else {
             // Keep only known custom items and default missing values to true.
-            customItemEnabled = Dictionary(uniqueKeysWithValues: customItems.map { ($0, rawMap[$0] ?? true) })
+            customItemEnabled = Dictionary(customItems.map { ($0, rawMap[$0] ?? true) }, uniquingKeysWith: { first, _ in first })
         }
     }
 
@@ -1681,7 +1697,7 @@ nonisolated struct MyScheduleOptions: Codable, Sendable, Hashable {
         try container.encode(showWorkingFromHome, forKey: .showWorkingFromHome)
         try container.encode(showSiteSurvey, forKey: .showSiteSurvey)
         try container.encode(customItems, forKey: .customItems)
-        let normalized = Dictionary(uniqueKeysWithValues: customItems.map { ($0, customItemEnabled[$0] ?? true) })
+        let normalized = Dictionary(customItems.map { ($0, customItemEnabled[$0] ?? true) }, uniquingKeysWith: { first, _ in first })
         try container.encode(normalized, forKey: .customItemEnabled)
     }
 }
@@ -2006,7 +2022,7 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return nil
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return nil
         case .timesheetSubmissionReminder: return nil
-        case .ideaStatus, .ideaShipped: return nil
+        case .ideaStatus, .ideaShipped, .ideaComment, .ideaMerged: return nil
         }
     }
 }

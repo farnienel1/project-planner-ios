@@ -75,15 +75,20 @@ struct EditWholesalerContactView: View {
                     .disabled(isDeleting)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Edit Contact")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { onDismiss() }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("editWholesalerContact.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveContact() }
+                        .fontWeight(.semibold)
                         .accessibilityIdentifier("editWholesalerContact.save")
                         .disabled(
                             contactName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -188,15 +193,20 @@ struct AddWholesalerContactView: View {
                         .textInputAutocapitalization(.never)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Add Contact")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { isPresented = false }
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("addWholesalerContact.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveContact() }
+                        .fontWeight(.semibold)
                         .accessibilityIdentifier("addWholesalerContact.save")
                         .disabled(
                             contactName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

@@ -459,7 +459,11 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
             print("🔥🔥🔥 DEBUG: Post-quiet side work starting (operative sync + reminders)…")
-            await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+            // Roster rows are synced only from staff devices; pay is mirrored only where
+            // `canChangePersonPay` allows, other fields as changed-only partial updates (§8, §11).
+            if !userStore.isOperativeMode() {
+                await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+            }
             await notificationService.refreshDailyMaterialCutOffReminder()
             await notificationService.refreshQualificationExpiryReminders()
             print("🔥🔥🔥 DEBUG: Post-quiet side work finished")
@@ -506,7 +510,11 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
             print("🔥🔥🔥 DEBUG: Post-quiet side work starting (operative sync + reminders)…")
-            await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+            // Roster rows are synced only from staff devices; pay is mirrored only where
+            // `canChangePersonPay` allows, other fields as changed-only partial updates (§8, §11).
+            if !userStore.isOperativeMode() {
+                await userStore.syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
+            }
             await notificationService.refreshDailyMaterialCutOffReminder()
             await notificationService.refreshQualificationExpiryReminders()
             print("🔥🔥🔥 DEBUG: Post-quiet side work finished")

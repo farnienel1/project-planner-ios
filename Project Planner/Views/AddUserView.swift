@@ -10,6 +10,7 @@ import SwiftUI
 struct AddUserView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     enum AddUserMode {
@@ -189,7 +190,24 @@ struct AddUserView: View {
         }
     }
 
+    /// RULEBOOK §2: creating the user sends the invite, so the last step is online only.
     private var wizardFooter: some View {
+        VStack(spacing: 0) {
+            if currentStep == finalReviewStep && !smartCache.isOnline {
+                Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+            }
+            wizardFooterButtons
+        }
+        .background(ProjectWorksRevampColors.surface)
+    }
+
+    private var wizardFooterButtons: some View {
         HStack(spacing: 11) {
             Button {
                 withAnimation { currentStep -= 1 }
@@ -246,7 +264,7 @@ struct AddUserView: View {
             }
             .accessibilityIdentifier("addUser.creating")
             .buttonStyle(.plain)
-            .disabled(!canProceed || isCreating)
+            .disabled(!canProceed || isCreating || (currentStep == finalReviewStep && !smartCache.isOnline))
             .opacity((canProceed && !isCreating) ? 1 : 0.55)
         }
         .padding(.horizontal, 16)
@@ -369,17 +387,11 @@ struct AddUserView: View {
         )
     }
 
+    /// `lineManagerRequiredError` for the invite as it will be saved (RULEBOOK §8, §11).
     private var lineManagerSelectionValid: Bool {
-        if permissions.operativeMode {
-            return !selectedLineManagerUserIds.isEmpty
-        }
-        if permissions.manager || permissions.adminAccess {
-            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: inviteDraftUserForValidation) {
-                return !selectedLineManagerUserIds.isEmpty
-            }
-            return !selectedLineManagerUserIds.isEmpty || hasNoLineManager
-        }
-        return true
+        var draft = inviteDraftUserForValidation
+        draft.setLineManagerUserIds(Array(selectedLineManagerUserIds).sorted())
+        return AnnualLeaveApproval.lineManagerRequiredError(for: draft, users: userStore.organizationUsers) == nil
     }
 
     @ViewBuilder
@@ -421,14 +433,15 @@ struct AddUserView: View {
         }
     }
 
+    /// RULEBOOK §8, §11: `lineManagerRequiredError` on the invite with nobody chosen says whether one is required
+    /// (every operative and manager, whatever self-book); only admins may have none.
     private var lineManagerPickerFootnote: String {
-        if permissions.operativeMode {
-            return "Holiday requests from this operative will go to their line manager(s) (and organisation admins)."
+        var unassigned = inviteDraftUserForValidation
+        unassigned.hasNoLineManager = false
+        if AnnualLeaveApproval.lineManagerRequiredError(for: unassigned, users: userStore.organizationUsers) != nil {
+            return "Required. Timesheets and annual leave requests from this person go to these line manager(s)."
         }
-        if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: inviteDraftUserForValidation) {
-            return "Required while annual leave self-book is off. Requests route to these line manager(s)."
-        }
-        return "Optional for senior staff who book their own annual leave. Choose No line manager if they approve their own leave."
+        return "Optional for admins. With no line manager, an admin's own timesheets and annual leave are self-approved."
     }
 
     private var stepDetailsWithManager: some View {
@@ -1432,4 +1445,5 @@ struct PermissionToggle: View {
     AddUserView()
         .environmentObject(UserStore())
         .environmentObject(FirebaseBackend())
+        .environmentObject(SmartCacheService())
 }

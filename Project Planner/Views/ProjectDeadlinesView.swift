@@ -36,14 +36,29 @@ struct ProjectDeadlinesView: View {
         Group {
             if isLoading && store.items.isEmpty {
                 VStack(spacing: 0) {
-                    HSNavBar(title: "Deadlines",
-                             subtitle: "\(project.siteName) · \(project.jobNumber)",
-                             onBack: { dismiss() }) { EmptyView() }
-                    Spacer()
-                    ProgressView()
-                    Spacer()
+                    VStack(alignment: .leading, spacing: 0) {
+                        HSNavBar(title: "Deadlines",
+                                 subtitle: "\(project.siteName) · \(project.jobNumber)",
+                                 onBack: { dismiss() }) { EmptyView() }
+
+                        DeadlinesLoadingNavyHeader(
+                            contextName: project.siteName,
+                            contextRef: project.jobNumber,
+                            contextKind: contextKind
+                        )
+                    }
+                    .padding(.bottom, PPMetrics.headerBottomPadding)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .ppNavyHeader()
+
+                    VStack(spacing: 0) {
+                        Spacer()
+                        ProgressView()
+                        Spacer()
+                    }
+                    .modifier(DeadlinesLoadingContentSheet())
                 }
-                .hsScreen()
+                .background(PPColor.page.ignoresSafeArea())
             } else {
                 DLDeadlinesScreen(
                     store: store,
@@ -273,6 +288,69 @@ struct ProjectDeadlinesView: View {
             assignedUserIds: added,
             createdBy: authorName
         )
+    }
+}
+
+/// Loading-state copy of the Deadlines page's navy header (same title block, stat
+/// row and progress track) so the page doesn't jump when the list arrives.
+/// Counts are not known yet, so the stat row and caption are shown as placeholders.
+private struct DeadlinesLoadingNavyHeader: View {
+    let contextName: String
+    let contextRef: String
+    let contextKind: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                PPNavyPageTitle(
+                    eyebrow: "\(contextRef) · \(contextKind)",
+                    title: contextName
+                )
+                Spacer(minLength: 8)
+                PPIconTile(symbol: "calendar.badge.clock", family: .plan, size: 40)
+            }
+
+            HStack(alignment: .top, spacing: 14) {
+                PPStat(value: "0", label: "Deadlines")
+                PPStatDivider()
+                PPStat(value: "0", label: "Met")
+                PPStatDivider()
+                PPStat(value: "0", label: "Overdue")
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .redacted(reason: .placeholder)
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                PPOnNavyProgressBar(fraction: 0)
+                Text("0 of 0 deadlines met")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(PPColor.onNavySecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .redacted(reason: .placeholder)
+            }
+            .accessibilityHidden(true)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 4)
+    }
+}
+
+/// Same light rounded sheet the loaded Deadlines page uses. Visual only.
+private struct DeadlinesLoadingContentSheet: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(PPColor.page)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: PPMetrics.contentCornerRadius,
+                    topTrailingRadius: PPMetrics.contentCornerRadius,
+                    style: .continuous
+                )
+            )
+            .padding(.top, -PPMetrics.contentOverlap)
     }
 }
 

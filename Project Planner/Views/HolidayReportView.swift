@@ -18,20 +18,36 @@ struct HolidayReportView: View {
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    header
-                    yearPicker
-                    summaryCard
-                    bookingsList
+                VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        header
+                        yearPicker
+                    }
+                    .padding(.horizontal, PPMetrics.screenGutter)
+                    .padding(.top, 16)
+                    .padding(.bottom, PPMetrics.headerBottomPadding)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .ppNavyHeader()
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        summaryCard
+                        bookingsList
+                    }
+                    .padding(.top, 20)
+                    .padding(.bottom, 28)
+                    .ppContentSheet()
                 }
-                .padding(16)
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Holiday Report")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
                         .accessibilityIdentifier("holidayReport.done")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                 }
             }
             .task {
@@ -41,14 +57,7 @@ struct HolidayReportView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(user.fullName)
-                .font(.title3)
-                .fontWeight(.semibold)
-            Text(user.email)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-        }
+        PPNavyPageTitle(eyebrow: "Holiday Report", title: user.fullName, subtitle: user.email)
     }
 
     private var joinDate: Date {
@@ -74,14 +83,21 @@ struct HolidayReportView: View {
                         selectedYear = year
                     } label: {
                         Text("\(year)")
-                            .font(.headline)
-                            .foregroundColor(selectedYear == year ? .white : .primary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(selectedYear == year ? Color.indigo : Color(.secondarySystemBackground))
-                            .cornerRadius(12)
+                            .font(.system(.subheadline, design: .rounded))
+                            .fontWeight(.bold)
+                            .monospacedDigit()
+                            .foregroundStyle(selectedYear == year ? PPColor.navy : Color.white)
+                            .padding(.horizontal, 16)
+                            .frame(height: 34)
+                            .background(
+                                Capsule().fill(selectedYear == year ? Color.white : PPColor.onNavyFill)
+                            )
+                            .overlay(
+                                Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: selectedYear == year ? 0 : 0.5)
+                            )
                     }
                         .accessibilityIdentifier("holidayReport.row.\(year)")
+                        .buttonStyle(PPPressableButtonStyle())
                 }
             }
         }
@@ -128,44 +144,59 @@ struct HolidayReportView: View {
     }
 
     private var summaryCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Summary")
-                .font(.headline)
-            Text("\(totalDaysTaken) day\(totalDaysTaken == 1 ? "" : "s") approved in \(selectedYear)")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            PPGroupLabel(text: "Summary")
+            PPGroupedCard {
+                HStack(spacing: 13) {
+                    PPIconTile(symbol: "sun.max.fill", family: .plan, size: 38)
+                    Text("\(totalDaysTaken) day\(totalDaysTaken == 1 ? "" : "s") approved in \(selectedYear)")
+                        .font(.body.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 0)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
     }
 
     private var bookingsList: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Approved holiday")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 0) {
+            PPGroupLabel(text: "Approved holiday")
             if yearBookings.isEmpty {
-                Text("No approved holiday for \(selectedYear).")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .padding(.vertical, 8)
-            } else {
-                ForEach(yearBookings) { booking in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("\(booking.startDate.formatted(date: .abbreviated, time: .omitted)) – \(booking.endDate.formatted(date: .abbreviated, time: .omitted))")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                            Text("\(daysCount(for: booking, inYear: selectedYear)) day\(daysCount(for: booking, inYear: selectedYear) == 1 ? "" : "s")")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
+                PPGroupedCard {
+                    HStack(spacing: 13) {
+                        PPIconTile(symbol: "calendar", family: .system, size: PPMetrics.menuIcon)
+                        Text("No approved holiday for \(selectedYear).")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
                     }
-                    .padding(12)
-                    .background(Color(.secondarySystemBackground))
-                    .cornerRadius(12)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(yearBookings) { booking in
+                        HStack(spacing: 13) {
+                            PPIconTile(symbol: "sun.max.fill", family: .plan, size: PPMetrics.menuIcon)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(booking.startDate.formatted(date: .abbreviated, time: .omitted)) – \(booking.endDate.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
+                                Text("\(daysCount(for: booking, inYear: selectedYear)) day\(daysCount(for: booking, inYear: selectedYear) == 1 ? "" : "s")")
+                                    .font(.footnote)
+                                    .monospacedDigit()
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .frame(minHeight: 54)
+                        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+                    }
                 }
             }
         }

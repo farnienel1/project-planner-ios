@@ -16,6 +16,7 @@ struct HolidayView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject private var smartCache: SmartCacheService
 
     var showRequests: Bool = false
     /// When `true`, the back chevron calls `dismiss()` (sheet from home / notifications). When `false`, posts `goBackToPreviousTab` (bottom-bar Holiday tab).
@@ -24,9 +25,15 @@ struct HolidayView: View {
     private var isOperativeMode: Bool { userStore.isOperativeMode() }
     private var isManagerRequestMode: Bool {
         guard let u = userStore.displayUser else { return false }
-        return AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: u)
+        return AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: u, users: userStore.organizationUsers)
     }
     private var isRequestMode: Bool { isOperativeMode || isManagerRequestMode }
+    /// Shown while `lineManagerRequiredError` says this person is missing a current line manager, so
+    /// `leaveApproverIds` routes their requests to the admins.
+    private var showsNoLineManagerNotice: Bool {
+        guard isRequestMode, let user = holidayProfileUser ?? userStore.displayUser else { return false }
+        return AnnualLeaveApproval.showsNoLineManagerNotice(for: user, users: userStore.organizationUsers)
+    }
     // Admins don't show Requests by default. Requests section becomes available only when opened from a notification.
     private var canApproveRequests: Bool {
         guard let u = userStore.displayUser else { return false }
@@ -76,7 +83,8 @@ struct HolidayView: View {
         return userStore.canAccessOperativeAnnualLeaveDirectory() || canApproveRequests
     }
 
-    private let calendar = Calendar.current
+    /// Leave days are organisation business days (§1): organisation zone, Monday-first.
+    private var calendar: Calendar { OrganizationRulebookContext.calendar }
 
     private var holidayProfileUser: AppUser? {
         guard let uid = firebaseBackend.currentUser?.uid else { return nil }
@@ -107,10 +115,19 @@ struct HolidayView: View {
         )
     }
 
-    /// Managers/admins with self-book (or no line manager) book approved leave without a separate approver.
+    /// RULEBOOK §9: `CanonicalBusinessEngine.leaveSubmitLabel(user, roster)` — "Submit" when the leave saves approved, else "Submit request".
+    private var leaveSubmitButtonTitle: String {
+        if let u = userStore.displayUser,
+           let label = RulebookPeople.leaveSubmitLabel(u, users: userStore.organizationUsers) {
+            return label
+        }
+        return isRequestMode ? "Submit request" : "Submit"
+    }
+
+    /// `canSelfBookAnnualLeave(user, roster)`: the self-book permission, or an admin with no line manager.
     private var canShowSelfServeBookedAnnualLeave: Bool {
         guard let u = userStore.displayUser else { return false }
-        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: u)
+        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: u, users: userStore.organizationUsers)
     }
 
     private var bankHolidayRegion: BankHolidayRegion {
@@ -165,17 +182,15 @@ struct HolidayView: View {
             let matchesUser = bookingMatchesSignedInUser(booking, uid: uid)
             let matchesOperative = oid != nil && booking.operativeId == oid
             guard matchesUser || matchesOperative else { continue }
-            let start = calendar.startOfDay(for: booking.startDate)
-            let end = calendar.startOfDay(for: booking.endDate)
-            guard dayStart >= start && dayStart <= end else { continue }
-            let singleCalendarDay = calendar.isDate(booking.startDate, inSameDayAs: booking.endDate)
+            // The record's leave days (`leaveRecordDayKeys`); its slot applies to every one of them (§9).
+            guard LeaveRecordDays.covers(booking, day: dayStart) else { continue }
             switch booking.status {
             case .pending:
-                if booking.timeSlot == .fullDay || !singleCalendarDay { return .pendingFull }
+                if booking.timeSlot == .fullDay { return .pendingFull }
                 pendingHalf = booking
             case .approved:
                 guard booking.cancellationRequestedAt == nil else { continue }
-                if booking.timeSlot == .fullDay || !singleCalendarDay { return .approvedFull }
+                if booking.timeSlot == .fullDay { return .approvedFull }
                 approvedHalf = booking
             case .rejected:
                 continue
@@ -208,6 +223,19 @@ struct HolidayView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            VStack(alignment: .leading, spacing: 18) {
+                                PPNavyPageTitle(title: "Annual leave")
+                                if showsTeamTab {
+                                    leavePageTabs
+                                }
+                            }
+                            .padding(.horizontal, PPMetrics.screenGutter)
+                            .padding(.top, 16)
+                            .padding(.bottom, PPMetrics.headerBottomPadding)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .ppNavyHeader()
+
                             VStack(alignment: .leading, spacing: 20) {
                                 if let msg = holidayStore.errorMessage, !msg.isEmpty {
                                     VStack(alignment: .leading, spacing: 8) {
@@ -223,14 +251,9 @@ struct HolidayView: View {
                                         .accessibilityIdentifier("leave.retry2")
                                         .buttonStyle(.bordered)
                                     }
-                                    .padding(12)
+                                    .padding(14)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color(.secondarySystemBackground))
-                                    .cornerRadius(10)
-                                }
-
-                                if showsTeamTab {
-                                    leavePageTabs
+                                    .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
                                 }
 
                                 if leavePage == .team && showsTeamTab {
@@ -238,13 +261,14 @@ struct HolidayView: View {
                                 } else {
                                     myLeavePage
                                 }
+                            }
+                            .padding(.top, 20)
+                            .padding(.bottom, 28)
+                            .ppContentSheet()
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 16)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(HolidayChrome.canvas)
+                    .background(PPColor.page)
                     .refreshable {
                         if userStore.isOperativeMode() {
                             operativeStore.loadData()
@@ -256,9 +280,10 @@ struct HolidayView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(HolidayChrome.canvas)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Annual leave")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .navigationBarBackButtonHidden(true)
             .toolbar {
                 if !isManagingTeamLeave {
@@ -271,7 +296,7 @@ struct HolidayView: View {
                             }
                         }) {
                             Image(systemName: "chevron.left")
-                                .foregroundStyle(HolidayChrome.accent)
+                                .foregroundStyle(.white)
                                 .font(.system(size: 17, weight: .semibold))
                         }
                         .accessibilityIdentifier("leave.back")
@@ -393,6 +418,8 @@ struct HolidayView: View {
                         }
                         .accessibilityIdentifier("leave.decline")
                         .foregroundStyle(AnnualLeavePalette.red)
+                        // RULEBOOK §2: annual leave approval is online only.
+                        .disabled(!smartCache.isOnline)
                     }
                 }
             }
@@ -479,7 +506,7 @@ struct HolidayView: View {
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("Remove booking")
                             }
-                            .listRowBackground(Color.white)
+                            .listRowBackground(PPColor.card)
                         }
                     }
                 } footer: {
@@ -489,7 +516,7 @@ struct HolidayView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(HolidayChrome.canvas)
+            .background(PPColor.page)
             .navigationTitle("Booked annual leave")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -508,8 +535,8 @@ struct HolidayView: View {
             pageTab("Team", page: .team, badge: approverPendingRequests.count)
         }
         .padding(4)
-        .background(AnnualLeavePalette.soft)
-        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .background(Capsule().fill(PPColor.onNavyFill))
+        .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
     }
 
     private func pageTab(_ title: String, page: AnnualLeavePage, badge: Int?) -> some View {
@@ -528,12 +555,11 @@ struct HolidayView: View {
                         .clipShape(Capsule())
                 }
             }
-            .font(.subheadline.weight(.bold))
-            .foregroundStyle(leavePage == page ? AnnualLeavePalette.ink : AnnualLeavePalette.ink2)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(leavePage == page ? PPColor.navy : Color.white.opacity(0.75))
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(leavePage == page ? AnnualLeavePalette.card : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.vertical, 9)
+            .background(Capsule().fill(leavePage == page ? Color.white : Color.clear))
         }
         .accessibilityIdentifier("leave.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
@@ -546,12 +572,22 @@ struct HolidayView: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text("Book time off")
-                    .font(.title3.weight(.bold))
+                    .font(.system(.title3, design: .rounded).weight(.bold))
                 Text(isRequestMode
                      ? "Tap the days you want. Each day can be a full day, morning, or afternoon. Your line manager approves the request."
                      : "Tap the days you want. Each day can be a full day, morning, or afternoon. These book straight onto your allowance.")
                     .font(.footnote)
                     .foregroundStyle(AnnualLeavePalette.ink3)
+                if showsNoLineManagerNotice {
+                    Text("Your requests go to the company admins until a line manager is set.")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(AnnualLeavePalette.ink2)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(AnnualLeavePalette.soft)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .accessibilityIdentifier("leave.noLineManagerNotice")
+                }
             }
             calendarSection
             upcomingLeaveSection
@@ -577,28 +613,33 @@ struct HolidayView: View {
         let ring = people > 0 ? min(1, Double(away) / Double(people)) : 0
         return VStack(alignment: .leading, spacing: 12) {
             Text("TEAM · \(annualLeaveSummary?.leaveYearLabel ?? "This leave year")")
-                .font(.footnote.weight(.heavy))
-                .padding(.horizontal, 11)
-                .padding(.vertical, 4)
-                .background(Color.white.opacity(0.2))
-                .clipShape(Capsule())
+                .font(.caption.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .background(Capsule().fill(PPColor.onNavyFill))
+                .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(away)")
-                        .font(.largeTitle.weight(.heavy))
+                        .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                        .monospacedDigit()
                     Text("away today")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(PPColor.onNavySecondary)
                 }
                 .foregroundStyle(.white)
                 Spacer(minLength: 0)
                 ZStack {
-                    Circle().stroke(Color.white.opacity(0.28), lineWidth: 8)
+                    Circle().stroke(PPColor.onNavyFill, lineWidth: 8)
                     Circle()
                         .trim(from: 0, to: ring)
                         .stroke(style: StrokeStyle(lineWidth: 8, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(
+                            LinearGradient(colors: [PPColor.glow, .white], startPoint: .top, endPoint: .bottom)
+                        )
                     Text(soon == 1 ? "1 soon" : "\(soon) soon")
                         .font(.caption.weight(.heavy))
                         .foregroundStyle(.white)
@@ -614,33 +655,34 @@ struct HolidayView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LinearGradient(
-                colors: [AnnualLeavePalette.blue, AnnualLeavePalette.blue.opacity(0.72)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .background(PPNavyBackdrop())
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        .environment(\.colorScheme, .dark)
     }
 
     private func teamHeroTile(_ value: String, _ title: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(.title3.weight(.heavy))
-            Text(title).font(.footnote.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.7)
+            Text(value)
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(PPColor.onNavyCaption)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
         }
-        .foregroundStyle(.white)
         .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
         .padding(10)
-        .background(Color.white.opacity(0.17))
-        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(PPColor.onNavyFill))
+        .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
     }
 
     private var teamWaitingSection: some View {
         let requests = approverPendingRequests
         return VStack(alignment: .leading, spacing: 8) {
             Text("Waiting for you")
-                .font(.title3.weight(.bold))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             if requests.isEmpty {
                 Text("Nothing is waiting for you. New leave requests and cancellation requests from your team will appear here.")
                     .font(.subheadline)
@@ -649,8 +691,8 @@ struct HolidayView: View {
                     .padding(22)
                     .frame(maxWidth: .infinity)
                     .background(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .strokeBorder(AnnualLeavePalette.line, style: StrokeStyle(lineWidth: 1, dash: [5]))
+                        RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous)
+                            .strokeBorder(Color(.separator), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     )
             } else {
                 ForEach(requests) { request in
@@ -732,10 +774,12 @@ struct HolidayView: View {
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
             }
+            // RULEBOOK §2: annual leave approval is online only.
+            .onlineOnly(isOnline: smartCache.isOnline)
         }
         .padding(14)
-        .background(AnnualLeavePalette.card)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(isCancellation ? AnnualLeavePalette.violet : AnnualLeavePalette.amber)
@@ -746,7 +790,7 @@ struct HolidayView: View {
     private var teamAwayCalendarSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Who is off, and when")
-                .font(.title3.weight(.bold))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             Text("Initials show on each day, so a clash is obvious before you approve it.")
                 .font(.footnote)
                 .foregroundStyle(AnnualLeavePalette.ink3)
@@ -804,12 +848,8 @@ struct HolidayView: View {
                 }
             }
             .padding(14)
-            .background(AnnualLeavePalette.card)
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(AnnualLeavePalette.line, lineWidth: 1)
-            )
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
     }
 
@@ -831,12 +871,12 @@ struct HolidayView: View {
             }
             return .none
         }()
-        let initials = away.prefix(2).map { initials(from: $0.displayName) }.joined(separator: " ")
+        let awayInitials = away.prefix(2).map { initials(from: $0.displayName) }.joined(separator: " ")
         return AnnualLeaveDayFace(
             dayNumber: calendar.component(.day, from: date),
             visual: away.count >= 2 ? .none : visual,
             isToday: calendar.isDateInToday(day),
-            initials: initials.isEmpty ? nil : initials,
+            initials: awayInitials.isEmpty ? nil : awayInitials,
             accessibilityLabel: teamDayLabel(date: day, away: away, block: block)
         )
         .background {
@@ -864,11 +904,11 @@ struct HolidayView: View {
     private var teamPeopleSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Your team")
-                .font(.title3.weight(.bold))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             TextField("Search name or trade", text: $teamSearch)
                 .accessibilityIdentifier("leave.searchNameOrTrade")
                 .padding(12)
-                .background(AnnualLeavePalette.card)
+                .background(PPColor.card)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             HStack {
                 Picker("Sort by", selection: $teamSort) {
@@ -920,11 +960,10 @@ struct HolidayView: View {
         let balance = teamBalance(for: person)
         return HStack(spacing: 11) {
             Text(initials(from: person.displayName))
-                .font(.subheadline.weight(.heavy))
-                .foregroundStyle(AnnualLeavePalette.leave)
+                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                .foregroundStyle(.white)
                 .frame(width: 38, height: 38)
-                .background(AnnualLeavePalette.leaveTint)
-                .clipShape(Circle())
+                .background(PPFamily.people.gradient, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(person.displayName)
                     .font(.body.weight(.semibold))
@@ -958,12 +997,8 @@ struct HolidayView: View {
                 .foregroundStyle(AnnualLeavePalette.ink3)
         }
         .padding(12)
-        .background(AnnualLeavePalette.card)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(AnnualLeavePalette.line, lineWidth: 1)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private var teamPeople: [AnnualLeavePerson] {
@@ -1131,15 +1166,15 @@ struct HolidayView: View {
         let spans = AnnualLeaveDateFormat.displaySpans(from: upcoming, calendar: calendar)
         return VStack(alignment: .leading, spacing: 8) {
             Text("Upcoming leave")
-                .font(.title3.weight(.bold))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             if spans.isEmpty {
                 Text("Approved and pending leave from today onwards will show here, grouped by the days you booked.")
                     .font(.subheadline)
                     .foregroundStyle(AnnualLeavePalette.ink3)
                     .padding(18)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(AnnualLeavePalette.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .background(PPColor.card)
+                    .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
             } else {
                 ForEach(spans) { span in
                     HolidayRowView(
@@ -1154,12 +1189,16 @@ struct HolidayView: View {
     }
 
     private var ownRequestsSection: some View {
+        let today = calendar.startOfDay(for: Date())
         let mine = holidayStore.myBookings(userId: firebaseBackend.currentUser?.uid, operativeId: currentOperative?.id)
-            .filter { $0.status == .pending || $0.cancellationRequestedAt != nil }
+            .filter {
+                $0.status == .pending || $0.cancellationRequestedAt != nil ||
+                    ($0.status == .rejected && calendar.startOfDay(for: $0.endDate) >= today)
+            }
             .sorted { $0.startDate > $1.startDate }
         return VStack(alignment: .leading, spacing: 8) {
             Text("Your requests")
-                .font(.title3.weight(.bold))
+                .font(.system(.title3, design: .rounded).weight(.bold))
             Text("These are waiting on your line manager, including cancellations.")
                 .font(.footnote)
                 .foregroundStyle(AnnualLeavePalette.ink3)
@@ -1169,8 +1208,8 @@ struct HolidayView: View {
                     .foregroundStyle(AnnualLeavePalette.ink3)
                     .padding(18)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(AnnualLeavePalette.card)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .background(PPColor.card)
+                    .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
             } else {
                 ForEach(mine) { request in
                     HolidayRowView(booking: request)
@@ -1327,6 +1366,8 @@ struct HolidayView: View {
 
     private func monthYearString(_ date: Date) -> String {
         let f = DateFormatter()
+        f.calendar = calendar
+        f.timeZone = calendar.timeZone
         f.dateFormat = "MMMM yyyy"
         return f.string(from: date)
     }
@@ -1357,13 +1398,8 @@ struct HolidayView: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(ProjectWorksRevampColors.surface)
-                .shadow(color: Color.black.opacity(0.04), radius: 8, y: 2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(HolidayChrome.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous)
+                .fill(PPColor.card)
         )
     }
 
@@ -1488,10 +1524,7 @@ struct HolidayView: View {
             guard matchesUser || matchesOperative else {
                 return false
             }
-            let target = calendar.startOfDay(for: day)
-            let start = calendar.startOfDay(for: booking.startDate)
-            let end = calendar.startOfDay(for: booking.endDate)
-            return target >= start && target <= end
+            return LeaveRecordDays.covers(booking, day: day)
         }
     }
 
@@ -1567,28 +1600,22 @@ struct HolidayView: View {
                             throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
                         }
                     }
-                    var createdBookingIds: [UUID] = []
-                    for day in selectedDays {
-                        let booking = HolidayBooking(
-                            organizationId: orgId,
-                            userId: uid,
-                            operativeId: operativeId,
-                            startDate: day,
-                            endDate: day,
-                            status: .pending,
-                            timeSlot: selectedDaySlots[calendar.startOfDay(for: day)] ?? selectedHolidayTimeSlot
-                        )
-                        try await holidayStore.saveBooking(booking)
-                        createdBookingIds.append(booking.id)
-                    }
-                    if let firstBookingId = createdBookingIds.first,
-                       let startDate = selectedDays.first,
-                       let endDate = selectedDays.last {
+                    // One document per request range (`holidayRequestRanges`), pending for `leaveApproverIds`.
+                    let created = try await holidayStore.createRequests(
+                        picks: selectedDays.map { day in
+                            (day: day, timeSlot: selectedDaySlots[calendar.startOfDay(for: day)] ?? selectedHolidayTimeSlot)
+                        },
+                        userId: uid,
+                        operativeId: operativeId,
+                        status: .pending,
+                        approvedByUserId: nil
+                    )
+                    for request in created {
                         await notificationService.notifyHolidayRequestSubmitted(
-                            bookingId: firstBookingId,
+                            bookingId: request.id,
                             operativeName: operativeDisplayName,
-                            startDate: startDate,
-                            endDate: endDate,
+                            startDate: request.startDate,
+                            endDate: request.endDate,
                             assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser(),
                             requesterUserId: uid,
                             excludeUserIdMatchingRequester: uid
@@ -1612,33 +1639,30 @@ struct HolidayView: View {
                             throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
                         }
                     }
-                    var firstBookingId: UUID?
-                    for day in selectedDays {
-                        let booking = HolidayBooking(
-                            organizationId: orgId,
-                            userId: uid,
-                            operativeId: nil,
-                            startDate: day,
-                            endDate: day,
-                            status: isManagerRequestMode ? .pending : .approved,
-                            timeSlot: selectedDaySlots[calendar.startOfDay(for: day)] ?? selectedHolidayTimeSlot
-                        )
-                        try await holidayStore.saveBooking(booking)
-                        firstBookingId = firstBookingId ?? booking.id
-                    }
-                    if isManagerRequestMode,
-                       let bookingId = firstBookingId,
-                       let startDate = selectedDays.first,
-                       let endDate = selectedDays.last {
+                    // D5: approved only with the `annualLeaveSelfBook` permission; otherwise a pending request
+                    // for `leaveApproverIds`. One document per request range (`holidayRequestRanges`).
+                    let selfBooks = !isManagerRequestMode
+                    let created = try await holidayStore.createRequests(
+                        picks: selectedDays.map { day in
+                            (day: day, timeSlot: selectedDaySlots[calendar.startOfDay(for: day)] ?? selectedHolidayTimeSlot)
+                        },
+                        userId: uid,
+                        operativeId: nil,
+                        status: selfBooks ? .approved : .pending,
+                        approvedByUserId: selfBooks ? uid : nil
+                    )
+                    if !selfBooks {
                         let requesterName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
-                        await notificationService.notifyHolidayRequestSubmittedByUser(
-                            bookingId: bookingId,
-                            requesterUserId: uid,
-                            requesterName: requesterName,
-                            startDate: startDate,
-                            endDate: endDate,
-                            assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser()
-                        )
+                        for request in created {
+                            await notificationService.notifyHolidayRequestSubmittedByUser(
+                                bookingId: request.id,
+                                requesterUserId: uid,
+                                requesterName: requesterName,
+                                startDate: request.startDate,
+                                endDate: request.endDate,
+                                assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser()
+                            )
+                        }
                     }
                     await MainActor.run {
                         if isManagerRequestMode {
@@ -1718,7 +1742,7 @@ struct HolidayView: View {
                             .tint(.white)
                     } else {
                         Image(systemName: isRequestMode ? "paperplane.fill" : "checkmark.circle.fill")
-                        Text(isRequestMode ? "Submit request" : "Confirm booking")
+                        Text(leaveSubmitButtonTitle)
                     }
                 }
                 .font(.system(size: 16, weight: .semibold))
@@ -1738,73 +1762,38 @@ struct HolidayView: View {
         return operativeStore.allOperatives.first { $0.email.lowercased() == email.lowercased() }
     }
 
+    /// D6: admins and super admins see every pending request in the organisation; anyone else only the
+    /// requests whose `leaveApproverIds` names them. Nobody sees their own.
     private var approverPendingRequests: [HolidayBooking] {
-        guard let me = userStore.currentUser else { return [] }
-        let all = holidayStore.pendingRequests
-            .filter { !isOwnAnnualLeave($0) && !isSelfBookedRequester($0) }
-            .sorted { $0.startDate > $1.startDate }
-        // Every assigned line manager can approve. Only one decision is required.
-        if me.permissions.manager && !me.isSuperAdmin && !me.permissions.adminAccess && me.role != .admin {
-            return all.filter { lineManagerIds(for: $0).contains(me.id) }
-        }
-        if userStore.hasAdminAccess() {
-            return all.filter {
-                let managers = lineManagerIds(for: $0)
-                return managers.isEmpty || managers.contains(me.id)
-            }
-        }
-        return []
+        guard userStore.currentUser != nil else { return [] }
+        return AnnualLeaveApproval.decidableRequests(
+            holidayStore.pendingRequests,
+            viewer: approvalViewer,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
+        .sorted { $0.startDate > $1.startDate }
     }
 
-    /// Team is other people's requests. Your own leave stays on My leave, even for an admin.
-    private func isOwnAnnualLeave(_ request: HolidayBooking) -> Bool {
-        let ids = Set([firebaseBackend.currentUser?.uid, userStore.currentUser?.id].compactMap { $0 })
-        if let uid = request.userId, ids.contains(uid) { return true }
-        if let email = userStore.currentUser?.email.lowercased(),
-           let oid = request.operativeId,
-           let operative = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           operative.email.lowercased() == email {
-            return true
-        }
-        return false
+    /// The signed-in account as the roster has it (fresh line-manager and role flags), else the session user.
+    private var approvalViewer: AppUser? {
+        guard let me = userStore.currentUser else { return nil }
+        return userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me
     }
 
-    /// People who book their own leave are not approved from the team queue.
-    private func isSelfBookedRequester(_ request: HolidayBooking) -> Bool {
-        if let uid = request.userId,
-           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: requester)
-        }
-        if let oid = request.operativeId,
-           let operative = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let requester = userStore.organizationUsers.first(where: { $0.email.lowercased() == operative.email.lowercased() }) {
-            return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: requester)
-        }
-        return false
-    }
-
-    private func lineManagerIds(for request: HolidayBooking) -> [String] {
-        if let uid = request.userId,
-           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            guard AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester) else { return [] }
-            return requester.lineManagerUserIds
-        }
-        if let oid = request.operativeId,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let requester = userStore.organizationUsers.first(where: {
-               ($0.permissions.operativeMode || $0.role == .operative) &&
-               $0.email.lowercased() == op.email.lowercased()
-           }) {
-            guard AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester) else { return [] }
-            return requester.lineManagerUserIds
-        }
-        return []
+    private func canDecide(_ request: HolidayBooking) -> Bool {
+        AnnualLeaveApproval.canDecide(
+            request,
+            viewer: approvalViewer,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
     }
 
     private func assignedApproverUserId(for request: HolidayBooking) -> String? {
         if let uid = request.userId,
            let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            if AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester) {
+            if AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester, users: userStore.organizationUsers) {
                 return requester.primaryLineManagerUserId
             }
             return nil
@@ -1821,7 +1810,7 @@ struct HolidayView: View {
     }
 
     private func approveRequest(_ request: HolidayBooking) {
-        guard let uid = firebaseBackend.currentUser?.uid else { return }
+        guard let uid = firebaseBackend.currentUser?.uid, canDecide(request) else { return }
         Task {
             if request.cancellationRequestedAt != nil {
                 await holidayStore.deleteBooking(request)
@@ -1854,9 +1843,11 @@ struct HolidayView: View {
         }
     }
 
-    private func peerNotice(for request: HolidayBooking, actorName: String, actionVerb: String) -> String {
-        let name = requesterName(for: request)
-        let dates = AnnualLeaveDateFormat.bookingTitle(request)
+    /// Web `buildLeaveDecisionPeerNotifications` copy: "{decider} {verb} {name}'s annual leave request|cancellation.
+    /// {dates}" with `annualLeaveDecisionDateText`.
+    private func peerNotice(for request: HolidayBooking, requester: AppUser, actorName: String, actionVerb: String) -> String {
+        let name = requester.fullName.isEmpty ? requester.email : requester.fullName
+        let dates = AnnualLeaveNoticeText.decisionDateText(request)
         let subject = request.cancellationRequestedAt != nil ? "annual leave cancellation" : "annual leave request"
         return "\(actorName) \(actionVerb) \(name)'s \(subject). \(dates)"
     }
@@ -1880,21 +1871,20 @@ struct HolidayView: View {
             return nil
         }()
         guard let requesterUser else { return }
-        let peers = requesterUser.lineManagerUserIds.filter { $0 != actorUserId }
-        guard !peers.isEmpty else { return }
+        // `lineManagerPeerRecipients(subject, actor, roster)` picks the other line managers.
         await notificationService.notifyLineManagerPeerAction(
             actorName: actorName,
-            actionSummary: peerNotice(for: request, actorName: actorName, actionVerb: actionVerb),
-            peerManagerUserIds: peers,
-            excludingActorUserId: actorUserId,
+            actionSummary: AnnualLeaveNoticeText.decisionDateText(request),
+            subject: requesterUser,
             actionVerb: actionVerb,
-            message: peerNotice(for: request, actorName: actorName, actionVerb: actionVerb)
+            message: peerNotice(for: request, requester: requesterUser, actorName: actorName, actionVerb: actionVerb),
+            relatedId: request.id
         )
     }
 
     private func declineRequest(_ request: HolidayBooking, reason: String = "") {
         if request.cancellationRequestedAt != nil { return }
-        guard let uid = firebaseBackend.currentUser?.uid else { return }
+        guard let uid = firebaseBackend.currentUser?.uid, canDecide(request) else { return }
         Task {
             await holidayStore.rejectBooking(request, rejectedByUserId: uid, reason: reason)
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
@@ -1917,16 +1907,7 @@ struct HolidayView: View {
                 decidedByName: decidedByName,
                 reason: reason
             )
-            if approved,
-               let requester = userStore.organizationUsers.first(where: { $0.id == requesterUserId }),
-               AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester),
-               requester.permissions.manager {
-                await notificationService.notifyAdminAnnualLeaveApproval(
-                    managerName: requester.fullName,
-                    approvedByName: decidedByName,
-                    excludingUserId: firebaseBackend.currentUser?.uid
-                )
-            }
+            // RULEBOOK §13: a decision notifies the requester only (`holidayDecisionRecipients`); no admin copy.
             return
         }
         if let oid = request.operativeId,
@@ -2000,7 +1981,8 @@ struct HolidayView: View {
                 endDate: booking.endDate,
                 assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser(),
                 requesterUserId: uid,
-                excludeUserIdMatchingRequester: uid
+                excludeUserIdMatchingRequester: uid,
+                cancellation: true
             )
         }
     }
@@ -2098,6 +2080,12 @@ struct HolidayRowView: View {
                 Text(statusText)
                     .font(.caption.weight(.bold))
                     .foregroundStyle(statusColor)
+                if booking.status != .pending,
+                   let note = CanonicalBusinessEngine.parseHolidayDecisionNote(booking.decisionNote) {
+                    Text("Note: \(note)")
+                        .font(.caption)
+                        .foregroundStyle(AnnualLeavePalette.ink2)
+                }
                 if let onRequestCancellation {
                     Button(actionTitle) {
                         onRequestCancellation()
@@ -2114,8 +2102,8 @@ struct HolidayRowView: View {
             Spacer(minLength: 0)
         }
         .padding(14)
-        .background(AnnualLeavePalette.card)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(statusColor)
@@ -2151,6 +2139,7 @@ struct HolidayRequestRowView: View {
     let canApprove: Bool
     let onApprove: () -> Void
     let onDecline: () -> Void
+    @EnvironmentObject private var smartCache: SmartCacheService
     @State private var showConflicts = false
 
     var body: some View {
@@ -2203,6 +2192,8 @@ struct HolidayRequestRowView: View {
                             .accessibilityIdentifier("holidayRequestRow.decline")
                     }
                 }
+                // RULEBOOK §2: annual leave approval is online only.
+                .onlineOnly(isOnline: smartCache.isOnline)
             } else {
                 Text("Pending approval")
                     .font(.caption)
@@ -2210,8 +2201,7 @@ struct HolidayRequestRowView: View {
             }
         }
         .padding(12)
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .alert("Annual Leave Overlap", isPresented: $showConflicts) {
             Button("OK", role: .cancel) {}
                 .accessibilityIdentifier("holidayRequestRow.ok")
@@ -2223,6 +2213,7 @@ struct HolidayRequestRowView: View {
 
 #Preview {
     HolidayView()
+        .environmentObject(SmartCacheService())
         .environmentObject(HolidayStore())
         .environmentObject(UserStore())
         .environmentObject(OperativeStore())

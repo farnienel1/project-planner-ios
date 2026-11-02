@@ -44,7 +44,10 @@ extension MyScheduleOptions {
             "showWorkingFromHome": showWorkingFromHome,
             "showSiteSurvey": showSiteSurvey,
             "customItems": customItems,
-            "customItemEnabled": Dictionary(uniqueKeysWithValues: customItems.map { ($0, customItemEnabled[$0] ?? true) }),
+            "customItemEnabled": Dictionary(
+                customItems.map { ($0, customItemEnabled[$0] ?? true) },
+                uniquingKeysWith: { first, _ in first }
+            ),
         ]
     }
 }

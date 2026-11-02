@@ -8,6 +8,7 @@ import SwiftUI
 struct OrganisationInvoicingSettingsView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft: OrganizationInvoicingSettings = .default
@@ -17,6 +18,24 @@ struct OrganisationInvoicingSettingsView: View {
     @State private var didLoad = false
 
     private var isDirty: Bool { draft != baseline }
+
+    /// `validateInvoicingSettings` on the draft, shown inline (e.g. run 1 must end by the 27th).
+    private var inlineValidationError: String? {
+        guard didLoad, draft != baseline else { return nil }
+        return CanonicalBusinessEngine.validateInvoicingSettings(draft.canonicalInvoicingSettings())
+    }
+
+    /// The run active today (`activePaymentRunSummary`, organisation zone) and its pay day
+    /// (`paymentRunPayDate`) for the draft settings.
+    private var currentRunLine: String? {
+        guard let run = CanonicalBusinessEngine.activePaymentRunSummary(draft) else { return nil }
+        let span = "\(CanonicalBusinessEngine.formatPaymentRunDay(run.startDayKey)) – \(CanonicalBusinessEngine.formatPaymentRunDay(run.endDayKey))"
+        let period = CanonicalDayWindow(startDayKey: run.startDayKey, endDayKey: run.endDayKey)
+        guard let payDay = CanonicalBusinessEngine.paymentRunPayDate(draft, period: period) else {
+            return "Current run: \(span) · pay date not set"
+        }
+        return "Current run: \(span) · Paid on \(CanonicalBusinessEngine.formatPaymentRunDay(payDay))"
+    }
 
     private var showsMonthCoverage: Bool {
         CanonicalBusinessEngine.paymentRunShowsMonthCoverage(draft.canonicalInvoicingSettings()) == true
@@ -72,11 +91,11 @@ struct OrganisationInvoicingSettingsView: View {
                         dayMenuRow(title: "Start day", selection: $draft.recurringRunStartDay)
                         dayMenuRow(title: "End day", selection: $draft.recurringRunEndDay)
                         Text(draft.recurringRunDisplaySummary)
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Color.primary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(ProjectWorksRevampColors.grayTint)
+                            .background(PPColor.well)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .padding(.bottom, 12)
                     }
@@ -120,14 +139,26 @@ struct OrganisationInvoicingSettingsView: View {
                     TextEditor(text: $draft.noteToUsers)
                         .accessibilityIdentifier("organisationInvoicingSettings.textEditor")
                         .frame(minHeight: 120)
-                        .font(.system(size: 13))
+                        .font(.subheadline)
                         .padding(.vertical, 8)
+                }
+
+                if errorMessage == nil, let inlineValidationError {
+                    Text(inlineValidationError)
+                        .foregroundStyle(PPColor.danger)
+                        .font(.subheadline.weight(.semibold))
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(ProjectWorksRevampColors.requiredPillBg)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.bottom, 8)
+                        .accessibilityIdentifier("organisationInvoicingSettings.validation")
                 }
 
                 if let errorMessage {
                     Text(errorMessage)
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(PPColor.danger)
+                        .font(.subheadline.weight(.semibold))
                         .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(ProjectWorksRevampColors.requiredPillBg)
@@ -138,12 +169,12 @@ struct OrganisationInvoicingSettingsView: View {
             }
             .padding(16)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Payment runs & timesheets")
         .navigationBarTitleDisplayMode(.inline)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
         .safeAreaInset(edge: .bottom) {
-            SettingsStickySaveBar(title: "Save", isDirty: isDirty, isSaving: isSaving) {
+            SettingsStickySaveBar(title: "Save", isDirty: isDirty, isSaving: isSaving, isOnline: smartCache.isOnline) {
                 Task { await save() }
             }
         }
@@ -159,6 +190,15 @@ struct OrganisationInvoicingSettingsView: View {
             adoptTimesheetRowsFromScript()
             baseline = draft
             didLoad = true
+        }
+        .onChange(of: firebaseBackend.currentOrganization?.settings.invoicing) { _, server in
+            // §4: keep an unsaved draft; follow the server only while nothing has been changed here.
+            guard didLoad, !isSaving, draft == baseline, let server else { return }
+            draft = server
+            ensureTwoDateRanges()
+            draft.refreshRecurringSummaryFromDays()
+            adoptTimesheetRowsFromScript()
+            baseline = draft
         }
         .onChange(of: draft.paymentRunMode) { _, mode in
             if mode == .recurringTimeframe {
@@ -183,7 +223,7 @@ struct OrganisationInvoicingSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 10) {
                 Text("Run \(index + 1)")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.footnote.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 8)
                     .frame(minWidth: 52, minHeight: 28)
@@ -213,32 +253,32 @@ struct OrganisationInvoicingSettingsView: View {
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted)
+                    .foregroundStyle(selected ? PPColor.brand : Color.secondary)
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.primary)
                         .multilineTextAlignment(.leading)
                     Text(description)
-                        .font(.system(size: 13))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.secondary)
                         .multilineTextAlignment(.leading)
                     Text(example)
-                        .font(.system(size: 12))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .font(.footnote)
+                        .foregroundStyle(Color.secondary)
                 }
                 Spacer(minLength: 0)
             }
             .padding(.vertical, 12)
             .padding(.horizontal, 12)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(selected ? ProjectWorksRevampColors.blue.opacity(0.08) : ProjectWorksRevampColors.card)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(selected ? PPColor.brand.opacity(0.08) : PPColor.card)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(selected ? ProjectWorksRevampColors.blue.opacity(0.35) : ProjectWorksRevampColors.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(selected ? PPColor.brand.opacity(0.35) : Color.clear, lineWidth: 1)
             )
         }
         .accessibilityIdentifier("organisationInvoicingSettings.\(AccessibilityID.token(title))")
@@ -256,47 +296,48 @@ struct OrganisationInvoicingSettingsView: View {
     }
 
     private var glanceLines: [String] {
+        let current = currentRunLine.map { [$0] } ?? []
         if draft.paymentRunMode == .dateRanges {
             return editorRanges.enumerated().map { index, range in
                 let span = ordinalSpan(start: range.startDay, end: range.endDay)
                 let pay = draft.paymentDateMode == .specificDates ? paidOn(index) : "pay date not set"
                 return "Run \(index + 1): work from the \(span), \(pay)"
-            }
+            } + current
         }
         let week = "Weekly in arrears: \(draft.recurringRunStartDay.title) to \(draft.recurringRunEndDay.title) of the previous week"
         if draft.paymentDateMode == .recurringDate {
-            return [week, "Paid every \(draft.recurringPaymentDay.title)"]
+            return [week, "Paid every \(draft.recurringPaymentDay.title)"] + current
         }
         let dates = draft.paymentDates
             .map { PaymentRunDateRange.clampDay($0) }
             .filter { (1...31).contains($0) }
             .compactMap { ordinalDay($0) }
         let paid = dates.isEmpty ? "dates not set" : dates.map { "the \($0)" }.joined(separator: " and ")
-        return [week, "Paid on \(paid)"]
+        return [week, "Paid on \(paid)"] + current
     }
 
     private var atAGlanceCard: some View {
         SettingsHubChrome.card {
             VStack(alignment: .leading, spacing: 6) {
                 Text("At a glance")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.secondary)
                     .padding(.top, 12)
                 ForEach(Array(glanceLines.enumerated()), id: \.offset) { _, line in
                     HStack(alignment: .top, spacing: 8) {
                         Circle()
-                            .fill(ProjectWorksRevampColors.blue)
+                            .fill(PPColor.brand)
                             .frame(width: 6, height: 6)
                             .padding(.top, 6)
                         Text(line)
-                            .font(.system(size: 14))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .font(.body)
+                            .foregroundStyle(Color.primary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Text("Set your pay periods first, then the pay day. Warnings can use the end of the pay period for detection.")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.footnote)
+                    .foregroundStyle(Color.secondary)
                     .padding(.bottom, 12)
             }
         }
@@ -305,18 +346,18 @@ struct OrganisationInvoicingSettingsView: View {
     private func numberedStep(_ step: Int, title: String, description: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Text("\(step)")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(ProjectWorksRevampColors.card)
+                .font(.footnote.weight(.bold))
+                .foregroundStyle(.white)
                 .frame(width: 24, height: 24)
-                .background(ProjectWorksRevampColors.ink)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(PPColor.brand)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 15.5, weight: .bold))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .font(.body.weight(.bold))
+                    .foregroundStyle(Color.primary)
                 Text(description)
-                    .font(.system(size: 13))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -331,7 +372,7 @@ struct OrganisationInvoicingSettingsView: View {
             dateModeButton("Recurring payment date", mode: .recurringDate, enabled: recurringRun)
         }
         .padding(3)
-        .background(ProjectWorksRevampColors.grayTint)
+        .background(PPColor.well)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .accessibilityIdentifier("organisationInvoicingSettings.dateMode")
     }
@@ -343,12 +384,12 @@ struct OrganisationInvoicingSettingsView: View {
             draft.paymentDateMode = mode
         } label: {
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.footnote.weight(.semibold))
                 .multilineTextAlignment(.center)
-                .foregroundStyle(selected ? ProjectWorksRevampColors.ink : ProjectWorksRevampColors.muted)
+                .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
-                .background(selected ? ProjectWorksRevampColors.card : Color.clear)
+                .background(selected ? PPColor.card : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -407,8 +448,8 @@ struct OrganisationInvoicingSettingsView: View {
     private func monthDayMenuRow(title: String, day: Int, onSelect: @escaping (Int) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(Color.secondary)
             Menu {
                 ForEach(1...31, id: \.self) { option in
                     Button(ordinalDay(option) ?? "\(option)") { onSelect(option) }
@@ -416,16 +457,16 @@ struct OrganisationInvoicingSettingsView: View {
             } label: {
                 HStack {
                     Text(ordinalDay(day) ?? "Select")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.primary)
                     Spacer(minLength: 4)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.secondary)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
-                .background(ProjectWorksRevampColors.canvas)
+                .background(PPColor.page)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .accessibilityIdentifier("organisationInvoicingSettings.\(AccessibilityID.token(title))")
@@ -452,10 +493,10 @@ struct OrganisationInvoicingSettingsView: View {
                 HStack(spacing: 6) {
                     Text("\(prefix)\(selection.wrappedValue.title)")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .foregroundStyle(PPColor.brand)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(PPColor.brand)
                 }
             }
                 .accessibilityIdentifier("organisationInvoicingSettings.\(AccessibilityID.token(title))2")
@@ -548,8 +589,8 @@ struct OrganisationInvoicingSettingsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 if rows.isEmpty {
                     Text("Timesheet reminder times will appear when these payment settings can be read.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .font(.footnote)
+                        .foregroundStyle(Color.secondary)
                 } else if draft.paymentRunMode == .recurringTimeframe, let row = rows.first {
                     timesheetRowEditor(index: 0, row: row, title: nil)
                 } else {
@@ -581,7 +622,7 @@ struct OrganisationInvoicingSettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             if let title {
                 Text(title)
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.footnote.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 8)
                     .frame(minWidth: 52, minHeight: 28)
@@ -589,8 +630,8 @@ struct OrganisationInvoicingSettingsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             Text(timesheetPaymentLabel(at: index))
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.body.weight(.medium))
+                .foregroundStyle(Color.primary)
 
             if draft.paymentRunMode == .recurringTimeframe {
                 weekdayChoice(
@@ -670,11 +711,11 @@ struct OrganisationInvoicingSettingsView: View {
             let preview = timesheetPreview(at: index, row: row)
             if !preview.isEmpty {
                 Text(preview)
-                    .font(.system(size: 13))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.primary)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(ProjectWorksRevampColors.canvas)
+                    .background(PPColor.page)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
 
@@ -682,14 +723,14 @@ struct OrganisationInvoicingSettingsView: View {
                 Button("Reset to payment-day defaults") {
                     resetTimesheet(at: index)
                 }
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(ProjectWorksRevampColors.blue)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(PPColor.brand)
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("organisationInvoicingSettings.resetTimesheet.\(index)")
             } else {
                 Text("Auto-filled from the payment day. Edit to keep a custom pair.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.caption)
+                    .foregroundStyle(Color.secondary)
             }
         }
         .padding(.vertical, 4)
@@ -785,8 +826,8 @@ struct OrganisationInvoicingSettingsView: View {
     ) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 13))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.subheadline)
+                .foregroundStyle(Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             Menu {
@@ -794,11 +835,11 @@ struct OrganisationInvoicingSettingsView: View {
             } label: {
                 HStack(spacing: 6) {
                     Text(value)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(enabled ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(enabled ? PPColor.brand : Color.secondary)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(enabled ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(enabled ? PPColor.brand : Color.secondary)
                 }
             }
             .disabled(!enabled)
@@ -967,12 +1008,12 @@ private struct PaymentRunMonthStrip: View {
                 legendSwatch(PaymentRunStripPalette.run2, title: "Run 2")
             }
             Text(legend.text)
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(legend == .coveredOnce ? PaymentRunStripPalette.covered : PaymentRunStripPalette.overlap)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
-        .background(ProjectWorksRevampColors.grayTint)
+        .background(PPColor.well)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
@@ -980,7 +1021,7 @@ private struct PaymentRunMonthStrip: View {
         Text("\(item.day)")
             .font(.system(size: 10.5, weight: .bold))
             .monospacedDigit()
-            .foregroundStyle(item.state == .gap ? ProjectWorksRevampColors.muted : Color.white)
+            .foregroundStyle(item.state == .gap ? Color.secondary : Color.white)
             .frame(maxWidth: .infinity)
             .frame(height: 28)
             .background(cellBackground(item.state))
@@ -1002,7 +1043,7 @@ private struct PaymentRunMonthStrip: View {
             PaymentRunStripPalette.overlap
         case .gap:
             ZStack {
-                ProjectWorksRevampColors.card
+                PPColor.card
                 PaymentRunGapHatch()
             }
         }
@@ -1014,8 +1055,8 @@ private struct PaymentRunMonthStrip: View {
                 .fill(color)
                 .frame(width: 10, height: 10)
             Text(title)
-                .font(.system(size: 12.5))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .font(.footnote)
+                .foregroundStyle(Color.primary)
         }
     }
 }

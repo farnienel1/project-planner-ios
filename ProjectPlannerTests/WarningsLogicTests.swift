@@ -129,6 +129,8 @@ final class WarningsLogicTests: XCTestCase {
         let store = WarningResolutionStore(defaults: defaults)
         Self.retained.append(store)
         store.adoptOrganization("unit-test-org")
+        // Decisions are staff-only (RULEBOOK §16); act as an admin.
+        store.setActor(AppUser(id: "admin-1", email: "admin@example.com", organizationId: "unit-test-org", role: .admin))
         XCTAssertTrue(store.shouldShowActive("qual-soon"))
         XCTAssertTrue(store.shouldShowActive("qual-expired"))
         store.dismiss("qual-expired")
@@ -138,6 +140,42 @@ final class WarningsLogicTests: XCTestCase {
         XCTAssertTrue(store.shouldShowActive("qual-soon"))
         let visible = ["qual-soon", "qual-expired", "clash-1"].filter { store.shouldShowActive($0) }
         XCTAssertEqual(visible, ["qual-soon"])
+    }
+
+    /// The Swift-shaped inputs `WarningResolutionStore` sends: empty booking ids for a non-clash row,
+    /// `acceptedBookingClashes` rows as dictionaries, and resolution documents keyed by id when `resolutionKey` is blank.
+    func testWarningDecisionWrappersMatchTheRulebook() {
+        XCTAssertEqual(
+            CanonicalBusinessEngine.resolvedWarningKeys([
+                ["id": "doc-1", "resolutionKey": "", "status": "Approved"],
+                ["id": "doc-2", "resolutionKey": "unbooked-2026-10-22-u1", "status": "dismissed"],
+                ["id": "doc-3", "resolutionKey": "qual-o1-q1", "status": "snoozed"]
+            ]),
+            ["doc-1", "unbooked-2026-10-22-u1"]
+        )
+        XCTAssertEqual(
+            CanonicalBusinessEngine.isWarningActive(
+                resolutionKey: "unbooked-2026-10-22-u1", bookingAId: nil, bookingBId: nil,
+                decisions: CanonicalBusinessEngine.warningDecisions(resolvedKeys: ["unbooked-2026-10-22-u1"], acceptedClashes: [])
+            ),
+            false
+        )
+        XCTAssertEqual(
+            CanonicalBusinessEngine.isWarningActive(
+                resolutionKey: "mgr-clash-m1-2026-10-22-0", bookingAId: "OB", bookingBId: "MB",
+                decisions: CanonicalBusinessEngine.warningDecisions(
+                    resolvedKeys: [], acceptedClashes: [["id": "MB|OB", "bookingAId": "MB", "bookingBId": "OB"]]
+                )
+            ),
+            false
+        )
+        XCTAssertEqual(
+            CanonicalBusinessEngine.isWarningActive(
+                resolutionKey: "leave-cover-2026-10-22-u1-h1", bookingAId: nil, bookingBId: nil,
+                decisions: CanonicalBusinessEngine.warningDecisions(resolvedKeys: [], acceptedClashes: [])
+            ),
+            true
+        )
     }
 
     /// Web fixture: PM leave plus a 07:30–09:30 custom booking is one leave_cover row

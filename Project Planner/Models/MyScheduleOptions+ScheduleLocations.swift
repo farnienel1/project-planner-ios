@@ -50,17 +50,23 @@ enum ScheduleLocationPick: Hashable, Identifiable {
 }
 
 extension MyScheduleOptions {
-    /// Locations shown under “Other” / Book labour — same rows as My Schedule “Book yourself in”.
+    /// Locations shown under “Other” / Book labour / My Schedule “Book yourself in”: exactly
+    /// `enabledScheduleLocations(options)` from the rulebook (built-ins behind their toggles, then every
+    /// custom item whose `customItemEnabled` is not false; trimmed, case-insensitive de-dupe).
+    /// Empty when the script does not answer.
     func enabledScheduleLocationPicks() -> [ScheduleLocationPick] {
-        var rows: [ScheduleLocationPick] = []
-        if showOffice { rows.append(.office) }
-        if showWorkingFromHome { rows.append(.workingFromHome) }
-        if showSiteSurvey { rows.append(.siteSurvey) }
-        for raw in customItems {
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { rows.append(.custom(trimmed)) }
+        let rows = CanonicalBusinessEngine.enabledScheduleLocations(self) ?? []
+        return rows.compactMap { row -> ScheduleLocationPick? in
+            switch row["locationType"] as? String {
+            case "office": return .office
+            case "working_from_home": return .workingFromHome
+            case "site_survey": return .siteSurvey
+            case "custom":
+                let name = (row["customLocationName"] as? String) ?? (row["title"] as? String) ?? ""
+                return name.isEmpty ? nil : .custom(name)
+            default: return nil
+            }
         }
-        return rows
     }
 
     /// Whether a manager-site booking should appear in UI/reports driven by schedule options.

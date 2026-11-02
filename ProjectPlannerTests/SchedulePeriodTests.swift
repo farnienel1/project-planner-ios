@@ -30,7 +30,8 @@ final class SchedulePeriodTests: XCTestCase {
         settings.paymentRunMode = .recurringTimeframe
         settings.recurringRunStartDay = .monday
         settings.recurringRunEndDay = .sunday
-        let calendar = Calendar.current
+        // Pay periods are organisation-zone days (RULEBOOK §1), not the device or runner zone.
+        let calendar = OrganizationRulebookContext.calendar
         let changeoverSunday = LogicFixtures.day(2026, 10, 25, hour: 1, minute: 30, calendar: calendar)
         let period = TimesheetPayrollPolicy.payPeriodContaining(
             referenceDate: changeoverSunday,

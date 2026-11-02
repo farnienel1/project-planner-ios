@@ -46,23 +46,32 @@ struct AdminManagerMaterialsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MaterialsWeekNavigator(
-                currentWeek: $currentWeek,
-                weekRangeLabel: MaterialsWeekHelpers.weekRangeString(for: currentWeek),
-                weekItemCount: MaterialsWeekHelpers.itemsThisWeek(materials, week: currentWeek)
-            )
-            MaterialsDayStrip(
-                selectedDate: $selectedDate,
-                weekDays: MaterialsWeekHelpers.weekDays(containing: currentWeek),
-                materials: materials
-            )
-            .padding(.bottom, 12)
+            VStack(spacing: 14) {
+                MaterialsWeekNavigator(
+                    currentWeek: $currentWeek,
+                    weekRangeLabel: MaterialsWeekHelpers.weekRangeString(for: currentWeek),
+                    weekItemCount: MaterialsWeekHelpers.itemsThisWeek(materials, week: currentWeek)
+                )
+                MaterialsDayStrip(
+                    selectedDate: $selectedDate,
+                    weekDays: MaterialsWeekHelpers.weekDays(containing: currentWeek),
+                    materials: materials
+                )
+            }
+            .padding(.top, 12)
+            .padding(.bottom, PPMetrics.headerBottomPadding)
+            .frame(maxWidth: .infinity)
+            .ppNavyHeader()
 
-            dayHeader
-            materialsContent
+            VStack(spacing: 0) {
+                dayHeader
+                materialsContent
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .ppContentSheet()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(MaterialsOrderingTheme.pageBackground)
+        .background(PPColor.page.ignoresSafeArea())
         .sheet(isPresented: $showingAddMaterial) {
             MaterialsAddWithCatalogueSheet(project: project, date: selectedDate)
                 .environmentObject(userStore)
@@ -108,38 +117,48 @@ struct AdminManagerMaterialsView: View {
     }
 
     private var dayHeader: some View {
-        HStack {
+        HStack(spacing: 8) {
             Text(dayTitle)
-                .font(.system(size: 12, weight: .medium))
-            Spacer()
+                .font(.system(.headline, design: .rounded))
+                .fontWeight(.bold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 4)
             if canViewQuoteOrderHistory {
                 Button("Quote/Order History") {
                     showingHistory = true
                 }
                 .accessibilityIdentifier("adminManagerMaterials.quoteOrderHistory")
-                .font(.system(size: 11, weight: .medium))
+                .font(.footnote.weight(.semibold))
                 .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
                 .tint(MaterialsOrderingTheme.muted)
             }
             Button { showingAddMaterial = true } label: {
                 Label("Add", systemImage: "plus")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.footnote.weight(.semibold))
             }
             .accessibilityIdentifier("adminManagerMaterials.add")
             .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
             .tint(MaterialsOrderingTheme.primary)
             Button {
                 selectedMaterials = Set(dayMaterials.map(\.id))
                 showingSendToWholesaler = true
             } label: {
                 Image(systemName: "paperplane.fill")
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(MaterialsOrderingTheme.success)
             }
             .accessibilityIdentifier("adminManagerMaterials.paperplaneFill")
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .tint(MaterialsOrderingTheme.success)
             .disabled(dayMaterials.isEmpty)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 2)
+        .padding(.top, 18)
+        .padding(.bottom, 10)
     }
 
     private var dayTitle: String {
@@ -151,7 +170,7 @@ struct AdminManagerMaterialsView: View {
     @ViewBuilder
     private var materialsContent: some View {
         ScrollView {
-            VStack(spacing: 8) {
+            VStack(spacing: 10) {
                 if dayMaterials.isEmpty {
                     emptyDay
                 } else {
@@ -183,23 +202,26 @@ struct AdminManagerMaterialsView: View {
 
     private var emptyDay: some View {
         VStack(spacing: 14) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 44))
-                .foregroundStyle(MaterialsOrderingTheme.disabled)
+            PPIconTile(symbol: "shippingbox.fill", family: .trade, size: PPMetrics.quickActionIcon, lifted: true)
             Text("No materials for \(formattedDate(selectedDate))")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.bold)
+                .multilineTextAlignment(.center)
             Text("Add what you need delivered on this day.")
-                .font(.system(size: 11))
-                .foregroundStyle(MaterialsOrderingTheme.muted)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             Button { showingAddMaterial = true } label: {
                 Label("Add material", systemImage: "plus")
             }
             .accessibilityIdentifier("adminManagerMaterials.addMaterial")
-            .buttonStyle(.borderedProminent)
-            .tint(MaterialsOrderingTheme.primary)
+            .ppProminentCapsule()
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        .padding(.vertical, 28)
+        .padding(.horizontal, 20)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func deleteMaterial(_ material: MaterialItem) {

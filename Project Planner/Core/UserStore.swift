@@ -18,7 +18,11 @@ class UserStore: ObservableObject {
     /// When set, tab visibility and `can*` helpers use a simulated role. Identity and Firestore still use `currentUser`.
     @Published var roleTestingPreset: RoleTestingPreset?
     @Published var organizationUsers: [AppUser] = [] {
-        didSet { restampSameEmailAliasesIfNeeded() }
+        didSet {
+            restampSameEmailAliasesIfNeeded()
+            // Rules that run without a store (`timesheetSelfSigned` in `TimesheetApprovalPolicy`) read this roster.
+            RulebookRosterSnapshot.update(organizationUsers)
+        }
     }
     /// Folded same-email `users` document id → the id the roster kept, from the last roster load.
     /// Bookings saved under the folded id (often the person's sign-in uid) must count for the kept person.
@@ -32,7 +36,6 @@ class UserStore: ObservableObject {
     private var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
     @Published var isOffline: Bool = false
-    private let operativeProfileOverridesKey = "operative_profile_overrides_v1"
     /// Throttle `lastSeenAt` writes (foreground heartbeats).
     private var lastSeenAtWriteTime: Date?
     /// Single-flight + short cooldown to prevent duplicate org user roster fetches.
@@ -42,6 +45,12 @@ class UserStore: ObservableObject {
     private var lastOrganizationUsersLoadAt: Date?
     private var currentUserListener: ListenerRegistration?
     private var currentUserListenerTarget: String?
+    /// Live roster: `users where organizationId == org` (RULEBOOK §1, §11). Keyed to one organisation;
+    /// results that arrive after an organisation switch are ignored.
+    private var organizationUsersListener: ListenerRegistration?
+    private var organizationUsersListenerOrganizationId: String?
+    /// The organisation whose roster listener failed; the one-off load is the fallback there.
+    private var organizationUsersListenerFailedOrganizationId: String?
     /// Stops a roster reload that started before a name save from putting the old name back.
     private var identityRevision: IdentityRevision?
 
@@ -56,12 +65,6 @@ class UserStore: ObservableObject {
         var savedAt: Date
     }
 
-    private struct OperativeProfileOverride: Codable {
-        var assignedManagerUserId: String?
-        var dayRate: Double?
-        var updatedAt: Date
-    }
-    
     init() {
         // Initialize with empty state
     }
@@ -126,8 +129,9 @@ class UserStore: ObservableObject {
             lastName: last,
             email: user.email.trimmingCharacters(in: .whitespacesAndNewlines),
             phone: user.mobileNumber,
-            startDate: Calendar.current.startOfDay(for: Date()),
-            dayRate: user.dayRate,
+            startDate: OrganizationRulebookContext.calendar.startOfDay(for: Date()),
+            // Pay fields of `operatives/{id}` are written only by someone who may change this person's pay (§8).
+            dayRate: canChangePay(of: user) ? user.dayRate : nil,
             tradeTypePreset: user.tradeTypePreset,
             tradeTypeCustom: user.tradeTypeCustom
         )
@@ -365,6 +369,10 @@ class UserStore: ObservableObject {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
         let cached = RosterRetention.users(for: orgId)
+        if organizationUsersListenerOrganizationId != orgId {
+            // The previous organisation's live roster must not keep writing into this one.
+            stopOrganizationUsersListener()
+        }
         organizationUsers = cached
         organizationUserEmailClaims = nil
         organizationUsersLoadOrganizationId = orgId
@@ -373,7 +381,9 @@ class UserStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: ROSTER_RESTORED org=\(orgId) count=\(cached.count) managers=\(managers) operatives=\(operatives)")
     }
 
-    func loadOrganizationUsers() async {
+    /// One-off roster load (members, email claims and staff links included), then the live listener on the
+    /// organisation's users query keeps it current. `forceRefresh` skips the short repeat-load cooldown.
+    func loadOrganizationUsers(forceRefresh: Bool = false) async {
         guard let firebaseBackend = firebaseBackend,
               let currentUser = currentUser else {
             print("🔥🔥🔥 DEBUG: Cannot load users - missing firebaseBackend or currentUser")
@@ -401,7 +411,8 @@ class UserStore: ObservableObject {
         let rosterLooksComplete = organizationUsers.count > 1
             && listedStaff > 0
             && cachedCount <= organizationUsers.count
-        if rosterLooksComplete,
+        if !forceRefresh,
+           rosterLooksComplete,
            organizationUsersLoadOrganizationId == requestedOrganizationId,
            let last = lastOrganizationUsersLoadAt,
            now.timeIntervalSince(last) < 3 {
@@ -431,9 +442,6 @@ class UserStore: ObservableObject {
         do {
             let roster = try await firebaseBackend.getOrganizationUsers(organizationId: requestedOrganizationId)
             let users = roster.users
-            let cloudOverrides = (try? await firebaseBackend.loadOperativeProfileMetadataFallback(
-                organizationId: requestedOrganizationId
-            )) ?? [:]
             guard generation == organizationUsersLoadGeneration else {
                 print("🔥🔥🔥 DEBUG: Ignoring organisation user roster for \(requestedOrganizationId) — a newer organisation load replaced it")
                 return
@@ -449,10 +457,10 @@ class UserStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: - \(user.email) (\(user.firstName) \(user.surname)) - Active: \(user.isActive), PasswordSet: \(user.passwordSet)")
             }
 
-            let usersWithCloudOverrides = applyCloudOperativeProfileOverrides(users, overrides: cloudOverrides)
-            let usersWithOverrides = applyOperativeProfileOverrides(to: usersWithCloudOverrides)
+            // `users/{uid}` is the only source of pay and line manager (RULEBOOK §1, §8). The
+            // `operativeProfiles` mirror and on-device copies are never laid over it.
             let healed = await healRosterKeepingKnownPeople(
-                incoming: usersWithOverrides,
+                incoming: users,
                 organizationId: requestedOrganizationId
             )
             guard let listed = CanonicalBusinessEngine.listedRosterUsers(healed, claimedEmails: roster.claimedEmails) else {
@@ -461,26 +469,8 @@ class UserStore: ObservableObject {
             }
             organizationUserEmailClaims = roster.claimedEmails
             organizationUserIdAliases = roster.userIdAliases
-            let sortedUsers = listed.sorted { user1, user2 in
-                if user1.isSuperAdmin != user2.isSuperAdmin {
-                    return user1.isSuperAdmin
-                }
-                return user1.email < user2.email
-            }
-            let published = sortedUsers.filter(\.isStoredUserDocument)
-            organizationUsers = published
-            // Empty is stored only when this load ended with nobody. People the server could not
-            // confirm as gone stay in `published`, so a short fetch cannot wipe the saved roster.
-            // Save the list with its same-email ids put back, so a cold start still matches bookings.
-            RosterRetention.save(
-                organizationUsers,
-                organizationId: requestedOrganizationId,
-                allowEmpty: published.isEmpty
-            )
-            let admins = published.filter(\.appearsOnAdminsList).count
-            let managers = published.filter(\.appearsOnManagersList).count
-            let operatives = published.filter(\.appearsOnOperativesList).count
-            print("🔥🔥🔥 DEBUG: ROSTER_PUBLISHED count=\(published.count) admins=\(admins) managers=\(managers) operatives=\(operatives)")
+            publishRoster(listed, organizationId: requestedOrganizationId)
+            startOrganizationUsersListener(organizationId: requestedOrganizationId)
         } catch {
             errorMessage = "Failed to load organization users: \(error.localizedDescription)"
             print("🔥🔥🔥 DEBUG: Error loading organization users: \(error)")
@@ -494,6 +484,101 @@ class UserStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ROSTER_KEPT on-screen count=\(organizationUsers.count) after fetch error")
             }
         }
+    }
+
+    /// Sorts and publishes a `listedRosterUsers` result and saves it on this phone.
+    private func publishRoster(_ listed: [AppUser], organizationId: String) {
+        let sortedUsers = listed.sorted { user1, user2 in
+            if user1.isSuperAdmin != user2.isSuperAdmin {
+                return user1.isSuperAdmin
+            }
+            return user1.email < user2.email
+        }
+        let published = sortedUsers.filter(\.isStoredUserDocument)
+        organizationUsers = published
+        // Empty is stored only when this load ended with nobody. People the server could not
+        // confirm as gone stay in `published`, so a short fetch cannot wipe the saved roster.
+        // Save the list with its same-email ids put back, so a cold start still matches bookings.
+        RosterRetention.save(
+            organizationUsers,
+            organizationId: organizationId,
+            allowEmpty: published.isEmpty
+        )
+        let admins = published.filter(\.appearsOnAdminsList).count
+        let managers = published.filter(\.appearsOnManagersList).count
+        let operatives = published.filter(\.appearsOnOperativesList).count
+        print("🔥🔥🔥 DEBUG: ROSTER_PUBLISHED count=\(published.count) admins=\(admins) managers=\(managers) operatives=\(operatives)")
+    }
+
+    private func stopOrganizationUsersListener() {
+        organizationUsersListener?.remove()
+        organizationUsersListener = nil
+        organizationUsersListenerOrganizationId = nil
+    }
+
+    /// Attaches the live roster listener for `organizationId` (replacing one for another organisation).
+    /// If it cannot start or fails, the one-off load stays the source for that organisation.
+    private func startOrganizationUsersListener(organizationId: String) {
+        guard let firebaseBackend else { return }
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { return }
+        if organizationUsersListener != nil, organizationUsersListenerOrganizationId == orgId { return }
+        if organizationUsersListenerFailedOrganizationId == orgId { return }
+        stopOrganizationUsersListener()
+        organizationUsersListenerOrganizationId = orgId
+        organizationUsersListener = firebaseBackend.observeOrganizationUsers(
+            organizationId: orgId,
+            onChange: { [weak self] changed, removedIds in
+                self?.applyLiveRosterChange(changed: changed, removedIds: removedIds, organizationId: orgId)
+            },
+            onError: { [weak self] error in
+                guard let self, self.organizationUsersListenerOrganizationId == orgId else { return }
+                print("🔥🔥🔥 DEBUG: ROSTER_LISTENER failed org=\(orgId): \(error.localizedDescription) — using one-off loads")
+                self.stopOrganizationUsersListener()
+                self.organizationUsersListenerFailedOrganizationId = orgId
+            }
+        )
+        if organizationUsersListener == nil {
+            organizationUsersListenerOrganizationId = nil
+            organizationUsersListenerFailedOrganizationId = orgId
+        }
+    }
+
+    /// A snapshot from the live roster query, fed through the same pipeline as a load
+    /// (`rosterPeople` fold, then `listedRosterUsers`). Ignored after an organisation switch.
+    private func applyLiveRosterChange(changed: [AppUser], removedIds: [String], organizationId: String) {
+        guard organizationUsersListenerOrganizationId == organizationId else { return }
+        let stillSameOrg = normalizedOrganizationId(currentUser?.organizationId ?? "") == organizationId
+            || normalizedOrganizationId(firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "") == organizationId
+        guard stillSameOrg, organizationUsersLoadOrganizationId == organizationId else { return }
+        if !removedIds.isEmpty {
+            // Leaving the query is not proof someone left the company (they may have opened another
+            // organisation last). The full load confirms who is still a member.
+            Task { await self.loadOrganizationUsers(forceRefresh: true) }
+        }
+        guard !changed.isEmpty else { return }
+        var byId: [String: AppUser] = [:]
+        var order: [String] = []
+        for user in organizationUsers where byId[user.id] == nil {
+            byId[user.id] = user
+            order.append(user.id)
+        }
+        for incoming in changed where !RosterRetention.isTombstoned(incoming.id, organizationId: organizationId) {
+            var user = incoming
+            if let existing = byId[user.id] {
+                user.placedByManagersRecord = existing.placedByManagersRecord
+                user.sameEmailUserIds = existing.sameEmailUserIds
+            } else {
+                order.append(user.id)
+            }
+            byId[user.id] = user
+        }
+        let folded = collapseRosterByEmail(order.compactMap { byId[$0] })
+        guard let listed = CanonicalBusinessEngine.listedRosterUsers(folded, claimedEmails: organizationUserEmailClaims) else {
+            print("🔥🔥🔥 DEBUG: ROSTER_LISTENER script did not return a list — keeping the roster on screen")
+            return
+        }
+        publishRoster(listed, organizationId: organizationId)
     }
 
     #if DEBUG
@@ -616,6 +701,8 @@ class UserStore: ObservableObject {
     
     /// Call when the user signs out so deleted/other-org users don't persist in the UI.
     func clearOnSignOut() {
+        stopOrganizationUsersListener()
+        organizationUsersListenerFailedOrganizationId = nil
         currentUserListener?.remove()
         currentUserListener = nil
         currentUserListenerTarget = nil
@@ -1222,7 +1309,7 @@ class UserStore: ObservableObject {
         let managerIds = (assignedManagerUserIds ?? assignedManagerUserId.map { [$0] } ?? [])
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        let draftUser = AppUser(
+        var draftUser = AppUser(
             id: "invite-validation",
             email: email,
             organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "",
@@ -1230,21 +1317,12 @@ class UserStore: ObservableObject {
             permissions: permissions,
             hasNoLineManager: hasNoLineManager
         )
-        if permissions.operativeMode && managerIds.isEmpty {
-            errorMessage = "Every operative must be assigned a line manager."
+        draftUser.setLineManagerUserIds(managerIds)
+        if let annualLeaveEnabled { draftUser.annualLeaveEnabled = annualLeaveEnabled }
+        // RULEBOOK §8, §11: `lineManagerRequiredError` refuses an invite that cannot self-book and has no line manager.
+        if let lineManagerError = AnnualLeaveApproval.lineManagerRequiredError(for: draftUser, users: organizationUsers) {
+            errorMessage = lineManagerError
             return false
-        }
-        if (permissions.manager || permissions.adminAccess) && !permissions.operativeMode {
-            if AnnualLeaveSelfBookPolicy.requiresLineManagerForAnnualLeaveRouting(for: draftUser) && managerIds.isEmpty {
-                errorMessage = "This user requires a Line Manager to Approve/Decline annual leave requests. Please set their line manager above."
-                return false
-            }
-            if managerIds.isEmpty && !hasNoLineManager {
-                errorMessage = permissions.manager
-                    ? "Every manager must be assigned a line manager or choose No line manager."
-                    : "Every administrator must be assigned a line manager or choose No line manager."
-                return false
-            }
         }
         
         guard let firebaseBackend = firebaseBackend else {
@@ -1520,12 +1598,12 @@ class UserStore: ObservableObject {
                  if organizationUsers.first(where: { $0.id == userId })?.isSuperAdmin == true { return }
                  
                  do {
-                     // Update user in Firebase to set isActive to false
+                     // Writes only `isActive` (+ WriteMetadata) — never the whole profile from this copy.
                      var updatedUser = organizationUsers.first { $0.id == userId }
                      updatedUser?.isActive = false
                      
                      if let user = updatedUser {
-                         try await firebaseBackend.saveUser(user)
+                         try await firebaseBackend.updateUserActiveFlag(userId: user.id, isActive: false)
                          await firebaseBackend.patchMembershipAccountActiveIfExists(
                              userId: user.id,
                              organizationId: user.organizationId,
@@ -1935,7 +2013,10 @@ class UserStore: ObservableObject {
                                 old: previousPermissions,
                                 new: sanitized,
                                 oldHasNoLineManager: organizationUsers[index].hasNoLineManager,
-                                newHasNoLineManager: organizationUsers[index].hasNoLineManager
+                                newHasNoLineManager: organizationUsers[index].hasNoLineManager,
+                                oldLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
+                                newLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
+                                users: organizationUsers
                             ) {
                              await holidayStore.deletePendingHolidayRequestsFor(
                                  userId: userId,
@@ -1948,7 +2029,10 @@ class UserStore: ObservableObject {
                                 old: previousPermissions,
                                 new: sanitized,
                                 oldHasNoLineManager: organizationUsers[index].hasNoLineManager,
-                                newHasNoLineManager: organizationUsers[index].hasNoLineManager
+                                newHasNoLineManager: organizationUsers[index].hasNoLineManager,
+                                oldLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
+                                newLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
+                                users: organizationUsers
                             ) {
                              await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: userId)
                          }
@@ -2066,6 +2150,11 @@ class UserStore: ObservableObject {
         if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
             return false
         }
+        // RULEBOOK §8: employment type is pay, so it follows `canChangePersonPay`.
+        guard canChangePay(of: updated) else {
+            errorMessage = Self.payChangeRefusedMessage
+            return false
+        }
         guard let change = CanonicalBusinessEngine.applyEmploymentTypeChange(
             previousType: updated.employmentType.rawValue,
             nextType: employmentType.rawValue,
@@ -2118,7 +2207,10 @@ class UserStore: ObservableObject {
         }
     }
 
-             /// Updates operative-specific profile fields on the user account and synchronizes linked operative day rate.
+             /// Updates the line manager and the rate on the user account (RULEBOOK §8, §11).
+             /// Only someone who may change this person's pay (`canChangePersonPay`) can change either; anyone else
+             /// gets a clear error and nothing is written. The rate keeps the person's stored `payBasis`: the single
+             /// rate field edits that basis's amount, and the save writes `payBasis` plus that one amount.
              func updateOperativeProfileFields(
                 for user: AppUser,
                 assignedManagerUserId: String?,
@@ -2131,7 +2223,8 @@ class UserStore: ObservableObject {
              ) async -> Bool {
                 guard let firebaseBackend = firebaseBackend else { return false }
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
-                var updatedUser = organizationUsers[index]
+                let original = organizationUsers[index]
+                var updatedUser = original
                 guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager || updatedUser.permissions.adminAccess || updatedUser.role == .admin else { return false }
                 if let hasNoLineManager {
                     updatedUser.setNoLineManager(hasNoLineManager)
@@ -2146,103 +2239,172 @@ class UserStore: ObservableObject {
                     }
                     updatedUser.setLineManagerUserIds(managerIds)
                 }
-                updatedUser.dayRate = dayRate
+                let previousPay = Self.storedPay(of: original)
+                let dayRateChanged = updateDayRate && previousPay.amount != dayRate
+                let lineManagerChanged = Set(updatedUser.lineManagerUserIds) != Set(original.lineManagerUserIds)
+                    || updatedUser.hasNoLineManager != original.hasNoLineManager
+                guard dayRateChanged || lineManagerChanged else { return true }
+                guard canChangePay(of: original) else {
+                    errorMessage = Self.payChangeRefusedMessage
+                    return false
+                }
+                if dayRateChanged {
+                    Self.applyStoredPay(to: &updatedUser, basis: previousPay.basis, amount: dayRate)
+                }
 
                 do {
-                    let previousDayRate = organizationUsers[index].dayRate
-                    let dayRateChanged = previousDayRate != dayRate
                     try await firebaseBackend.updateOperativeProfileMetadata(
                         userId: updatedUser.id,
                         assignedManagerUserId: updatedUser.assignedManagerUserId,
                         assignedManagerUserIds: updatedUser.lineManagerUserIds,
                         hasNoLineManager: hasNoLineManager ?? updatedUser.hasNoLineManager,
                         dayRate: dayRate,
-                        updateDayRate: updateDayRate
+                        updateDayRate: dayRateChanged,
+                        payBasis: previousPay.basis
                     )
-                    if updateDayRate && dayRateChanged,
+                    if dayRateChanged,
                        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                         let emailNorm = updatedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                         let linkedOperativeId = operativeStore?.operatives.first(where: {
                             $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
                         })?.id
-                        let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
-                        let merged = collection.mergedEntries(userId: updatedUser.id, operativeId: linkedOperativeId)
-                        if merged.isEmpty, let previousDayRate, previousDayRate > 0 {
-                            try? await firebaseBackend.recordOperativeDayRateChange(
-                                organizationId: orgId,
-                                userId: updatedUser.id,
-                                operativeId: linkedOperativeId,
-                                dayRate: previousDayRate,
-                                effectiveAt: updatedUser.createdAt
-                            )
-                        }
-                        let effective = dayRateEffectiveAt ?? Date()
-                        // Persist the new rate into history, including an explicit £0.
-                        try? await firebaseBackend.recordOperativeDayRateChange(
+                        await recordRateHistory(
                             organizationId: orgId,
-                            userId: updatedUser.id,
+                            user: updatedUser,
                             operativeId: linkedOperativeId,
-                            dayRate: dayRate ?? 0,
-                            effectiveAt: effective
+                            previous: previousPay,
+                            nextAmount: dayRate,
+                            nextBasis: previousPay.basis,
+                            effectiveAt: dayRateEffectiveAt ?? Date()
                         )
                     }
-                    clearOperativeProfileOverride(for: updatedUser.id)
-                    // Keep cloud fallback in sync so a later loadOrganizationUsers() cannot
-                    // re-apply a stale day rate after the user cleared the settings field.
-                    // Use 0 as an explicit clear sentinel (nil would only delete the field).
-                    if updateDayRate {
-                        try? await firebaseBackend.saveOperativeProfileMetadataFallback(
-                            organizationId: updatedUser.organizationId,
-                            userId: updatedUser.id,
-                            assignedManagerUserId: updatedUser.assignedManagerUserId,
-                            dayRate: dayRate ?? 0
-                        )
-                    }
+                    // Mirror (web writes the same one). Never read over users/{uid}; best effort.
+                    let mirrored = Self.storedPay(of: updatedUser)
+                    try? await firebaseBackend.saveOperativeProfileMetadataFallback(
+                        organizationId: updatedUser.organizationId,
+                        userId: updatedUser.id,
+                        assignedManagerUserId: updatedUser.assignedManagerUserId,
+                        dayRate: mirrored.amount,
+                        payBasis: mirrored.basis
+                    )
                     organizationUsers[index] = updatedUser
                     if let operativeStore {
                         await syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
                     }
-                    await loadOrganizationUsers()
+                    await loadOrganizationUsers(forceRefresh: true)
                     return true
                 } catch {
-                    let nsError = error as NSError
-                    if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
-                        do {
-                            try await firebaseBackend.saveOperativeProfileMetadataFallback(
-                                organizationId: updatedUser.organizationId,
-                                userId: updatedUser.id,
-                                assignedManagerUserId: assignedManagerUserId,
-                                dayRate: dayRate ?? 0
-                            )
-                            clearOperativeProfileOverride(for: updatedUser.id)
-                            organizationUsers[index] = updatedUser
-                            errorMessage = "Primary user profile write was blocked, but saved to cloud fallback."
-                            if let operativeStore {
-                                await syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
-                            }
-                            await loadOrganizationUsers()
-                            return true
-                        } catch {
-                            // Last fallback: keep operations unblocked by persisting an on-device override.
-                            saveOperativeProfileOverride(
-                                for: updatedUser.id,
-                                assignedManagerUserId: assignedManagerUserId,
-                                dayRate: dayRate ?? 0
-                            )
-                            organizationUsers[index] = updatedUser
-                            errorMessage = "Cloud permissions blocked this update. Saved locally on this device."
-                            if let operativeStore {
-                                await syncActiveOperativesWithUserAccounts(operativeStore: operativeStore)
-                            }
-                            return true
-                        }
-                    } else {
-                        errorMessage = "Failed to update operative profile fields: \(error.localizedDescription)"
-                        print("🔥🔥🔥 DEBUG: Error updating operative profile fields: \(error)")
-                        return false
-                    }
+                    // No fallback write and no on-device copy: the server refused, so nothing changed.
+                    errorMessage = Self.isPermissionDenied(error)
+                        ? Self.payChangeRefusedMessage
+                        : "Failed to update operative profile fields: \(error.localizedDescription)"
+                    print("🔥🔥🔥 DEBUG: Error updating operative profile fields: \(error)")
+                    return false
                 }
              }
+
+    // MARK: - Pay (RULEBOOK §8)
+
+    static let payChangeRefusedMessage = "You don't have permission to change this person's pay or line manager. Nothing was saved."
+
+    /// `canChangePersonPay` for the signed-in account, from its real document (as the security rules see it,
+    /// not role testing). `subject` nil is an operative catalogue row with no account.
+    func canChangePay(of subject: AppUser?) -> Bool {
+        guard let writer = currentUser else { return false }
+        return CanonicalBusinessEngine.canChangePersonPay(
+            writerUserId: Auth.auth().currentUser?.uid ?? writer.id,
+            writerIsPlatformOwner: AppUser.isPlatformOwnerEmail(writer.email),
+            writerIsAdmin: writer.isSuperAdmin || writer.permissions.adminAccess
+                || (writer.role == .admin && !writer.permissions.operativeMode),
+            writerIsManager: writer.permissions.manager || writer.role == .manager,
+            writerHasOperativesAccess: writer.permissions.operatives,
+            writerIsOperativeMode: writer.permissions.operativeMode,
+            subjectUserId: subject?.id,
+            subjectIsOperative: subject?.isPaySubjectOperative ?? true
+        )
+    }
+
+    /// The stored basis (`day` / `hourly`) and its amount, read with `readStoredRates`.
+    static func storedPay(of user: AppUser) -> (basis: String, amount: Double?) {
+        let stored = CanonicalBusinessEngine.readStoredRates(
+            payBasis: user.payBasis,
+            dayRate: user.dayRate,
+            hourlyRate: user.hourlyRate
+        )
+        let basis = stored?.payBasis == "hourly" ? "hourly" : "day"
+        let amount = basis == "hourly" ? stored?.hourlyRate : stored?.dayRate
+        return (basis, amount)
+    }
+
+    /// The in-memory copy after a rate save: `payBasis` plus exactly one amount (`exclusiveRates`).
+    static func applyStoredPay(to user: inout AppUser, basis: String, amount: Double?) {
+        guard let amount else {
+            user.payBasis = nil
+            user.dayRate = nil
+            user.hourlyRate = nil
+            return
+        }
+        let pay = CanonicalBusinessEngine.exclusiveRates(
+            payBasis: basis,
+            dayRate: basis == "hourly" ? nil : amount,
+            hourlyRate: basis == "hourly" ? amount : nil
+        )
+        user.payBasis = pay?.payBasis ?? basis
+        user.dayRate = (pay?.payBasis ?? basis) == "hourly" ? nil : (pay?.dayRate ?? amount)
+        user.hourlyRate = (pay?.payBasis ?? basis) == "hourly" ? (pay?.hourlyRate ?? amount) : nil
+    }
+
+    private static func isPermissionDenied(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7
+    }
+
+    /// `operativeDayRateHistory` rows for a rate change, as web `recordDayRateChangeIfNeeded` writes them
+    /// (each through `payRateHistoryWriteFields`): with no history yet, the previous live rate from the
+    /// account's creation, then the new rate (an explicit 0 included). Clearing a saved rate (`nextAmount`
+    /// nil) writes one "rate cleared" row. Only called after `canChangePay` passed. Best effort, like web.
+    private func recordRateHistory(
+        organizationId: String,
+        user: AppUser,
+        operativeId: UUID?,
+        previous: (basis: String, amount: Double?),
+        nextAmount: Double?,
+        nextBasis: String,
+        effectiveAt: Date
+    ) async {
+        guard let firebaseBackend, canChangePay(of: user) else { return }
+        guard let nextAmount else {
+            guard previous.amount != nil else { return }
+            try? await firebaseBackend.recordOperativeDayRateChange(
+                organizationId: organizationId,
+                userId: user.id,
+                operativeId: operativeId,
+                dayRate: nil,
+                effectiveAt: effectiveAt
+            )
+            return
+        }
+        let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: organizationId)) ?? .empty
+        let merged = collection.mergedEntries(userId: user.id, operativeId: operativeId)
+        if merged.isEmpty, let previousAmount = previous.amount, previousAmount > 0 {
+            try? await firebaseBackend.recordOperativeDayRateChange(
+                organizationId: organizationId,
+                userId: user.id,
+                operativeId: operativeId,
+                dayRate: previousAmount,
+                effectiveAt: user.createdAt,
+                payBasis: previous.basis
+            )
+        }
+        try? await firebaseBackend.recordOperativeDayRateChange(
+            organizationId: organizationId,
+            userId: user.id,
+            operativeId: operativeId,
+            dayRate: nextAmount,
+            effectiveAt: effectiveAt,
+            payBasis: nextBasis
+        )
+    }
     
     /// Persists trade type on the user document and mirrors it to linked operative or manager roster rows (matched by email).
     /// Uploads a new profile image and writes `profilePhotoURL` on the user document.
@@ -2255,11 +2417,14 @@ class UserStore: ObservableObject {
         do {
             let url = try await firebaseBackend.uploadUserProfilePhoto(image, userId: user.id, organizationId: orgId)
             try await firebaseBackend.updateUserProfilePhotoURL(userId: user.id, url: url)
+            let changedAt = Date()
             if let idx = organizationUsers.firstIndex(where: { $0.id == user.id }) {
                 organizationUsers[idx].profilePhotoURL = url
+                organizationUsers[idx].profilePhotoUpdatedAt = changedAt
             }
             if var cu = currentUser, cu.id == user.id {
                 cu.profilePhotoURL = url
+                cu.profilePhotoUpdatedAt = changedAt
                 currentUser = cu
             }
             return true
@@ -2341,59 +2506,59 @@ class UserStore: ObservableObject {
         let row = organizationUsers[index]
         let isStaffDayRate = row.permissions.manager || row.role == .manager || row.permissions.adminAccess || row.role == .admin
         guard isStaffDayRate, !row.permissions.operativeMode else { return false }
-        
+
         var updatedUser = organizationUsers[index]
-        let previousDayRate = updatedUser.dayRate
-        let dayRateChanged = previousDayRate != dayRate
-        updatedUser.dayRate = dayRate
-        updatedUser.hourlyRate = nil
-        
+        let previousPay = Self.storedPay(of: updatedUser)
+        guard previousPay.amount != dayRate else { return true }
+        // A manager's pay is changed by admins only, and nobody but an admin changes their own (§8).
+        guard canChangePay(of: row) else {
+            errorMessage = Self.payChangeRefusedMessage
+            return false
+        }
+        Self.applyStoredPay(to: &updatedUser, basis: previousPay.basis, amount: dayRate)
+
         do {
-            try await firebaseBackend.updateUserDayRateMetadata(userId: updatedUser.id, dayRate: dayRate)
-            if dayRateChanged,
-               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                let effective = effectiveAt ?? Date()
-                let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
-                let merged = collection.mergedEntries(userId: updatedUser.id, operativeId: nil)
-                if let previousDayRate, merged.isEmpty {
-                    try? await firebaseBackend.recordOperativeDayRateChange(
-                        organizationId: orgId,
-                        userId: updatedUser.id,
-                        operativeId: nil,
-                        dayRate: previousDayRate,
-                        effectiveAt: updatedUser.createdAt
-                    )
-                }
-                try? await firebaseBackend.recordOperativeDayRateChange(
+            try await firebaseBackend.updateUserDayRateMetadata(
+                userId: updatedUser.id,
+                dayRate: dayRate,
+                payBasis: previousPay.basis
+            )
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                await recordRateHistory(
                     organizationId: orgId,
-                    userId: updatedUser.id,
+                    user: updatedUser,
                     operativeId: nil,
-                    dayRate: dayRate ?? 0,
-                    effectiveAt: effective
+                    previous: previousPay,
+                    nextAmount: dayRate,
+                    nextBasis: previousPay.basis,
+                    effectiveAt: effectiveAt ?? Date()
                 )
             }
-            clearOperativeProfileOverride(for: updatedUser.id)
-            // Mirror clear/set into cloud fallback so profile cards cannot resurrect a blanked rate.
+            // Mirror (web writes the same one). Never read over users/{uid}; best effort.
             try? await firebaseBackend.saveOperativeProfileMetadataFallback(
                 organizationId: updatedUser.organizationId,
                 userId: updatedUser.id,
                 assignedManagerUserId: updatedUser.assignedManagerUserId,
-                dayRate: dayRate
+                dayRate: dayRate,
+                payBasis: previousPay.basis
             )
             organizationUsers[index] = updatedUser
             if let operativeStore {
                 await syncOperativeDayRateFromStaffUser(updatedUser, operativeStore: operativeStore)
             }
-            await loadOrganizationUsers()
+            await loadOrganizationUsers(forceRefresh: true)
             return true
         } catch {
-            errorMessage = "Failed to update day rate: \(error.localizedDescription)"
+            errorMessage = Self.isPermissionDenied(error)
+                ? Self.payChangeRefusedMessage
+                : "Failed to update day rate: \(error.localizedDescription)"
             print("🔥🔥🔥 DEBUG: Error updating staff day rate: \(error)")
             return false
         }
     }
 
     private func syncOperativeDayRateFromStaffUser(_ user: AppUser, operativeStore: OperativeStore) async {
+        guard canChangePay(of: user) else { return }
         let em = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !em.isEmpty,
               let idx = operativeStore.operatives.firstIndex(where: {
@@ -2462,10 +2627,10 @@ class UserStore: ObservableObject {
 
                          // `users/{uid}.isActive` is the last-used organisation only.
                          if lastUsedIsThisOrg {
-                             try await ref.updateData([
-                                 "isActive": isActive,
-                                 "updatedAt": Timestamp(date: Date())
-                             ])
+                             try await ref.updateData(WriteMetadata.stamped(
+                                 ["isActive": isActive],
+                                 userId: Auth.auth().currentUser?.uid
+                             ))
                              updatedCount += 1
                              print("🔥🔥🔥 DEBUG: ✅ isActive=\(isActive) on users/\(docId)")
                          }
@@ -2568,7 +2733,13 @@ class UserStore: ObservableObject {
                 op.isActive = true
                 changed = true
             }
-            if let dr = user.dayRate {
+            // Pay on `operatives/{id}` is mirrored only by someone who may change this person's pay
+            // (`canChangePersonPay`). Everyone else sends only the changed non-pay fields.
+            let mayMirrorPay = canChangePay(of: user)
+            let stored = Self.storedPay(of: user)
+            if !mayMirrorPay {
+                // Leave the row's pay as it is.
+            } else if stored.basis == "day", let dr = stored.amount {
                 if op.dayRate != dr {
                     op.dayRate = dr
                     changed = true
@@ -2577,7 +2748,7 @@ class UserStore: ObservableObject {
                     op.hourlyRate = nil
                     changed = true
                 }
-            } else if let hr = user.hourlyRate, hr > 0 {
+            } else if stored.basis == "hourly", let hr = stored.amount {
                 if op.hourlyRate != hr {
                     op.hourlyRate = hr
                     changed = true
@@ -2586,12 +2757,9 @@ class UserStore: ObservableObject {
                     op.dayRate = nil
                     changed = true
                 }
-            } else if op.dayRate != nil || op.hourlyRate != nil {
-                // Account rate blank — clear stale roster rates so profile/timesheets don't inherit them.
-                op.dayRate = nil
-                op.hourlyRate = nil
-                changed = true
             }
+            // A blank account rate leaves the row's rate alone: `payRateOnDay` falls back to the operative
+            // row when users/{uid} has none (RULEBOOK §8), and a local copy never deletes a stored field.
             if op.tradeTypePreset != user.tradeTypePreset || op.tradeTypeCustom != user.tradeTypeCustom {
                 op.tradeTypePreset = user.tradeTypePreset
                 op.tradeTypeCustom = user.tradeTypeCustom
@@ -2603,91 +2771,6 @@ class UserStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ✅ Synced operative roster for linked user \(em)")
                 await Task.yield()
             }
-        }
-    }
-
-    private func operativeOverridesStorageKey() -> String {
-        let organizationId = currentUser?.organizationId
-            ?? firebaseBackend?.currentOrganization?.firestoreDocumentId
-            ?? "none"
-        return "\(operativeProfileOverridesKey)_\(organizationId)"
-    }
-
-    private func loadOperativeProfileOverrides() -> [String: OperativeProfileOverride] {
-        let key = operativeOverridesStorageKey()
-        if let data = UserDefaults.standard.data(forKey: key),
-           let decoded = try? JSONDecoder().decode([String: OperativeProfileOverride].self, from: data) {
-            return decoded
-        }
-        let migratedKey = "operative_profile_overrides_legacy_migrated_v1"
-        guard !UserDefaults.standard.bool(forKey: migratedKey),
-              let legacy = UserDefaults.standard.data(forKey: operativeProfileOverridesKey) else {
-            return [:]
-        }
-        UserDefaults.standard.set(legacy, forKey: key)
-        UserDefaults.standard.set(true, forKey: migratedKey)
-        return (try? JSONDecoder().decode([String: OperativeProfileOverride].self, from: legacy)) ?? [:]
-    }
-
-    private func saveOperativeProfileOverrides(_ overrides: [String: OperativeProfileOverride]) {
-        if let data = try? JSONEncoder().encode(overrides) {
-            UserDefaults.standard.set(data, forKey: operativeOverridesStorageKey())
-        }
-    }
-
-    private func saveOperativeProfileOverride(for userId: String, assignedManagerUserId: String?, dayRate: Double?) {
-        var overrides = loadOperativeProfileOverrides()
-        overrides[userId] = OperativeProfileOverride(
-            assignedManagerUserId: assignedManagerUserId,
-            dayRate: dayRate,
-            updatedAt: Date()
-        )
-        saveOperativeProfileOverrides(overrides)
-    }
-
-    private func clearOperativeProfileOverride(for userId: String) {
-        var overrides = loadOperativeProfileOverrides()
-        overrides.removeValue(forKey: userId)
-        saveOperativeProfileOverrides(overrides)
-    }
-
-    private func applyOperativeProfileOverrides(to users: [AppUser]) -> [AppUser] {
-        let overrides = loadOperativeProfileOverrides()
-        guard !overrides.isEmpty else { return users }
-        return users.map { user in
-            guard let override = overrides[user.id] else { return user }
-            var updated = user
-            if let managerId = override.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !managerId.isEmpty {
-                updated.assignedManagerUserId = managerId
-            }
-            // 0 is a valid £0 day rate (nil means the field was never stored).
-            if let rate = override.dayRate {
-                updated.dayRate = rate
-                updated.hourlyRate = nil
-            }
-            return updated
-        }
-    }
-
-    private func applyCloudOperativeProfileOverrides(
-        _ users: [AppUser],
-        overrides: [String: FirebaseBackend.OperativeProfileMetadata]
-    ) -> [AppUser] {
-        guard !overrides.isEmpty else { return users }
-        return users.map { user in
-            guard let override = overrides[user.id] else { return user }
-            var updated = user
-            if let managerId = override.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !managerId.isEmpty {
-                updated.assignedManagerUserId = managerId
-            }
-            // Positive fallback restores a rate; 0 is a valid £0 day rate; missing field leaves the user doc as-is.
-            if let rate = override.dayRate {
-                updated.dayRate = rate
-                updated.hourlyRate = nil
-            }
-            return updated
         }
     }
 }

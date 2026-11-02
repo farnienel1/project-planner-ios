@@ -323,4 +323,126 @@ final class AnnualLeaveLogicTests: XCTestCase {
         )
         XCTAssertNil(downgrade)
     }
+
+    // MARK: - Rulebook 1.2.0 self-book, line manager and deciders
+
+    private func staff(
+        _ id: String,
+        role: UserRole,
+        permissions: UserPermissions,
+        lineManagers: [String] = [],
+        hasNoLineManager: Bool = false
+    ) -> AppUser {
+        var user = AppUser(id: id, email: "\(id)@example.test", organizationId: "TEST-org", role: role, permissions: permissions)
+        user.setLineManagerUserIds(lineManagers)
+        user.hasNoLineManager = hasNoLineManager
+        return user
+    }
+
+    /// Having no line manager does not make a manager a self-booker (`canSelfBookAnnualLeave`), and every
+    /// operative and manager needs one (`lineManagerRequiredError`), whatever self-book (rulebook 1.3.0 §8, §11).
+    func testNoLineManagerIsNotSelfBookAndNeedsALineManager() {
+        let director = staff("dir-1", role: .manager, permissions: UserPermissions(manager: true), hasNoLineManager: true)
+        XCTAssertFalse(AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: director, users: [director]))
+        XCTAssertNotNil(AnnualLeaveApproval.lineManagerRequiredError(for: director, users: [director]))
+        XCTAssertTrue(AnnualLeaveApproval.showsNoLineManagerNotice(for: director, users: [director]))
+
+        var selfBooker = director
+        selfBooker.permissions.annualLeaveSelfBook = true
+        XCTAssertTrue(AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: selfBooker, users: [selfBooker]))
+        // 1.3.0: the self-book permission no longer waives the line manager.
+        XCTAssertEqual(
+            AnnualLeaveApproval.lineManagerRequiredError(for: selfBooker, users: [selfBooker]),
+            "Set a line manager — this person's timesheets and annual leave need approval."
+        )
+
+        let admin = staff("admin-1", role: .admin, permissions: UserPermissions(adminAccess: true))
+        let report = staff("op-1", role: .operative, permissions: UserPermissions(operativeMode: true), lineManagers: ["admin-1"])
+        XCTAssertNil(AnnualLeaveApproval.lineManagerRequiredError(for: report, users: [admin, report]))
+        XCTAssertEqual(AnnualLeaveApproval.usersMissingLineManager([admin, report, director]).map(\.id).contains("dir-1"), true)
+        XCTAssertFalse(AnnualLeaveApproval.usersMissingLineManager([admin, report, director]).map(\.id).contains("op-1"))
+        XCTAssertFalse(AnnualLeaveApproval.usersMissingLineManager([admin, report, director]).map(\.id).contains("admin-1"))
+    }
+
+    /// Rulebook 1.3.0 §8, §9: an admin with no active line manager is self-approved — own leave saves approved
+    /// behind "Submit" and the timesheet is self-signed. An admin with a line manager asks like everyone else.
+    func testAdminWithoutLineManagerIsSelfApproved() {
+        let admin = staff("admin-1", role: .admin, permissions: UserPermissions(adminAccess: true))
+        let manager = staff("mgr-1", role: .manager, permissions: UserPermissions(manager: true), lineManagers: ["admin-1"])
+        let managedAdmin = staff("admin-2", role: .admin, permissions: UserPermissions(adminAccess: true), lineManagers: ["mgr-1"])
+        let users = [admin, manager, managedAdmin]
+
+        XCTAssertNil(AnnualLeaveApproval.lineManagerRequiredError(for: admin, users: users))
+        XCTAssertTrue(AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: admin, users: users))
+        XCTAssertEqual(RulebookPeople.timesheetSelfSigned(admin, users: users), true)
+        XCTAssertEqual(RulebookPeople.leaveSubmitLabel(admin, users: users), "Submit")
+
+        XCTAssertFalse(AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: managedAdmin, users: users))
+        XCTAssertEqual(RulebookPeople.timesheetSelfSigned(managedAdmin, users: users), false)
+        XCTAssertEqual(RulebookPeople.leaveSubmitLabel(managedAdmin, users: users), "Submit request")
+
+        // A manager is never self-signed, line manager or not.
+        XCTAssertEqual(RulebookPeople.timesheetSelfSigned(manager, users: users), false)
+    }
+
+    /// Rulebook 1.3.0 §13: recipient rules never name the actor or the subject under any of their ids.
+    func testNotificationRecipientsNeverNameTheActor() throws {
+        let admin = staff("admin-1", role: .admin, permissions: UserPermissions(adminAccess: true))
+        var manager = staff("mgr-1", role: .manager, permissions: UserPermissions(manager: true), lineManagers: ["admin-1"])
+        manager.sameEmailUserIds = ["mgr-old"]
+        let report = staff("op-1", role: .operative, permissions: UserPermissions(operativeMode: true), lineManagers: ["mgr-1", "op-1"])
+        let users = [admin, manager, report]
+        let roster = RulebookPeople.roster(users)
+
+        XCTAssertEqual(
+            try XCTUnwrap(CanonicalBusinessEngine.timesheetSubmittedRecipients(subject: RulebookPeople.person(report), roster: roster)),
+            ["mgr-1"]
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(CanonicalBusinessEngine.timesheetSubmittedRecipients(subject: RulebookPeople.person(admin), roster: roster)),
+            []
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(CanonicalBusinessEngine.timesheetSignedRecipients(subject: "op-1", signer: RulebookPeople.person(report), roster: roster)),
+            []
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(CanonicalBusinessEngine.holidayDecisionRecipients(requester: "op-1", decider: RulebookPeople.person(manager), roster: roster)),
+            ["op-1"]
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(CanonicalBusinessEngine.bookingCreatedRecipients(bookedIds: ["op-1", "mgr-old"], booker: RulebookPeople.person(manager), roster: roster)),
+            ["op-1"]
+        )
+        XCTAssertEqual(
+            CanonicalBusinessEngine.timesheetNotificationDedupeKey(
+                type: "timesheet_signed_by_manager",
+                subjectId: "op-1",
+                periodStartDayKey: "2026-07-02",
+                timeZone: "Europe/London"
+            ),
+            "timesheetSigned|op-1|1782946800"
+        )
+    }
+
+    /// `canDecideLeave` / `leaveDecisionQueue`: never your own request; admins decide any; a line manager
+    /// decides their reports'.
+    func testDecidersComeFromTheRulebook() {
+        let admin = staff("admin-1", role: .admin, permissions: UserPermissions(adminAccess: true))
+        let manager = staff("mgr-1", role: .manager, permissions: UserPermissions(manager: true), lineManagers: ["admin-1"])
+        let report = staff("op-1", role: .operative, permissions: UserPermissions(operativeMode: true), lineManagers: ["mgr-1"])
+        let users = [admin, manager, report]
+        let request = HolidayBooking(
+            organizationId: "TEST-org",
+            userId: "op-1",
+            startDate: Date(timeIntervalSince1970: 1_800_000_000),
+            endDate: Date(timeIntervalSince1970: 1_800_000_000),
+            status: .pending
+        )
+        XCTAssertTrue(AnnualLeaveApproval.canDecide(request, viewer: admin, users: users, operatives: []))
+        XCTAssertTrue(AnnualLeaveApproval.canDecide(request, viewer: manager, users: users, operatives: []))
+        XCTAssertFalse(AnnualLeaveApproval.canDecide(request, viewer: report, users: users, operatives: []))
+        XCTAssertEqual(AnnualLeaveApproval.decidableRequests([request], viewer: manager, users: users, operatives: []).count, 1)
+        XCTAssertEqual(AnnualLeaveApproval.decidableRequests([request], viewer: report, users: users, operatives: []).count, 0)
+    }
 }

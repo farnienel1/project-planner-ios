@@ -1,0 +1,90 @@
+name: Rulebook
+
+# iOS half of the one-rulebook check. docs/RULEBOOK.md and Project Planner/Canonical/* are mirrors of
+# project-planner-web (scripts/sync-rulebook-from-web.sh). This fails when the mirror was edited by hand,
+# when the parity tests fail, and (daily) when web has published a different pack than iOS runs.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 6 * * *'
+  workflow_dispatch:
+    inputs:
+      web_branch:
+        description: Web branch whose published manifest iOS must match
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  mirror-intact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mirrored pack matches its manifest
+        run: echo '{}' | bash scripts/rulebook-guard.sh stop
+
+  web-drift:
+    # Same drift alarm web runs: red while iOS lags the rulebook web published.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: iOS runs the pack web published
+        env:
+          WEB_BRANCH: ${{ inputs.web_branch || 'main' }}
+        run: |
+          url="https://raw.githubusercontent.com/farnienel1/project-planner-web/$WEB_BRANCH/lib/canonical/dist/canonical-manifest.json"
+          if ! curl -fsSL "$url" -o web-manifest.json; then
+            echo "::warning::Web $WEB_BRANCH has no published canonical-manifest.json yet ($url)."
+            exit 0
+          fi
+          web=$(node -p "require('./web-manifest.json').bundleSha256")
+          webVersion=$(node -p "require('./web-manifest.json').rulebookVersion")
+          ios=$(node -p "require('./Project Planner/Canonical/canonical-manifest.json').bundleSha256")
+          iosVersion=$(node -p "require('./Project Planner/Canonical/canonical-manifest.json').rulebookVersion")
+          if [ "$ios" != "$web" ]; then
+            echo "::error::iOS runs rulebook $iosVersion ($ios); web $WEB_BRANCH publishes $webVersion ($web). Run scripts/sync-rulebook-from-web.sh and follow web docs/ios-handoff/LATEST.md."
+            exit 1
+          fi
+          echo "iOS mirrors rulebook $iosVersion."
+
+  parity-tests:
+    if: github.event_name != 'schedule'
+    # The project is Xcode 26.2 (LastUpgradeCheck 2620): iOS 26 SDK APIs and Swift 6.2 default MainActor isolation.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$xcode" ]; then echo "::error::No Xcode 26 on this runner image"; ls -d /Applications/Xcode*.app; exit 1; fi
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+      - name: ProjectPlannerTests (unit tests; snapshot tests are pinned to iPhone 16e / iOS 26.2 and skipped here)
+        run: |
+          sim=$(xcrun simctl list devices available -j | node -e '
+            const d=JSON.parse(require("fs").readFileSync(0,"utf8")).devices;
+            const ios=Object.keys(d).filter(k=>k.includes("iOS")).sort().reverse();
+            for (const k of ios) { const p=d[k].find(x=>x.name.startsWith("iPhone")); if (p) { console.log(p.udid); break; } }')
+          xcodebuild test \
+            -project "Project Planner.xcodeproj" \
+            -scheme ProjectPlannerTests \
+            -destination "platform=iOS Simulator,id=$sim" \
+            -only-testing:ProjectPlannerTests \
+            -skip-testing:ProjectPlannerTests/FixedSampleScreenSnapshotTests \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != 0 ]; then
+            echo "::group::Compiler errors (file:line)"
+            grep -E "^/.*:[0-9]+:[0-9]+: error:" xcodebuild.log | sed 's#^/Users/runner/work/project-planner-ios/project-planner-ios/##' | sort -u | head -200 || true
+            echo "::endgroup::"
+            echo "::group::Failed tests"
+            grep -E "error: -\[|Test Case .* failed|XCTAssert" xcodebuild.log | sort -u | head -200 || true
+            echo "::endgroup::"
+            grep -E "^/.*:[0-9]+:[0-9]+: error:" xcodebuild.log | sed 's#^/Users/runner/work/project-planner-ios/project-planner-ios/##' | sort -u | head -50 | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit "$status"

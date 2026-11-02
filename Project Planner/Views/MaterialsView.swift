@@ -48,6 +48,8 @@ struct MaterialsView: View {
                 .environmentObject(firebaseBackend)
             }
         }
+        .background(PPColor.page.ignoresSafeArea())
+        .ppNavyNavigationBar()
         .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await MainActor.run {
@@ -730,13 +732,22 @@ struct AddMaterialView: View {
                     let managerUserIds = userStore.organizationUsers
                         .filter { managerEmails.contains($0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
                         .map(\.id)
+                    // RULEBOOK §13: `materialOrderRecipients` (the job's managers), then `excludeActor` in the service.
+                    let rulebookRecipients = MaterialOrderRecipientsRulebook.recipientUserIds(
+                        jobManagerIds: project.managerIds.map(\.uuidString),
+                        managers: operativeStore.managers,
+                        accounts: userStore.organizationUsers,
+                        adder: userStore.currentUser,
+                        adderUserId: material.addedByUserId
+                    )
                     await notificationService.notifyMaterialAdded(
                         projectId: project.id,
                         siteName: project.siteName,
                         materialName: material.material,
                         addedByName: addedBy,
                         addedByUserId: material.addedByUserId,
-                        extraRecipientUserIds: managerUserIds
+                        extraRecipientUserIds: managerUserIds,
+                        rulebookRecipientUserIds: rulebookRecipients
                     )
                 } catch {
                     print("❌ Error saving material: \(error.localizedDescription)")

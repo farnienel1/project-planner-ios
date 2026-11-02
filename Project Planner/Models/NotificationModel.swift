@@ -45,6 +45,10 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case ideaStatus = "idea_status"
         /// Web feedback board: an idea this user raised or voted for has shipped.
         case ideaShipped = "idea_shipped"
+        /// Web feedback board: a comment on an idea this user raised or voted for (rulebook §13, `ideaRecipients`).
+        case ideaComment = "idea_comment"
+        /// Web feedback board: an idea this user raised or voted for was merged into another.
+        case ideaMerged = "idea_merged"
     }
     
     let id: UUID

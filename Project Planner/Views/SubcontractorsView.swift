@@ -21,32 +21,47 @@ struct SubcontractorsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                summaryHero
-                searchBar
-                if !availableTradeFilters.isEmpty {
-                    tradeFilterRow
-                }
-                if filteredSubcontractors.isEmpty {
-                    emptyState
-                } else {
-                    ForEach(filteredSubcontractors) { subcontractor in
-                        NavigationLink {
-                            SubcontractorFirmDetailView(subcontractorId: subcontractor.id)
-                                .environmentObject(subcontractorStore)
-                                .environmentObject(firebaseBackend)
-                        } label: {
-                            subcontractorCard(subcontractor)
-                        }
-                        .accessibilityIdentifier("subcontractors.row.\(subcontractor.id)")
-                        .buttonStyle(.plain)
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 14) {
+                    summaryHero
+                    searchBar
+                    if !availableTradeFilters.isEmpty {
+                        tradeFilterRow
                     }
                 }
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.top, 12)
+                .padding(.bottom, PPMetrics.headerBottomPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .ppNavyHeader()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    PPGroupLabel(text: "Firms")
+                        .padding(.top, -6)
+                    if filteredSubcontractors.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(filteredSubcontractors) { subcontractor in
+                            NavigationLink {
+                                SubcontractorFirmDetailView(subcontractorId: subcontractor.id)
+                                    .environmentObject(subcontractorStore)
+                                    .environmentObject(firebaseBackend)
+                            } label: {
+                                subcontractorCard(subcontractor)
+                            }
+                            .accessibilityIdentifier("subcontractors.row.\(subcontractor.id)")
+                            .buttonStyle(PPPressableButtonStyle())
+                        }
+                    }
+                }
+                .padding(.bottom, 28)
+                .ppContentSheet()
             }
-            .padding(16)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Sub contractors")
+        .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
@@ -57,8 +72,8 @@ struct SubcontractorsView: View {
                         Image(systemName: "chevron.left")
                         Text("Back")
                     }
-                    .foregroundColor(Color.theme.primary)
-                    .fontWeight(.medium)
+                    .foregroundStyle(.white)
+                    .fontWeight(.semibold)
                 }
                     .accessibilityIdentifier("subcontractors.gobacktoprevioustab")
             }
@@ -69,6 +84,7 @@ struct SubcontractorsView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("subcontractors.add")
                 }
             }
@@ -123,14 +139,13 @@ struct SubcontractorsView: View {
     private func tradeFilterChip(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(isSelected ? .white : Color(red: 0.278, green: 0.333, blue: 0.412))
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(isSelected ? PPColor.navy : Color.white.opacity(0.85))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .background(isSelected ? (label == "All" ? Color(red: 0.325, green: 0.29, blue: 0.72) : tradeChipColors(for: label).foreground) : Color.white)
-                .clipShape(Capsule())
+                .background(Capsule().fill(isSelected ? Color.white : PPColor.onNavyFill))
                 .overlay(
-                    Capsule().stroke(Color(.systemGray5), lineWidth: isSelected ? 0 : 0.8)
+                    Capsule().strokeBorder(isSelected ? Color.clear : PPColor.onNavyStroke, lineWidth: 0.5)
                 )
         }
         .accessibilityIdentifier("subcontractors.filter.all")
@@ -140,98 +155,99 @@ struct SubcontractorsView: View {
     private var summaryHero: some View {
         let firms = subcontractorStore.subcontractors.count
         let operatives = subcontractorStore.subcontractors.reduce(0) { $0 + $1.contacts.count }
-        return VStack(alignment: .leading, spacing: 2) {
+        return VStack(alignment: .leading, spacing: 14) {
             Text("YOUR SUB CONTRACTORS")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.85))
-            Text("\(firms) Firm\(firms == 1 ? "" : "s") · \(operatives) Operative\(operatives == 1 ? "" : "s")")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
+                .font(.caption2.weight(.semibold))
+                .tracking(1.1)
+                .foregroundStyle(PPColor.onNavySecondary)
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(firms)", label: "Firm\(firms == 1 ? "" : "s")")
+                PPStatDivider()
+                PPStat(value: "\(operatives)", label: "Operative\(operatives == 1 ? "" : "s")")
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            LinearGradient(
-                colors: [Color(red: 0.325, green: 0.29, blue: 0.72), Color(red: 0.50, green: 0.47, blue: 0.87)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var searchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(PPColor.onNavySecondary)
             TextField("Search firms or trades…", text: $searchText)
                 .accessibilityIdentifier("subcontractors.searchFirmsOrTrades")
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .foregroundStyle(.white)
+        .background(PPColor.onNavyFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(.systemGray5), lineWidth: 0.8)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
         )
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "person.2.badge.gearshape.fill")
-                .font(.system(size: 34))
-                .foregroundStyle(.secondary)
+        VStack(spacing: 12) {
+            PPIconTile(symbol: "person.2.badge.gearshape.fill", family: .trade, size: PPMetrics.quickActionIcon, lifted: true)
             Text("No sub contractors yet")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.semibold)
             Text("Add your first sub contractor to start booking them to projects and small works.")
-                .font(.system(size: 12))
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 26)
+        .padding(.vertical, 28)
+        .padding(.horizontal, 20)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func subcontractorCard(_ subcontractor: Subcontractor) -> some View {
         let previewContacts = Array(subcontractor.contacts.prefix(3))
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
                 Text(initials(for: subcontractor.name))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 44, height: 44)
                     .background(
                         LinearGradient(
                             colors: tradeChipColors(for: subcontractor.subcontractorType).gradient,
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        in: RoundedRectangle(cornerRadius: 44 * 0.29, style: .continuous)
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 44 * 0.29, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
+                    )
+                VStack(alignment: .leading, spacing: 4) {
                     Text(subcontractor.name)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         Text(subcontractor.subcontractorType)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.caption2.weight(.semibold))
                             .foregroundStyle(tradeChipColors(for: subcontractor.subcontractorType).foreground)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(tradeChipColors(for: subcontractor.subcontractorType).background)
                             .clipShape(Capsule())
                         Text("\(subcontractor.contacts.count) Operative\(subcontractor.contacts.count == 1 ? "" : "s")")
-                            .font(.system(size: 10))
+                            .font(.caption)
+                            .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
                 }
-                Spacer()
+                Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
             if !previewContacts.isEmpty {
@@ -245,12 +261,12 @@ struct SubcontractorsView: View {
                                 .background(avatarColor(index: idx))
                                 .clipShape(Circle())
                             Text(contact.name)
-                                .font(.system(size: 10, weight: .medium))
+                                .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                             if !contact.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                 Text(contact.email)
-                                    .font(.system(size: 10))
+                                    .font(.caption)
                                     .foregroundStyle(.tertiary)
                                     .lineLimit(1)
                             }
@@ -259,25 +275,24 @@ struct SubcontractorsView: View {
                     }
                     HStack(spacing: 4) {
                         Text("More")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                         if subcontractor.contacts.count > 3 {
                             Text("(+\(subcontractor.contacts.count - 3))")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(.caption.weight(.semibold))
                         }
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
                     }
-                    .foregroundStyle(Color.theme.primary)
+                    .foregroundStyle(PPColor.brand)
                 }
+                .padding(.leading, 56)
             }
         }
-        .padding(12)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(.systemGray5), lineWidth: 0.8)
-        )
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
     }
 
     private func avatarColor(index: Int) -> Color {
@@ -362,35 +377,42 @@ private struct SubcontractorFirmDetailView: View {
     var body: some View {
         ScrollView {
             if let subcontractor {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 0) {
                     headerCard(subcontractor)
 
-                    HStack {
-                        sectionLabel("Operatives · \(subcontractor.contacts.count)")
-                        Spacer()
-                        Button {
-                            showingAddOperative = true
-                        } label: {
-                            Label("Add", systemImage: "plus")
-                                .font(.system(size: 11, weight: .medium))
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline) {
+                            sectionLabel("Operatives · \(subcontractor.contacts.count)")
+                            Spacer()
+                            Button {
+                                showingAddOperative = true
+                            } label: {
+                                Label("Add", systemImage: "plus")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                                .tint(PPColor.brand)
+                                .accessibilityIdentifier("subcontractorFirmDetail.add")
                         }
-                            .accessibilityIdentifier("subcontractorFirmDetail.add")
+                        .padding(.top, 8)
+
+                        operativesCard(subcontractor)
+
+                        sectionLabel("Firm contact")
+                            .padding(.top, 12)
+                        contactCard(subcontractor)
                     }
-
-                    operativesCard(subcontractor)
-
-                    sectionLabel("Firm contact")
-                    contactCard(subcontractor)
+                    .padding(.bottom, 28)
+                    .ppContentSheet()
                 }
-                .padding(16)
             } else {
                 ContentUnavailableView("Firm not found", systemImage: "exclamationmark.triangle")
                     .padding(.top, 80)
             }
         }
-        .background(Color(.systemGroupedBackground))
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Firm details")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 if subcontractor != nil {
@@ -399,6 +421,7 @@ private struct SubcontractorFirmDetailView: View {
                     } label: {
                         Image(systemName: "pencil")
                     }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("subcontractorFirmDetail.edit")
                 }
             }
@@ -457,139 +480,100 @@ private struct SubcontractorFirmDetailView: View {
 
     private func sectionLabel(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.footnote.weight(.semibold))
             .foregroundStyle(.secondary)
             .textCase(.uppercase)
-            .tracking(0.3)
+            .tracking(0.8)
+            .padding(.horizontal, 4)
     }
 
+    /// Navy header (Home style): firm initials tile, name, trade and operative count pills.
     private func headerCard(_ subcontractor: Subcontractor) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             Text(initials(for: subcontractor.name))
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 22, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(
-                    LinearGradient(
-                        colors: [Color(red: 0.325, green: 0.29, blue: 0.72), Color(red: 0.50, green: 0.47, blue: 0.87)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+                .frame(width: 64, height: 64)
+                .background(PPFamily.trade.gradient, in: RoundedRectangle(cornerRadius: 64 * 0.29, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 64 * 0.29, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             Text(subcontractor.name)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(.title2, design: .rounded))
+                .fontWeight(.bold)
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
             HStack(spacing: 6) {
-                Text(subcontractor.subcontractorType)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.52, green: 0.31, blue: 0.04))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(Color(red: 0.98, green: 0.93, blue: 0.85))
-                    .clipShape(Capsule())
-                Text("\(subcontractor.contacts.count) Operative\(subcontractor.contacts.count == 1 ? "" : "s")")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color(red: 0.33, green: 0.29, blue: 0.72))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(Color(red: 0.93, green: 0.93, blue: 0.99))
-                    .clipShape(Capsule())
+                PPOnNavyPill(text: subcontractor.subcontractorType, symbol: "wrench.and.screwdriver.fill")
+                PPOnNavyPill(text: "\(subcontractor.contacts.count) Operative\(subcontractor.contacts.count == 1 ? "" : "s")", symbol: "person.2.fill")
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color(.systemGray5), lineWidth: 0.8)
-        )
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .ppNavyHeader()
     }
 
     private func operativesCard(_ subcontractor: Subcontractor) -> some View {
         VStack(spacing: 0) {
             if subcontractor.contacts.isEmpty {
                 Text("No operatives added yet.")
-                    .font(.system(size: 12))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
+                    .padding(14)
             } else {
                 ForEach(Array(subcontractor.contacts.enumerated()), id: \.offset) { idx, contact in
                     Button {
                         editingContact = contact
                     } label: {
-                        HStack(spacing: 10) {
+                        HStack(spacing: 13) {
                             Text(initials(for: contact.name))
-                                .font(.system(size: 9, weight: .semibold))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                                 .foregroundStyle(.white)
-                                .frame(width: 28, height: 28)
-                                .background(Color(red: 0.09, green: 0.37, blue: 0.65))
-                                .clipShape(Circle())
+                                .frame(width: PPMetrics.menuIcon, height: PPMetrics.menuIcon)
+                                .background(PPFamily.people.gradient, in: Circle())
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(contact.name)
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
                                 Text(contact.displayTrade)
-                                    .font(.system(size: 10))
+                                    .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
-                            Spacer()
+                            Spacer(minLength: 8)
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.footnote.weight(.semibold))
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 58)
+                        .contentShape(Rectangle())
                     }
                     .accessibilityIdentifier("subcontractorFirmDetail.row.\(idx).chevronRight")
-                    .buttonStyle(.plain)
+                    .buttonStyle(PPMenuRowButtonStyle())
                     if idx < subcontractor.contacts.count - 1 {
-                        Divider().padding(.leading, 12)
+                        PPRowDivider()
                     }
                 }
             }
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(.systemGray5), lineWidth: 0.8)
-        )
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func contactCard(_ subcontractor: Subcontractor) -> some View {
-        VStack(spacing: 0) {
-            contactRow(icon: "globe", title: "Website", value: subcontractor.website ?? "Not set")
-            Divider().padding(.leading, 12)
-            contactRow(icon: "location.fill", title: "Address", value: subcontractor.address ?? "Not set")
+        PPGroupedCard {
+            contactRow(icon: "globe", title: "Website", value: subcontractor.website ?? "Not set", family: .plan)
+            PPRowDivider()
+            contactRow(icon: "location.fill", title: "Address", value: subcontractor.address ?? "Not set", family: .sites)
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(.systemGray5), lineWidth: 0.8)
-        )
     }
 
-    private func contactRow(icon: String, title: String, value: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.theme.primary)
-                .frame(width: 26, height: 26)
-                .background(Color.theme.primary.opacity(0.14))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                Text(value)
-                    .font(.system(size: 12, weight: .medium))
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+    private func contactRow(icon: String, title: String, value: String, family: PPFamily) -> some View {
+        PPDetailRowLabel(title: title, value: value, symbol: icon, family: family)
     }
 
     private func initials(for name: String) -> String {
@@ -678,18 +662,21 @@ private struct SubcontractorFirmEditorView: View {
                         .padding(.bottom, 6)
                 }
             }
-            .background(Color(.systemGroupedBackground))
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(existingSubcontractor == nil ? "New sub contractor" : "Edit sub contractor")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
+                        .tint(.white)
                         .accessibilityIdentifier("subcontractorFirmEditor.cancel")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") { save() }
                         .accessibilityIdentifier("subcontractorFirmEditor.save")
                         .fontWeight(.semibold)
+                        .tint(.white)
                         .disabled(!isValid)
                 }
             }
@@ -754,12 +741,7 @@ private struct SubcontractorFirmEditorView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(.systemGray5), lineWidth: 0.8)
-        )
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func inputRow(_ label: String, text: Binding<String>, placeholder: String, autocap: TextInputAutocapitalization?) -> some View {
@@ -817,12 +799,7 @@ private struct SubcontractorFirmEditorView: View {
                 }
             }
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(.systemGray5), lineWidth: 0.8)
-        )
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func initials(for fullName: String) -> String {
@@ -946,12 +923,14 @@ private struct SubcontractorOperativeEditorSheet: View {
                 }
                 .padding(16)
             }
-            .background(Color(.systemGroupedBackground))
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(existingContact == nil ? "Add operative" : "Edit operative")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { dismiss() }
+                        .tint(.white)
                         .accessibilityIdentifier("subcontractorOperativeEditor.cancel")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -959,6 +938,8 @@ private struct SubcontractorOperativeEditorSheet: View {
                         saveOperative()
                     }
                     .accessibilityIdentifier("subcontractorOperativeEditor.save")
+                    .fontWeight(.semibold)
+                    .tint(.white)
                     .disabled(!canSave)
                 }
             }
@@ -1035,12 +1016,7 @@ private struct SubcontractorOperativeEditorSheet: View {
             Spacer()
         }
         .padding(10)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(.systemGray5), lineWidth: 0.8)
-        )
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func label(_ text: String) -> some View {
@@ -1055,12 +1031,7 @@ private struct SubcontractorOperativeEditorSheet: View {
         VStack(spacing: 0) { content() }
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color(.systemGray5), lineWidth: 0.8)
-            )
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func rowField(_ label: String, text: Binding<String>, autocap: TextInputAutocapitalization?, keyboard: UIKeyboardType = .default) -> some View {

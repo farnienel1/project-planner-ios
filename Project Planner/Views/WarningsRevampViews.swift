@@ -18,6 +18,7 @@ enum WarningsFilterChip: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Content of the Warnings navy header. Sits on the navy backdrop the Warnings screen draws behind it.
 struct WarningsHeroCard: View {
     let activeCount: Int
     let highCount: Int
@@ -26,73 +27,49 @@ struct WarningsHeroCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Active issues")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Color.white.opacity(0.6))
-                .textCase(.uppercase)
-                .tracking(0.8)
-
-            HStack(alignment: .center) {
-                Text("\(activeCount) need attention")
-                    .font(.system(size: 26, weight: .bold))
-                    .foregroundStyle(.white)
-                Spacer(minLength: 0)
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(0.18))
-                        .frame(width: 36, height: 36)
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Active issues")
+                        .font(.caption2.weight(.semibold))
+                        .textCase(.uppercase)
+                        .tracking(1.1)
+                        .foregroundStyle(PPColor.onNavySecondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\(activeCount)")
+                            .font(.system(.largeTitle, design: .rounded))
+                            .fontWeight(.bold)
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                        Text("need attention")
+                            .font(.system(.title3, design: .rounded))
+                            .fontWeight(.bold)
+                            .foregroundStyle(Color.white.opacity(0.6))
+                    }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 }
+                Spacer(minLength: 0)
+                PPIconTile(symbol: "exclamationmark.triangle.fill", family: .alert, size: 44, lifted: true)
             }
-            .padding(.top, 4)
-            .padding(.bottom, 14)
 
-            HStack(spacing: 8) {
-                priorityStat(value: highCount, label: "High")
-                priorityStat(value: mediumCount, label: "Medium")
-                priorityStat(value: lowCount, label: "Low")
+            HStack(alignment: .top, spacing: 12) {
+                PPStat(value: "\(highCount)", label: "High", highlight: true)
+                PPStatDivider()
+                PPStat(value: "\(mediumCount)", label: "Medium")
+                PPStatDivider()
+                PPStat(value: "\(lowCount)", label: "Low")
             }
-            .padding(.bottom, 12)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 18)
 
             Text("High: operative booking clashes, unbooked labour, and bookings during annual leave (approve clashes for the weekly report) · Medium: manager/admin overlaps and a half day of leave that is not covered · Low: materials and qualifications")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.white.opacity(0.55))
+                .font(.caption)
+                .foregroundStyle(PPColor.onNavyCaption)
                 .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(16)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(red: 0.722, green: 0.196, blue: 0.196), // #B83232
-                    Color(red: 0.620, green: 0.165, blue: 0.165)  // #9E2A2A
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private func priorityStat(value: Int, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("\(value)")
-                .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white)
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.65))
+                .padding(.top, 16)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(Color.white.opacity(0.14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -110,15 +87,15 @@ struct WarningsFilterChipsRow: View {
                         selected = chip
                     } label: {
                         Text("\(chip.rawValue) · \(count)")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(isOn ? Color.white : Color(red: 0.420, green: 0.447, blue: 0.502))
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 6)
-                            .background(isOn ? Color(red: 0.110, green: 0.110, blue: 0.118) : Color.white)
-                            .clipShape(Capsule())
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(isOn ? Color.white : Color.primary)
+                            .padding(.horizontal, 14)
+                            .frame(height: 34)
+                            .background(Capsule().fill(isOn ? PPColor.brand : PPColor.card))
                             .overlay(
                                 Capsule()
-                                    .stroke(Color.black.opacity(0.10), lineWidth: isOn ? 0 : 0.5)
+                                    .strokeBorder(Color(.separator), lineWidth: isOn ? 0 : 0.5)
                             )
                     }
                     .accessibilityIdentifier("warningsFilterChips.row.\(chip.id)")
@@ -135,19 +112,19 @@ struct WarningPriorityBadge: View {
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .bold))
+                .font(.caption2.weight(.bold))
             Text(label)
-                .font(.system(size: 11, weight: .bold))
+                .font(.caption2.weight(.bold))
+                .tracking(0.6)
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 11)
-        .padding(.vertical, 4)
-        .background(Color.white.opacity(0.18))
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .background(Capsule().fill(Color.white.opacity(0.18)))
         .overlay(
             Capsule()
-                .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                .strokeBorder(Color.white.opacity(0.28), lineWidth: 0.5)
         )
-        .clipShape(Capsule())
     }
 
     private var label: String {
@@ -166,8 +143,8 @@ struct WarningRemoveButton: View {
     var body: some View {
         Button(action: action) {
             Text("Dismiss")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color(red: 0.420, green: 0.447, blue: 0.502))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
         }

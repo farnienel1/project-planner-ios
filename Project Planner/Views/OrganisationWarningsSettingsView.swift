@@ -21,6 +21,7 @@ struct OrganisationWarningsSettingsView: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject private var smartCache: SmartCacheService
 
     @State private var draft = OrgWarningDetectionSettings.default
     @State private var baseline = OrgWarningDetectionSettings.default
@@ -36,49 +37,97 @@ struct OrganisationWarningsSettingsView: View {
         firebaseBackend.currentOrganization?.settings.invoicing ?? .default
     }
 
-    private var invoicingPeriod: InvoicingPeriodInfo {
-        InvoicingPeriodResolver.resolve(invoicing: invoicingSettings)
+    /// `activePaymentRunSummary` over the organisation's `invoicing` map. Nil when the script did not answer.
+    private var paymentRunSummary: WarningsPaymentRunSummary? {
+        let invoicing = firebaseBackend.currentOrganization.map { FirebaseBackend.invoicingFirestoreMap($0.settings.invoicing) }
+        return CanonicalBusinessEngine.warningsPaymentRunSummary(invoicing: invoicing)
     }
 
-    /// Active payment-run segment used by Warnings “Invoicing period” mode (from Organisation Hub).
-    private var warningsInvoicingScanLabel: String {
-        InvoicingPeriodResolver.warningScanBounds(invoicing: invoicingSettings).label
+    /// The draft's scan window from the script (`coverageWindow`, with its fallback reason).
+    private var draftScanWindow: WarningScanWindow? {
+        CanonicalBusinessEngine.warningScanWindow(detection: draft, invoicing: invoicingSettings)
+    }
+
+    /// The draft scan window in words. Dates are the script's; only the wording is here.
+    private var scanSummary: String {
+        guard let window = draftScanWindow else {
+            return "The scan window could not be worked out right now. Save still updates the setting."
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        formatter.timeZone = OrganizationRulebookContext.timeZone
+        let startLabel = formatter.string(from: window.start)
+        let endLabel = formatter.string(from: window.end)
+        switch draft.clashLookaheadMode {
+        case .numberOfDays:
+            return "Scans \(startLabel) through \(endLabel), today included. Includes clashes, unbooked labour, and materials cut-off in that window."
+        case .endOfInvoicingPeriod:
+            return "Scans the active payment run: \(startLabel) through \(endLabel). Every past, present, and future day in it is included."
+        case .endOfWorkingWeek:
+            return "Monday–Friday of this week, including days already past (\(startLabel) through \(endLabel)). Saturday and Sunday are added for unbooked labour when Include weekends is on."
+        }
+    }
+
+    /// RULEBOOK §5: a "Set number of days" fallback is always said, never silent.
+    @ViewBuilder
+    private var lookaheadFallbackNotice: some View {
+        if let notice = OrgWarningDetectionSettings.lookaheadFallbackNotice(draftScanWindow?.fallbackReason) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Text(notice)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .background(Color.orange.opacity(0.10))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.orange.opacity(0.3), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityIdentifier("organisationWarningsSettings.lookaheadFallback")
+        }
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 0) {
                 headerBar
 
-                detectionPeriodCard
-                excludedUsersCard
-                warningTypesCard
-                severityGuideCard
+                VStack(alignment: .leading, spacing: 20) {
+                    detectionPeriodCard
+                    excludedUsersCard
+                    warningTypesCard
+                    severityGuideCard
 
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 4)
-                }
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 4)
+                    }
 
-                if saveSucceeded, onSaved == nil {
-                    Text("Settings saved. Warnings have been updated.")
-                        .font(.caption)
-                        .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                        .padding(.horizontal, 4)
+                    if saveSucceeded, onSaved == nil {
+                        Text("Settings saved. Warnings have been updated.")
+                            .font(.caption)
+                            .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                            .padding(.horizontal, 4)
+                    }
                 }
+                .padding(.top, 18)
+                .padding(.bottom, 12)
+                .ppContentSheet()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Warnings")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .navigationBarBackButtonHidden(true)
         .background(SettingsSwipeBackGuard(disabled: isDirty))
         .safeAreaInset(edge: .bottom) {
-            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving) {
+            SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving, isOnline: smartCache.isOnline) {
                 Task { await save() }
             }
         }
@@ -95,9 +144,10 @@ struct OrganisationWarningsSettingsView: View {
                     } else {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                            .foregroundStyle(.white)
                     }
                 }
+                .tint(.white)
                 .accessibilityIdentifier("organisationWarningsSettings.back")
             }
         }
@@ -130,14 +180,15 @@ struct OrganisationWarningsSettingsView: View {
     // MARK: - Header
 
     private var headerBar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Warnings")
-                .font(.title2.bold())
-            Text("Control how and when your team is alerted to scheduling issues")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        PPNavyPageTitle(
+            title: "Warnings",
+            subtitle: "Control how and when your team is alerted to scheduling issues"
+        )
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 16)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
     }
 
     // MARK: - Detection period
@@ -148,9 +199,11 @@ struct OrganisationWarningsSettingsView: View {
 
             VStack(spacing: 10) {
                 modeOption(.numberOfDays, label: "Set number of days", description: "Scan today through the next N calendar days (inclusive). Example: 7 days = today + the next 6 days.")
-                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan the active payment-run timeframe from Organisation Hub (e.g. 1–16 or 17–31) — every past, present, and future day inside that timeframe.")
-                modeOption(.endOfWorkingWeek, label: "Full week", description: "This option will include any warnings for your current working week. To exclude weekends, please use the toggle below.")
+                modeOption(.endOfInvoicingPeriod, label: "Invoicing period", description: "Scan the active payment run from Organisation Hub — every past, present, and future day inside it.")
+                modeOption(.endOfWorkingWeek, label: "Full week", description: "Monday–Friday of this week, including days already past. Saturday and Sunday are added for unbooked labour when Include weekends is on.")
             }
+
+            lookaheadFallbackNotice
 
             if draft.clashLookaheadMode == .numberOfDays {
                 daysStepperBox
@@ -161,7 +214,7 @@ struct OrganisationWarningsSettingsView: View {
             }
 
             if draft.clashLookaheadMode == .endOfWorkingWeek {
-                infoBox(text: draft.detectionScanSummary(invoicing: invoicingSettings))
+                infoBox(text: scanSummary)
             }
 
             Text("Save updates the organisation setting. The Warnings list refreshes automatically when you leave settings; you can also tap Refresh anytime.")
@@ -175,15 +228,16 @@ struct OrganisationWarningsSettingsView: View {
         Button {
             markEdited()
             draft.clashLookaheadMode = mode
+            draft.clashLookaheadDaysFallback = nil
         } label: {
             HStack(alignment: .top, spacing: 12) {
                 ZStack {
                     Circle()
-                        .strokeBorder(draft.clashLookaheadMode == mode ? ProjectWorksRevampColors.blue : Color(.systemGray4), lineWidth: 2)
+                        .strokeBorder(draft.clashLookaheadMode == mode ? PPColor.brand : Color(.systemGray4), lineWidth: 2)
                         .frame(width: 18, height: 18)
                     if draft.clashLookaheadMode == mode {
                         Circle()
-                            .fill(ProjectWorksRevampColors.blue)
+                            .fill(PPColor.brand)
                             .frame(width: 8, height: 8)
                     }
                 }
@@ -192,7 +246,7 @@ struct OrganisationWarningsSettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(draft.clashLookaheadMode == mode ? ProjectWorksRevampColors.blue : .primary)
+                        .foregroundStyle(draft.clashLookaheadMode == mode ? PPColor.brand : .primary)
                     Text(description)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -203,11 +257,11 @@ struct OrganisationWarningsSettingsView: View {
             .padding(14)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(draft.clashLookaheadMode == mode ? ProjectWorksRevampColors.blue.opacity(0.08) : Color(.secondarySystemBackground))
+                    .fill(draft.clashLookaheadMode == mode ? PPColor.brand.opacity(0.08) : Color(.secondarySystemBackground))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(draft.clashLookaheadMode == mode ? ProjectWorksRevampColors.blue : Color.clear, lineWidth: 2)
+                    .strokeBorder(draft.clashLookaheadMode == mode ? PPColor.brand : Color.clear, lineWidth: 2)
             )
         }
         .accessibilityIdentifier("organisationWarningsSettings.\(AccessibilityID.token(label))")
@@ -229,6 +283,7 @@ struct OrganisationWarningsSettingsView: View {
                     stepButton(systemName: "minus") {
                         markEdited()
                         draft.clashLookaheadDays = max(1, draft.clashLookaheadDays - 1)
+                        draft.clashLookaheadDaysFallback = nil
                     }
                     Text("\(draft.clashLookaheadDays)")
                         .font(.title3.bold())
@@ -236,10 +291,11 @@ struct OrganisationWarningsSettingsView: View {
                     stepButton(systemName: "plus") {
                         markEdited()
                         draft.clashLookaheadDays = min(365, draft.clashLookaheadDays + 1)
+                        draft.clashLookaheadDaysFallback = nil
                     }
                 }
             }
-            infoBox(text: draft.detectionScanSummary(invoicing: invoicingSettings))
+            infoBox(text: scanSummary)
         }
         .padding(14)
         .background(Color(.secondarySystemBackground))
@@ -247,58 +303,63 @@ struct OrganisationWarningsSettingsView: View {
         .padding(.top, 8)
     }
 
+    /// "Invoicing period" only (RULEBOOK §4.5, §5): the active payment run from `activePaymentRunSummary`,
+    /// or a prompt to set payment runs up when the organisation has none.
+    @ViewBuilder
     private var invoicingPeriodPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("YOUR INVOICING SCHEDULE")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color(.tertiarySystemBackground))
-
-                ForEach(Array(invoicingPeriod.scheduleRows.enumerated()), id: \.offset) { index, row in
-                    if index > 0 { Divider() }
+            switch paymentRunSummary {
+            case .configured(let label, _):
+                VStack(spacing: 0) {
                     HStack {
-                        Text(row.label)
-                            .font(.subheadline)
+                        Text("YOUR INVOICING SCHEDULE")
+                            .font(.caption2.weight(.bold))
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Text(row.summary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color(.tertiarySystemBackground))
+
+                    HStack(alignment: .top) {
+                        Text("Active payment run")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 12)
+                        Text(label)
                             .font(.subheadline.weight(.medium))
+                            .multilineTextAlignment(.trailing)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                 }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
+                .accessibilityIdentifier("organisationWarningsSettings.invoicingSchedule")
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: "calendar")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.green)
-                    Text("ACTIVE PAYMENT-RUN PERIOD")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.green)
+                infoBox(text: scanSummary)
+            case .notConfigured:
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("No payment runs are set up for this company, so there is no invoicing period to scan.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    NavigationLink {
+                        OrganisationInvoicingSettingsView()
+                            .environmentObject(firebaseBackend)
+                    } label: {
+                        Text("Set up payment runs")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(PPColor.brand)
+                    }
+                    .accessibilityIdentifier("organisationWarningsSettings.setUpPaymentRuns")
                 }
-                Text(warningsInvoicingScanLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color(red: 0.08, green: 0.33, blue: 0.18))
-                Text("From Organisation Hub payment-run settings. While you are in this timeframe, warnings include every day from period start through period end — past, present, and future.")
-                    .font(.caption)
-                    .foregroundStyle(Color(red: 0.09, green: 0.40, blue: 0.20))
+                .padding(14)
+                .background(Color(.secondarySystemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            case nil:
+                infoBox(text: scanSummary)
             }
-            .padding(14)
-            .background(Color(red: 0.94, green: 0.99, blue: 0.95))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.green.opacity(0.35), lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-            infoBox(text: draft.detectionScanSummary(invoicing: invoicingSettings))
         }
         .padding(.top, 8)
     }
@@ -329,8 +390,8 @@ struct OrganisationWarningsSettingsView: View {
                             .font(.caption2.weight(.bold))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
-                            .background(ProjectWorksRevampColors.blue.opacity(0.15))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
+                            .background(PPColor.brand.opacity(0.15))
+                            .foregroundStyle(PPColor.brand)
                             .clipShape(Capsule())
                     }
                     Image(systemName: "chevron.right")
@@ -361,7 +422,7 @@ struct OrganisationWarningsSettingsView: View {
             } label: {
                 Text("Open full exclusion list")
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
+                    .foregroundStyle(PPColor.brand)
             }
             .accessibilityIdentifier("organisationWarningsSettings.openFullExclusionList")
             .padding(.top, 4)
@@ -434,7 +495,7 @@ struct OrganisationWarningsSettingsView: View {
 
             toggleRow(
                 title: "Booking clashes",
-                subtitle: "Flags when a person is double-booked on the same date. Operative, manager, and admin clashes are high-urgency; each can be approved for the weekly report.",
+                subtitle: "Flags when a person is double-booked on the same date. Operative clashes are high; manager and admin overlaps are medium. Each can be approved for the weekly report.",
                 isOn: $draft.detectClashes
             )
 
@@ -477,28 +538,16 @@ struct OrganisationWarningsSettingsView: View {
             content()
         }
         .padding(18)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: Color.black.opacity(0.05), radius: 8, y: 2)
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(Color(.separator).opacity(0.35), lineWidth: 0.5)
-        )
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func sectionHeader(icon: String, title: String, subtitle: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(ProjectWorksRevampColors.blue.opacity(0.1))
-                    .frame(width: 36, height: 36)
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
-            }
+        HStack(alignment: .top, spacing: 13) {
+            PPIconTile(symbol: icon, family: sectionFamily(for: icon), size: 36)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                 Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -507,26 +556,35 @@ struct OrganisationWarningsSettingsView: View {
         }
     }
 
+    private func sectionFamily(for icon: String) -> PPFamily {
+        switch icon {
+        case "clock.fill": return .plan
+        case "person.2.fill": return .people
+        case "exclamationmark.triangle.fill": return .alert
+        default: return .system
+        }
+    }
+
     private func infoBox(text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "info.circle.fill")
                 .font(.caption)
-                .foregroundStyle(ProjectWorksRevampColors.blue)
+                .foregroundStyle(PPColor.brand)
             Text(text)
                 .font(.caption)
-                .foregroundStyle(ProjectWorksRevampColors.blue)
+                .foregroundStyle(PPColor.brand)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
-        .background(ProjectWorksRevampColors.blue.opacity(0.08))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(ProjectWorksRevampColors.blue.opacity(0.2), lineWidth: 1))
+        .background(PPColor.brand.opacity(0.08))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(PPColor.brand.opacity(0.2), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func stepButton(systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .bold))
+                .font(.footnote.weight(.bold))
                 .frame(width: 32, height: 32)
                 .background(Color(.systemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -556,7 +614,7 @@ struct OrganisationWarningsSettingsView: View {
             Toggle("", isOn: isOn)
                 .accessibilityIdentifier("organisationWarningsSettings.\(AccessibilityID.token(title))")
                 .labelsHidden()
-                .tint(ProjectWorksRevampColors.blue)
+                .tint(PPColor.brand)
                 .onChange(of: isOn.wrappedValue) { _, _ in markEdited() }
         }
         .padding(.vertical, 4)
@@ -710,8 +768,11 @@ private struct WarningExcludedUsersPickerView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Excluded users")
         .navigationBarTitleDisplayMode(.inline)
+        .ppNavyNavigationBar()
         .searchable(text: $searchText, prompt: "Search users")
     }
 

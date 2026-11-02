@@ -51,6 +51,7 @@ struct BookingClashWarningCard: View {
     let onOpenDay: () -> Void
     let onRemoveWarning: () -> Void
 
+    @EnvironmentObject private var smartCache: SmartCacheService
     @State private var timelineOpen = false
 
     private var entries: [Warning.ClashTimelineEntry] {
@@ -366,6 +367,8 @@ struct BookingClashWarningCard: View {
         }
         .accessibilityIdentifier("bookingClashWarningCard.checkmark")
         .buttonStyle(.plain)
+        // RULEBOOK §2: clash approval is online only.
+        .onlineOnly(isOnline: smartCache.isOnline)
         .padding(.top, 1)
     }
 

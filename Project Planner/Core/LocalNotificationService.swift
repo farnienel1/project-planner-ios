@@ -133,6 +133,12 @@ class LocalNotificationService {
         case .ideaShipped:
             content.title = "You asked, we built it"
             content.body = details.isEmpty ? "An idea you raised or voted for has shipped." : details
+        case .ideaComment:
+            content.title = "New comment on your feedback"
+            content.body = details.isEmpty ? "Someone commented on an idea you raised or voted for." : details
+        case .ideaMerged:
+            content.title = "Feedback merged"
+            content.body = details.isEmpty ? "An idea you raised or voted for was merged into another." : details
         }
         
         // Set sound
@@ -311,9 +317,10 @@ class LocalNotificationService {
             content.userInfo = userInfo
         }
 
-        var cal = Calendar.current
-        cal.timeZone = TimeZone.current
-        let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: fireAt)
+        // `fireAt` is an instant chosen on an organisation business day; keep it in the organisation zone.
+        let cal = OrganizationRulebookContext.calendar
+        var comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: fireAt)
+        comps.timeZone = cal.timeZone
         let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
         do {

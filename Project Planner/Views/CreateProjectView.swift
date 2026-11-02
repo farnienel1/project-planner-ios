@@ -140,7 +140,7 @@ struct CreateProjectView: View {
         AnyView(
             NavigationStack {
             ZStack {
-                ProjectWorksRevampColors.canvas.ignoresSafeArea()
+                PPColor.page.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         heroCard
@@ -191,12 +191,13 @@ struct CreateProjectView: View {
             }
             .navigationTitle("New project")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                         .accessibilityIdentifier("createProject.cancel")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -251,40 +252,22 @@ struct CreateProjectView: View {
     private var heroCard: some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack(alignment: .bottomTrailing) {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 52, height: 52)
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 24))
-                    .foregroundStyle(.white)
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(ProjectWorksRevampColors.canvas))
-                    .overlay(Circle().stroke(ProjectWorksRevampColors.canvas, lineWidth: 2))
-                    .offset(x: 4, y: 4)
+                PPIconTile(symbol: "folder.fill", family: .sites, size: 52, lifted: true)
+                PPPlusBadge()
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Create a new project")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .font(.system(.headline, design: .rounded))
+                    .fontWeight(.bold)
+                    .foregroundStyle(.primary)
                 Text("Fill in the essentials, add the rest later")
-                    .font(.system(size: 12))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
         .padding(16)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var requiredProgressCard: some View {
@@ -318,9 +301,9 @@ struct CreateProjectView: View {
     private func sectionHeader(_ title: String, subtitle: String? = nil, showRequiredBadge: Bool = false) -> some View {
         HStack(spacing: 8) {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .tracking(0.4)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.8)
             if showRequiredBadge {
                 Text("REQUIRED")
                     .font(.system(size: 9, weight: .medium))
@@ -344,9 +327,9 @@ struct CreateProjectView: View {
         HStack {
             HStack(spacing: 8) {
                 Text("ADDRESS")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                    .tracking(0.4)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .tracking(0.8)
                 if hasMapPin {
                     Text("MAP PIN SET")
                         .font(.system(size: 9, weight: .medium))
@@ -395,9 +378,8 @@ struct CreateProjectView: View {
             )
         }
         .padding(.horizontal, 14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var expandAddressFieldsRow: some View {
@@ -426,9 +408,8 @@ struct CreateProjectView: View {
                 Spacer()
             }
             .padding(12)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
         .accessibilityIdentifier("createProject.chevronDown")
         .buttonStyle(.plain)
@@ -482,9 +463,8 @@ struct CreateProjectView: View {
             )
         }
         .padding(.horizontal, 14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var setPinOnMapRow: some View {
@@ -510,9 +490,8 @@ struct CreateProjectView: View {
                     .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
             }
             .padding(12)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
+            .background(PPColor.card)
+            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
         .accessibilityIdentifier("createProject.map")
         .buttonStyle(.plain)
@@ -525,9 +504,8 @@ struct CreateProjectView: View {
             dateRow(icon: "flag.fill", iconBg: ProjectWorksRevampColors.endDateBg, iconTint: ProjectWorksRevampColors.endDateFg, label: "End date", date: $projectEndDate)
         }
         .padding(.horizontal, 14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func dateRow(icon: String, iconBg: Color, iconTint: Color, label: String, date: Binding<Date>) -> some View {
@@ -579,9 +557,8 @@ struct CreateProjectView: View {
             jobTypeMenuRow
         }
         .padding(.horizontal, 14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var clientMenuRow: some View {
@@ -683,9 +660,8 @@ struct CreateProjectView: View {
                     .allowsHitTesting(false)
             }
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(ProjectWorksRevampColors.border, lineWidth: 0.5))
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private var bottomCreateBar: some View {

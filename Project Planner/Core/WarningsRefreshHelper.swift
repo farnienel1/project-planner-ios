@@ -105,6 +105,8 @@ enum WarningsRefreshHelper {
         bookingDataChanged: Bool = false
     ) async -> Bool {
         guard userStore.canViewStaffWarnings() else { return false }
+        // Approve, dismiss and un-approve write only for the person `canViewStaffWarnings` allows.
+        WarningResolutionStore.shared.setActor(userStore.displayUser)
 
         if isWarningsSheetVisible && !manualUserInitiated && !allowWhileSheetVisible && !bookingDataChanged {
             print("🔥🔥🔥 DEBUG: Warnings refresh skipped (Warnings sheet visible)")
@@ -349,8 +351,15 @@ enum WarningsRefreshHelper {
         WarningsService.shared.setIncompleteDataMessage(nil)
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
 
-        // Honor Organisation Warnings detection horizon (days / working week / invoicing period).
-        let canonical = CanonicalBusinessEngine.warningBounds(
+        // Honor Organisation Warnings detection horizon (days / working week / invoicing period):
+        // `coverageWindow`, the unbooked end and `clashScanDays` with every weekend day of the week
+        // counted as booked, so the bookings read below reach a booked Saturday or Sunday in Full week.
+        let scanWindow = CanonicalBusinessEngine.warningScanWindow(
+            detection: warningDetection,
+            invoicing: invoicingSettings,
+            reference: today
+        )
+        let canonical = scanWindow.map { (start: $0.start, end: $0.end) } ?? CanonicalBusinessEngine.warningBounds(
             detection: warningDetection,
             invoicing: invoicingSettings,
             reference: today
@@ -367,12 +376,8 @@ enum WarningsRefreshHelper {
             managerScheduleStore.loadData(force: true)
             return
         }
-        let unbookedEnd = CanonicalBusinessEngine.unbookedLabourWindowEnd(
-            coverageEnd: coverageEnd,
-            clashLookaheadMode: warningDetection.clashLookaheadMode.rawValue,
-            includeWeekends: warningDetection.includeWeekendsForUnbookedLabour
-        )
-        let dataEnd = max(coverageEnd, unbookedEnd)
+        let unbookedEnd = scanWindow?.unbookedEnd ?? coverageEnd
+        let dataEnd = scanWindow?.dataEnd ?? max(coverageEnd, unbookedEnd)
         let dayCount = max(1, (cal.dateComponents([.day], from: coverageStart, to: coverageEnd).day ?? 0) + 1)
         print("🔥🔥🔥 DEBUG: Warnings coverage mode=\(warningDetection.clashLookaheadMode.displayName) days=\(dayCount) \(coverageStart)…\(coverageEnd)")
         let tomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 1, to: today) ?? today)
@@ -386,6 +391,18 @@ enum WarningsRefreshHelper {
         )
         let projects = projectStore.projects
         let projectsTomorrow = projects.filter { tomorrowIds.contains($0.id) }
+        // `materialCutOffWarningRows` decides which of these bookings are on tomorrow and active; this only
+        // reads the bookings, lines and order records it needs (today through the day after tomorrow).
+        let dayAfterTomorrow = cal.startOfDay(for: cal.date(byAdding: .day, value: 2, to: today) ?? today)
+        let materialCutOffBookings = bookingStore.bookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= today && day <= dayAfterTomorrow
+        }
+        let materialLoad = await loadMaterialCutOffInputs(
+            projectIds: Array(tomorrowIds),
+            firebaseBackend: firebaseBackend
+        )
+        if Task.isCancelled { return }
 
         // Pre-window to the detection horizon before WarningsService snapshot work.
         let liveBookings = bookingStore.bookings.filter {
@@ -441,10 +458,42 @@ enum WarningsRefreshHelper {
             materialCutOffMinutes: materialCutOffMinutes,
             materialCutOffLabel: materialCutOffLabel,
             projectsWithTomorrowBookings: projectsTomorrow,
+            materialItemsForTomorrow: materialLoad.materials,
             dismissedQualificationKeys: dismissedQualificationKeys,
+            materialCutOff: firebaseBackend.currentOrganization?.settings.materialCutOff,
+            // A job whose lines could not be read is left out, so a failed read is never "nothing ordered".
+            materialCutOffBookings: materialCutOffBookings.filter { materialLoad.loadedProjectIds.contains($0.projectId) },
+            materialSendRecords: materialLoad.sendRecords,
             publishToLiveCache: true
         )
         postWarningsCountDidChange()
+    }
+
+    /// Material lines and send records for the jobs booked tomorrow. `loadedProjectIds` holds the jobs whose
+    /// lines were read; the others get no cut-off row this scan.
+    @MainActor
+    private static func loadMaterialCutOffInputs(
+        projectIds: [UUID],
+        firebaseBackend: FirebaseBackend
+    ) async -> (materials: [MaterialItem], sendRecords: [MaterialSendRecord], loadedProjectIds: Set<UUID>) {
+        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId, !organizationId.isEmpty else {
+            return ([], [], [])
+        }
+        var materials: [MaterialItem] = []
+        var records: [MaterialSendRecord] = []
+        var loaded = Set<UUID>()
+        for projectId in projectIds {
+            if Task.isCancelled { break }
+            guard let lines = try? await firebaseBackend.loadMaterialItems(organizationId: organizationId, projectId: projectId) else {
+                continue
+            }
+            materials.append(contentsOf: lines)
+            loaded.insert(projectId)
+            if let sent = try? await firebaseBackend.loadMaterialSendRecords(organizationId: organizationId, projectId: projectId) {
+                records.append(contentsOf: sent)
+            }
+        }
+        return (materials, records, loaded)
     }
 
     @MainActor

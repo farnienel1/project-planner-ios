@@ -71,10 +71,25 @@ class BookingStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: BookingStore offline sync skipped until org bootstrap finishes")
                     return
                 }
-                print("🔥🔥🔥 DEBUG: BookingStore received syncOfflineChanges notification - syncing all data to Firebase")
-                if !self.bookings.isEmpty {
-                    await self.saveData()
-                }
+                // RULEBOOK §1/§2: queued changes replay from the outbox as partial updates. Re-saving
+                // every in-memory booking here rewrote whole documents from a possibly stale copy and
+                // could bring back bookings deleted on another device, so it no longer writes.
+                print("🔥🔥🔥 DEBUG: BookingStore received syncOfflineChanges — outbox replays queued changes")
+            }
+        }
+
+        // RULEBOOK §2: a refused replay is final. Drop the local row the server will never accept.
+        NotificationCenter.default.addObserver(
+            forName: .offlineBookingReplayRefused,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let collection = note.userInfo?["collection"] as? String
+            let bookingId = note.userInfo?["bookingId"] as? String
+            let operation = note.userInfo?["operation"] as? String
+            Task { @MainActor [weak self] in
+                guard let self, collection == "bookings", let bookingId else { return }
+                self.dropRefusedBooking(bookingId: bookingId, operation: operation)
             }
         }
     }
@@ -229,21 +244,42 @@ class BookingStore: ObservableObject {
     
     func addBooking(_ booking: Booking) async {
         bookings.append(booking)
-        await saveData(syncingBookingIds: [booking.id])
+        await saveData(writes: [BookingWrite(booking: booking, changedFields: nil)])
     }
 
     /// Append multiple bookings then sync only the new rows (much faster than repeated full saves).
     func addBookings(_ newBookings: [Booking]) async {
         guard !newBookings.isEmpty else { return }
         bookings.append(contentsOf: newBookings)
-        await saveData(syncingBookingIds: Set(newBookings.map(\.id)))
+        await saveData(writes: newBookings.map { BookingWrite(booking: $0, changedFields: nil) })
     }
     
+    /// Saves only the fields that changed against the copy on this device (RULEBOOK §1 partial writes).
     func updateBooking(_ booking: Booking) async {
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
+            let changed = BookingWritePatch.changedLabourFields(from: bookings[index], to: booking)
             bookings[index] = booking
-            await saveData()
+            await saveData(writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed)])
         }
+    }
+
+    /// RULEBOOK §2 "Pending sync": this booking has a change in the outbox the server has not confirmed.
+    func isPendingSync(_ booking: Booking) -> Bool {
+        OfflineOutboxStore.shared.hasPendingSync(bookingId: booking.id)
+    }
+
+    /// A queued save the server refused for good (tombstone / cancelled elsewhere): the row goes.
+    /// A refused delete leaves the row to come back from the server listener.
+    private func dropRefusedBooking(bookingId: String, operation: String?) {
+        guard operation == OfflineOutboxEntry.Operation.saveBooking.rawValue else { return }
+        let key = bookingId.uppercased()
+        let before = bookings.count
+        bookings.removeAll { $0.id.uuidString.uppercased() == key || $0.documentKey.uppercased() == key }
+        guard bookings.count != before else { return }
+        smartCache?.cacheBookings(bookings)
+        let snapshot = bookings
+        Task { try? await persistenceService.saveBookingData(bookings: snapshot) }
+        ScheduleChangeNotifier.postBookingStoreDidChange()
     }
     
     /// A deleted person's bookings to remove, from the rulebook's `bookingsToRemoveOnOperativeDelete` (web calls it too):
@@ -267,6 +303,12 @@ class BookingStore: ObservableObject {
     }
 
     func deleteBooking(_ booking: Booking) async {
+        // RULEBOOK §2 (`offlineAvailability("booking.delete")`): deleting a booking is online only; the
+        // delete and its tombstone are never queued.
+        guard OfflinePolicy.isEnabled(.deleteBooking, isOnline: smartCache?.isOnline ?? true) else {
+            errorMessage = OfflinePolicy.onlineOnlyMessage
+            return
+        }
         bookings.removeAll { $0.id == booking.id }
         try? await persistenceService.saveBookingData(bookings: bookings)
         smartCache?.cacheBookings(bookings)
@@ -279,35 +321,36 @@ class BookingStore: ObservableObject {
         ) ?? fb.resolvedOrganizationIdForOfflineWrites()
         guard let orgId else { return }
 
-        if smartCache?.isOnline == false {
-            OfflineOutboxStore.shared.enqueueDeleteBooking(booking.id, documentId: booking.documentId, organizationId: orgId)
-            return
-        }
-
         do {
+            // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             try await fb.deleteBooking(booking, organizationId: orgId)
         } catch {
-            if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
-                OfflineOutboxStore.shared.enqueueDeleteBooking(booking.id, documentId: booking.documentId, organizationId: orgId)
-                errorMessage = "Removed locally. Will sync when you're back online."
-            } else {
-                errorMessage = error.localizedDescription
-                print("🔥🔥🔥 DEBUG: Error deleting booking from Firebase: \(error)")
+            // Refused (for example: only an admin may delete a labour booking), or the connection dropped:
+            // deletes are online only, so nothing is queued. It still exists on the server; put it back.
+            if !bookings.contains(where: { $0.id == booking.id }) {
+                bookings.append(booking)
+                smartCache?.cacheBookings(bookings)
+                try? await persistenceService.saveBookingData(bookings: bookings)
+                ScheduleChangeNotifier.postBookingStoreDidChange()
             }
+            errorMessage = OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true)
+                ? OfflinePolicy.onlineOnlyMessage
+                : error.localizedDescription
+            print("🔥🔥🔥 DEBUG: Error deleting booking from Firebase: \(error)")
         }
     }
     
     func cancelBooking(_ booking: Booking) async {
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
             bookings[index].status = .cancelled
-            await saveData()
+            await saveData(writes: [BookingWrite(booking: bookings[index], changedFields: ["status"])])
         }
     }
     
     func completeBooking(_ booking: Booking) async {
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
             bookings[index].status = .completed
-            await saveData()
+            await saveData(writes: [BookingWrite(booking: bookings[index], changedFields: ["status"])])
         }
     }
     
@@ -375,7 +418,8 @@ class BookingStore: ObservableObject {
     // MARK: - Computed Properties
     
     var bookingsByDate: [Date: [Booking]] {
-        Dictionary(grouping: bookings) { Calendar.current.startOfDay(for: $0.date) }
+        // Business day in the organisation zone (RULEBOOK §1), not the phone's.
+        Dictionary(grouping: bookings) { OrganizationRulebookContext.calendar.startOfDay(for: $0.date) }
     }
     
     var bookingsByOperative: [UUID: [Booking]] {
@@ -394,9 +438,10 @@ class BookingStore: ObservableObject {
     }
     
     var todaysBookings: [Booking] {
-        let today = Calendar.current.startOfDay(for: Date())
+        let calendar = OrganizationRulebookContext.calendar
+        let today = calendar.startOfDay(for: Date())
         return bookings.filter { 
-            Calendar.current.isDate($0.date, inSameDayAs: today) &&
+            calendar.isDate($0.date, inSameDayAs: today) &&
             ($0.status.occupiesDay)
         }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
     }
@@ -420,19 +465,21 @@ class BookingStore: ObservableObject {
     // MARK: - Booking Queries
     
     func bookings(for operative: Operative, on date: Date) -> [Booking] {
-        let dayStart = Calendar.current.startOfDay(for: date)
+        let calendar = OrganizationRulebookContext.calendar
+        let dayStart = calendar.startOfDay(for: date)
         return bookings.filter { 
             $0.operativeId == operative.id && 
-            Calendar.current.isDate($0.date, inSameDayAs: dayStart) &&
+            calendar.isDate($0.date, inSameDayAs: dayStart) &&
             ($0.status.occupiesDay)
         }
     }
     
     func bookings(for project: Project, on date: Date) -> [Booking] {
-        let dayStart = Calendar.current.startOfDay(for: date)
+        let calendar = OrganizationRulebookContext.calendar
+        let dayStart = calendar.startOfDay(for: date)
         return bookings.filter { 
             $0.projectId == project.id && 
-            Calendar.current.isDate($0.date, inSameDayAs: dayStart) &&
+            calendar.isDate($0.date, inSameDayAs: dayStart) &&
             ($0.status.occupiesDay)
         }
     }
@@ -501,20 +548,21 @@ class BookingStore: ObservableObject {
     
     // MARK: - Persistence
     
-    private func saveData(syncingBookingIds: Set<UUID>? = nil) async {
+    /// One booking to write: `changedFields` nil is a create (whole booking); otherwise only those fields.
+    struct BookingWrite {
+        let booking: Booking
+        let changedFields: Set<String>?
+    }
+
+    /// Saves the list on this device, then writes only `writes` to Firestore (RULEBOOK §1 partial writes).
+    /// Offline, each write goes to the outbox with its changed fields and shows "Pending sync" (§2).
+    private func saveData(writes: [BookingWrite] = []) async {
         do {
             // Save to local storage
             try await persistenceService.saveBookingData(bookings: bookings)
             smartCache?.cacheBookings(bookings)
 
-            let bookingsToSave: [Booking]
-            if let ids = syncingBookingIds, !ids.isEmpty {
-                bookingsToSave = bookings.filter { ids.contains($0.id) }
-            } else {
-                bookingsToSave = bookings
-            }
-
-            guard !bookingsToSave.isEmpty else {
+            guard !writes.isEmpty else {
                 ScheduleChangeNotifier.postBookingStoreDidChange()
                 return
             }
@@ -526,10 +574,14 @@ class BookingStore: ObservableObject {
 
             if smartCache?.isOnline == false {
                 if let organizationId {
-                    for booking in bookingsToSave {
-                        OfflineOutboxStore.shared.enqueueSaveBooking(booking, organizationId: organizationId)
+                    for write in writes {
+                        OfflineOutboxStore.shared.enqueueSaveBooking(
+                            write.booking,
+                            changedFields: write.changedFields,
+                            organizationId: organizationId
+                        )
                     }
-                    print("🔥🔥🔥 DEBUG: Queued \(bookingsToSave.count) bookings for offline sync")
+                    print("🔥🔥🔥 DEBUG: Queued \(writes.count) bookings for offline sync")
                 } else {
                     errorMessage = "Saved locally. Organization not available to queue cloud sync yet."
                 }
@@ -543,35 +595,61 @@ class BookingStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: Saving bookings to Firebase for organization: \(organizationId)")
 
                 var failedCount = 0
-                for booking in bookingsToSave {
+                var refusedIds = Set<UUID>()
+                for write in writes {
                     do {
-                        try await firebaseBackend.saveBooking(booking, organizationId: organizationId)
+                        try await firebaseBackend.saveBooking(
+                            write.booking,
+                            organizationId: organizationId,
+                            changedFields: write.changedFields
+                        )
                     } catch {
                         failedCount += 1
                         if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
                            let orgId = firebaseBackend.resolvedOrganizationIdForOfflineWrites() {
-                            OfflineOutboxStore.shared.enqueueSaveBooking(booking, organizationId: orgId)
+                            OfflineOutboxStore.shared.enqueueSaveBooking(
+                                write.booking,
+                                changedFields: write.changedFields,
+                                organizationId: orgId
+                            )
+                        } else if BookingWritePatch.isRefusedFinal(error) {
+                            // Tombstoned (deleted elsewhere) or cancelled by someone who may reinstate it.
+                            refusedIds.insert(write.booking.id)
                         }
-                        print("🔥🔥🔥 DEBUG: Error saving booking \(booking.id.uuidString): \(error)")
+                        print("🔥🔥🔥 DEBUG: Error saving booking \(write.booking.id.uuidString): \(error)")
                     }
                 }
 
-                if failedCount > 0 {
+                if !refusedIds.isEmpty {
+                    // A refused create is never on the server: drop it. A refused edit comes back from the
+                    // listener with the server's values.
+                    let refusedCreates = Set(writes.filter { $0.changedFields == nil && refusedIds.contains($0.booking.id) }.map(\.booking.id))
+                    if !refusedCreates.isEmpty {
+                        bookings.removeAll { refusedCreates.contains($0.id) }
+                        smartCache?.cacheBookings(bookings)
+                        try? await persistenceService.saveBookingData(bookings: bookings)
+                    }
+                    errorMessage = CanonicalBusinessEngine.bookingReplayRefusedMessage
+                } else if failedCount > 0 {
                     if OfflineOutboxStore.shared.pendingCount > 0 {
                         errorMessage = "Some bookings saved locally and will sync when you're back online."
                     } else {
                         errorMessage = "Some bookings could not be synced to cloud (\(failedCount))."
                     }
-                    print("🔥🔥🔥 DEBUG: Saved \(bookingsToSave.count - failedCount)/\(bookingsToSave.count) bookings to Firebase")
+                    print("🔥🔥🔥 DEBUG: Saved \(writes.count - failedCount)/\(writes.count) bookings to Firebase")
                 } else {
                     errorMessage = nil
-                    print("🔥🔥🔥 DEBUG: Successfully saved \(bookingsToSave.count) bookings to Firebase")
+                    print("🔥🔥🔥 DEBUG: Successfully saved \(writes.count) bookings to Firebase")
                 }
             } else {
                 print("🔥🔥🔥 DEBUG: Saved \(bookings.count) bookings locally (Firebase not available or not authenticated)")
                 if let organizationId = firebaseBackend?.resolvedOrganizationIdForOfflineWrites() {
-                    for booking in bookingsToSave {
-                        OfflineOutboxStore.shared.enqueueSaveBooking(booking, organizationId: organizationId)
+                    for write in writes {
+                        OfflineOutboxStore.shared.enqueueSaveBooking(
+                            write.booking,
+                            changedFields: write.changedFields,
+                            organizationId: organizationId
+                        )
                     }
                 }
             }
@@ -621,6 +699,8 @@ class BookingStore: ObservableObject {
         }
         if !fromCache {
             listenerFailed = false
+            // RULEBOOK §2 read-only offline screens show "Last updated" from this.
+            smartCache?.markSynced()
             if BookingStore.sameBookings(remote, existing) {
                 if bookings.count != existing.count { bookings = existing }
                 return

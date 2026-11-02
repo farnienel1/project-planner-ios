@@ -371,16 +371,16 @@ struct TimesheetAdjustedAmountText: View {
     var body: some View {
         if showsAdjustment {
             VStack(alignment: .trailing, spacing: 2) {
-                Text(String(format: "£%.2f", original))
+                Text(OrgMoney.format(original))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .strikethrough(decision == .declined || decision == .edited, color: .secondary)
-                Text(String(format: "£%.2f", effective))
+                Text(OrgMoney.format(effective))
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(decision.tint)
             }
         } else {
-            Text(String(format: "£%.2f", original))
+            Text(OrgMoney.format(original))
                 .font(.subheadline.weight(.bold))
         }
     }
@@ -394,20 +394,20 @@ struct TimesheetManagerAdjustmentSummaryCard: View {
         var rows: [(String, TimesheetManagerDecision, String?)] = []
         for entry in draft.expenseEntries where entry.managerDecision != .approved && entry.managerDecision != .pending {
             let detail: String? = entry.managerDecision == .edited
-                ? "£\(String(format: "%.2f", entry.amount)) → £\(String(format: "%.2f", entry.managerRevisedAmount ?? entry.amount))"
+                ? "\(OrgMoney.format(entry.amount)) → \(OrgMoney.format(entry.managerRevisedAmount ?? entry.amount))"
                 : nil
             rows.append(("Expense: \(entry.title)", entry.managerDecision, detail))
         }
         for entry in draft.priceWorkEntries where entry.managerDecision != .approved && entry.managerDecision != .pending {
             let detail: String? = entry.managerDecision == .edited
-                ? "£\(String(format: "%.2f", entry.amount)) → £\(String(format: "%.2f", entry.managerRevisedAmount ?? entry.amount))"
+                ? "\(OrgMoney.format(entry.amount)) → \(OrgMoney.format(entry.managerRevisedAmount ?? entry.amount))"
                 : nil
             rows.append(("Price work: \(entry.title)", entry.managerDecision, detail))
         }
         for (lineId, review) in draft.payrollLineReviews where review.decision == .declined || review.decision == .edited {
             let label = review.decision == .declined ? "Day removed" : "Day adjusted"
             let detail: String? = review.decision == .edited
-                ? "New amount £\(String(format: "%.2f", review.revisedAmount ?? 0))"
+                ? "New amount \(OrgMoney.format(review.revisedAmount ?? 0))"
                 : nil
             rows.append(("\(label) (\(lineId.prefix(8))…)", review.decision, detail))
         }
@@ -495,12 +495,12 @@ struct TimesheetManagerAmountEditSheet: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     HStack {
-                        Text("£")
+                        Text(OrgMoney.symbol())
                         TextField("Amount", text: $amountText)
                             .accessibilityIdentifier("timesheetManagerAmountEdit.amount")
                             .keyboardType(.decimalPad)
                     }
-                    Text("Original: £\(String(format: "%.2f", originalAmount))")
+                    Text("Original: \(OrgMoney.format(originalAmount))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -523,7 +523,7 @@ struct TimesheetManagerAmountEditSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        let cleaned = amountText.replacingOccurrences(of: "£", with: "").trimmingCharacters(in: .whitespaces)
+                        let cleaned = amountText.replacingOccurrences(of: OrgMoney.symbol(), with: "").trimmingCharacters(in: .whitespaces)
                         if let value = Double(cleaned), value >= 0 {
                             onSave(value)
                             dismiss()

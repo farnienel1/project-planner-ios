@@ -22,11 +22,11 @@ struct HelpView: View {
                 SettingsHubChrome.card {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Find answers and how-to guides")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(Color.primary)
                         Text("Browse a topic or expand a frequent question. Get in touch via your organisation admin if you still need help.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .font(.footnote)
+                            .foregroundStyle(Color.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.vertical, 12)
@@ -36,11 +36,11 @@ struct HelpView: View {
                 SettingsHubChrome.card {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass")
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .foregroundStyle(Color.secondary)
                         TextField("Search topics", text: $searchText)
                             .accessibilityIdentifier("help.searchTopics")
-                            .font(.system(size: 14))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .font(.body)
+                            .foregroundStyle(Color.primary)
                     }
                     .padding(.vertical, 12)
                 }
@@ -53,8 +53,8 @@ struct HelpView: View {
                         } label: {
                             SettingsHubChrome.row(
                                 icon: category.icon,
-                                iconBg: ProjectWorksRevampColors.blue.opacity(0.12),
-                                iconFg: ProjectWorksRevampColors.blue,
+                                iconBg: PPColor.brand.opacity(0.12),
+                                iconFg: PPColor.brand,
                                 title: category.title,
                                 subtitle: category.description
                             )
@@ -79,10 +79,10 @@ struct HelpView: View {
             }
             .padding(16)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Help & support")
         .navigationBarTitleDisplayMode(.inline)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
         .toolbar {
             if showsTabBackButton {
                 ToolbarItem(placement: .topBarLeading) {
@@ -90,9 +90,8 @@ struct HelpView: View {
                         NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
                     } label: {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.blue)
                     }
+                        .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
                         .accessibilityIdentifier("help.gobacktoprevioustab")
                 }
             }
@@ -126,18 +125,18 @@ struct FAQCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 10) {
                     Text(faq.question)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color.primary)
                         .multilineTextAlignment(.leading)
                     Spacer(minLength: 8)
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color(.tertiaryLabel))
                 }
                 if isExpanded {
                     Text(faq.answer)
-                        .font(.system(size: 12))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .font(.footnote)
+                        .foregroundStyle(Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -162,18 +161,11 @@ struct CategoryHelpView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     SettingsHubChrome.sectionTitle(category.title)
                     SettingsHubChrome.card {
-                        HStack(alignment: .top, spacing: 12) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(ProjectWorksRevampColors.blue.opacity(0.12))
-                                    .frame(width: 36, height: 36)
-                                Image(systemName: category.icon)
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.blue)
-                            }
+                        HStack(alignment: .top, spacing: 13) {
+                            PPIconTile(symbol: category.icon, family: .plan, size: 36)
                             Text(category.description)
-                                .font(.system(size: 13))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
+                                .font(.subheadline)
+                                .foregroundStyle(Color.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 0)
                         }
@@ -196,11 +188,11 @@ struct CategoryHelpView: View {
                             ForEach(Array(category.tips.enumerated()), id: \.offset) { index, tip in
                                 HStack(alignment: .top, spacing: 10) {
                                     Image(systemName: "lightbulb.fill")
-                                        .font(.system(size: 13, weight: .semibold))
+                                        .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                                     Text(tip)
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                                        .font(.subheadline)
+                                        .foregroundStyle(Color.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                     Spacer(minLength: 0)
                                 }
@@ -214,14 +206,16 @@ struct CategoryHelpView: View {
                 }
                 .padding(16)
             }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle(category.title)
             .navigationBarTitleDisplayMode(.inline)
-            .appChromeNavigationBarSurface()
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .accessibilityIdentifier("categoryHelp.done")
+                        .font(.body.weight(.semibold))
+                        .tint(.white)
                 }
             }
         }
@@ -235,19 +229,19 @@ struct StepView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Text("\(number)")
-                .font(.system(size: 12, weight: .bold))
+                .font(.footnote.weight(.bold))
                 .foregroundStyle(.white)
                 .frame(width: 24, height: 24)
-                .background(ProjectWorksRevampColors.blue)
+                .background(PPColor.brand)
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(step.title)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(Color.primary)
                 Text(step.description)
-                    .font(.system(size: 12))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .font(.footnote)
+                    .foregroundStyle(Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)

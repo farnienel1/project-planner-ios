@@ -64,7 +64,7 @@ struct LineManagersMultiSelectSheet: View {
                                     .foregroundStyle(hasNoLineManager ? AnnualLeavePalette.leave : AnnualLeavePalette.ink3)
                             }
                             .padding(14)
-                            .background(AnnualLeavePalette.card)
+                            .background(PPColor.card)
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -76,7 +76,9 @@ struct LineManagersMultiSelectSheet: View {
                     }
 
                     Text("Line managers")
-                        .font(.headline)
+                        .font(.system(.title3, design: .rounded))
+                        .fontWeight(.bold)
+                        .padding(.top, 6)
                     if candidates.isEmpty {
                         Text("No line managers are available to assign.")
                             .font(.subheadline)
@@ -115,7 +117,7 @@ struct LineManagersMultiSelectSheet: View {
                                     .foregroundStyle(selected ? AnnualLeavePalette.leave : AnnualLeavePalette.ink3)
                             }
                             .padding(12)
-                            .background(AnnualLeavePalette.card)
+                            .background(PPColor.card)
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -139,9 +141,10 @@ struct LineManagersMultiSelectSheet: View {
                 }
                 .padding(16)
             }
-            .background(AnnualLeavePalette.soft.ignoresSafeArea())
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Line managers")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
@@ -153,6 +156,7 @@ struct LineManagersMultiSelectSheet: View {
                     }
                     .accessibilityIdentifier("lineManagersMultiSelect.done")
                     .fontWeight(.semibold)
+                    .foregroundStyle(.white)
                 }
             }
             .interactiveDismissDisabled(!hasValidSelection)

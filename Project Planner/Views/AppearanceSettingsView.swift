@@ -21,13 +21,13 @@ struct AppearanceSettingsView: View {
                         } label: {
                             HStack {
                                 Text(theme.displayName)
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(Color.primary)
                                 Spacer()
                                 if appSettings.settings.theme == theme {
                                     Image(systemName: "checkmark")
                                         .fontWeight(.semibold)
-                                        .foregroundStyle(ProjectWorksRevampColors.blue)
+                                        .foregroundStyle(PPColor.brand)
                                 }
                             }
                             .padding(.vertical, 12)
@@ -35,7 +35,7 @@ struct AppearanceSettingsView: View {
                         .accessibilityIdentifier("appearanceSettings.row.\(index).checkmark")
                         .buttonStyle(.plain)
                         if index < ThemePreference.allCases.count - 1 {
-                            Divider().overlay(ProjectWorksRevampColors.border)
+                            Divider().overlay(Color(.separator))
                         }
                     }
                 }
@@ -43,9 +43,9 @@ struct AppearanceSettingsView: View {
             }
             .padding(16)
         }
-        .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
+        .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
-        .appChromeNavigationBarSurface()
+        .ppNavyNavigationBar()
     }
 }

@@ -64,9 +64,9 @@ struct EditClientView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(isFormValid ? Color.blue : Color.gray)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
+                        .background(isFormValid ? PPColor.brand : Color.gray,
+                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .foregroundStyle(.white)
                     }
                     .accessibilityIdentifier("editClient.saveChanges")
                     .disabled(!isFormValid || isLoading)
@@ -81,25 +81,29 @@ struct EditClientView: View {
                             Spacer()
                             Text("Delete Client")
                                 .fontWeight(.semibold)
-                                .foregroundColor(.red)
+                                .foregroundStyle(PPColor.danger)
                             Spacer()
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(8)
+                        .background(PPColor.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                         .accessibilityIdentifier("editClient.deleteClient")
                 }
                 .listRowBackground(Color.clear)
             }
+            .scrollContentBackground(.hidden)
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Edit Client")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         dismiss()
                     }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
                         .accessibilityIdentifier("editClient.cancel")
                 }
             }

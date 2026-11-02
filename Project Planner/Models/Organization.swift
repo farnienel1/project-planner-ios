@@ -49,7 +49,11 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
     var name: String
     var settings: OrganizationSettings
     var officeAddressLine1: String?
+    /// `officeAddressLine2` (optional; removed from the document when blank).
+    var officeAddressLine2: String?
     var officeCity: String?
+    /// `officeCounty` (optional; removed from the document when blank).
+    var officeCounty: String?
     var officePostcode: String?
     var countryCode: String
     var defaultLatitude: Double?
@@ -78,7 +82,9 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         name: String,
         settings: OrganizationSettings = OrganizationSettings(),
         officeAddressLine1: String? = nil,
+        officeAddressLine2: String? = nil,
         officeCity: String? = nil,
+        officeCounty: String? = nil,
         officePostcode: String? = nil,
         countryCode: String = "GB",
         defaultLatitude: Double? = nil,
@@ -101,7 +107,9 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         self.name = name
         self.settings = settings
         self.officeAddressLine1 = officeAddressLine1
+        self.officeAddressLine2 = officeAddressLine2
         self.officeCity = officeCity
+        self.officeCounty = officeCounty
         self.officePostcode = officePostcode
         self.countryCode = countryCode
         self.defaultLatitude = defaultLatitude
@@ -119,7 +127,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, firestoreDocumentId, name, settings, officeAddressLine1, officeCity, officePostcode
+        case id, firestoreDocumentId, name, settings, officeAddressLine1, officeAddressLine2, officeCity, officeCounty, officePostcode
         case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, documentAbbreviation, createdAt, updatedAt, creatorUserId
         case payrollTimePolicyPrior, payrollTimePolicyEffectiveFrom, payrollTimePolicyScheduled
         case billingJSON, billingResolved
@@ -131,7 +139,9 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         name = try c.decode(String.self, forKey: .name)
         settings = try c.decode(OrganizationSettings.self, forKey: .settings)
         officeAddressLine1 = try c.decodeIfPresent(String.self, forKey: .officeAddressLine1)
+        officeAddressLine2 = try c.decodeIfPresent(String.self, forKey: .officeAddressLine2)
         officeCity = try c.decodeIfPresent(String.self, forKey: .officeCity)
+        officeCounty = try c.decodeIfPresent(String.self, forKey: .officeCounty)
         officePostcode = try c.decodeIfPresent(String.self, forKey: .officePostcode)
         countryCode = try c.decodeIfPresent(String.self, forKey: .countryCode) ?? "GB"
         defaultLatitude = try c.decodeIfPresent(Double.self, forKey: .defaultLatitude)
@@ -156,7 +166,9 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         try c.encode(name, forKey: .name)
         try c.encode(settings, forKey: .settings)
         try c.encodeIfPresent(officeAddressLine1, forKey: .officeAddressLine1)
+        try c.encodeIfPresent(officeAddressLine2, forKey: .officeAddressLine2)
         try c.encodeIfPresent(officeCity, forKey: .officeCity)
+        try c.encodeIfPresent(officeCounty, forKey: .officeCounty)
         try c.encodeIfPresent(officePostcode, forKey: .officePostcode)
         try c.encode(countryCode, forKey: .countryCode)
         try c.encodeIfPresent(defaultLatitude, forKey: .defaultLatitude)
@@ -180,6 +192,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
 
     /// Maps an `organizations/{id}` Firestore document without exposing abbreviation plumbing at call sites.
     /// `fallbackName` is unused. An empty script result is a missing name; a nil script result stays empty.
+    /// Company details come from `parseCompanyDetails` (flat fields, legacy nested `officeAddress` fallback).
     nonisolated static func make(
         fromFirestoreId orgId: String,
         data: [String: Any],
@@ -188,19 +201,35 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
     ) -> Organization {
         _ = fallbackName
         let name = CanonicalBusinessEngine.parseOrganizationName(nameParsePayload(from: data)) ?? ""
+        let raw = FirebaseBackend.firestoreJSON(data) as? [String: Any] ?? [:]
+        let details = CanonicalBusinessEngine.parseCompanyDetails(orgDocument: raw)
+        func detail(_ key: String) -> String? {
+            if let details {
+                let value = (details[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return value.isEmpty ? nil : value
+            }
+            let value = (data[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return value.isEmpty ? nil : value
+        }
+        func number(_ key: String) -> Double? {
+            if let details { return (details[key] as? NSNumber)?.doubleValue }
+            return (data[key] as? NSNumber)?.doubleValue
+        }
         let organization = Organization(
             id: UUID(uuidString: orgId) ?? UUID(),
             firestoreDocumentId: orgId,
             name: name,
             settings: settings,
-            officeAddressLine1: data["officeAddressLine1"] as? String,
-            officeCity: data["officeCity"] as? String,
-            officePostcode: data["officePostcode"] as? String,
-            countryCode: (data["countryCode"] as? String)?.uppercased() ?? "GB",
-            defaultLatitude: data["defaultLatitude"] as? Double,
-            defaultLongitude: data["defaultLongitude"] as? Double,
-            companyLogoURL: data["companyLogoURL"] as? String,
-            documentAbbreviation: OrganizationDocumentAbbreviation.normalized(data["documentAbbreviation"] as? String),
+            officeAddressLine1: detail("officeAddressLine1"),
+            officeAddressLine2: detail("officeAddressLine2"),
+            officeCity: detail("officeCity"),
+            officeCounty: detail("officeCounty"),
+            officePostcode: detail("officePostcode"),
+            countryCode: detail("countryCode")?.uppercased() ?? "GB",
+            defaultLatitude: number("defaultLatitude"),
+            defaultLongitude: number("defaultLongitude"),
+            companyLogoURL: detail("companyLogoURL"),
+            documentAbbreviation: OrganizationDocumentAbbreviation.normalized(detail("documentAbbreviation")),
             creatorUserId: data["creatorUserId"] as? String,
             billingJSON: OrganizationBillingMap.storedJSON(from: data),
             billingResolved: true

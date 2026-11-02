@@ -489,18 +489,18 @@ func notifyAnnualLeavePeerManagers(
         return nil
     }()
     guard let requester else { return }
-    let peers = requester.lineManagerUserIds.filter { $0 != actorUserId }
-    guard !peers.isEmpty else { return }
     let name = requester.fullName.isEmpty ? requester.email : requester.fullName
-    let dates = AnnualLeaveDateFormat.bookingTitle(request)
+    // Web `buildLeaveDecisionPeerNotifications`: same copy, key and relatedId (`annualLeaveDecisionDateText`).
+    let dates = AnnualLeaveNoticeText.decisionDateText(request)
     let subject = request.cancellationRequestedAt != nil ? "annual leave cancellation" : "annual leave request"
+    // `CanonicalBusinessEngine.lineManagerPeerRecipients(requester, signed-in actor, roster)` picks the other line managers (RULEBOOK §13).
     await notificationService.notifyLineManagerPeerAction(
         actorName: actorName,
         actionSummary: dates,
-        peerManagerUserIds: peers,
-        excludingActorUserId: actorUserId,
+        subject: requester,
         actionVerb: actionVerb,
-        message: "\(actorName) \(actionVerb) \(name)'s \(subject). \(dates)"
+        message: "\(actorName) \(actionVerb) \(name)'s \(subject). \(dates)",
+        relatedId: request.id
     )
 }
 

@@ -30,12 +30,11 @@ struct CreateOperativeView: View {
                 VStack(spacing: 20) {
                     // Header
                     VStack(spacing: 10) {
-                        Image(systemName: "person.badge.plus")
-                            .font(.system(size: 60))
-                            .foregroundColor(.green)
+                        PPIconTile(symbol: "person.badge.plus", family: .people, size: 72, lifted: true)
+                            .padding(.bottom, 4)
                         
                         Text("Create New Operative")
-                            .font(.largeTitle)
+                            .font(.system(.largeTitle, design: .rounded))
                             .fontWeight(.bold)
                         
                         Text("Add a new operative to your organisation.")
@@ -78,12 +77,17 @@ struct CreateOperativeView: View {
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.decimalPad)
                     }
-                    .padding(.horizontal)
+                    .padding(16)
+                    .background(
+                        PPColor.card,
+                        in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous)
+                    )
+                    .padding(.horizontal, PPMetrics.screenGutter)
                     
                     // Error Message
                     if let errorMessage = errorMessage {
                         Text(errorMessage)
-                            .foregroundColor(.red)
+                            .foregroundColor(PPColor.danger)
                             .padding(.horizontal)
                     }
                     
@@ -93,10 +97,14 @@ struct CreateOperativeView: View {
                     }
                     .accessibilityIdentifier("createOperative.creating")
                     .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .tint(PPColor.brand)
                     .disabled(isLoading || isSaving || !isFormValid)
                     .padding()
                 }
             }
+            .background(PPColor.page.ignoresSafeArea())
+            .ppNavyNavigationBar()
             .navigationTitle("New Operative")
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(true)

@@ -469,10 +469,10 @@ class OperativeStore: ObservableObject {
 
     func updateOperative(_ operative: Operative) async {
         if let index = operatives.firstIndex(where: { $0.id == operative.id }) {
+            let previous = operatives[index]
             operatives[index] = operative
-            // Save ONLY this operative — rewriting the whole roster on every sync
-            // jetsams Simulator on Home (~35s post-quiet side work).
-            _ = await saveSingleOperativeWithRetry(operative, description: "updating operative \(operative.name)")
+            // Save ONLY this operative, and only the fields that changed from the copy it was edited from (RULEBOOK §1).
+            _ = await saveSingleOperativeWithRetry(operative, previous: previous, description: "updating operative \(operative.name)")
             if let smartCache {
                 smartCache.cacheOperatives(operatives)
             }
@@ -531,9 +531,11 @@ class OperativeStore: ObservableObject {
     
     func toggleOperativeStatus(_ operative: Operative) async {
         if let index = operatives.firstIndex(where: { $0.id == operative.id }) {
+            let previous = operatives[index]
             operatives[index].isActive.toggle()
-            // CRITICAL: Save immediately with retry logic
-            _ = await saveDataWithRetry(description: "toggling operative status for \(operative.name)")
+            // Writes only `isActive` (+ metadata) on this row.
+            _ = await saveSingleOperativeWithRetry(operatives[index], previous: previous, description: "toggling operative status for \(operative.name)")
+            smartCache?.cacheOperatives(operatives)
         }
     }
     
@@ -547,9 +549,11 @@ class OperativeStore: ObservableObject {
     
     func updateManager(_ manager: Manager) async {
         if let index = managers.firstIndex(where: { $0.id == manager.id }) {
+            let previous = managers[index]
             managers[index] = manager
-            // CRITICAL: Save immediately with retry logic
-            _ = await saveDataWithRetry(description: "updating manager \(manager.fullName)")
+            // Only the fields that changed on this row (RULEBOOK §1).
+            _ = await saveSingleManagerWithRetry(manager, previous: previous, description: "updating manager \(manager.fullName)")
+            smartCache?.cacheManagers(managers)
         }
     }
     
@@ -581,9 +585,10 @@ class OperativeStore: ObservableObject {
     
     func toggleManagerStatus(_ manager: Manager) async {
         if let index = managers.firstIndex(where: { $0.id == manager.id }) {
+            let previous = managers[index]
             managers[index].isActive.toggle()
-            // CRITICAL: Save immediately with retry logic
-            _ = await saveDataWithRetry(description: "toggling manager status for \(manager.fullName)")
+            _ = await saveSingleManagerWithRetry(managers[index], previous: previous, description: "toggling manager status for \(manager.fullName)")
+            smartCache?.cacheManagers(managers)
         }
     }
     
@@ -663,7 +668,7 @@ class OperativeStore: ObservableObject {
         )
     }
 
-    private func saveSingleOperativeWithRetry(_ operative: Operative, description: String) async -> Result<Void, Error> {
+    private func saveSingleOperativeWithRetry(_ operative: Operative, previous: Operative? = nil, description: String) async -> Result<Void, Error> {
         return await DataPersistenceManager.shared.saveWithRetry(
             operation: {
                 guard let firebaseBackend = self.firebaseBackend,
@@ -671,7 +676,7 @@ class OperativeStore: ObservableObject {
                       let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
                     throw NSError(domain: "OperativeStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Firebase not available"])
                 }
-                try await firebaseBackend.saveOperative(operative, organizationId: organizationId)
+                try await firebaseBackend.saveOperative(operative, organizationId: organizationId, previous: previous)
             },
             description: description,
             onSuccess: { _ in
@@ -683,6 +688,26 @@ class OperativeStore: ObservableObject {
         )
     }
     
+    private func saveSingleManagerWithRetry(_ manager: Manager, previous: Manager?, description: String) async -> Result<Void, Error> {
+        return await DataPersistenceManager.shared.saveWithRetry(
+            operation: {
+                guard let firebaseBackend = self.firebaseBackend,
+                      firebaseBackend.isAuthenticated,
+                      let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+                    throw NSError(domain: "OperativeStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Firebase not available"])
+                }
+                try await firebaseBackend.saveManager(manager, organizationId: organizationId, previous: previous)
+            },
+            description: description,
+            onSuccess: { _ in
+                print("🔥🔥🔥 DEBUG: ✅ Single manager persistence successful: \(description)")
+            },
+            onFailure: { error in
+                print("🔥🔥🔥 DEBUG: ❌ Single manager persistence failed: \(description) — \(error.localizedDescription)")
+            }
+        )
+    }
+
     private func saveDataInternal() async throws {
         guard let firebaseBackend = firebaseBackend,
               firebaseBackend.isAuthenticated,
@@ -691,14 +716,14 @@ class OperativeStore: ObservableObject {
             throw NSError(domain: "OperativeStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Firebase not available"])
         }
         
-        // Save operatives
+        // Creates rows that are not on the server yet. An existing row is never rewritten from this
+        // whole-roster pass (a stale copy would put old values back); edits save through
+        // `updateOperative` / `updateManager`, which write only the changed fields.
         for operative in operatives {
-            try await firebaseBackend.saveOperative(operative, organizationId: organizationId)
+            try await firebaseBackend.saveOperative(operative, organizationId: organizationId, previous: operative)
         }
-        
-        // Save managers
         for manager in managers {
-            try await firebaseBackend.saveManager(manager, organizationId: organizationId)
+            try await firebaseBackend.saveManager(manager, organizationId: organizationId, previous: manager)
         }
         
         // Skills catalogue is retired — do not rewrite organizations/{orgId}/skills.

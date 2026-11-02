@@ -2,10 +2,14 @@
 //  OrganizationCurrencyCatalog.swift
 //  Project Planner
 //
+//  Thin pass-through to the rulebook's money rules (`money.ts`): the list is `CURRENCY_OPTIONS`
+//  (`OrgMoney.options`), the default is `defaultCurrencyForCountry`, a lookup is `currencyOption`.
+//  There is no Swift currency table.
+//
 
 import Foundation
 
-struct OrganizationCurrencyOption: Identifiable, Hashable, Codable, Sendable {
+nonisolated struct OrganizationCurrencyOption: Identifiable, Hashable, Codable, Sendable {
     let code: String
     let title: String
     let symbol: String
@@ -14,42 +18,32 @@ struct OrganizationCurrencyOption: Identifiable, Hashable, Codable, Sendable {
 }
 
 nonisolated enum OrganizationCurrencyCatalog: Sendable {
-    nonisolated static let defaultCode = "GBP"
-
-    static let all: [OrganizationCurrencyOption] = [
-        OrganizationCurrencyOption(code: "GBP", title: "British pound", symbol: "£"),
-        OrganizationCurrencyOption(code: "EUR", title: "Euro", symbol: "€"),
-        OrganizationCurrencyOption(code: "USD", title: "US dollar", symbol: "$"),
-        OrganizationCurrencyOption(code: "CAD", title: "Canadian dollar", symbol: "CA$"),
-        OrganizationCurrencyOption(code: "AUD", title: "Australian dollar", symbol: "A$"),
-        OrganizationCurrencyOption(code: "NZD", title: "New Zealand dollar", symbol: "NZ$"),
-        OrganizationCurrencyOption(code: "SEK", title: "Swedish krona", symbol: "kr"),
-        OrganizationCurrencyOption(code: "NOK", title: "Norwegian krone", symbol: "kr"),
-        OrganizationCurrencyOption(code: "DKK", title: "Danish krone", symbol: "kr"),
-        OrganizationCurrencyOption(code: "PLN", title: "Polish złoty", symbol: "zł"),
-        OrganizationCurrencyOption(code: "AED", title: "UAE dirham", symbol: "د.إ"),
-    ]
-
-    static func option(for code: String?) -> OrganizationCurrencyOption {
-        let normalized = (code ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        return all.first { $0.code == normalized } ?? all[0]
+    /// `defaultCurrencyForCountry` for an unknown country (the script's `DEFAULT_CURRENCY_CODE`).
+    nonisolated static var defaultCode: String {
+        CanonicalBusinessEngine.defaultCurrencyForCountry("")
     }
 
-    /// Suggested currency when an org has not saved one yet.
-    static func defaultCode(forCountryCode countryCode: String) -> String {
-        switch countryCode.uppercased() {
-        case "GB": return "GBP"
-        case "IE", "FR", "DE", "ES", "IT", "NL": return "EUR"
-        case "US": return "USD"
-        case "CA": return "CAD"
-        case "AU": return "AUD"
-        case "NZ": return "NZD"
-        case "SE": return "SEK"
-        case "NO": return "NOK"
-        case "DK": return "DKK"
-        case "PL": return "PLN"
-        case "AE": return "AED"
-        default: return defaultCode
+    /// `CURRENCY_OPTIONS`, in the script's order.
+    static var all: [OrganizationCurrencyOption] {
+        OrgMoney.options.map { OrganizationCurrencyOption(code: $0.code, title: $0.title, symbol: $0.symbol) }
+    }
+
+    /// `currencyOption(code)`: the supported option, else the first option.
+    static func option(for code: String?) -> OrganizationCurrencyOption {
+        if let row = CanonicalBusinessEngine.callJSON("currencyOption", arguments: [code ?? ""]) as? [String: Any],
+           let resolved = row["code"] as? String {
+            return OrganizationCurrencyOption(
+                code: resolved,
+                title: row["title"] as? String ?? resolved,
+                symbol: row["symbol"] as? String ?? resolved
+            )
         }
+        let normalized = (code ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return OrganizationCurrencyOption(code: normalized, title: normalized, symbol: normalized)
+    }
+
+    /// `defaultCurrencyForCountry(countryCode)`: suggested currency when an org has not saved one yet.
+    static func defaultCode(forCountryCode countryCode: String) -> String {
+        CanonicalBusinessEngine.defaultCurrencyForCountry(countryCode)
     }
 }

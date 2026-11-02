@@ -106,6 +106,7 @@ struct OperativeQualificationsEditorView: View {
                     editorForm
                         .navigationTitle(title)
                         .navigationBarTitleDisplayMode(.inline)
+                        .ppNavyNavigationBar()
                         .toolbar { editorToolbar }
                 }
             } else {
@@ -188,10 +189,12 @@ struct OperativeQualificationsEditorView: View {
             if let errorMessage {
                 Section {
                     Text(errorMessage)
-                        .foregroundColor(.red)
+                        .foregroundStyle(PPColor.danger)
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(PPColor.page.ignoresSafeArea())
     }
 
     @ToolbarContentBuilder
@@ -202,6 +205,7 @@ struct OperativeQualificationsEditorView: View {
             } label: {
                 Image(systemName: "line.3.horizontal.decrease.circle")
             }
+                .tint(.white)
                 .accessibilityIdentifier("operativeQualificationsEditor.filter")
         }
         if isMyQualifications {
@@ -212,6 +216,7 @@ struct OperativeQualificationsEditorView: View {
                     Image(systemName: "plus")
                 }
                 .accessibilityIdentifier("operativeQualificationsEditor.add")
+                .tint(.white)
                 .disabled(!canEditAssignments)
                 .accessibilityLabel("Add qualifications")
             }
@@ -221,11 +226,13 @@ struct OperativeQualificationsEditorView: View {
                         Button("Cancel") {
                             revertToBaseline()
                         }
+                            .tint(.white)
                             .accessibilityIdentifier("operativeQualificationsEditor.cancel")
                     } else {
                         Button("Done") {
                             dismiss()
                         }
+                            .tint(.white)
                             .accessibilityIdentifier("operativeQualificationsEditor.done2")
                     }
                 }
@@ -234,6 +241,7 @@ struct OperativeQualificationsEditorView: View {
                     Button("Cancel") {
                         revertToBaseline()
                     }
+                        .tint(.white)
                         .accessibilityIdentifier("operativeQualificationsEditor.cancel2")
                 }
             }
@@ -243,13 +251,15 @@ struct OperativeQualificationsEditorView: View {
                 }
                 .accessibilityIdentifier("operativeQualificationsEditor.saving")
                 .disabled(isSaving || !canEditAssignments || !hasUnsavedChanges)
+                .fontWeight(.semibold)
                 .foregroundColor(
-                    hasUnsavedChanges && canEditAssignments && !isSaving ? .blue : .gray
+                    hasUnsavedChanges && canEditAssignments && !isSaving ? .white : PPColor.onNavySecondary
                 )
             }
         } else {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
+                    .tint(.white)
                     .accessibilityIdentifier("operativeQualificationsEditor.cancel3")
             }
             ToolbarItem(placement: .confirmationAction) {
@@ -258,8 +268,9 @@ struct OperativeQualificationsEditorView: View {
                 }
                 .accessibilityIdentifier("operativeQualificationsEditor.saving2")
                 .disabled(isSaving || !canEditAssignments || !hasUnsavedChanges)
+                .fontWeight(.semibold)
                 .foregroundColor(
-                    hasUnsavedChanges && canEditAssignments && !isSaving ? .blue : .gray
+                    hasUnsavedChanges && canEditAssignments && !isSaving ? .white : PPColor.onNavySecondary
                 )
             }
         }
@@ -344,16 +355,18 @@ struct OperativeQualificationsEditorView: View {
 
         VStack(alignment: .leading, spacing: 10) {
             HStack {
+                PPIconTile(symbol: "graduationcap.fill", family: .people, size: PPMetrics.menuIcon)
                 Text(qualification.name)
                     .font(.body)
-                    .fontWeight(.medium)
+                    .fontWeight(.semibold)
                 Spacer()
                 Button {
                     guard canEditAssignments else { return }
                     toggleQualification(qualification)
                 } label: {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .foregroundColor(isSelected ? .blue : .gray)
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? PPColor.brand : Color.secondary)
                 }
                 .accessibilityIdentifier("operativeQualificationsEditor.qualificationRow")
                 .buttonStyle(.borderless)

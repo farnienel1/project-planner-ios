@@ -82,31 +82,13 @@ struct ManagersView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Button(action: {
-                    NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
-                }) {
-                    Image(systemName: "chevron.left")
-                        .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
-                        .font(.system(size: 17, weight: .semibold))
-                }
-                    .accessibilityIdentifier("managers.gobacktoprevioustab")
-                Spacer()
-                Text("Managers")
-                    .font(.headline)
-                Spacer()
-                Button(action: { showingFilterOptions.toggle() }) {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                        .foregroundColor(.primary)
-                }
-                    .accessibilityIdentifier("managers.filter")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(Color(.systemBackground))
+            managersNavyHeader
             
             managersList
+                .padding(.top, 10)
+                .modifier(ManagersListSheet())
         }
+            .background(PPColor.page.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarBackButtonHidden(true)
             .sheet(item: $selectedUser) { user in
@@ -142,37 +124,100 @@ struct ManagersView: View {
             }
     }
     
-    @ViewBuilder
-    private var managersList: some View {
-        VStack(spacing: 0) {
+    /// Home-style navy header: back, title and filter, roster numbers, then the Active / Inactive / Pending tabs.
+    private var managersNavyHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                Button(action: {
+                    NotificationCenter.default.post(name: NSNotification.Name("goBackToPreviousTab"), object: nil)
+                }) {
+                    Image(systemName: "chevron.left")
+                }
+                    .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
+                    .accessibilityIdentifier("managers.gobacktoprevioustab")
+                PPNavyPageTitle(title: "Managers")
+                Spacer(minLength: 8)
+                Button(action: { showingFilterOptions.toggle() }) {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                }
+                    .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
+                    .accessibilityIdentifier("managers.filter")
+            }
+            
+            managersStatsRow(managerRosterCounts)
+                .padding(.top, 18)
+            
             // Active / Inactive / Pending tab bar stays fixed at top.
-            HStack(spacing: 0) {
+            HStack(spacing: 4) {
                 ForEach(UserRosterSegment.allCases) { seg in
                     OperativeTabButton(title: seg.title, isSelected: rosterSegment == seg) {
                         rosterSegment = seg
                     }
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(Color(.systemGroupedBackground))
-            
+            .padding(4)
+            .background(Capsule().fill(PPColor.onNavyFill))
+            .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
+            .padding(.top, 20)
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 8)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+    
+    /// Header numbers. Same `listedRosterUsers` / `rosterSegment` calls the list itself uses, before the search filter.
+    private var managerRosterCounts: ManagersRosterCounts {
+        let listed = CanonicalBusinessEngine.listedRosterUsers(
+            allManagers,
+            claimedEmails: userStore.organizationUserEmailClaims
+        ) ?? []
+        let segments = listed.map { CanonicalBusinessEngine.rosterSegment($0) }
+        return ManagersRosterCounts(
+            active: segments.filter { $0 == UserRosterSegment.active.canonicalSegment }.count,
+            inactive: segments.filter { $0 == UserRosterSegment.inactive.canonicalSegment }.count,
+            pending: segments.filter { $0 == UserRosterSegment.pending.canonicalSegment }.count
+        )
+    }
+    
+    private func managersStatsRow(_ counts: ManagersRosterCounts) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            PPStat(value: "\(counts.active)", label: "Active")
+            PPStatDivider()
+            PPStat(value: "\(counts.inactive)", label: "Inactive")
+            PPStatDivider()
+            PPStat(value: "\(counts.pending)", label: "Pending invite", highlight: counts.pending > 0)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    
+    @ViewBuilder
+    private var managersList: some View {
+        VStack(spacing: 0) {
             // Filter bar
             if !filterText.isEmpty {
-                HStack {
+                HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal.decrease")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(PPColor.brand)
                     Text("Filter: \(selectedFilterType.rawValue) - \(filterText)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
                     Button("Clear") {
                         filterText = ""
                     }
                     .accessibilityIdentifier("managers.clear")
-                    .font(.caption)
+                    .font(.footnote.weight(.semibold))
+                    .tint(PPColor.brand)
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .background(Color(.systemGray6))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(PPColor.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.bottom, 6)
             }
             
             if userStore.isLoading {
@@ -189,28 +234,87 @@ struct ManagersView: View {
                             selectedUser = user
                         }
                     }
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                     .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 }
                 .listStyle(PlainListStyle())
+                .scrollContentBackground(.hidden)
             }
         }
     }
     
     private var emptyManagersView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "person.2.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
+        VStack(spacing: 14) {
+            PPIconTile(symbol: "person.2.fill", family: .people, size: PPMetrics.quickActionIcon, lifted: true)
             
             Text(emptyManagersTitle)
-                .font(.title2)
+                .font(.system(.title3, design: .rounded))
                 .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
         }
-        .padding()
+        .padding(.horizontal, 24)
+        .padding(.top, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
     
+}
+
+/// Numbers shown in the Managers navy header.
+private struct ManagersRosterCounts {
+    let active: Int
+    let inactive: Int
+    let pending: Int
+}
+
+/// Light rounded sheet under the navy header that holds the list (Home's content sheet, sized for a List).
+private struct ManagersListSheet: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(PPColor.page)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: PPMetrics.contentCornerRadius,
+                    topTrailingRadius: PPMetrics.contentCornerRadius,
+                    style: .continuous
+                )
+            )
+            .padding(.top, -PPMetrics.contentOverlap)
+    }
+}
+
+/// Gradient initials circle (Home icon-tile colours).
+private struct ManagerInitialsAvatar: View {
+    let initials: String
+    let family: PPFamily
+    var size: CGFloat = 46
+    
+    var body: some View {
+        Text(initials)
+            .font(.system(size: size * 0.36, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(family.gradient, in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
+    }
+}
+
+/// Small tinted capsule for the existing Admin and roster status labels.
+private struct ManagerStatusPill: View {
+    let text: String
+    let tint: Color
+    
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(tint)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(tint.opacity(0.14), in: Capsule())
+    }
 }
 
 // MARK: - Manager User Row View
@@ -222,73 +326,63 @@ struct ManagerUserRowView: View {
         Button(action: onTap) {
             HStack(spacing: 12) {
                 // Avatar
-                Circle()
-                    .fill(user.isActive ? Color.indigo : Color.gray)
-                    .frame(width: 50, height: 50)
-                    .overlay(
-                        Text(user.firstName.prefix(1) + user.surname.prefix(1))
-                            .font(.headline)
-                            .foregroundColor(.white)
-                    )
+                ManagerInitialsAvatar(
+                    initials: String(user.firstName.prefix(1)) + String(user.surname.prefix(1)),
+                    family: user.isActive ? .people : .system
+                )
                 
                 // User Info
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
                         Text(user.fullName)
-                            .font(.headline)
-                            .foregroundColor(.primary)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
                         
                         // Show Admin badge if user is admin
                         if user.permissions.adminAccess || user.isSuperAdmin {
-                            Text("Admin")
-                                .font(.caption2)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.green.opacity(0.2))
-                                .foregroundColor(.green)
-                                .cornerRadius(4)
+                            ManagerStatusPill(text: "Admin", tint: .green)
                         }
                     }
                     
                     Text(user.email)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     
                     if user.displayTradeType != "—" {
                         Text(user.displayTradeType)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                     
                     if let mobileNumber = user.mobileNumber, !mobileNumber.isEmpty {
-                        HStack {
+                        HStack(spacing: 4) {
                             Image(systemName: "phone")
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
                             Text(mobileNumber)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                                .font(.footnote)
                         }
+                        .foregroundStyle(.secondary)
                     }
                     
                     if let segment = user.rosterSegment {
-                        Text(segment.title)
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(segment == .pending ? Color.orange.opacity(0.2) : (segment == .active ? Color.green.opacity(0.2) : Color.red.opacity(0.2)))
-                            .foregroundColor(segment == .pending ? .orange : (segment == .active ? .green : .red))
-                            .cornerRadius(8)
+                        ManagerStatusPill(
+                            text: segment.title,
+                            tint: segment == .pending ? .orange : (segment == .active ? .green : .red)
+                        )
+                        .padding(.top, 2)
                     }
                 }
                 
-                Spacer()
+                Spacer(minLength: 8)
                 
                 Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.gray)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
-            .padding(.vertical, 8)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         }
         .accessibilityIdentifier("managerUserRow.admin")
         .buttonStyle(PlainButtonStyle())

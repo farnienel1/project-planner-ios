@@ -2,7 +2,8 @@
 //  InvoicingPeriodResolver.swift
 //  Project Planner
 //
-//  Resolves the organisation's current invoicing period for warnings look-ahead and reports.
+//  The organisation's current payment run for warnings look-ahead and reports. The period itself is
+//  the rulebook's `invoicingPeriod` (organisation zone); this file only formats it.
 //
 
 import Foundation
@@ -21,15 +22,35 @@ nonisolated struct InvoicingPeriodInfo: Hashable, Sendable {
 }
 
 nonisolated enum InvoicingPeriodResolver {
+    /// The payment run containing `referenceDate`: `invoicingPeriod` from the rulebook, in the zone of
+    /// `calendar` (the organisation zone by default). When no date-range run contains the day, the script
+    /// falls back to the run with the latest end day (never "Not configured").
     static func resolve(
         invoicing: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
         calendar: Calendar = CanonicalBusinessEngine.businessCalendar
     ) -> InvoicingPeriodInfo {
-        if invoicing.paymentRunMode == .recurringTimeframe {
-            return recurringPeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
+        let rows = scheduleRows(for: invoicing)
+        let zone = calendar.timeZone.identifier
+        guard let window = CanonicalBusinessEngine.invoicingPeriod(invoicing, reference: referenceDate, timeZone: zone),
+              let start = CanonicalBusinessEngine.date(fromDayKey: window.startDayKey, calendar: calendar),
+              let end = CanonicalBusinessEngine.date(fromDayKey: window.endDayKey, calendar: calendar) else {
+            let today = calendar.startOfDay(for: referenceDate)
+            return InvoicingPeriodInfo(
+                scheduleRows: rows,
+                currentPeriodLabel: "Not configured",
+                currentPeriodStart: today,
+                currentPeriodEnd: today,
+                currentPeriodEndLabel: formattedDay(today, calendar: calendar)
+            )
         }
-        return dateRangePeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
+        return InvoicingPeriodInfo(
+            scheduleRows: rows,
+            currentPeriodLabel: periodLabel(start: start, end: end, calendar: calendar),
+            currentPeriodStart: start,
+            currentPeriodEnd: end,
+            currentPeriodEndLabel: formattedDay(end, calendar: calendar)
+        )
     }
 
     /// Start date of the invoicing period that contains `referenceDate` (reports / UI “current period”).
@@ -64,130 +85,15 @@ nonisolated enum InvoicingPeriodResolver {
         return (period.currentPeriodStart, period.currentPeriodEnd, period.currentPeriodLabel)
     }
 
-    // MARK: - Private
+    // MARK: - Private (display only)
 
-    private static func dateRangePeriod(
-        invoicing: OrganizationInvoicingSettings,
-        referenceDate: Date,
-        calendar: Calendar
-    ) -> InvoicingPeriodInfo {
-        let ranges = invoicing.normalizedRanges
-        let scheduleRows = ranges.enumerated().map { index, range in
-            InvoicingPeriodInfo.ScheduleRow(
-                label: "Period \(index + 1)",
-                summary: rangeScheduleSummary(range)
-            )
+    private static func scheduleRows(for invoicing: OrganizationInvoicingSettings) -> [InvoicingPeriodInfo.ScheduleRow] {
+        if invoicing.paymentRunMode == .recurringTimeframe {
+            return [InvoicingPeriodInfo.ScheduleRow(label: "Recurring", summary: invoicing.recurringRunDisplaySummary)]
         }
-
-        let today = calendar.startOfDay(for: referenceDate)
-        let dayOfMonth = calendar.component(.day, from: today)
-        guard let matchIndex = ranges.firstIndex(where: { $0.contains(day: dayOfMonth) }),
-              let bounds = dateRangeBounds(for: ranges[matchIndex], containing: today, calendar: calendar) else {
-            let fallbackEnd = calendar.startOfDay(for: referenceDate)
-            return InvoicingPeriodInfo(
-                scheduleRows: scheduleRows,
-                currentPeriodLabel: "Not configured",
-                currentPeriodStart: fallbackEnd,
-                currentPeriodEnd: fallbackEnd,
-                currentPeriodEndLabel: formattedDay(fallbackEnd, calendar: calendar)
-            )
+        return invoicing.normalizedRanges.enumerated().map { index, range in
+            InvoicingPeriodInfo.ScheduleRow(label: "Period \(index + 1)", summary: rangeScheduleSummary(range))
         }
-
-        return InvoicingPeriodInfo(
-            scheduleRows: scheduleRows,
-            currentPeriodLabel: periodLabel(start: bounds.start, end: bounds.end, calendar: calendar),
-            currentPeriodStart: bounds.start,
-            currentPeriodEnd: bounds.end,
-            currentPeriodEndLabel: formattedDay(bounds.end, calendar: calendar)
-        )
-    }
-
-    private static func recurringPeriod(
-        invoicing: OrganizationInvoicingSettings,
-        referenceDate: Date,
-        calendar: Calendar
-    ) -> InvoicingPeriodInfo {
-        let scheduleRows = [
-            InvoicingPeriodInfo.ScheduleRow(
-                label: "Recurring",
-                summary: invoicing.recurringRunDisplaySummary
-            ),
-        ]
-
-        let today = calendar.startOfDay(for: referenceDate)
-        guard let weekStart = today.startOfISOWeek else {
-            return InvoicingPeriodInfo(
-                scheduleRows: scheduleRows,
-                currentPeriodLabel: invoicing.recurringRunDisplaySummary,
-                currentPeriodStart: today,
-                currentPeriodEnd: today,
-                currentPeriodEndLabel: formattedDay(today, calendar: calendar)
-            )
-        }
-
-        let startOffset = invoicing.recurringRunStartDay.isoWeekOffset
-        let endOffset = invoicing.recurringRunEndDay.isoWeekOffset
-        guard var periodStart = calendar.date(byAdding: .day, value: startOffset, to: weekStart),
-              var periodEnd = calendar.date(byAdding: .day, value: endOffset, to: weekStart) else {
-            return dateRangePeriod(invoicing: invoicing, referenceDate: referenceDate, calendar: calendar)
-        }
-        if endOffset < startOffset {
-            periodEnd = calendar.date(byAdding: .day, value: 7, to: periodEnd) ?? periodEnd
-        }
-        periodStart = calendar.startOfDay(for: periodStart)
-        periodEnd = calendar.startOfDay(for: periodEnd)
-
-        while today < periodStart {
-            periodStart = calendar.date(byAdding: .day, value: -7, to: periodStart) ?? periodStart
-            periodEnd = calendar.date(byAdding: .day, value: -7, to: periodEnd) ?? periodEnd
-        }
-        while today > periodEnd {
-            periodStart = calendar.date(byAdding: .day, value: 7, to: periodStart) ?? periodStart
-            periodEnd = calendar.date(byAdding: .day, value: 7, to: periodEnd) ?? periodEnd
-        }
-
-        return InvoicingPeriodInfo(
-            scheduleRows: scheduleRows,
-            currentPeriodLabel: periodLabel(start: periodStart, end: periodEnd, calendar: calendar),
-            currentPeriodStart: periodStart,
-            currentPeriodEnd: periodEnd,
-            currentPeriodEndLabel: formattedDay(periodEnd, calendar: calendar)
-        )
-    }
-
-    private static func dateRangeBounds(
-        for range: PaymentRunDateRange,
-        containing referenceDate: Date,
-        calendar: Calendar
-    ) -> (start: Date, end: Date)? {
-        let today = calendar.startOfDay(for: referenceDate)
-        let dayOfMonth = calendar.component(.day, from: today)
-        let monthAnchor = calendar.date(from: calendar.dateComponents([.year, .month], from: today)) ?? today
-
-        func dateFor(day: Int, in month: Date) -> Date? {
-            var comps = calendar.dateComponents([.year, .month], from: month)
-            let daysInMonth = calendar.range(of: .day, in: .month, for: month)?.count ?? 31
-            comps.day = min(max(day, 1), daysInMonth)
-            return calendar.date(from: comps).map { calendar.startOfDay(for: $0) }
-        }
-
-        if range.startDay <= range.endDay {
-            guard let start = dateFor(day: range.startDay, in: monthAnchor),
-                  let end = dateFor(day: range.endDay, in: monthAnchor) else { return nil }
-            return (start, end)
-        }
-
-        if dayOfMonth >= range.startDay {
-            guard let start = dateFor(day: range.startDay, in: monthAnchor),
-                  let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthAnchor),
-                  let end = dateFor(day: range.endDay, in: nextMonth) else { return nil }
-            return (start, end)
-        }
-
-        guard let previousMonth = calendar.date(byAdding: .month, value: -1, to: monthAnchor),
-              let start = dateFor(day: range.startDay, in: previousMonth),
-              let end = dateFor(day: range.endDay, in: monthAnchor) else { return nil }
-        return (start, end)
     }
 
     private static func rangeScheduleSummary(_ range: PaymentRunDateRange) -> String {

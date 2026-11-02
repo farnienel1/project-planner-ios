@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import FirebaseAuth
 
 @MainActor
 enum OfflineSyncCoordinator {
@@ -35,6 +36,22 @@ enum OfflineSyncCoordinator {
                 outbox.removeEntry(id: entry.id)
                 synced += 1
             } catch {
+                if let writeError = error as? OfflinePartialUpdateWriter.WriteError {
+                    // Another account is signed in, or the path is unusable: retrying cannot help.
+                    outbox.removeRefused(id: entry.id, message: writeError.localizedDescription)
+                    failed += 1
+                    continue
+                }
+                // `bookingReplayRefusedIsFinal({ code, isCreate })`: also final is not-found on an edit replay
+                // (the booking was deleted elsewhere; an edit never turns into a create).
+                if BookingWritePatch.isRefusedFinal(error, isCreate: bookingSaveIsCreate(entry)) {
+                    // RULEBOOK §2: a refused replay is final (`bookingReplayRefusedIsFinal`). The booking
+                    // was deleted (tombstone) or cancelled elsewhere, or the area is online only.
+                    handleRefused(entry: entry, outbox: outbox)
+                    failed += 1
+                    print("🔥🔥🔥 DEBUG: [OfflineSync] Refused for good \(entry.operation.rawValue) \(entry.entityId)")
+                    continue
+                }
                 outbox.markFailed(id: entry.id, error: error.localizedDescription)
                 failed += 1
                 print("🔥🔥🔥 DEBUG: [OfflineSync] Failed \(entry.operation.rawValue): \(error.localizedDescription)")
@@ -49,12 +66,32 @@ enum OfflineSyncCoordinator {
         return (synced, failed)
     }
 
+    /// For a queued booking save: true for a create (no `changedFields`), false for an edit. Nil otherwise.
+    private static func bookingSaveIsCreate(_ entry: OfflineOutboxEntry) -> Bool? {
+        let decoder = JSONDecoder()
+        switch entry.operation {
+        case .saveBooking:
+            guard let payload = try? decoder.decode(OfflineSaveBookingPayload.self, from: entry.payload) else { return nil }
+            return payload.changedFields == nil
+        case .saveManagerSiteBooking:
+            guard let payload = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: entry.payload) else { return nil }
+            return payload.changedFields == nil
+        default:
+            return nil
+        }
+    }
+
     private static func execute(entry: OfflineOutboxEntry, firebaseBackend: FirebaseBackend) async throws {
         let decoder = JSONDecoder()
         switch entry.operation {
         case .saveBooking:
             let payload = try decoder.decode(OfflineSaveBookingPayload.self, from: entry.payload)
-            try await firebaseBackend.saveBooking(payload.booking, organizationId: entry.organizationId)
+            // An edit replays only its changed fields; only a create writes the whole booking.
+            try await firebaseBackend.saveBooking(
+                payload.booking,
+                organizationId: entry.organizationId,
+                changedFields: payload.changedFields.map { Set($0) }
+            )
 
         case .deleteBooking:
             let payload = try decoder.decode(OfflineDeleteBookingPayload.self, from: entry.payload)
@@ -71,7 +108,11 @@ enum OfflineSyncCoordinator {
 
         case .saveManagerSiteBooking:
             let payload = try decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: entry.payload)
-            try await firebaseBackend.saveManagerSiteBooking(payload.booking, organizationId: entry.organizationId)
+            try await firebaseBackend.saveManagerSiteBooking(
+                payload.booking,
+                organizationId: entry.organizationId,
+                changedFields: payload.changedFields.map { Set($0) }
+            )
 
         case .deleteManagerSiteBooking:
             let payload = try decoder.decode(OfflineDeleteManagerSiteBookingPayload.self, from: entry.payload)
@@ -121,10 +162,53 @@ enum OfflineSyncCoordinator {
                 organizationId: entry.organizationId,
                 updatedAt: Date()
             )
+
+        case .saveAnnualLeaveRequest, .saveOwnProfileFields, .saveOwnNotificationToggles:
+            let payload = try decoder.decode(OfflinePartialUpdatePayload.self, from: entry.payload)
+            // Throws `OfflinePartialUpdateWriter.WriteError` (final) when another account is signed in.
+            try await OfflinePartialUpdateWriter.replay(
+                payload,
+                db: firebaseBackend.db,
+                signedInUserId: firebaseBackend.currentUser?.uid
+            )
+        }
+    }
+
+    /// Removes a refused item for good and tells the stores to drop the local copy.
+    private static func handleRefused(entry: OfflineOutboxEntry, outbox: OfflineOutboxStore) {
+        let message: String
+        switch entry.operation {
+        case .saveBooking, .saveManagerSiteBooking:
+            // `BOOKING_REPLAY_REFUSED_MESSAGE`
+            message = CanonicalBusinessEngine.bookingReplayRefusedMessage
+        case .deleteBooking, .deleteManagerSiteBooking:
+            message = "You do not have permission to delete this booking. It has been put back."
+        default:
+            message = "\(entry.displayTitle): this change was refused by the server and was not saved."
+        }
+        outbox.removeRefused(id: entry.id, message: message)
+        switch entry.operation {
+        case .saveBooking, .deleteBooking:
+            NotificationCenter.default.post(
+                name: .offlineBookingReplayRefused,
+                object: nil,
+                userInfo: ["bookingId": entry.entityId, "collection": "bookings", "operation": entry.operation.rawValue]
+            )
+        case .saveManagerSiteBooking, .deleteManagerSiteBooking:
+            NotificationCenter.default.post(
+                name: .offlineBookingReplayRefused,
+                object: nil,
+                userInfo: ["bookingId": entry.entityId, "collection": "managerSiteBookings", "operation": entry.operation.rawValue]
+            )
+        default:
+            break
         }
     }
 }
 
 extension Notification.Name {
     static let offlineSyncDidComplete = Notification.Name("offlineSyncDidComplete")
+    /// A queued booking write was refused for good. userInfo: `bookingId` (String), `collection`
+    /// (`bookings` | `managerSiteBookings`), `operation` (outbox operation raw value).
+    static let offlineBookingReplayRefused = Notification.Name("offlineBookingReplayRefused")
 }
