@@ -23,6 +23,8 @@ struct CompanyDetailsEditView: View {
     @State private var officeCounty = ""
     @State private var officePostcode = ""
     @State private var countryCode = "GB"
+    /// Bank-holiday region for the chosen country (`bankHolidayRegionsForCountry`, rulebook §4.1).
+    @State private var bankHolidayRegionId = ""
     @State private var selectedLogoItem: PhotosPickerItem?
     @State private var selectedLogoImage: UIImage?
     @State private var selectedLogoPDFData: Data?
@@ -42,6 +44,7 @@ struct CompanyDetailsEditView: View {
     @State private var baselineCounty = ""
     @State private var baselinePostcode = ""
     @State private var baselineCountry = "GB"
+    @State private var baselineRegionId = ""
     @State private var didLoad = false
 
     private var isDirty: Bool {
@@ -54,6 +57,7 @@ struct CompanyDetailsEditView: View {
             || officeCounty != baselineCounty
             || officePostcode != baselinePostcode
             || countryCode != baselineCountry
+            || bankHolidayRegionId != baselineRegionId
             || logoRemoved
             || selectedLogoImage != nil
             || selectedLogoPDFData != nil
@@ -102,6 +106,35 @@ struct CompanyDetailsEditView: View {
                         .font(.subheadline.weight(.medium))
                         .tint(PPColor.brand)
                         .padding(.vertical, 11)
+                        .onChange(of: countryCode) { _, newCountry in
+                            countryChanged(to: newCountry)
+                        }
+                        SettingsHubChrome.divider()
+                        if regionChoices.isEmpty {
+                            Text("No bank-holiday calendar is listed for this country.")
+                                .font(.footnote)
+                                .foregroundStyle(Color.secondary)
+                                .padding(.vertical, 11)
+                        } else {
+                            Picker("Bank holiday region", selection: $bankHolidayRegionId) {
+                                if !regionIsListed {
+                                    Text("Choose…").tag(bankHolidayRegionId)
+                                }
+                                ForEach(regionChoices) { region in
+                                    Text(region.title).tag(region.id)
+                                }
+                            }
+                            .accessibilityIdentifier("companyDetailsEdit.bankHolidayRegion")
+                            .font(.subheadline.weight(.medium))
+                            .tint(PPColor.brand)
+                            .padding(.vertical, 11)
+                        }
+                        if regionPrompt.required {
+                            Text(regionPrompt.message)
+                                .font(.footnote)
+                                .foregroundStyle(regionBlocksSave ? PPColor.danger : Color.secondary)
+                                .padding(.bottom, 11)
+                        }
                         if hasOfficeAddress {
                             SettingsHubChrome.divider()
                             TextField("Office address line 1", text: $officeAddressLine1)
@@ -136,7 +169,7 @@ struct CompanyDetailsEditView: View {
                                 .padding(.vertical, 11)
                         }
                     }
-                    SettingsHubChrome.footer("Country is always required. Bank holidays for annual leave are set separately under Organisation → Annual leave. If there is no office address, the site map centres on the capital (London for the UK).")
+                    SettingsHubChrome.footer("Country is always required. Changing it asks for that country's bank holidays (also under Organisation → Annual leave); leave already booked is not recounted. If there is no office address, the site map centres on the capital (London for the UK).")
 
                     SettingsHubChrome.sectionTitle("Company logo")
                     SettingsHubChrome.card {
@@ -237,7 +270,8 @@ struct CompanyDetailsEditView: View {
             .ppNavyNavigationBar()
             .interactiveDismissDisabled(isDirty)
             .safeAreaInset(edge: .bottom) {
-                SettingsStickySaveBar(isDirty: isDirty, isSaving: isSaving, isOnline: smartCache.isOnline) {
+                // Save stays off until a region from the new country is chosen (`companyDetailsRegionPrompt`).
+                SettingsStickySaveBar(isDirty: isDirty && !regionBlocksSave, isSaving: isSaving, isOnline: smartCache.isOnline) {
                     Task { await save() }
                 }
             }
@@ -319,12 +353,50 @@ struct CompanyDetailsEditView: View {
             org.firestoreDocumentId, org.name, org.documentAbbreviation ?? "", org.countryCode,
             org.officeAddressLine1 ?? "", org.officeAddressLine2 ?? "", org.officeCity ?? "",
             org.officeCounty ?? "", org.officePostcode ?? "", org.companyLogoURL ?? "",
+            org.settings.bankHolidayRegionId ?? "",
         ].joined(separator: "\u{1F}")
+    }
+
+    /// `bankHolidayRegionsForCountry(countryCode)`: only the chosen country's regions.
+    private var regionChoices: [BankHolidayRegion] {
+        CanonicalBusinessEngine.bankHolidayRegionsForCountry(countryCode)
+    }
+
+    private var regionIsListed: Bool {
+        regionChoices.contains { $0.id == bankHolidayRegionId }
+    }
+
+    /// `companyDetailsRegionPrompt(saved, { countryCode })`: the saved country and region are the live organisation's.
+    private var regionPrompt: CompanyDetailsRegionPrompt {
+        guard let org = firebaseBackend.currentOrganization else { return .notRequired }
+        return CanonicalBusinessEngine.companyDetailsRegionPrompt(
+            previousCountryCode: org.countryCode,
+            previousBankHolidayRegionId: org.settings.bankHolidayRegionId,
+            countryCode: countryCode
+        )
+    }
+
+    /// Required prompt and no listed region picked.
+    private var regionBlocksSave: Bool {
+        regionPrompt.blocksSave(regionId: bankHolidayRegionId)
+    }
+
+    /// Back to the saved country restores the saved region; another country keeps a region that belongs to it,
+    /// otherwise pre-selects that country's default (`defaultBankHolidayRegionForCountry`).
+    private func countryChanged(to newCountry: String) {
+        guard didLoad else { return }
+        if newCountry == baselineCountry {
+            bankHolidayRegionId = baselineRegionId
+            return
+        }
+        guard !regionIsListed else { return }
+        bankHolidayRegionId = CanonicalBusinessEngine.defaultBankHolidayRegionForCountry(newCountry) ?? ""
     }
 
     /// `companyDetailsValidationError` (rulebook). Nil when the form can be saved.
     private var validationError: String? {
-        CanonicalBusinessEngine.companyDetailsValidationError(
+        let org = firebaseBackend.currentOrganization
+        return CanonicalBusinessEngine.companyDetailsValidationError(
             CanonicalBusinessEngine.companyDetailsInput(
                 name: organizationName,
                 hasOfficeAddress: hasOfficeAddress,
@@ -336,7 +408,10 @@ struct CompanyDetailsEditView: View {
                 countryCode: countryCode,
                 documentAbbreviation: documentAbbreviation,
                 defaultLatitude: nil,
-                defaultLongitude: nil
+                defaultLongitude: nil,
+                bankHolidayRegionId: CanonicalBusinessEngine.normalizeBankHolidayRegionId(bankHolidayRegionId),
+                previousCountryCode: org?.countryCode,
+                previousBankHolidayRegionId: org?.settings.bankHolidayRegionId
             )
         )
     }
@@ -355,6 +430,10 @@ struct CompanyDetailsEditView: View {
         documentAbbreviation = org.documentAbbreviation
             ?? OrganizationDocumentAbbreviation.display(abbreviation: nil, organizationName: org.name)
         countryCode = org.countryCode.uppercased()
+        let storedRegion = org.settings.bankHolidayRegionId
+        bankHolidayRegionId = CanonicalBusinessEngine.normalizeBankHolidayRegionId(storedRegion)
+            ?? CanonicalBusinessEngine.defaultBankHolidayRegionForCountry(countryCode)
+            ?? ""
         if let line1 = org.officeAddressLine1, !line1.isEmpty,
            let city = org.officeCity, !city.isEmpty {
             hasOfficeAddress = true
@@ -388,6 +467,7 @@ struct CompanyDetailsEditView: View {
         baselineCounty = officeCounty
         baselinePostcode = officePostcode
         baselineCountry = countryCode
+        baselineRegionId = bankHolidayRegionId
     }
     
     private func resolveMapCenter() async -> (Double, Double) {
@@ -422,6 +502,8 @@ struct CompanyDetailsEditView: View {
         errorMessage = nil
         successMessage = nil
         let (lat, lon) = await resolveMapCenter()
+        let regionToSave = CanonicalBusinessEngine.normalizeBankHolidayRegionId(bankHolidayRegionId)
+        let regionChanged = bankHolidayRegionId != baselineRegionId || countryCode != baselineCountry
         do {
             try await firebaseBackend.updateOrganizationCompanyDetails(
                 name: organizationName,
@@ -434,8 +516,16 @@ struct CompanyDetailsEditView: View {
                 countryCode: countryCode,
                 defaultLatitude: lat,
                 defaultLongitude: lon,
-                documentAbbreviation: documentAbbreviation
+                documentAbbreviation: documentAbbreviation,
+                bankHolidayRegionId: regionToSave
             )
+            if regionChanged,
+               let region = CanonicalBusinessEngine.resolvedBankHolidayRegion(for: firebaseBackend.currentOrganization) {
+                Task {
+                    BankHolidayService.shared.invalidateCache(for: region.id)
+                    await BankHolidayService.shared.ensureLoaded(region: region, forceRefresh: true)
+                }
+            }
             if logoRemoved, selectedLogoImage == nil, selectedLogoPDFData == nil {
                 try await firebaseBackend.updateOrganizationCompanyLogoURL(nil)
             }

@@ -358,6 +358,9 @@ extension FirebaseBackend {
         // Fast path: locked org does not need a memberships query.
         if OrganizationTrialPolicy.isAccessBlocked(orgData) {
             errorMessage = OrganizationTrialPolicy.blockedMessage(from: orgData)
+            // RULEBOOK §13: a forced sign-out removes this device's push token too (while the company is still
+            // known, so same-email copies are found), as `AppSignOut` does.
+            await removeThisDevicePushTokenBeforeSignOut()
             currentOrganization = nil
             sessionOrganizationId = ""
             try? auth.signOut()
@@ -379,6 +382,7 @@ extension FirebaseBackend {
         }
 
         errorMessage = message
+        await removeThisDevicePushTokenBeforeSignOut()
         currentOrganization = nil
         sessionOrganizationId = ""
         try? auth.signOut()

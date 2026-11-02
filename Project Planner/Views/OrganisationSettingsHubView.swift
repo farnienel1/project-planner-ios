@@ -385,7 +385,9 @@ struct OrganisationSettingsHubView: View {
         let daysText = d.daysPerYear.truncatingRemainder(dividingBy: 1) == 0
             ? String(Int(d.daysPerYear))
             : String(format: "%.1f", d.daysPerYear)
-        let region = BankHolidayRegionDirectory.resolvedRegion(for: org)
+        guard let region = CanonicalBusinessEngine.resolvedBankHolidayRegion(for: org) else {
+            return "\(daysText) days · \(start)→\(end)"
+        }
         return "\(daysText) days · \(start)→\(end) · \(region.title)"
     }
 

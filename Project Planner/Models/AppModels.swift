@@ -2023,6 +2023,7 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return nil
         case .timesheetSubmissionReminder: return nil
         case .ideaStatus, .ideaShipped, .ideaComment, .ideaMerged: return nil
+        case .pushTest: return nil
         }
     }
 }

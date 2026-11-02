@@ -281,6 +281,8 @@ final class NotificationPreferenceCanonicalTests: XCTestCase {
             false
         )
         XCTAssertFalse(staffKeys.contains("operativeCreated"))
+        // Company activity is admins only.
+        XCTAssertFalse(staffKeys.contains("companyActivity"))
         for key in ["materialOrderCutOff", "bookedOntoJob", "qualificationExpiry"] {
             XCTAssertEqual(
                 CanonicalBusinessEngine.notificationPreferenceIsVisible(key, audience: staffWithoutOperatives),
@@ -302,13 +304,16 @@ final class NotificationPreferenceCanonicalTests: XCTestCase {
             canManageClients: true,
             canManageMaterials: true
         )
+        // Rulebook 1.4.0 §13: the six per-type company toggles are retired; admins see one `companyActivity` toggle.
         XCTAssertEqual(
-            CanonicalBusinessEngine.notificationPreferenceIsVisible("operativeCreated", audience: superAdmin),
+            CanonicalBusinessEngine.notificationPreferenceIsVisible("companyActivity", audience: superAdmin),
             true
         )
-        XCTAssertTrue(
-            try XCTUnwrap(CanonicalBusinessEngine.visibleNotificationPreferenceKeys(superAdmin)).contains("operativeCreated")
-        )
+        let superAdminKeys = try XCTUnwrap(CanonicalBusinessEngine.visibleNotificationPreferenceKeys(superAdmin))
+        XCTAssertTrue(superAdminKeys.contains("companyActivity"))
+        for retired in ["projectCreated", "smallWorksCreated", "operativeCreated", "managerCreated", "clientCreated", "warningDismissed"] {
+            XCTAssertFalse(superAdminKeys.contains(retired), retired)
+        }
 
         let omittedFlags = CanonicalBusinessEngine.CanonicalNotificationPreferenceAudience(
             role: CanonicalBusinessEngine.CanonicalStaffAccountRole(
@@ -320,10 +325,13 @@ final class NotificationPreferenceCanonicalTests: XCTestCase {
             catalogue: CanonicalBusinessEngine.CanonicalWorkCatalogueToggles(projects: true, smallWorks: true)
         )
         XCTAssertEqual(
-            CanonicalBusinessEngine.notificationPreferenceIsVisible("operativeCreated", audience: omittedFlags),
+            CanonicalBusinessEngine.notificationPreferenceIsVisible("companyActivity", audience: omittedFlags),
             true
         )
         XCTAssertTrue(
+            try XCTUnwrap(CanonicalBusinessEngine.visibleNotificationPreferenceKeys(omittedFlags)).contains("companyActivity")
+        )
+        XCTAssertFalse(
             try XCTUnwrap(CanonicalBusinessEngine.visibleNotificationPreferenceKeys(omittedFlags)).contains("operativeCreated")
         )
 

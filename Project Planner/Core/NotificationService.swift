@@ -496,90 +496,96 @@ class NotificationService: ObservableObject {
         let dates: [Date]
     }
     
-    func notifyOperativeCreated(operativeId: UUID, operativeName: String, createdBy: String) async {
+    /// Rulebook 1.4.0 §13: a company activity notice (`COMPANY_ACTIVITY_NOTICE_TYPES`) is one row per id from
+    /// `companyActivityRecipients(actor, roster)` — the active admins outside operative mode, never the actor —
+    /// each with `userId` and `actorUserId` (`saveNotification` stamps it). Never written without `userId`.
+    /// `dedupeKey` names the event; each recipient's row id is derived from it.
+    private func saveCompanyActivityNotice(
+        type: AppNotification.NotificationType,
+        title: String,
+        message: String,
+        relatedId: UUID?,
+        dedupeKey: String
+    ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        
-        // Only notify users who can view operatives
-        let notification = AppNotification(
-            organizationId: organizationId,
+        if let userStore, userStore.organizationUsers.isEmpty {
+            await userStore.loadOrganizationUsers()
+        }
+        // Nil when the script did not answer: nothing is written (never an ownerless row).
+        guard let recipientIds = CanonicalBusinessEngine.companyActivityRecipients(
+            actor: actorPerson,
+            roster: recipientRoster
+        ) else { return }
+        for recipientId in recipientIds {
+            let notification = AppNotification(
+                id: syntheticNotificationId(from: "\(dedupeKey)|\(recipientId)"),
+                organizationId: organizationId,
+                type: type,
+                title: title,
+                message: message,
+                userId: recipientId,
+                relatedId: relatedId,
+                requiresPermission: nil
+            )
+            await saveNotification(notification)
+        }
+    }
+
+    func notifyOperativeCreated(operativeId: UUID, operativeName: String, createdBy: String) async {
+        await saveCompanyActivityNotice(
             type: .operativeCreated,
             title: "New Operative Created",
             message: "\(createdBy) created a new operative: \(operativeName)",
             relatedId: operativeId,
-            requiresPermission: "canViewOperatives"
+            dedupeKey: "operativeCreated|\(operativeId.uuidString)"
         )
-        
-        await saveNotification(notification)
     }
     
     func notifyManagerCreated(managerId: UUID, managerName: String, createdBy: String) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        
-        // Only notify users who can view managers
-        let notification = AppNotification(
-            organizationId: organizationId,
+        await saveCompanyActivityNotice(
             type: .managerCreated,
             title: "New Manager Created",
             message: "\(createdBy) created a new manager: \(managerName)",
             relatedId: managerId,
-            requiresPermission: "canViewManagers"
+            dedupeKey: "managerCreated|\(managerId.uuidString)"
         )
-        
-        await saveNotification(notification)
     }
     
     func notifyClientCreated(clientId: UUID, clientName: String, createdBy: String) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        
-        let notification = AppNotification(
-            organizationId: organizationId,
+        await saveCompanyActivityNotice(
             type: .clientCreated,
             title: "New Client Created",
             message: "\(createdBy) added a new client: \(clientName)",
             relatedId: clientId,
-            requiresPermission: "superAdminOrAdmin"
+            dedupeKey: "clientCreated|\(clientId.uuidString)"
         )
-        
-        await saveNotification(notification)
     }
     
     func notifyProjectCreated(projectId: UUID, siteName: String, jobNumber: String, createdBy: String) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        
         let detail = jobNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? siteName
             : "\(jobNumber) · \(siteName)"
-        let notification = AppNotification(
-            organizationId: organizationId,
+        await saveCompanyActivityNotice(
             type: .projectCreated,
             title: "New Project",
             message: "\(createdBy) added a new project: \(detail)",
             relatedId: projectId,
-            requiresPermission: "superAdminOrAdmin"
+            dedupeKey: "projectCreated|\(projectId.uuidString)"
         )
-        await saveNotification(notification)
     }
     
     func notifySmallWorksCreated(smallWorkId: UUID, siteName: String, jobNumber: String, createdBy: String) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        
         let detail = jobNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? siteName
             : "\(jobNumber) · \(siteName)"
-        let notification = AppNotification(
-            organizationId: organizationId,
+        await saveCompanyActivityNotice(
             type: .smallWorksCreated,
             title: "New Small Works",
             message: "\(createdBy) added new small works: \(detail)",
             relatedId: smallWorkId,
-            requiresPermission: "superAdminOrAdmin"
+            dedupeKey: "smallWorksCreated|\(smallWorkId.uuidString)"
         )
-        await saveNotification(notification)
     }
 
     /// One notification per recipient when a variation is raised on iOS. Web must do the same on its create path — do not also add a Cloud Function or recipients get two.
@@ -748,11 +754,9 @@ class NotificationService: ObservableObject {
         await saveNotification(notification2)
     }
 
-    /// Notifies all admins when someone dismisses a warning. Appears in the home notification centre.
+    /// Notifies the admins (`companyActivityRecipients`, never the person who dismissed it) when a warning is
+    /// dismissed. Appears in their notification centre.
     func notifyWarningRemoved(warning: Warning, removedBy: String) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-
         let detail = warning.removalNotificationDetail
         let typeLabel: String = {
             switch warning.type {
@@ -766,17 +770,14 @@ class NotificationService: ObservableObject {
             }
         }()
         // Unique per dismiss so repeated dismissals of different warnings never collapse in the inbox.
-        let dedupeId = UUID()
-        let notification = AppNotification(
-            id: dedupeId,
-            organizationId: organizationId,
+        let dismissId = UUID()
+        await saveCompanyActivityNotice(
             type: .warningRemoved,
             title: "Warning dismissed by \(removedBy)",
             message: "\(removedBy) dismissed a \(typeLabel.lowercased()) warning. Dismissed warnings do not reappear.\n\n\(detail)",
             relatedId: nil,
-            requiresPermission: "hasAdminAccess"
+            dedupeKey: "warningRemoved|\(dismissId.uuidString)"
         )
-        await saveNotification(notification)
     }
     
     func notifyTaskCompleted(taskId: UUID, taskTitle: String, completedBy: String, assignedToUserId: String) async {
@@ -1301,8 +1302,9 @@ class NotificationService: ObservableObject {
         await saveNotification(notification)
     }
 
-    /// Temporary: writes a targeted notification for the current signed-in user so we can validate
-    /// end-to-end remote push delivery (notification write -> Cloud Function -> APNs/FCM).
+    /// Settings "send a test notification" (rulebook 1.4.0 §13): one `push_test` row to `pushTestRecipients(actor)`
+    /// — the signed-in user — with `actorUserId` set (`saveNotification` stamps it). The push function delivers it to
+    /// its sender (`notificationPushesToActor`), so this checks notification write → Cloud Function → APNs/FCM.
     func sendTemporaryPushDiagnosticToCurrentUser() async -> String {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
@@ -1311,21 +1313,23 @@ class NotificationService: ObservableObject {
         guard let currentUser = userStore?.currentUser else {
             return "❌ Push diagnostic failed: no signed-in app user."
         }
+        guard let targetId = CanonicalBusinessEngine.pushTestRecipients(actor: actorPerson)?.first else {
+            return "❌ Push diagnostic failed: the rulebook gave no recipient."
+        }
 
         let refreshResult = await firebaseBackend.forceRefreshAndRegisterPushToken()
-        let targetId = resolvedRecipientUserId(currentUser.id)
         let tokenCount = await pushTokenCount(for: targetId)
         let notification = AppNotification(
             organizationId: organizationId,
-            type: .taskCreated,
-            title: "Push Diagnostic",
-            message: "Temporary diagnostic ping for \(currentUser.fullName).",
+            type: .pushTest,
+            title: "Test notification",
+            message: "Test notification for \(currentUser.fullName).",
             userId: targetId,
             relatedId: UUID(),
             requiresPermission: nil
         )
         await saveNotification(notification)
-        return "✅ Diagnostic notification created.\n\(refreshResult)\nTarget userId: \(targetId)\nNotification id: \(notification.id.uuidString)\nKnown tokens on target doc: \(tokenCount)"
+        return "✅ Test notification created.\n\(refreshResult)\nTarget userId: \(targetId)\nNotification id: \(notification.id.uuidString)\nKnown tokens on target doc: \(tokenCount)"
     }
 
     // MARK: - Notification Management

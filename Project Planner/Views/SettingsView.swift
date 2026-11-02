@@ -490,7 +490,7 @@ struct SettingsView: View {
                     Task { await runTemporaryPushDiagnostic() }
                 }) {
                     HStack {
-                        Text("TEMP: Remote Push Diagnostic")
+                        Text("Send a test notification")
                         Spacer()
                         if isRunningPushDiagnostic {
                             ProgressView()

@@ -176,6 +176,7 @@ struct NotificationRowView: View {
         case .lineManagerPeerUpdate: return "person.2.fill"
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return "plus.rectangle.on.folder"
         case .timesheetSubmissionReminder: return "clock.badge.exclamationmark"
+        case .pushTest: return "bell.badge"
         }
     }
 
@@ -206,6 +207,7 @@ struct NotificationRowView: View {
         case .lineManagerPeerUpdate: return .people
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return .trade
         case .timesheetSubmissionReminder: return .trade
+        case .pushTest: return .plan
         }
     }
 }

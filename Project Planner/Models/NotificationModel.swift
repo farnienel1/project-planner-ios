@@ -49,6 +49,9 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case ideaComment = "idea_comment"
         /// Web feedback board: an idea this user raised or voted for was merged into another.
         case ideaMerged = "idea_merged"
+        /// Settings "send a test notification" (rulebook 1.4.0 §13, `PUSH_TEST_NOTICE_TYPE`): written to the sender
+        /// (`pushTestRecipients`); its push reaches the actor (`notificationPushesToActor`). No toggle.
+        case pushTest = "push_test"
     }
     
     let id: UUID

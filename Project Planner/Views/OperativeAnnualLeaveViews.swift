@@ -542,13 +542,15 @@ struct OperativeAnnualLeaveCalendarView: View {
     /// Leave days are organisation business days (§1).
     private var calendar: Calendar { OrganizationRulebookContext.calendar }
 
-    private var bankHolidayRegion: BankHolidayRegion {
-        BankHolidayRegionDirectory.resolvedRegion(for: firebaseBackend.currentOrganization)
+    /// `BANK_HOLIDAY_REGIONS` row for the saved region (rulebook §4.4). Nil only when the script did not answer.
+    private var bankHolidayRegion: BankHolidayRegion? {
+        CanonicalBusinessEngine.resolvedBankHolidayRegion(for: firebaseBackend.currentOrganization)
     }
 
     private func reloadBankHolidays(referenceDate: Date = Date(), forceRefresh: Bool = false) async {
+        guard let region = bankHolidayRegion else { return }
         await bankHolidayService.ensureLoaded(
-            region: bankHolidayRegion,
+            region: region,
             referenceDate: referenceDate,
             forceRefresh: forceRefresh
         )
@@ -665,7 +667,7 @@ struct OperativeAnnualLeaveCalendarView: View {
         } message: {
             if let bankHolidayTooltip { Text(bankHolidayTooltip) }
         }
-        .task(id: bankHolidayRegion.id) {
+        .task(id: bankHolidayRegion?.id) {
             await reloadBankHolidays(forceRefresh: false)
         }
         .task(id: displayedMonth) {

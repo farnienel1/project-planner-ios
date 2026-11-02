@@ -840,6 +840,14 @@ class FirebaseBackend: ObservableObject {
     func signOut() throws {
         try auth.signOut()
     }
+
+    /// RULEBOOK §13: a forced sign-out (expired session, blocked trial) removes this device's push token from every
+    /// `users` document it was written to before Firebase Auth signs out, exactly as `AppSignOut` does. The wait is
+    /// bounded (`removeThisDevicePushTokenBeforeSignOut`); sign-out goes ahead either way.
+    func forcedSignOutRemovingPushToken() async {
+        await removeThisDevicePushTokenBeforeSignOut()
+        try? auth.signOut()
+    }
     
     /// Sends a new verification code (invitation token) so the user can set or reset their password on the Project Planner page.
     /// Creates a fresh invitation document and emails the user with "Verification code" wording.
@@ -971,7 +979,7 @@ class FirebaseBackend: ObservableObject {
             try await user.updatePassword(to: newPassword)
         } catch {
             if isSessionExpiredOrInvalidCredential(error) {
-                try? auth.signOut()
+                await forcedSignOutRemovingPushToken()
                 errorMessage = FirebaseBackend.sessionExpiredMessage
             } else {
                 errorMessage = error.localizedDescription
@@ -1797,7 +1805,7 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: ✅✅✅ Organization loaded successfully - Name: \(organizationName), ID: \(organizationId)")
         } catch {
             if isSessionExpiredOrInvalidCredential(error) {
-                try? auth.signOut()
+                await forcedSignOutRemovingPushToken()
                 errorMessage = FirebaseBackend.sessionExpiredMessage
                 print("🔥🔥🔥 DEBUG: Session/credential expired – signed out so user can sign in again")
                 return
@@ -5323,33 +5331,28 @@ class FirebaseBackend: ObservableObject {
             )
         }
         let trimmed = bankHolidayRegionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 400,
-                userInfo: [NSLocalizedDescriptionKey: "Select an annual leave / bank holiday region."]
-            )
-        }
+        // Rulebook 1.4.0 §4.4: a country with no listed region (`bankHolidayRegionsForCountry` empty) has nothing
+        // to choose, so the leave defaults still save and the stored region is left alone.
         let payload: [String: Any] = [
             "daysPerYear": defaults.daysPerYear,
             "startMonth": defaults.startMonth,
             "endMonth": defaults.endMonth,
             "carriesOver": defaults.carriesOver,
         ]
-        // Dotted `settings.bankHolidayRegionId` is a path only in updateData (never setData(merge:)).
+        var fields: [String: Any] = ["annualLeaveDefaults": payload]
+        if !trimmed.isEmpty {
+            // Dotted `settings.bankHolidayRegionId` is a path only in updateData (never setData(merge:)).
+            fields["bankHolidayRegionId"] = trimmed
+            fields["settings.bankHolidayRegionId"] = trimmed
+        }
         try await db.collection("organizations").document(orgId).updateData(
-            WriteMetadata.stamped(
-                [
-                    "annualLeaveDefaults": payload,
-                    "bankHolidayRegionId": trimmed,
-                    "settings.bankHolidayRegionId": trimmed,
-                ],
-                userId: auth.currentUser?.uid
-            )
+            WriteMetadata.stamped(fields, userId: auth.currentUser?.uid)
         )
         guard var org = currentOrganization else { return }
         org.settings.annualLeaveDefaults = defaults
-        org.settings.bankHolidayRegionId = trimmed
+        if !trimmed.isEmpty {
+            org.settings.bankHolidayRegionId = trimmed
+        }
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -5507,7 +5510,8 @@ class FirebaseBackend: ObservableObject {
         countryCode: String,
         defaultLatitude: Double?,
         defaultLongitude: Double?,
-        documentAbbreviation: String?
+        documentAbbreviation: String?,
+        bankHolidayRegionId: String? = nil
     ) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(
@@ -5519,6 +5523,8 @@ class FirebaseBackend: ObservableObject {
         // Rulebook: `companyDetailsValidationError` then `companyDetailsWriteFields` → `{ set, remove }`.
         // A blank name is never written (`organizationNameWriteFields` inside it); blank optional fields and
         // the legacy nested `officeAddress` map are removed with `FieldValue.delete()`.
+        // Rulebook 1.4.0 §4.1: `previous` is the saved country and region, so a country change needs a region from
+        // the new country (`companyDetailsRegionPrompt`) and country + region go in this one partial update.
         let input = CanonicalBusinessEngine.companyDetailsInput(
             name: name,
             hasOfficeAddress: hasOfficeAddress,
@@ -5530,7 +5536,10 @@ class FirebaseBackend: ObservableObject {
             countryCode: countryCode,
             documentAbbreviation: documentAbbreviation,
             defaultLatitude: defaultLatitude,
-            defaultLongitude: defaultLongitude
+            defaultLongitude: defaultLongitude,
+            bankHolidayRegionId: bankHolidayRegionId,
+            previousCountryCode: currentOrganization?.countryCode,
+            previousBankHolidayRegionId: currentOrganization?.settings.bankHolidayRegionId
         )
         if let message = CanonicalBusinessEngine.companyDetailsValidationError(input) {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
@@ -5559,6 +5568,11 @@ class FirebaseBackend: ObservableObject {
         }
         if let country = written("countryCode") {
             org.countryCode = country
+        }
+        if let region = written("bankHolidayRegionId") {
+            org.settings.bankHolidayRegionId = region
+        } else if write.remove.contains("bankHolidayRegionId") {
+            org.settings.bankHolidayRegionId = nil
         }
         org.documentAbbreviation = OrganizationDocumentAbbreviation.normalized(written("documentAbbreviation"))
         org.officeAddressLine1 = written("officeAddressLine1")
