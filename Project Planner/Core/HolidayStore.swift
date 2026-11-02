@@ -143,6 +143,17 @@ class HolidayStore: ObservableObject {
         ) { [weak self] rows, fromCache in
             guard let self else { return }
             let parsed = FirebaseBackend.holidayBookings(fromDocuments: rows, organizationId: normalizedOrganizationId(organizationId))
+            // Leave documents arrived but none could be read: keep the leave on screen (queued requests would
+            // otherwise be all that is left).
+            if LiveSnapshotMerge.refusesUnreadSnapshot(
+                collection: "holidayBookings",
+                rowCount: LiveSnapshotMerge.readableRowCount(rows),
+                parsedCount: parsed.count,
+                existingCount: self.bookings.count,
+                fromCache: fromCache
+            ) {
+                return
+            }
             // §2: a request queued offline stays on screen (Pending sync) until the outbox replays it.
             let pending = self.bookings.filter { self.isPendingSync($0) }
             let pendingIds = Set(pending.map(\.id))

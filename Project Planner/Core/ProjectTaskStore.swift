@@ -35,7 +35,7 @@ class ProjectTaskStore: ObservableObject {
         ) { [weak self] rows, fromCache in
             guard let self else { return }
             let incoming = rows.compactMap { FirebaseBackend.projectTask(documentId: $0.id, data: $0.data) }
-            guard var next = LiveSnapshotMerge.apply(existing: self.tasks, incoming: incoming, fromCache: fromCache) else { return }
+            guard var next = LiveSnapshotMerge.apply(existing: self.tasks, incoming: incoming, fromCache: fromCache, rowCount: LiveSnapshotMerge.readableRowCount(rows), collection: "tasks") else { return }
             let incomingIds = Set(next.map(\.id))
             let queued = self.tasks.filter {
                 !incomingIds.contains($0.id) && OfflineOutboxStore.shared.hasPendingSync(entityId: $0.id.uuidString)

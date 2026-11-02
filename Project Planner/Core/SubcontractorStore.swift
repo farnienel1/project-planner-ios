@@ -35,7 +35,7 @@ class SubcontractorStore: ObservableObject {
                     copy.contacts = firm.contacts.filter { seen.insert($0.id).inserted }
                     return copy
                 }
-            guard let next = LiveSnapshotMerge.apply(existing: self.subcontractors, incoming: firms, fromCache: fromCache),
+            guard let next = LiveSnapshotMerge.apply(existing: self.subcontractors, incoming: firms, fromCache: fromCache, rowCount: LiveSnapshotMerge.readableRowCount(rows), collection: "subcontractors"),
                   next != self.subcontractors else { return }
             self.subcontractors = next
         }
@@ -46,7 +46,7 @@ class SubcontractorStore: ObservableObject {
         ) { [weak self] rows, fromCache in
             guard let self else { return }
             let incoming = FirebaseBackend.subcontractorBookings(fromDocuments: rows)
-            guard let next = LiveSnapshotMerge.apply(existing: self.bookings, incoming: incoming, fromCache: fromCache),
+            guard let next = LiveSnapshotMerge.apply(existing: self.bookings, incoming: incoming, fromCache: fromCache, rowCount: LiveSnapshotMerge.readableRowCount(rows), collection: "subcontractorBookings"),
                   next != self.bookings else { return }
             self.bookings = next
         }

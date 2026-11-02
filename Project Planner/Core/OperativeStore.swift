@@ -118,7 +118,9 @@ class OperativeStore: ObservableObject {
             return existing
         }
         if incoming.count >= existing.count { return incoming }
-        var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        // Two stored ids that differ only in letter case are one in-app id (`Booking.internalOperativeId`); a
+        // duplicate key must not trap.
+        var byId = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for person in incoming { byId[person.id] = person }
         let merged = Array(byId.values)
         print("🔥🔥🔥 DEBUG: OPERATIVES_KEPT merged \(merged.count) (fetch had \(incoming.count))")
@@ -179,7 +181,13 @@ class OperativeStore: ObservableObject {
         ) { [weak self] rows, fromCache in
             guard let self else { return }
             let incoming = FirebaseBackend.operatives(fromDocuments: rows)
-            guard let next = LiveSnapshotMerge.apply(existing: self.operatives, incoming: incoming, fromCache: fromCache) else { return }
+            guard let next = LiveSnapshotMerge.apply(
+                existing: self.operatives,
+                incoming: incoming,
+                fromCache: fromCache,
+                rowCount: LiveSnapshotMerge.readableRowCount(rows),
+                collection: "operatives"
+            ) else { return }
             // `Operative ==` compares ids only, so a server snapshot always publishes (it fires only on a change).
             if fromCache && next.count == self.operatives.count && next.map(\.id) == self.operatives.map(\.id) { return }
             self.operatives = next
@@ -194,7 +202,13 @@ class OperativeStore: ObservableObject {
         ) { [weak self] rows, fromCache in
             guard let self else { return }
             let incoming = FirebaseBackend.managers(fromDocuments: rows)
-            guard let next = LiveSnapshotMerge.apply(existing: self.managers, incoming: incoming, fromCache: fromCache),
+            guard let next = LiveSnapshotMerge.apply(
+                existing: self.managers,
+                incoming: incoming,
+                fromCache: fromCache,
+                rowCount: LiveSnapshotMerge.readableRowCount(rows),
+                collection: "managers"
+            ),
                   next != self.managers else { return }
             self.managers = next
             self.smartCache?.cacheManagers(next)

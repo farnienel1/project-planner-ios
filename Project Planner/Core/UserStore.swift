@@ -467,7 +467,8 @@ class UserStore: ObservableObject {
         
         do {
             let roster = try await firebaseBackend.getOrganizationUsers(organizationId: requestedOrganizationId)
-            let users = roster.users
+            // Rows the rulebook could not read (no role, no permissions) never replace rows it did read.
+            let users = Self.rosterKeepingReadRows(roster.users, onScreen: organizationUsers)
             guard generation == organizationUsersLoadGeneration else {
                 print("🔥🔥🔥 DEBUG: Ignoring organisation user roster for \(requestedOrganizationId) — a newer organisation load replaced it")
                 return
@@ -491,6 +492,24 @@ class UserStore: ObservableObject {
             )
             guard let listed = CanonicalBusinessEngine.listedRosterUsers(healed, claimedEmails: roster.claimedEmails) else {
                 print("🔥🔥🔥 DEBUG: ROSTER_LIST script did not return a list — keeping the roster already on screen")
+                ReaderDiagnostics.shared.record(
+                    collection: "users",
+                    rowCount: healed.count,
+                    parsedCount: 0,
+                    keptCount: organizationUsers.count,
+                    source: "roster load (listedRosterUsers did not answer)"
+                )
+                return
+            }
+            // People documents arrived but none could be read or listed: keep the roster on screen (and the saved
+            // copy), never publish and save an empty one.
+            if LiveSnapshotMerge.refusesUnreadSnapshot(
+                collection: "users",
+                rowCount: roster.users.count,
+                parsedCount: listed.filter { !$0.parsedWithoutRulebook }.count,
+                existingCount: organizationUsers.count,
+                fromCache: false
+            ) {
                 return
             }
             organizationUserEmailClaims = roster.claimedEmails
@@ -510,6 +529,22 @@ class UserStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ROSTER_KEPT on-screen count=\(organizationUsers.count) after fetch error")
             }
         }
+    }
+
+    /// The fetched roster with every row `parseUserDocument` could not read replaced by the row already on screen
+    /// for that id (when there is one). Nothing is decided about the person here.
+    static func rosterKeepingReadRows(_ fetched: [AppUser], onScreen: [AppUser]) -> [AppUser] {
+        guard fetched.contains(where: \.parsedWithoutRulebook) else { return fetched }
+        var known: [String: AppUser] = [:]
+        for user in onScreen where !user.parsedWithoutRulebook && known[user.id] == nil { known[user.id] = user }
+        let kept = fetched.map { user in user.parsedWithoutRulebook ? (known[user.id] ?? user) : user }
+        NSLog(
+            "ROSTER_UNREAD_ROWS unread=%d of %d — kept %d rows already on screen",
+            fetched.filter(\.parsedWithoutRulebook).count,
+            fetched.count,
+            zip(fetched, kept).filter { $0.0.parsedWithoutRulebook && !$0.1.parsedWithoutRulebook }.count
+        )
+        return kept
     }
 
     /// Sorts and publishes a `listedRosterUsers` result and saves it on this phone.
@@ -591,6 +626,10 @@ class UserStore: ObservableObject {
         }
         for incoming in changed where !RosterRetention.isTombstoned(incoming.id, organizationId: organizationId) {
             var user = incoming
+            if user.parsedWithoutRulebook, let existing = byId[user.id], !existing.parsedWithoutRulebook {
+                NSLog("ROSTER_ROW_KEPT id=%@ — parseUserDocument did not answer for the live copy", user.id)
+                continue
+            }
             if let existing = byId[user.id] {
                 user.placedByManagersRecord = existing.placedByManagersRecord
                 user.sameEmailUserIds = existing.sameEmailUserIds
@@ -602,6 +641,15 @@ class UserStore: ObservableObject {
         let folded = collapseRosterByEmail(order.compactMap { byId[$0] })
         guard let listed = CanonicalBusinessEngine.listedRosterUsers(folded, claimedEmails: organizationUserEmailClaims) else {
             print("🔥🔥🔥 DEBUG: ROSTER_LISTENER script did not return a list — keeping the roster on screen")
+            return
+        }
+        if LiveSnapshotMerge.refusesUnreadSnapshot(
+            collection: "users (live)",
+            rowCount: folded.count,
+            parsedCount: listed.count,
+            existingCount: organizationUsers.count,
+            fromCache: false
+        ) {
             return
         }
         publishRoster(listed, organizationId: organizationId)
@@ -750,6 +798,11 @@ class UserStore: ObservableObject {
         currentUserListenerTarget = target
         currentUserListener = firebaseBackend.observeCurrentUserDocument(userId: userId) { [weak self] user in
             guard let self, let user else { return }
+            // A copy the rulebook could not read has no role or permissions: keep the profile already read.
+            if user.parsedWithoutRulebook, let existing = self.currentUser, existing.id == user.id, !existing.parsedWithoutRulebook {
+                NSLog("CURRENT_USER_KEPT id=%@ — parseUserDocument did not answer for the live copy", user.id)
+                return
+            }
             Task { @MainActor in
                 let resolved = await self.firebaseBackend?.applyDeviceSessionIfNeeded(to: user) ?? user
                 self.currentUser = resolved
