@@ -932,11 +932,13 @@ enum TimesheetDraftStore {
         }
         if reviewer {
             let storedIds = storedEntryIds(server)
-            func entryId(_ id: UUID) -> String { storedIds[id.uuidString.lowercased()] ?? id.uuidString }
+            func entryId(_ id: UUID, _ stored: String?) -> String {
+                stored ?? storedIds[id.uuidString.lowercased()] ?? WorkDocumentKeys.storedId(for: id)
+            }
             let entries: [(id: String, amount: Double, managerDecision: String, managerRevisedAmount: Double?)] = draft.expenseEntries.map {
-                (id: entryId($0.id), amount: $0.amount, managerDecision: $0.managerDecision.rawValue, managerRevisedAmount: $0.managerRevisedAmount)
+                (id: entryId($0.id, $0.storedId), amount: $0.amount, managerDecision: $0.managerDecision.rawValue, managerRevisedAmount: $0.managerRevisedAmount)
             } + draft.priceWorkEntries.map {
-                (id: entryId($0.id), amount: $0.amount, managerDecision: $0.managerDecision.rawValue, managerRevisedAmount: $0.managerRevisedAmount)
+                (id: entryId($0.id, $0.storedId), amount: $0.amount, managerDecision: $0.managerDecision.rawValue, managerRevisedAmount: $0.managerRevisedAmount)
             }
             if let reviewFields = CanonicalBusinessEngine.timesheetEntryReviewWriteFields(
                 storedSheet: server,
@@ -1032,7 +1034,8 @@ enum TimesheetDraftStore {
             "weeklyReportOverride": draft.weeklyReportOverride.map(weeklyReportOverrideMap) as Any,
             "expenseEntries": draft.expenseEntries.map { e in
                 [
-                    "id": e.id.uuidString,
+                    // RULEBOOK 1.7.0 §8: the id as stored (or `timesheetEntryId`), so a review keyed on it still matches.
+                    "id": e.storedId ?? WorkDocumentKeys.storedId(for: e.id),
                     "title": e.title,
                     "details": e.details,
                     "jobNumber": e.jobNumber,
@@ -1045,7 +1048,7 @@ enum TimesheetDraftStore {
             },
             "priceWorkEntries": draft.priceWorkEntries.map { p in
                 [
-                    "id": p.id.uuidString,
+                    "id": p.storedId ?? WorkDocumentKeys.storedId(for: p.id),
                     "title": p.title,
                     "details": p.details,
                     "jobNumber": p.jobNumber,
@@ -1100,40 +1103,43 @@ enum TimesheetDraftStore {
             output.exportedAt = fields.exportedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }
         }
 
-        output.expenseEntries = ((map["expenseEntries"] as? [[String: Any]]) ?? []).compactMap { row in
-            guard let idRaw = row["id"] as? String,
-                  let id = UUID(uuidString: idRaw),
-                  let title = row["title"] as? String else { return nil }
-            let resolved = resolvedEntryDecision(sheet: map, row: row)
-            return TimesheetExpenseEntry(
-                id: id,
-                title: title,
-                details: row["details"] as? String ?? "",
-                jobNumber: row["jobNumber"] as? String ?? "",
-                date: (row["date"] as? Timestamp)?.dateValue() ?? Date(),
-                amount: row["amount"] as? Double ?? 0,
-                receiptName: row["receiptName"] as? String,
-                managerDecision: resolved.decision,
-                managerRevisedAmount: resolved.revisedAmount
+        // RULEBOOK 1.7.0 §8: entries are read only through `parseTimesheetEntries`. Every entry with a title is kept
+        // under its stored id (any case, UUID or not); one stored without an id gets the deterministic
+        // `timesheetEntryId`, so `extraEntryReviews[entryId]` matches on every platform and every read. The decision
+        // in effect is `timesheetEntryDecision` for that id. Without the script the sheet is not decoded at all
+        // (a save from a half-read sheet would drop entries).
+        guard let entries = CanonicalBusinessEngine.parseTimesheetEntries(
+            sheetDocumentId: timesheetSheetDocumentId(map),
+            sheet: map
+        ) else { return nil }
+        output.expenseEntries = entries.rows("expenseEntries").map { row in
+            TimesheetExpenseEntry(
+                id: WorkDocumentKeys.inAppId(for: row.id),
+                title: row.text("title"),
+                details: row.raw["details"] as? String ?? "",
+                jobNumber: row.text("jobNumber"),
+                date: row.date("dateMs") ?? Date(),
+                amount: row.number("amount") ?? 0,
+                receiptName: row.optionalText("receiptName"),
+                managerDecision: TimesheetManagerDecision(rawValue: row.text("managerDecision")) ?? .approved,
+                managerRevisedAmount: row.number("managerRevisedAmount"),
+                storedId: row.id
             )
         }
 
-        output.priceWorkEntries = ((map["priceWorkEntries"] as? [[String: Any]]) ?? []).compactMap { row in
-            guard let idRaw = row["id"] as? String,
-                  let id = UUID(uuidString: idRaw),
-                  let title = row["title"] as? String else { return nil }
-            let resolved = resolvedEntryDecision(sheet: map, row: row)
-            return TimesheetPriceWorkEntry(
-                id: id,
-                title: title,
-                details: row["details"] as? String ?? "",
-                jobNumber: row["jobNumber"] as? String ?? "",
-                agreedManagerName: row["agreedManagerName"] as? String ?? "Manager",
-                startDate: (row["startDate"] as? Timestamp)?.dateValue() ?? Date(),
-                endDate: (row["endDate"] as? Timestamp)?.dateValue(),
-                amount: row["amount"] as? Double ?? 0,
-                managerDecision: resolved.decision,
-                managerRevisedAmount: resolved.revisedAmount
+        output.priceWorkEntries = entries.rows("priceWorkEntries").map { row in
+            TimesheetPriceWorkEntry(
+                id: WorkDocumentKeys.inAppId(for: row.id),
+                title: row.text("title"),
+                details: row.raw["details"] as? String ?? "",
+                jobNumber: row.text("jobNumber"),
+                agreedManagerName: row.optionalText("agreedManagerName") ?? "Manager",
+                startDate: row.date("startMs") ?? Date(),
+                endDate: row.date("endMs"),
+                amount: row.number("amount") ?? 0,
+                managerDecision: TimesheetManagerDecision(rawValue: row.text("managerDecision")) ?? .approved,
+                managerRevisedAmount: row.number("managerRevisedAmount"),
+                storedId: row.id
             )
         }
 
@@ -1156,20 +1162,19 @@ enum TimesheetDraftStore {
         return output
     }
 
-    /// The decision in effect for one stored entry (`timesheetEntryDecision`): the reviewer's
-    /// `extraEntryReviews` entry; the owner-writable inline value only when it lowers the amount, or on a
-    /// manager-signed legacy sheet. The inline value is read only when the script did not answer.
-    private static func resolvedEntryDecision(
-        sheet: [String: Any],
-        row: [String: Any]
-    ) -> (decision: TimesheetManagerDecision, revisedAmount: Double?) {
-        if let resolved = CanonicalBusinessEngine.timesheetEntryDecision(sheet: sheet, entry: row) {
-            return (TimesheetManagerDecision(rawValue: resolved.decision) ?? .approved, resolved.revisedAmount)
+    /// The sheet document id entry ids derive from: the id a read attached (`__documentId`), else
+    /// `timesheetDocumentId(userId, weekStartKey)` from the stored period fields.
+    private static func timesheetSheetDocumentId(_ map: [String: Any]) -> String {
+        if let id = (map["__documentId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+            return id
         }
-        return (
-            TimesheetManagerDecision(rawValue: row["managerDecision"] as? String ?? "") ?? .approved,
-            row["managerRevisedAmount"] as? Double
-        )
+        let userId = (map["userId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let storedKey = (map["weekStartKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let startKey = storedKey.isEmpty
+            ? (firestoreDate(map["weekStart"]).flatMap { CanonicalBusinessEngine.dayKeyInOrganizationZone($0) } ?? "")
+            : storedKey
+        guard !userId.isEmpty, !startKey.isEmpty else { return "" }
+        return CanonicalBusinessEngine.timesheetDocumentId(userId: userId, startDayKey: startKey) ?? ""
     }
 
     static func decodeFirestoreMap(_ map: [String: Any]) -> TimesheetDraft? {

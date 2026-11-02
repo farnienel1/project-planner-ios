@@ -290,7 +290,7 @@ class BookingStore: ObservableObject {
               let ids = CanonicalBusinessEngine.bookingsToRemoveOnOperativeDelete(
                 bookings.map {
                     CanonicalBusinessEngine.CanonicalRemovableBooking(
-                        id: $0.id.uuidString,
+                        id: $0.documentKey,
                         operativeId: $0.storedOperativeId,
                         dateMs: $0.date.timeIntervalSince1970 * 1000
                     )
@@ -299,7 +299,7 @@ class BookingStore: ObservableObject {
                 now: now
               ) else { return [] }
         let remove = Set(ids.map { $0.uppercased() })
-        return bookings.filter { remove.contains($0.id.uuidString.uppercased()) }
+        return bookings.filter { remove.contains($0.documentKey.uppercased()) }
     }
 
     func deleteBooking(_ booking: Booking) async {
@@ -612,7 +612,7 @@ class BookingStore: ObservableObject {
                                 changedFields: write.changedFields,
                                 organizationId: orgId
                             )
-                        } else if BookingWritePatch.isRefusedFinal(error) {
+                        } else if BookingWritePatch.isRefusedFinal(error, isCreate: write.changedFields == nil) {
                             // Tombstoned (deleted elsewhere) or cancelled by someone who may reinstate it.
                             refusedIds.insert(write.booking.id)
                         }

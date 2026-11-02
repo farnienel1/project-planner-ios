@@ -18,6 +18,9 @@ struct Booking: Identifiable, Codable, Hashable {
     /// The `operativeId` exactly as Firestore stores it. Nil on bookings made before this field existed.
     var operativeKey: String?
     var projectId: UUID
+    /// The `projectId` exactly as Firestore stores it (RULEBOOK 1.7.0 §1: stored case, a non-UUID job id is kept).
+    /// Nil on bookings made in this app or saved before this field existed.
+    var projectKey: String? = nil
     var date: Date
     var timeSlot: TimeSlot
     var bookedBy: String
@@ -77,6 +80,12 @@ struct Booking: Identifiable, Codable, Hashable {
     var storedOperativeId: String {
         if let key = operativeKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty { return key }
         return Self.storedOperativeId(for: operativeId)
+    }
+
+    /// The `projectId` written to Firestore: the stored job id while the booking is still on that job, else the
+    /// job's remembered stored id (`WorkDocumentKeys`), else the UUID itself.
+    var storedProjectId: String {
+        WorkDocumentKeys.storedId(for: projectId, key: projectKey)
     }
 
     /// The stored id behind an in-app operative key (a Firebase Auth uid mapped by `internalOperativeId(for:)`).
