@@ -501,14 +501,15 @@ struct TasksDetailView: View {
         guard let uid = userStore.currentUser?.id, canDecideHoliday(request) else { return }
         Task {
             if request.cancellationRequestedAt != nil {
-                var updated = request
-                updated.cancellationRequestedAt = nil
-                updated.cancellationRequestedByUserId = nil
-                updated.updatedAt = Date()
-                do {
-                    try await holidayStore.saveBooking(updated)
-                } catch {
-                    return
+                // Refuse the cancellation: the leave stays approved (`holidayDecisionRecipients` is told).
+                guard await holidayStore.refuseCancellation(request) else { return }
+                if let ownerId = request.userId {
+                    let name = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
+                    await notificationService.notifyAnnualLeaveCancellationRefused(
+                        userId: ownerId,
+                        booking: request,
+                        decidedByName: name
+                    )
                 }
                 await notificationService.loadNotifications()
                 return

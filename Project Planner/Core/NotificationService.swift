@@ -1121,6 +1121,33 @@ class NotificationService: ObservableObject {
         print("🔥🔥🔥 DEBUG: [HOLIDAY CANCEL EMAIL] to=\(trimmedEmail) sent=\(sent)")
     }
 
+    /// RULEBOOK §13 `holiday_request_declined` (a cancellation refused): the requester is told their leave stays
+    /// booked. Recipients are `holidayDecisionRecipients` (never the person who refused).
+    func notifyAnnualLeaveCancellationRefused(
+        userId: String,
+        booking: HolidayBooking,
+        decidedByName: String
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let resolvedUserId = await resolvedRecipientUserIdResolvingStaleIds(userId)
+        guard let targetId = holidayDecisionTarget(resolvedUserId) else { return }
+        let dateText = annualLeaveDateText(for: booking)
+        let when = dateText.isEmpty ? "" : " for \(dateText)"
+        let requestedAt = Int((booking.cancellationRequestedAt ?? Date()).timeIntervalSince1970)
+        let notification = AppNotification(
+            id: syntheticNotificationId(from: "annualLeaveCancellationRefused|\(booking.documentId)|\(targetId)|\(requestedAt)"),
+            organizationId: organizationId,
+            type: .holidayRequestDeclined,
+            title: "Annual Leave Kept",
+            message: "\(decidedByName) refused your request to cancel annual leave\(when). Your leave stays booked.",
+            userId: targetId,
+            relatedId: booking.id,
+            requiresPermission: nil
+        )
+        await saveNotification(notification)
+    }
+
     private func annualLeaveDateText(bookingId: UUID) -> String {
         guard let booking = holidayStore?.bookings.first(where: { $0.id == bookingId }) else { return "" }
         return annualLeaveDateText(for: booking)

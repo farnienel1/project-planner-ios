@@ -755,7 +755,18 @@ struct HolidayView: View {
             .background(AnnualLeavePalette.soft)
             .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
             HStack(spacing: 8) {
-                if !isCancellation {
+                if isCancellation {
+                    // Refuse the cancellation: the leave stays booked.
+                    Button("Keep Booking") { declineRequest(request) }
+                        .accessibilityIdentifier("leave.keepBooking")
+                        .buttonStyle(.plain)
+                        .font(.subheadline.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(AnnualLeavePalette.soft)
+                        .foregroundStyle(AnnualLeavePalette.ink2)
+                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                } else {
                     Button("Decline") { declineDraft = request }
                         .accessibilityIdentifier("leave.decline2")
                         .buttonStyle(.plain)
@@ -766,7 +777,7 @@ struct HolidayView: View {
                         .foregroundStyle(AnnualLeavePalette.ink2)
                         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                 }
-                Button("Approve") { approveRequest(request) }
+                Button(isCancellation ? "Approve Cancellation" : "Approve") { approveRequest(request) }
                     .accessibilityIdentifier("leave.approve")
                     .buttonStyle(.plain)
                     .font(.subheadline.weight(.bold))
@@ -1885,8 +1896,11 @@ struct HolidayView: View {
     }
 
     private func declineRequest(_ request: HolidayBooking, reason: String = "") {
-        if request.cancellationRequestedAt != nil { return }
         guard let uid = firebaseBackend.currentUser?.uid, canDecide(request) else { return }
+        if request.cancellationRequestedAt != nil {
+            refuseCancellation(request, actorUserId: uid)
+            return
+        }
         Task {
             await holidayStore.rejectBooking(request, rejectedByUserId: uid, reason: reason)
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
@@ -1894,6 +1908,28 @@ struct HolidayView: View {
             await notifyPeerLineManagers(
                 for: request,
                 actorUserId: uid,
+                actorName: approverName,
+                actionVerb: "declined"
+            )
+        }
+    }
+
+    /// Refuse a cancellation request (§9): the leave stays approved; the requester (`holidayDecisionRecipients`) and
+    /// the other line managers (`lineManagerPeerRecipients`) are told.
+    private func refuseCancellation(_ request: HolidayBooking, actorUserId: String) {
+        Task {
+            guard await holidayStore.refuseCancellation(request) else { return }
+            let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
+            if let ownerId = request.userId {
+                await notificationService.notifyAnnualLeaveCancellationRefused(
+                    userId: ownerId,
+                    booking: request,
+                    decidedByName: approverName
+                )
+            }
+            await notifyPeerLineManagers(
+                for: request,
+                actorUserId: actorUserId,
                 actorName: approverName,
                 actionVerb: "declined"
             )
@@ -2181,18 +2217,17 @@ struct HolidayRequestRowView: View {
                             .cornerRadius(10)
                     }
                         .accessibilityIdentifier("holidayRequestRow.approve")
-                    if request.cancellationRequestedAt == nil {
-                        Button(action: onDecline) {
-                            Label("Decline", systemImage: "xmark.circle.fill")
-                                .font(.subheadline)
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(Color.red)
-                                .cornerRadius(10)
-                        }
-                            .accessibilityIdentifier("holidayRequestRow.decline")
+                    // A cancellation request can be refused too ("Keep Booking": the leave stays approved).
+                    Button(action: onDecline) {
+                        Label(request.cancellationRequestedAt == nil ? "Decline" : "Keep Booking", systemImage: "xmark.circle.fill")
+                            .font(.subheadline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color.red)
+                            .cornerRadius(10)
                     }
+                        .accessibilityIdentifier("holidayRequestRow.decline")
                 }
                 // RULEBOOK §2: annual leave approval is online only.
                 .onlineOnly(isOnline: smartCache.isOnline)

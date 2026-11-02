@@ -313,6 +313,24 @@ class HolidayStore: ObservableObject {
         }
     }
 
+    /// An approver refuses a cancellation request (RULEBOOK §9): the leave stays approved and the request fields are
+    /// cleared in one partial update. Returns false when the write failed (`errorMessage` is set).
+    @discardableResult
+    func refuseCancellation(_ booking: HolidayBooking) async -> Bool {
+        guard booking.cancellationRequestedAt != nil else { return false }
+        var updated = booking
+        updated.cancellationRequestedAt = nil
+        updated.cancellationRequestedByUserId = nil
+        updated.updatedAt = Date()
+        do {
+            try await saveBooking(updated)
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     /// Approved records whose leave days (`leaveRecordDayKeys` over the reader's `startDayKey` / `endDayKey`)
     /// include the organisation day of `date`.
     func approvedBookings(covering date: Date) -> [HolidayBooking] {
