@@ -862,6 +862,16 @@ class FirebaseBackend: ObservableObject {
     
     func signOut() throws {
         try auth.signOut()
+        clearDeviceQueuesOnSignOut()
+    }
+
+    /// Sign-out leaves nothing this account queued or cached on the device: the offline outbox (it would
+    /// otherwise replay as the next account), every cached timesheet draft, and the SmartCacheService
+    /// cache (`clearAllCache`, through `.appDidSignOut`).
+    func clearDeviceQueuesOnSignOut() {
+        OfflineOutboxStore.shared.clearAll()
+        TimesheetDraftStore.clearAll()
+        NotificationCenter.default.post(name: .appDidSignOut, object: nil)
     }
 
     /// RULEBOOK §13: a forced sign-out (expired session, blocked trial) removes this device's push token from every
@@ -870,6 +880,7 @@ class FirebaseBackend: ObservableObject {
     func forcedSignOutRemovingPushToken() async {
         await removeThisDevicePushTokenBeforeSignOut()
         try? auth.signOut()
+        clearDeviceQueuesOnSignOut()
     }
     
     /// Sends a new verification code (invitation token) so the user can set or reset their password on the Project Planner page.
@@ -945,8 +956,14 @@ class FirebaseBackend: ObservableObject {
         )
         let invitedBy = currentUser?.uid ?? ""
         let invitationId = UUID().uuidString
+        // The invitation email is stored trimmed and lower case, as Add User stores it
+        // (`inviteEmailOrgLookupConstraints` normalises it), so the set-up page finds it whatever was typed.
+        let invitationEmail = CanonicalBusinessEngine.inviteEmailOrgLookupConstraints(
+            organizationId: organizationId,
+            email: email
+        )?.email ?? email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         var invitationData: [String: Any] = [
-            "email": email,
+            "email": invitationEmail,
             "organizationId": organizationId,
             "invitedBy": invitedBy,
             "firstName": firstName,
@@ -6519,6 +6536,7 @@ class FirebaseBackend: ObservableObject {
             )
         }
         let organizationId = lookup.organizationId
+        // Trimmed and lower case (`inviteEmailOrgLookupConstraints`): the invitation, placeholder and claim all store this.
         let email = lookup.email
 
         let claimInput = try await inviteEmailClaimInput(email: email, organizationId: organizationId)
@@ -7009,15 +7027,8 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: Preferred booking org \(preferredOrgId) was not readable: \(error.localizedDescription)")
         }
 
-        if let userId = currentUser?.uid,
-           let linkedOrgId = try? await validateUserOrganizationLink(userId: userId),
-           !linkedOrgId.isEmpty {
-            print("🔥🔥🔥 DEBUG: Falling back booking org to linked org \(linkedOrgId)")
-            let fallbackOrgId = try await ensureReadableOrganization(linkedOrgId)
-            await repairCurrentUserOrganizationAccess(organizationId: fallbackOrgId)
-            return fallbackOrgId
-        }
-
+        // Never fall back to another company (the user's linked organisation): the write is for this one or
+        // not at all (AGENTS rule 2, organisation context).
         throw NSError(
             domain: "FirebaseBackend",
             code: 403,

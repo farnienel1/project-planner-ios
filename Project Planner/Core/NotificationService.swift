@@ -174,7 +174,8 @@ class NotificationService: ObservableObject {
     }
 
     /// Inbox row once the notice is due. The device alert is the FCM send for that id, not a local banner.
-    /// Only the signed-in person who already participates in timesheets. The toggle does not add recipients.
+    /// Only the signed-in person who already participates in timesheets. The toggle neither adds recipients nor
+    /// removes the row; it only stops the push.
     private func performTimesheetSubmissionReminderRefresh() async {
         let noticeType = CanonicalBusinessEngine.timesheetSubmissionNoticeType
             ?? AppNotification.NotificationType.timesheetSubmissionReminder.rawValue
@@ -182,7 +183,12 @@ class NotificationService: ObservableObject {
             await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
             return
         }
-        guard deliveryAllowed(type: noticeType) else {
+        // §13: the toggle stops the device push only (`devicePushAllowed`, enforced by the push function for this
+        // row); the inbox row is written whatever the toggle says (`notificationShowsInInbox`).
+        guard CanonicalBusinessEngine.notificationShowsInInbox(
+            prefs: appSettingsStore?.settings.notifications.preferenceValues,
+            type: noticeType
+        ) else {
             await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
             return
         }
@@ -956,10 +962,26 @@ class NotificationService: ObservableObject {
         assignedManagerUserId: String?,
         requesterUserId: String? = nil,
         excludeUserIdMatchingRequester: String? = nil,
-        cancellation: Bool = false
+        cancellation: Bool = false,
+        organizationId requestedOrganizationId: String? = nil
     ) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard let firebaseBackend = firebaseBackend else { return }
+        // The request's own organisation when given (a deferred notice released after a switch), else the open one.
+        let openOrganizationId = firebaseBackend.currentOrganization?.firestoreDocumentId
+        let requested = requestedOrganizationId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let organizationId = requested.isEmpty ? openOrganizationId : Optional(requested) else { return }
+        let isOpenOrganization = organizationIdsMatch(openOrganizationId, organizationId)
+        // Another organisation's recipients come from that organisation's own roster (read from the server),
+        // never from the open company's list or a cache (rule 2).
+        var otherRoster: [AppUser]? = nil
+        if !isOpenOrganization {
+            guard let roster = try? await firebaseBackend.getOrganizationUsers(organizationId: organizationId),
+                  !roster.users.isEmpty else {
+                print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT] roster for \(organizationId) did not load; no request notice written")
+                return
+            }
+            otherRoster = roster.users
+        }
         // Same copy and key as web `buildHolidayRequestSubmittedNotifications` (request or cancellation).
         let dateRange = AnnualLeaveNoticeText.requestRange(start: startDate, end: endDate)
         let keyPrefix = cancellation ? "holidayCancellation" : "holidaySubmitted"
@@ -968,7 +990,8 @@ class NotificationService: ObservableObject {
 
         let recipients = await holidayRequestTargets(
             requesterUserId: requesterUserId ?? excludeUserIdMatchingRequester,
-            assignedManagerUserId: assignedManagerUserId
+            assignedManagerUserId: assignedManagerUserId,
+            users: otherRoster
         )
         print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY SUBMIT] bookingId=\(bookingId.uuidString) operative=\(operativeName) assignedManager=\(assignedManagerUserId ?? "nil") recipients=\(recipients)")
         for targetId in recipients {
@@ -983,7 +1006,11 @@ class NotificationService: ObservableObject {
                 relatedId: bookingId,
                 requiresPermission: nil
             )
-            await saveNotification(toManager)
+            await saveNotification(
+                toManager,
+                deliverLocalPush: isOpenOrganization,
+                organizationId: isOpenOrganization ? nil : organizationId
+            )
         }
     }
 
@@ -1577,10 +1604,12 @@ class NotificationService: ObservableObject {
         deliverLocalPush: Bool = true,
         preserveExistingReadState: Bool = false,
         onlyIfMissing: Bool = false,
-        stampsActor: Bool = true
+        stampsActor: Bool = true,
+        organizationId explicitOrganizationId: String? = nil
     ) async {
+        // `explicitOrganizationId`: write to that organisation (a notice that belongs to it) instead of the open one.
         guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+              let organizationId = explicitOrganizationId ?? firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         // A toggle stops the push only; the inbox row is always written (§13, `notificationShowsInInbox`).
         // The local banner below still checks the toggle (`shouldShowNotification` → `notificationPreferenceAllowsDelivery`).
         
@@ -1809,12 +1838,22 @@ class NotificationService: ObservableObject {
     /// `holidayRequestRecipients(requester, roster)` (§9, §13): `leaveApproverIds` without the requester under
     /// any of their ids; nobody when the leave is self-booked. A requester with no account found in the roster is
     /// sent with the stored manager id, so the script still routes it.
-    private func holidayRequestTargets(requesterUserId: String?, assignedManagerUserId: String?) async -> [String] {
-        guard let userStore else { return [] }
-        if userStore.organizationUsers.isEmpty {
-            await userStore.loadOrganizationUsers()
+    /// `users` is another organisation's roster when the notice belongs there; nil means the open organisation's.
+    private func holidayRequestTargets(
+        requesterUserId: String?,
+        assignedManagerUserId: String?,
+        users otherRoster: [AppUser]? = nil
+    ) async -> [String] {
+        let users: [AppUser]
+        if let otherRoster {
+            users = otherRoster
+        } else {
+            guard let userStore else { return [] }
+            if userStore.organizationUsers.isEmpty {
+                await userStore.loadOrganizationUsers()
+            }
+            users = userStore.organizationUsers
         }
-        let users = userStore.organizationUsers
         let trimmedRequester = requesterUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let requester = trimmedRequester.isEmpty ? nil : users.first(where: {
             $0.id == trimmedRequester || $0.sameEmailUserIds.contains(trimmedRequester) || $0.formerUserIds.contains(trimmedRequester)

@@ -104,11 +104,11 @@ extension NotificationService {
         await sendDeferredLeaveNotice(notice, checksOrganization: false)
     }
 
-    /// Recipients are `holidayRequestRecipients` (inside `notifyHolidayRequestSubmitted`). Skipped when another
-    /// organisation is open; the notice is then dropped rather than written to the wrong company.
+    /// Recipients are `holidayRequestRecipients` (inside `notifyHolidayRequestSubmitted`) over the request's own
+    /// organisation. The notice is written to `notice.organizationId` explicitly, also when another organisation
+    /// is open by the time the outbox confirms the request (never to the open company, never dropped).
+    /// `checksOrganization` is kept for callers; the organisation is always the notice's own.
     func sendDeferredLeaveNotice(_ notice: DeferredLeaveNotice, checksOrganization: Bool = true) async {
-        if checksOrganization,
-           firebaseBackend?.currentOrganization?.firestoreDocumentId != notice.organizationId { return }
         await notifyHolidayRequestSubmitted(
             bookingId: notice.bookingId,
             operativeName: notice.requesterName,
@@ -117,7 +117,8 @@ extension NotificationService {
             assignedManagerUserId: notice.assignedManagerUserId,
             requesterUserId: notice.requesterUserId,
             excludeUserIdMatchingRequester: notice.requesterUserId,
-            cancellation: notice.cancellation
+            cancellation: notice.cancellation,
+            organizationId: notice.organizationId
         )
     }
 }
