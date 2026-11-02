@@ -28,6 +28,19 @@ struct ManagerSiteBooking: Identifiable, Codable, Hashable {
     var bookingGroupId: String?
     var createdAt: Date
     var updatedAt: Date
+    /// The Firestore document id when `id.uuidString` would not spell it the same way (RULEBOOK 1.7.0 §1:
+    /// stored case, a non-UUID id is kept).
+    var documentId: String? = nil
+    /// `locationId` exactly as stored (a lower-case or non-UUID job id), nil when made in this app.
+    var locationKey: String? = nil
+
+    /// The document id under `organizations/{orgId}/managerSiteBookings`.
+    var documentKey: String { documentId ?? id.uuidString }
+
+    /// The `locationId` written to Firestore: the stored id while the booking is still on that job.
+    var storedLocationId: String? {
+        locationId.map { WorkDocumentKeys.storedId(for: $0, key: locationKey) }
+    }
 
     init(
         id: UUID = UUID(),

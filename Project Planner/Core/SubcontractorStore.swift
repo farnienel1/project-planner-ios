@@ -68,12 +68,20 @@ class SubcontractorStore: ObservableObject {
             errorMessage = "Organization is not loaded yet. Please try again."
             return
         }
+        // The firm's people on site by name, written with their ids (RULEBOOK 1.7.0 `subcontractorBookingWriteFields`).
+        let firm = subcontractors.first { $0.id == booking.subcontractorId }
+        let names = booking.bookedOperativeNames(subcontractor: firm)
+        let operativeNames: [String]? = firm == nil && !booking.bookedContactIds.isEmpty ? nil : names
         do {
-            try await firebaseBackend.saveSubcontractorBooking(booking, organizationId: orgId)
+            try await firebaseBackend.saveSubcontractorBooking(booking, organizationId: orgId, operativeNames: operativeNames)
+            var saved = booking
+            // Saved: from now on this booking is edited in place at its document, never created again.
+            saved.firestoreDocumentId = booking.documentId
+            if let operativeNames { saved.storedOperativeNames = operativeNames }
             if let idx = bookings.firstIndex(where: { $0.id == booking.id }) {
-                bookings[idx] = booking
+                bookings[idx] = saved
             } else {
-                bookings.append(booking)
+                bookings.append(saved)
             }
         } catch {
             errorMessage = error.localizedDescription

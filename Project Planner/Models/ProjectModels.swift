@@ -40,6 +40,23 @@ struct Project: Identifiable, Codable, Hashable {
     var latitude: Double?
     /// WGS84 longitude when using map pin.
     var longitude: Double?
+    /// `projects/{id}` / `smallWorks/{id}` as stored (RULEBOOK 1.7.0 §1: stored case, a non-UUID id is kept).
+    /// Nil on a job made in this app before it was saved: its id is `id.uuidString`. Use `documentId`.
+    var firestoreDocumentId: String? = nil
+    /// `managerIds` exactly as `parseJobDocument` read them, so a save writes a stored id back unchanged.
+    var storedManagerIds: [String] = []
+
+    /// The Firestore document id every write, delete and lookup addresses.
+    var documentId: String {
+        let stored = firestoreDocumentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? WorkDocumentKeys.storedId(for: id) : stored
+    }
+
+    /// The stored id of an assigned manager: the id this job was read with, else the remembered stored id.
+    func storedManagerId(for managerId: UUID) -> String {
+        let key = storedManagerIds.first { Manager.stableId(forFirestoreDocumentId: $0) == managerId }
+        return WorkDocumentKeys.storedId(for: managerId, key: key)
+    }
 
     var allAssignedManagerIds: [UUID] {
         var seen = Set<UUID>()
@@ -222,6 +239,7 @@ struct Project: Identifiable, Codable, Hashable {
         case isLive, description, notes, createdAt, updatedAt
         case hiddenManagerUserIds, hiddenOperativeUserIds
         case usesMapPinForLocation, latitude, longitude
+        case firestoreDocumentId, storedManagerIds
     }
     
     init(from decoder: Decoder) throws {
@@ -251,6 +269,11 @@ struct Project: Identifiable, Codable, Hashable {
         usesMapPinForLocation = try c.decodeIfPresent(Bool.self, forKey: .usesMapPinForLocation) ?? false
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
+        firestoreDocumentId = try c.decodeIfPresent(String.self, forKey: .firestoreDocumentId)
+        storedManagerIds = try c.decodeIfPresent([String].self, forKey: .storedManagerIds) ?? []
+        // A saved copy read before the server answers: remember stored spellings so writes keep them.
+        if let firestoreDocumentId { _ = WorkDocumentKeys.inAppId(for: firestoreDocumentId) }
+        for managerId in storedManagerIds { _ = WorkDocumentKeys.inAppId(for: managerId) }
     }
     
     func encode(to encoder: Encoder) throws {
@@ -280,6 +303,8 @@ struct Project: Identifiable, Codable, Hashable {
         try c.encode(usesMapPinForLocation, forKey: .usesMapPinForLocation)
         try c.encodeIfPresent(latitude, forKey: .latitude)
         try c.encodeIfPresent(longitude, forKey: .longitude)
+        try c.encodeIfPresent(firestoreDocumentId, forKey: .firestoreDocumentId)
+        try c.encode(storedManagerIds, forKey: .storedManagerIds)
     }
 }
 

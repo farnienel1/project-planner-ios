@@ -103,6 +103,33 @@ struct SubcontractorBooking: Identifiable, Codable, Hashable {
     var bookedContactIds: [UUID]
     var createdAt: Date
     var updatedAt: Date
+    /// `subcontractorBookings/{id}` as stored (RULEBOOK 1.7.0 §1: stored case, a non-UUID id is kept). Nil on a
+    /// booking made in this app and not saved yet: it is then created at `id.uuidString`.
+    var firestoreDocumentId: String? = nil
+    /// `subcontractorId` and `projectId` exactly as stored (web may write lower-case or non-UUID ids).
+    var subcontractorKey: String? = nil
+    var projectKey: String? = nil
+    /// `bookedContactIds` exactly as stored.
+    var bookedContactKeys: [String] = []
+    /// `bookedOperativeNames` as stored (web writes them; empty = general attendance).
+    var storedOperativeNames: [String] = []
+
+    /// The Firestore document id every write and delete addresses.
+    var documentId: String {
+        let stored = firestoreDocumentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? id.uuidString : stored
+    }
+
+    var storedSubcontractorId: String { WorkDocumentKeys.storedId(for: subcontractorId, key: subcontractorKey) }
+    var storedProjectId: String { WorkDocumentKeys.storedId(for: projectId, key: projectKey) }
+    var storedContactIds: [String] {
+        bookedContactIds.map { contactId in
+            WorkDocumentKeys.storedId(
+                for: contactId,
+                key: bookedContactKeys.first { Manager.stableId(forFirestoreDocumentId: $0) == contactId }
+            )
+        }
+    }
     
     init(
         id: UUID = UUID(),

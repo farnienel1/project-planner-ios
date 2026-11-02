@@ -1913,7 +1913,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - Project Management
     
-    private func parseJobType(from rawValue: Any?, defaultValue: JobType) -> JobType {
+    private static func parseJobType(from rawValue: Any?, defaultValue: JobType) -> JobType {
         if let stringValue = rawValue as? String {
             if let exact = JobType(rawValue: stringValue) {
                 return exact
@@ -1939,7 +1939,7 @@ class FirebaseBackend: ObservableObject {
         return defaultValue
     }
     
-    private func parseManagerLegacy(from rawValue: Any?) -> ManagerLegacy {
+    private static func parseManagerLegacy(from rawValue: Any?) -> ManagerLegacy {
         if let stringValue = rawValue as? String {
             if let exact = ManagerLegacy(rawValue: stringValue) {
                 return exact
@@ -1986,128 +1986,177 @@ class FirebaseBackend: ObservableObject {
     }
 
     func saveProject(_ project: Project, organizationId: String) async throws {
-        print("🔥🔥🔥 DEBUG: [SAVE] ========== SAVING PROJECT ==========")
-        print("🔥🔥🔥 DEBUG: [SAVE] Project: \(project.siteName)")
-        print("🔥🔥🔥 DEBUG: [SAVE] Project ID: \(project.id.uuidString)")
-        print("🔥🔥🔥 DEBUG: [SAVE] Organization ID: \(organizationId)")
-        
+        print("🔥🔥🔥 DEBUG: [SAVE] Saving project \(project.siteName) at projects/\(project.documentId)")
         // CRITICAL: Ensure user document is linked before validation
         // This prevents "user is not linked to organization" errors
         do {
             try await ensureUserDocumentLinked(organizationId: organizationId)
-            print("🔥🔥🔥 DEBUG: [SAVE] ✅ User document verified/updated")
         } catch {
             print("🔥🔥🔥 DEBUG: [SAVE] ⚠️ Could not ensure user document is linked: \(error.localizedDescription)")
             // Continue anyway - validation might still pass if user is in organization members
         }
-        
-        // Validate data integrity before saving
+        try await validateDataIntegrity(organizationId: organizationId)
+        try await saveJobDocument(project, collection: "projects", organizationId: organizationId)
+    }
+
+    /// RULEBOOK 1.7.0 §1 "Partial writes only": a job save writes the fields `jobWriteFields` names (the manager
+    /// ids, the address and the map pin each as a group; `id`, `createdAt` and `organizationId` on create only). A
+    /// new job is created whole. Never a full `setData` over the stored job, which deleted fields this app does
+    /// not hold. The path is the stored document id (`Project.documentId`).
+    private func saveJobDocument(_ job: Project, collection: String, organizationId: String) async throws {
+        let ref = db.collection("organizations").document(organizationId).collection(collection).document(job.documentId)
         do {
-            try await validateDataIntegrity(organizationId: organizationId)
-            print("🔥🔥🔥 DEBUG: [SAVE] ✅ Data integrity validation passed")
+            try await writeChangedRosterRow(
+                ref,
+                payload: Self.jobDocumentPayload(job, organizationId: organizationId),
+                previousPayload: nil,
+                writeFields: "jobWriteFields"
+            )
         } catch {
-            print("🔥🔥🔥 DEBUG: [SAVE] ❌ Data integrity validation failed: \(error.localizedDescription)")
-            throw error
-        }
-        
-        var data: [String: Any] = [
-            "jobNumber": project.jobNumber,
-            "siteName": project.siteName,
-            "addressLine1": project.addressLine1,
-            "addressLine2": project.addressLine2 ?? "",
-            "townCity": project.townCity,
-            "postcode": project.postcode,
-            // Keep siteAddress for backward compatibility
-            "siteAddress": project.siteAddress,
-            "client": [
-                "id": project.client.id.uuidString,
-                "name": project.client.name,
-                "email": project.client.email ?? "",
-                "phone": project.client.phone ?? ""
-            ],
-            "startDate": Timestamp(date: project.startDate),
-            "endDate": Timestamp(date: project.endDate),
-            "jobType": project.jobType.rawValue,
-            "manager": project.manager.rawValue,
-            "isLive": project.isLive,
-            "description": project.description ?? "",
-            "organizationId": organizationId,
-            "createdAt": Timestamp(date: project.createdAt),
-            "updatedAt": Timestamp(date: project.updatedAt)
-        ]
-        data["hiddenManagerUserIds"] = Array(project.hiddenManagerUserIds)
-        data["hiddenOperativeUserIds"] = Array(project.hiddenOperativeUserIds)
-        data["usesMapPinForLocation"] = project.usesMapPinForLocation
-        if let lat = project.latitude { data["latitude"] = lat }
-        if let lon = project.longitude { data["longitude"] = lon }
-        
-        // Save primary managerId if available
-        if let managerId = project.managerId ?? project.allAssignedManagerIds.first {
-            data["managerId"] = managerId.uuidString
-        }
-        let managerIdsToSave = project.allAssignedManagerIds.map(\.uuidString)
-        if !managerIdsToSave.isEmpty {
-            data["managerIds"] = managerIdsToSave
-        }
-        
-        // Save customJobType if available
-        if let customJobType = project.customJobType {
-            data["customJobType"] = customJobType
-        }
-        
-        let documentPath = "organizations/\(organizationId)/projects/\(project.id.uuidString)"
-        print("🔥🔥🔥 DEBUG: [SAVE] Saving to: \(documentPath)")
-        print("🔥🔥🔥 DEBUG: [SAVE] Data keys: \(data.keys.joined(separator: ", "))")
-        
-        // Save to organizations/{orgId}/projects/{projectId}
-        do {
-            try await db.collection("organizations").document(organizationId).collection("projects").document(project.id.uuidString).setData(data)
-            print("🔥🔥🔥 DEBUG: [SAVE] ✅✅✅ Project saved successfully to Firebase!")
-            
-            // Verify save by reading it back immediately
-            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds for propagation
-            let verifyDoc = try await db.collection("organizations").document(organizationId).collection("projects").document(project.id.uuidString).getDocument()
-            if verifyDoc.exists {
-                print("🔥🔥🔥 DEBUG: [SAVE] ✅ Verification: Document exists in Firebase")
-                if let verifyData = verifyDoc.data() {
-                    print("🔥🔥🔥 DEBUG: [SAVE] ✅ Verification: Document has data with \(verifyData.keys.count) fields")
-                }
-            } else {
-                print("🔥🔥🔥 DEBUG: [SAVE] ❌❌❌ WARNING: Document does NOT exist after save!")
-                print("🔥🔥🔥 DEBUG: [SAVE] This indicates a permission or data issue!")
-            }
-        } catch {
-            print("🔥🔥🔥 DEBUG: [SAVE] ❌❌❌ ERROR saving project: \(error.localizedDescription)")
-            print("🔥🔥🔥 DEBUG: [SAVE] Error type: \(type(of: error))")
             let nsError = error as NSError
-            print("🔥🔥🔥 DEBUG: [SAVE] Error domain: \(nsError.domain), code: \(nsError.code)")
-            if nsError.domain == "FIRFirestoreErrorDomain" {
-                if nsError.code == 7 {
-                    print("🔥🔥🔥 DEBUG: [SAVE] ❌ PERMISSION DENIED - Security rules are blocking this save!")
-                    print("🔥🔥🔥 DEBUG: [SAVE] Check that user belongs to organization and organizationId matches")
-                }
-            }
+            print("🔥🔥🔥 DEBUG: [SAVE JOB] ❌ \(collection)/\(job.documentId): \(nsError.domain) \(nsError.code) \(error.localizedDescription)")
             throw error
         }
     }
 
-    /// Restores map-pin location fields from Firestore (handles `NSNumber` from Firestore).
-    private static func applyMapPinFields(from data: [String: Any], to project: inout Project) {
-        project.usesMapPinForLocation = data["usesMapPinForLocation"] as? Bool ?? false
-        if let n = data["latitude"] as? NSNumber {
-            project.latitude = n.doubleValue
-        } else if let d = data["latitude"] as? Double {
-            project.latitude = d
-        } else {
-            project.latitude = nil
+    /// The fields a job save would write, as native Firestore values. "No value" is `FieldValue.delete()`, which
+    /// `jobWriteFields` turns into a removal only when the stored job has that field. Ids are the stored ids.
+    static func jobDocumentPayload(_ job: Project, organizationId: String) -> [String: Any] {
+        func orDelete(_ value: Any?) -> Any { value ?? FieldValue.delete() }
+        let managerIds = job.allAssignedManagerIds.map { job.storedManagerId(for: $0) }
+        let primaryManager = (job.managerId ?? job.allAssignedManagerIds.first).map { job.storedManagerId(for: $0) }
+        return [
+            "jobNumber": job.jobNumber,
+            "siteName": job.siteName,
+            "addressLine1": job.addressLine1,
+            "addressLine2": job.addressLine2 ?? "",
+            "townCity": job.townCity,
+            "postcode": job.postcode,
+            // Keep siteAddress for backward compatibility
+            "siteAddress": job.siteAddress,
+            "client": [
+                "id": job.client.documentId,
+                "name": job.client.name,
+                "email": job.client.email ?? "",
+                "phone": job.client.phone ?? ""
+            ],
+            "startDate": Timestamp(date: job.startDate),
+            "endDate": Timestamp(date: job.endDate),
+            "jobType": job.jobType.rawValue,
+            "customJobType": orDelete(job.customJobType),
+            "manager": job.manager.rawValue,
+            "managerId": orDelete(primaryManager),
+            "managerIds": managerIds.isEmpty ? FieldValue.delete() as Any : managerIds as Any,
+            "isLive": job.isLive,
+            "description": job.description ?? "",
+            "hiddenManagerUserIds": Array(job.hiddenManagerUserIds).sorted(),
+            "hiddenOperativeUserIds": Array(job.hiddenOperativeUserIds).sorted(),
+            "usesMapPinForLocation": job.usesMapPinForLocation,
+            "latitude": orDelete(job.latitude),
+            "longitude": orDelete(job.longitude),
+            "organizationId": organizationId,
+            "createdAt": Timestamp(date: job.createdAt),
+            "updatedAt": Timestamp(date: job.updatedAt)
+        ]
+    }
+
+    /// RULEBOOK 1.7.0 §1 "Document readers": `projects/{id}` and `smallWorks/{id}` are read only through
+    /// `parseJobDocument` (web uses the same reader). The job id is the document id in stored case and the client
+    /// and manager ids are kept as stored (a non-UUID id is kept with a stable in-app UUID, never random or
+    /// dropped). A job with no start date starts on its creation day; no end date ends on its start day. The
+    /// placeholder document is skipped. Tests call this with raw documents.
+    static func jobs(fromDocuments documents: [(id: String, data: [String: Any])], smallWorks: Bool) -> [Project] {
+        documents.compactMap { doc -> Project? in
+            guard let row = CanonicalBusinessEngine.parseJobDocument(documentId: doc.id, data: doc.data, smallWorks: smallWorks) else {
+                return nil
+            }
+            return job(fromCanonical: row, smallWorks: smallWorks, storedManagerName: doc.data["manager"])
         }
-        if let n = data["longitude"] as? NSNumber {
-            project.longitude = n.doubleValue
-        } else if let d = data["longitude"] as? Double {
-            project.longitude = d
+    }
+
+    /// One `parseJobDocument` row as a `Project`. `storedManagerName` is the legacy `manager` label (the reader
+    /// drops "Custom"; the legacy picker still shows it).
+    static func job(fromCanonical row: CanonicalDocumentRow, smallWorks: Bool, storedManagerName: Any? = nil) -> Project {
+        let clientRow = CanonicalDocumentRow(row.map("client"))
+        let clientId = clientRow?.text("id") ?? ""
+        let client = Client(
+            id: WorkDocumentKeys.inAppId(for: clientId.isEmpty ? "job-client.\(row.id)" : clientId),
+            name: clientRow?.optionalText("name") ?? "Unknown Client",
+            email: clientRow?.optionalText("email"),
+            phone: clientRow?.optionalText("phone"),
+            firestoreDocumentId: clientId.isEmpty ? nil : clientId
+        )
+        let startDate = row.date("startMs") ?? Date()
+        let endDate = row.date("endMs") ?? startDate
+        let jobType = parseJobType(from: row.optionalText("jobType"), defaultValue: smallWorks ? .smallWorks : .catA)
+        let manager = parseManagerLegacy(from: row.optionalText("managerName") ?? storedManagerName)
+        let storedManagerIds = row.strings("managerIds")
+        let storedPrimary = row.optionalText("managerId")
+        let managerIds = storedManagerIds.map { WorkDocumentKeys.inAppId(for: $0) }
+        let managerId = storedPrimary.map { WorkDocumentKeys.inAppId(for: $0) }
+        let hiddenManagerUserIds = Set(row.strings("hiddenManagerUserIds"))
+        let hiddenOperativeUserIds = Set(row.strings("hiddenOperativeUserIds"))
+        let siteName = row.optionalText("siteName") ?? (smallWorks ? "Unnamed Small Works" : "Unnamed Project")
+        let addressLine1 = row.text("addressLine1")
+        let townCity = row.text("townCity")
+        let postcode = row.text("postcode")
+        let siteAddress = row.text("siteAddress")
+        var job: Project
+        if addressLine1.isEmpty && townCity.isEmpty && postcode.isEmpty && !siteAddress.isEmpty {
+            // Legacy one-line address only.
+            job = Project(
+                id: WorkDocumentKeys.inAppId(for: row.id),
+                jobNumber: row.text("jobNumber"),
+                siteName: siteName,
+                siteAddress: siteAddress,
+                client: client,
+                startDate: startDate,
+                endDate: endDate,
+                jobType: jobType,
+                manager: manager,
+                isLive: row.bool("isLive", default: true),
+                description: row.optionalText("description"),
+                notes: row.optionalText("notes"),
+                hiddenManagerUserIds: hiddenManagerUserIds,
+                hiddenOperativeUserIds: hiddenOperativeUserIds
+            )
+            job.managerId = managerId
+            job.managerIds = managerIds
+            job.customJobType = row.optionalText("customJobType")
         } else {
-            project.longitude = nil
+            job = Project(
+                id: WorkDocumentKeys.inAppId(for: row.id),
+                jobNumber: row.text("jobNumber"),
+                siteName: siteName,
+                addressLine1: addressLine1,
+                addressLine2: row.optionalText("addressLine2"),
+                townCity: townCity,
+                postcode: postcode,
+                client: client,
+                startDate: startDate,
+                endDate: endDate,
+                jobType: jobType,
+                customJobType: row.optionalText("customJobType"),
+                manager: manager,
+                managerId: managerId,
+                managerIds: managerIds,
+                isLive: row.bool("isLive", default: true),
+                description: row.optionalText("description"),
+                notes: row.optionalText("notes"),
+                hiddenManagerUserIds: hiddenManagerUserIds,
+                hiddenOperativeUserIds: hiddenOperativeUserIds
+            )
         }
+        job.usesMapPinForLocation = row.bool("usesMapPinForLocation")
+        job.latitude = row.number("latitude")
+        job.longitude = row.number("longitude")
+        if let createdAt = row.date("createdAtMs") { job.createdAt = createdAt }
+        if let updatedAt = row.date("updatedAtMs") { job.updatedAt = updatedAt }
+        job.firestoreDocumentId = row.id
+        job.storedManagerIds = storedManagerIds + (storedPrimary.map { primary in
+            storedManagerIds.contains(primary) ? [] : [primary]
+        } ?? [])
+        return job
     }
     
     /// Server-first collection read. An empty Firestore persistence cache is NOT treated as
@@ -2138,130 +2187,12 @@ class FirebaseBackend: ObservableObject {
 
     func loadProjects(organizationId: String) async throws -> [Project] {
         let orgId = try await ensureReadableOrganization(organizationId)
-        print("🔥🔥🔥 DEBUG: [LOAD] Starting to load projects for organization: \(orgId)")
         let snapshot = try await getDocumentsPreferringServer(
             db.collection("organizations").document(orgId).collection("projects")
         )
-        print("🔥🔥🔥 DEBUG: [LOAD] Found \(snapshot.documents.count) project documents in Firebase")
-        
-        var loadedProjects: [Project] = []
-        var skippedCount = 0
-        
-        for doc in snapshot.documents {
-            let data = doc.data()
-            let docId = doc.documentID
-            if loadedProjects.count % 40 == 0 {
-                await Task.yield()
-            }
-
-            // Skip placeholder documents
-            if docId == "INITIAL-PLACEHOLDER" {
-                print("🔥🔥🔥 DEBUG: [LOAD] Skipping placeholder document")
-                skippedCount += 1
-                continue
-            }
-            
-            // More forgiving parsing - use defaults for missing fields
-            let clientData = data["client"] as? [String: Any] ?? [:]
-            let clientName = clientData["name"] as? String ?? "Unknown Client"
-            let clientEmail = clientData["email"] as? String ?? ""
-            let clientPhone = clientData["phone"] as? String ?? ""
-            let clientIdString = clientData["id"] as? String ?? UUID().uuidString
-            
-            let startDate = (data["startDate"] as? Timestamp)?.dateValue()
-                ?? (data["createdAt"] as? Timestamp)?.dateValue()
-                ?? Date()
-            let endDate = (data["endDate"] as? Timestamp)?.dateValue() ?? startDate
-            let jobType = parseJobType(from: data["jobType"], defaultValue: .catA)
-            let manager = parseManagerLegacy(from: data["manager"])
-            
-            // Load managerId if available
-            let managerId: UUID? = {
-                if let managerIdString = data["managerId"] as? String {
-                    return UUID(uuidString: managerIdString)
-                }
-                return nil
-            }()
-            let managerIds: [UUID] = {
-                let raw = data["managerIds"] as? [String] ?? []
-                let parsed = raw.compactMap(UUID.init(uuidString:))
-                if !parsed.isEmpty { return parsed }
-                if let managerId { return [managerId] }
-                return []
-            }()
-            
-            // Load customJobType if available
-            let customJobType: String? = data["customJobType"] as? String
-            let hiddenManagerUserIds = Set((data["hiddenManagerUserIds"] as? [String]) ?? [])
-            let hiddenOperativeUserIds = Set((data["hiddenOperativeUserIds"] as? [String]) ?? [])
-            
-            let client = Client(
-                id: UUID(uuidString: clientIdString) ?? UUID(),
-                name: clientName,
-                email: clientEmail.isEmpty ? nil : clientEmail,
-                phone: clientPhone.isEmpty ? nil : clientPhone
-            )
-            
-            // Handle both new format (addressLine1, etc.) and old format (siteAddress)
-            let project: Project
-            if let addressLine1 = data["addressLine1"] as? String,
-               let townCity = data["townCity"] as? String,
-               let postcode = data["postcode"] as? String {
-                // New format
-                var decodedProject = Project(
-                    id: UUID(uuidString: docId) ?? UUID(),
-                    jobNumber: data["jobNumber"] as? String ?? "",
-                    siteName: data["siteName"] as? String ?? "Unnamed Project",
-                    addressLine1: addressLine1,
-                    addressLine2: data["addressLine2"] as? String,
-                    townCity: townCity,
-                    postcode: postcode,
-                    client: client,
-                    startDate: startDate,
-                    endDate: endDate,
-                    jobType: jobType,
-                    customJobType: customJobType,
-                    manager: manager,
-                    managerId: managerId,
-                    managerIds: managerIds,
-                    isLive: data["isLive"] as? Bool ?? true,
-                    description: data["description"] as? String,
-                    hiddenManagerUserIds: hiddenManagerUserIds,
-                    hiddenOperativeUserIds: hiddenOperativeUserIds
-                )
-                Self.applyMapPinFields(from: data, to: &decodedProject)
-                project = decodedProject
-            } else {
-                // Legacy format - use old initializer
-                var legacyProject = Project(
-                    id: UUID(uuidString: docId) ?? UUID(),
-                    jobNumber: data["jobNumber"] as? String ?? "",
-                    siteName: data["siteName"] as? String ?? "Unnamed Project",
-                    siteAddress: data["siteAddress"] as? String ?? "",
-                    client: client,
-                    startDate: startDate,
-                    endDate: endDate,
-                    jobType: jobType,
-                    manager: manager,
-                    isLive: data["isLive"] as? Bool ?? true,
-                    description: data["description"] as? String,
-                    hiddenManagerUserIds: hiddenManagerUserIds,
-                    hiddenOperativeUserIds: hiddenOperativeUserIds
-                )
-                // Set managerId and customJobType after initialization since legacy initializer doesn't accept them
-                legacyProject.managerId = managerId
-                legacyProject.managerIds = managerIds
-                legacyProject.customJobType = customJobType
-                var legacyVar = legacyProject
-                Self.applyMapPinFields(from: data, to: &legacyVar)
-                project = legacyVar
-            }
-            
-            loadedProjects.append(project)
-        }
-        
-        print("🔥🔥🔥 DEBUG: [LOAD] ✅ Loaded \(loadedProjects.count) projects, skipped \(skippedCount) documents")
-        return loadedProjects
+        let jobs = Self.jobs(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) }, smallWorks: false)
+        print("🔥🔥🔥 DEBUG: [LOAD] ✅ Loaded \(jobs.count) of \(snapshot.documents.count) projects documents")
+        return jobs
     }
     
     func saveClient(_ client: Client, organizationId: String) async throws {
@@ -2341,7 +2272,7 @@ class FirebaseBackend: ObservableObject {
         documents.compactMap { doc -> Client? in
             guard let row = CanonicalBusinessEngine.parseClientDocument(documentId: doc.id, data: doc.data) else { return nil }
             var client = Client(
-                id: Manager.stableId(forFirestoreDocumentId: row.id),
+                id: WorkDocumentKeys.inAppId(for: row.id),
                 name: row.text("name"),
                 contactPerson: row.optionalText("contactPerson"),
                 email: row.optionalText("email"),
@@ -2362,253 +2293,69 @@ class FirebaseBackend: ObservableObject {
     }
     
     func deleteProject(_ project: Project, organizationId: String) async throws {
-        print("🔥🔥🔥 DEBUG: deleteProject called for project: \(project.siteName), organization: \(organizationId)")
-        try await db.collection("organizations").document(organizationId).collection("projects").document(project.id.uuidString).delete()
+        print("🔥🔥🔥 DEBUG: deleteProject called for: \(project.siteName), organization: \(organizationId)")
+        await removeFutureBookingsOfDeletedJob(project, organizationId: organizationId)
+        try await db.collection("organizations").document(organizationId).collection("projects").document(project.documentId).delete()
         print("🔥🔥🔥 DEBUG: Project deleted successfully from Firebase")
+    }
+
+    /// RULEBOOK 1.7.0 §2: deleting a job removes its bookings from today on (`bookingsToRemoveOnProjectDelete`),
+    /// each with its tombstone (`deleteBookingWithTombstone`); past bookings stay for timesheets and reports. A
+    /// booking the rules refuse to delete (labour booking deletes are admin only) is logged and left in place.
+    private func removeFutureBookingsOfDeletedJob(_ job: Project, organizationId: String) async {
+        do {
+            let snapshot = try await db.collection("organizations").document(organizationId).collection("bookings")
+                .whereField("projectId", isEqualTo: job.documentId)
+                .getDocuments()
+            let bookings = bookingsFromFirestoreDocuments(snapshot.documents)
+            guard !bookings.isEmpty,
+                  let ids = CanonicalBusinessEngine.bookingsToRemoveOnProjectDelete(
+                    bookings.map { (id: $0.documentKey, projectId: $0.storedProjectId, date: $0.date) },
+                    projectId: job.documentId,
+                    now: Date()
+                  ) else { return }
+            for id in ids {
+                do {
+                    try await deleteBookingWithTombstone(collection: "bookings", bookingId: id, organizationId: organizationId)
+                } catch {
+                    print("🔥🔥🔥 DEBUG: [DELETE JOB] booking \(id) not removed: \(error.localizedDescription)")
+                }
+            }
+        } catch {
+            print("🔥🔥🔥 DEBUG: [DELETE JOB] could not read the job's bookings: \(error.localizedDescription)")
+        }
     }
     
     // MARK: - Small Works Management (Separate Collection)
     
     func saveSmallWorks(_ smallWork: Project, organizationId: String) async throws {
-        print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ========== SAVING SMALL WORKS ==========")
-        print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Small Work: \(smallWork.siteName)")
-        print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Small Work ID: \(smallWork.id.uuidString)")
-        print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Organization ID: \(organizationId)")
-        
+        print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Saving small works \(smallWork.siteName) at smallWorks/\(smallWork.documentId)")
         // CRITICAL: Ensure user document is linked before validation
         // This prevents "user is not linked to organization" errors
         do {
             try await ensureUserDocumentLinked(organizationId: organizationId)
-            print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ✅ User document verified/updated")
-            // Wait a moment for the update to propagate
-            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
         } catch {
             print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ⚠️ Could not ensure user document is linked: \(error.localizedDescription)")
-            print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Will continue - validation will check organization members as fallback")
+            // Continue anyway - validation might still pass if user is in organization members
         }
-        
-        // Validate data integrity before saving
-        // This now checks organization members as fallback if user document doesn't have organizationId
-        do {
-            try await validateDataIntegrity(organizationId: organizationId)
-            print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ✅ Data integrity validation passed")
-        } catch {
-            print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ❌ Data integrity validation failed: \(error.localizedDescription)")
-            throw error
-        }
-        
-        var data: [String: Any] = [
-            "jobNumber": smallWork.jobNumber,
-            "siteName": smallWork.siteName,
-            "addressLine1": smallWork.addressLine1,
-            "addressLine2": smallWork.addressLine2 ?? "",
-            "townCity": smallWork.townCity,
-            "postcode": smallWork.postcode,
-            // Keep siteAddress for backward compatibility
-            "siteAddress": smallWork.siteAddress,
-            "client": [
-                "id": smallWork.client.id.uuidString,
-                "name": smallWork.client.name,
-                "email": smallWork.client.email ?? "",
-                "phone": smallWork.client.phone ?? ""
-            ],
-            "startDate": Timestamp(date: smallWork.startDate),
-            "endDate": Timestamp(date: smallWork.endDate),
-            "jobType": smallWork.jobType.rawValue,
-            "manager": smallWork.manager.rawValue,
-            "isLive": smallWork.isLive,
-            "description": smallWork.description ?? "",
-            "organizationId": organizationId,
-            "createdAt": Timestamp(date: smallWork.createdAt),
-            "updatedAt": Timestamp(date: smallWork.updatedAt)
-        ]
-        data["hiddenManagerUserIds"] = Array(smallWork.hiddenManagerUserIds)
-        data["hiddenOperativeUserIds"] = Array(smallWork.hiddenOperativeUserIds)
-        data["usesMapPinForLocation"] = smallWork.usesMapPinForLocation
-        if let lat = smallWork.latitude { data["latitude"] = lat }
-        if let lon = smallWork.longitude { data["longitude"] = lon }
-        
-        // Save primary managerId if available
-        if let managerId = smallWork.managerId ?? smallWork.allAssignedManagerIds.first {
-            data["managerId"] = managerId.uuidString
-        }
-        let managerIdsToSave = smallWork.allAssignedManagerIds.map(\.uuidString)
-        if !managerIdsToSave.isEmpty {
-            data["managerIds"] = managerIdsToSave
-        }
-        
-        // Save customJobType if available
-        if let customJobType = smallWork.customJobType {
-            data["customJobType"] = customJobType
-        }
-        
-        let documentPath = "organizations/\(organizationId)/smallWorks/\(smallWork.id.uuidString)"
-        print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Saving to: \(documentPath)")
-        print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Data keys: \(data.keys.joined(separator: ", "))")
-        
-        // Save to organizations/{orgId}/smallWorks/{smallWorkId}
-        do {
-            try await db.collection("organizations").document(organizationId).collection("smallWorks").document(smallWork.id.uuidString).setData(data)
-            print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ✅✅✅ Small Works saved successfully to Firebase!")
-            
-            // Verify save by reading it back immediately
-            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds for propagation
-            let verifyDoc = try await db.collection("organizations").document(organizationId).collection("smallWorks").document(smallWork.id.uuidString).getDocument()
-            if verifyDoc.exists {
-                print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ✅ Verification: Document exists in Firebase")
-                if let verifyData = verifyDoc.data() {
-                    print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ✅ Verification: Document has data with \(verifyData.keys.count) fields")
-                }
-            } else {
-                print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ❌❌❌ WARNING: Document does NOT exist after save!")
-                print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] This indicates a permission or data issue!")
-            }
-        } catch {
-            print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ❌❌❌ ERROR saving small works: \(error.localizedDescription)")
-            print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Error type: \(type(of: error))")
-            let nsError = error as NSError
-            print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Error domain: \(nsError.domain), code: \(nsError.code)")
-            if nsError.domain == "FIRFirestoreErrorDomain" {
-                if nsError.code == 7 {
-                    print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] ❌ PERMISSION DENIED - Security rules are blocking this save!")
-                    print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Check that user belongs to organization and organizationId matches")
-                }
-            }
-            throw error
-        }
+        try await validateDataIntegrity(organizationId: organizationId)
+        try await saveJobDocument(smallWork, collection: "smallWorks", organizationId: organizationId)
     }
     
     func loadSmallWorks(organizationId: String) async throws -> [Project] {
         let orgId = try await ensureReadableOrganization(organizationId)
-        print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Starting to load small works for organization: \(orgId)")
         let snapshot = try await getDocumentsPreferringServer(
             db.collection("organizations").document(orgId).collection("smallWorks")
         )
-        print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Found \(snapshot.documents.count) small works documents in Firebase")
-        
-        var loadedSmallWorks: [Project] = []
-        var skippedCount = 0
-        
-        for doc in snapshot.documents {
-            let data = doc.data()
-            let docId = doc.documentID
-            if loadedSmallWorks.count % 40 == 0 {
-                await Task.yield()
-            }
-
-            // Skip placeholder documents
-            if docId == "INITIAL-PLACEHOLDER" {
-                print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] Skipping placeholder document")
-                skippedCount += 1
-                continue
-            }
-            
-            // More forgiving parsing - use defaults for missing fields
-            let clientData = data["client"] as? [String: Any] ?? [:]
-            let clientName = clientData["name"] as? String ?? "Unknown Client"
-            let clientEmail = clientData["email"] as? String ?? ""
-            let clientPhone = clientData["phone"] as? String ?? ""
-            let clientIdString = clientData["id"] as? String ?? UUID().uuidString
-            
-            let startDate = (data["startDate"] as? Timestamp)?.dateValue()
-                ?? (data["createdAt"] as? Timestamp)?.dateValue()
-                ?? Date()
-            let endDate = (data["endDate"] as? Timestamp)?.dateValue() ?? startDate
-            let jobType = parseJobType(from: data["jobType"], defaultValue: .smallWorks)
-            let manager = parseManagerLegacy(from: data["manager"])
-            
-            // Load managerId if available
-            let managerId: UUID? = {
-                if let managerIdString = data["managerId"] as? String {
-                    return UUID(uuidString: managerIdString)
-                }
-                return nil
-            }()
-            let managerIds: [UUID] = {
-                let raw = data["managerIds"] as? [String] ?? []
-                let parsed = raw.compactMap(UUID.init(uuidString:))
-                if !parsed.isEmpty { return parsed }
-                if let managerId { return [managerId] }
-                return []
-            }()
-            
-            // Load customJobType if available
-            let customJobType: String? = data["customJobType"] as? String
-            let hiddenManagerUserIds = Set((data["hiddenManagerUserIds"] as? [String]) ?? [])
-            let hiddenOperativeUserIds = Set((data["hiddenOperativeUserIds"] as? [String]) ?? [])
-            
-            let client = Client(
-                id: UUID(uuidString: clientIdString) ?? UUID(),
-                name: clientName,
-                email: clientEmail.isEmpty ? nil : clientEmail,
-                phone: clientPhone.isEmpty ? nil : clientPhone
-            )
-            
-            // Handle both new format (addressLine1, etc.) and old format (siteAddress)
-            let smallWork: Project
-            if let addressLine1 = data["addressLine1"] as? String,
-               let townCity = data["townCity"] as? String,
-               let postcode = data["postcode"] as? String {
-                // New format
-                var decodedSmallWork = Project(
-                    id: UUID(uuidString: docId) ?? UUID(),
-                    jobNumber: data["jobNumber"] as? String ?? "",
-                    siteName: data["siteName"] as? String ?? "Unnamed Small Works",
-                    addressLine1: addressLine1,
-                    addressLine2: data["addressLine2"] as? String,
-                    townCity: townCity,
-                    postcode: postcode,
-                    client: client,
-                    startDate: startDate,
-                    endDate: endDate,
-                    jobType: jobType,
-                    customJobType: customJobType,
-                    manager: manager,
-                    managerId: managerId,
-                    managerIds: managerIds,
-                    isLive: data["isLive"] as? Bool ?? true,
-                    description: data["description"] as? String,
-                    hiddenManagerUserIds: hiddenManagerUserIds,
-                    hiddenOperativeUserIds: hiddenOperativeUserIds
-                )
-                Self.applyMapPinFields(from: data, to: &decodedSmallWork)
-                smallWork = decodedSmallWork
-            } else {
-                // Legacy format - use old initializer
-                var legacySmallWork = Project(
-                    id: UUID(uuidString: docId) ?? UUID(),
-                    jobNumber: data["jobNumber"] as? String ?? "",
-                    siteName: data["siteName"] as? String ?? "Unnamed Small Works",
-                    siteAddress: data["siteAddress"] as? String ?? "",
-                    client: client,
-                    startDate: startDate,
-                    endDate: endDate,
-                    jobType: jobType,
-                    manager: manager,
-                    isLive: data["isLive"] as? Bool ?? true,
-                    description: data["description"] as? String,
-                    hiddenManagerUserIds: hiddenManagerUserIds,
-                    hiddenOperativeUserIds: hiddenOperativeUserIds
-                )
-                // Set managerId and customJobType after initialization since legacy initializer doesn't accept them
-                legacySmallWork.managerId = managerId
-                legacySmallWork.managerIds = managerIds
-                legacySmallWork.customJobType = customJobType
-                var legacySmallVar = legacySmallWork
-                Self.applyMapPinFields(from: data, to: &legacySmallVar)
-                smallWork = legacySmallVar
-            }
-            
-            loadedSmallWorks.append(smallWork)
-        }
-        
-        print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] ✅ Loaded \(loadedSmallWorks.count) small works, skipped \(skippedCount) documents")
-        return loadedSmallWorks
+        let jobs = Self.jobs(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) }, smallWorks: true)
+        print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] ✅ Loaded \(jobs.count) of \(snapshot.documents.count) smallWorks documents")
+        return jobs
     }
     
     func deleteSmallWorks(_ smallWork: Project, organizationId: String) async throws {
-        print("🔥🔥🔥 DEBUG: deleteSmallWorks called for small works: \(smallWork.siteName), organization: \(organizationId)")
-        try await db.collection("organizations").document(organizationId).collection("smallWorks").document(smallWork.id.uuidString).delete()
+        print("🔥🔥🔥 DEBUG: deleteSmallWorks called for: \(smallWork.siteName), organization: \(organizationId)")
+        await removeFutureBookingsOfDeletedJob(smallWork, organizationId: organizationId)
+        try await db.collection("organizations").document(organizationId).collection("smallWorks").document(smallWork.documentId).delete()
         print("🔥🔥🔥 DEBUG: Small Works deleted successfully from Firebase")
     }
     
@@ -3425,22 +3172,36 @@ class FirebaseBackend: ObservableObject {
     func deleteOperative(documentId: String, organizationId: String) async throws {
         print("🔥🔥🔥 DEBUG: deleteOperative called for operative: \(documentId), organization: \(organizationId)")
         
-        // Delete all bookings for this operative
+        // RULEBOOK 1.7.0 §2 (`bookingsToRemoveOnOperativeDelete`): only this person's bookings from today on are
+        // removed, each with its tombstone; past bookings stay for timesheets and reports. (Every booking used to
+        // be deleted, without tombstones.) A booking the rules refuse to delete is logged and left in place.
         let bookingsSnapshot = try await db.collection("organizations").document(organizationId).collection("bookings")
             .whereField("operativeId", isEqualTo: documentId)
             .getDocuments()
-        
-        print("🔥🔥🔥 DEBUG: Found \(bookingsSnapshot.documents.count) bookings to delete for operative")
-        
-        // Delete each booking
-        for bookingDoc in bookingsSnapshot.documents {
-            try await bookingDoc.reference.delete()
-            print("🔥🔥🔥 DEBUG: Deleted booking: \(bookingDoc.documentID)")
+        let bookings = bookingsFromFirestoreDocuments(bookingsSnapshot.documents)
+        let removeIds = CanonicalBusinessEngine.bookingsToRemoveOnOperativeDelete(
+            bookings.map {
+                CanonicalBusinessEngine.CanonicalRemovableBooking(
+                    id: $0.documentKey,
+                    operativeId: $0.storedOperativeId,
+                    dateMs: $0.date.timeIntervalSince1970 * 1000
+                )
+            },
+            operativeIds: [documentId],
+            now: Date()
+        ) ?? []
+        print("🔥🔥🔥 DEBUG: \(removeIds.count) of \(bookings.count) bookings for operative are from today on")
+        for bookingId in removeIds {
+            do {
+                try await deleteBookingWithTombstone(collection: "bookings", bookingId: bookingId, organizationId: organizationId)
+            } catch {
+                print("🔥🔥🔥 DEBUG: booking \(bookingId) not removed: \(error.localizedDescription)")
+            }
         }
         
         // Delete the operative
         try await db.collection("organizations").document(organizationId).collection("operatives").document(documentId).delete()
-        print("🔥🔥🔥 DEBUG: Operative and \(bookingsSnapshot.documents.count) bookings deleted successfully from Firebase")
+        print("🔥🔥🔥 DEBUG: Operative deleted from Firebase")
     }
     
     func loadOperatives(organizationId: String) async throws -> [Operative] {
@@ -3810,7 +3571,8 @@ class FirebaseBackend: ObservableObject {
             if row.bool("isPlaceholder") { return nil }
             let documentId = row.id
             var manager = Manager(
-                id: Manager.stableId(forFirestoreDocumentId: documentId),
+                // RULEBOOK 1.7.0: remembered so a job save writes this manager's stored id back.
+                id: WorkDocumentKeys.inAppId(for: documentId),
                 firstName: row.text("firstName"),
                 lastName: row.text("lastName"),
                 email: row.text("email"),
@@ -7290,7 +7052,10 @@ class FirebaseBackend: ObservableObject {
     }
     
     /// RULEBOOK §1 partial writes. `changedFields` nil is a create: every field plus `id` and `createdAt`.
-    /// Otherwise only those fields (`BookingWritePatch.labourFieldNames`) are written with `updateData`.
+    /// Otherwise (1.7.0) the edited fields (`BookingWritePatch.labourFieldNames`, with the slot group
+    /// `BOOKING_SLOT_WRITE_GROUP` sent together) go through `bookingUpdateWriteFields` against the stored booking and
+    /// only what differs is written with `updateData`; `bookedBy` is never rewritten. An edit of a booking that is
+    /// gone is refused as not-found (`bookingReplayRefusedIsFinal`), never turned into a create.
     /// Both carry `WriteMetadata`. A tombstoned or (for non-managers) cancelled booking is refused by the rules.
     func saveBooking(_ booking: Booking, organizationId: String, changedFields: Set<String>? = nil) async throws {
         print("🔥🔥🔥 DEBUG: saveBooking called with organizationId: \(organizationId), bookingId: \(booking.id.uuidString)")
@@ -7299,10 +7064,28 @@ class FirebaseBackend: ObservableObject {
         let uid = currentUser?.uid
 
         if let changedFields {
-            let patch = BookingWritePatch.patch(
+            var fields = changedFields
+            if let slotGroup = CanonicalBusinessEngine.constant("BOOKING_SLOT_WRITE_GROUP", as: [String].self),
+               !fields.isDisjoint(with: slotGroup) {
+                fields.formUnion(slotGroup)
+            }
+            let next = BookingWritePatch.patch(
                 BookingWritePatch.labourValues(booking, deletesClearedFields: true),
-                fields: changedFields
+                fields: fields
             )
+            guard !next.isEmpty else { return }
+            let snapshot = try await ref.getDocument(source: .server)
+            guard snapshot.exists, let stored = snapshot.data() else {
+                throw NSError(
+                    domain: "FIRFirestoreErrorDomain",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: CanonicalBusinessEngine.bookingReplayRefusedMessage]
+                )
+            }
+            guard let write = CanonicalBusinessEngine.bookingUpdateWrite(before: stored, next: next) else {
+                throw CanonicalWriteUnavailableError(function: "bookingUpdateWriteFields")
+            }
+            let patch = write.firestoreFields(from: next)
             guard !patch.isEmpty else { return }
             print("🔥🔥🔥 DEBUG: Updating booking fields \(patch.keys.sorted()) at organizations/\(orgId)/bookings/\(booking.documentKey)")
             try await ref.updateData(WriteMetadata.stamped(patch, userId: uid))
@@ -7449,7 +7232,9 @@ class FirebaseBackend: ObservableObject {
     }
 
     nonisolated static func booking(fromCanonical row: CanonicalBusinessEngine.CanonicalParsedBooking) -> Booking? {
-        guard let projectId = UUID(uuidString: row.projectId),
+        // RULEBOOK 1.7.0 §1: a job id is kept as stored (a lower-case or non-UUID job id no longer drops the booking).
+        let storedProjectId = row.projectId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !storedProjectId.isEmpty,
               let timeSlot = TimeSlot.fromStored(row.timeSlot),
               let status = BookingStatus(rawValue: row.status) else {
             NSLog("BOOKING_UNREADABLE_ON_IOS id=%@ project=%@ slot=%@ status=%@", row.id, row.projectId, row.timeSlot, row.status)
@@ -7459,7 +7244,7 @@ class FirebaseBackend: ObservableObject {
             // A document id that is not a UUID keeps one stable in-app id instead of a new random one per read.
             id: UUID(uuidString: row.id) ?? OperativeKeyRegistry.derivedUUID(for: "booking.\(row.id)"),
             operativeId: Booking.internalOperativeId(for: row.operativeId),
-            projectId: projectId,
+            projectId: WorkDocumentKeys.inAppId(for: storedProjectId),
             date: Date(timeIntervalSince1970: row.dateMs / 1000),
             timeSlot: timeSlot,
             bookedBy: row.bookedBy,
@@ -7474,6 +7259,7 @@ class FirebaseBackend: ObservableObject {
             updatedAt: row.updatedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }
         )
         booking.operativeKey = row.operativeId
+        booking.projectKey = storedProjectId
         // Firestore ids are case-sensitive: keep any id that `uuidString` would not spell the same way.
         booking.documentId = row.id == booking.id.uuidString ? nil : row.id
         return booking
@@ -7488,13 +7274,16 @@ class FirebaseBackend: ObservableObject {
         return parsed.compactMap { row in
             guard let timeSlot = ManagerTimeSlot.fromStored(row.timeSlot),
                   let locationType = ManagerLocationType(rawValue: row.locationType) else { return nil }
-            return ManagerSiteBooking(
+            // RULEBOOK 1.7.0 §1: the document id and the job id are kept as stored (a non-UUID id gets a stable
+            // in-app UUID and is written back unchanged).
+            let locationKey = row.locationId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var booking = ManagerSiteBooking(
                 id: UUID(uuidString: row.id) ?? OperativeKeyRegistry.derivedUUID(for: "managerBooking.\(row.id)"),
                 userId: row.userId,
                 date: Date(timeIntervalSince1970: row.dateMs / 1000),
                 timeSlot: timeSlot,
                 locationType: locationType,
-                locationId: row.locationId.flatMap { UUID(uuidString: $0) },
+                locationId: (locationKey?.isEmpty == false ? locationKey : nil).map { WorkDocumentKeys.inAppId(for: $0) },
                 customLocationName: row.customLocationName,
                 workStartTime: row.workStartTime,
                 workEndTime: row.workEndTime,
@@ -7503,6 +7292,9 @@ class FirebaseBackend: ObservableObject {
                 createdAt: row.createdAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date(),
                 updatedAt: row.updatedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date()
             )
+            booking.documentId = row.id == booking.id.uuidString ? nil : row.id
+            booking.locationKey = locationKey?.isEmpty == false ? locationKey : nil
+            return booking
         }
     }
 
@@ -7512,8 +7304,8 @@ class FirebaseBackend: ObservableObject {
             // operativeId may be a Firebase Auth uid, not a UUID (web #189). Keep the booking and its stored id.
             guard let operativeIdString = (data["operativeId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !operativeIdString.isEmpty,
-                  let projectIdString = data["projectId"] as? String,
-                  let projectId = UUID(uuidString: projectIdString),
+                  let projectIdString = (data["projectId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !projectIdString.isEmpty,
                   let date = (data["date"] as? Timestamp)?.dateValue(),
                   let timeSlotString = data["timeSlot"] as? String,
                   let timeSlot = TimeSlot.fromStored(timeSlotString),
@@ -7523,7 +7315,8 @@ class FirebaseBackend: ObservableObject {
                 return nil
             }
             
-            let id = UUID(uuidString: doc.documentID) ?? UUID()
+            // Same stable in-app id as `booking(fromCanonical:)`, never a fresh random one.
+            let id = UUID(uuidString: doc.documentID) ?? OperativeKeyRegistry.derivedUUID(for: "booking.\(doc.documentID)")
             let notes = data["notes"] as? String
             let workStartTime = data["workStartTime"] as? String
             let workEndTime = data["workEndTime"] as? String
@@ -7541,7 +7334,7 @@ class FirebaseBackend: ObservableObject {
             var booking = Booking(
                 id: id,
                 operativeId: Booking.internalOperativeId(for: operativeIdString),
-                projectId: projectId,
+                projectId: WorkDocumentKeys.inAppId(for: projectIdString),
                 date: date,
                 timeSlot: timeSlot,
                 bookedBy: bookedBy,
@@ -7556,6 +7349,8 @@ class FirebaseBackend: ObservableObject {
                 updatedAt: updatedAt
             )
             booking.operativeKey = operativeIdString
+            booking.projectKey = projectIdString
+            booking.documentId = doc.documentID == booking.id.uuidString ? nil : doc.documentID
             return booking
     }
 
@@ -7676,7 +7471,7 @@ class FirebaseBackend: ObservableObject {
     /// RULEBOOK §1 partial writes. `changedFields` nil is a create (every field plus `id`, `organizationId`,
     /// `createdAt`); otherwise only those fields (`BookingWritePatch.managerFieldNames`) with `updateData`.
     func saveManagerSiteBooking(_ booking: ManagerSiteBooking, organizationId: String, changedFields: Set<String>? = nil) async throws {
-        let ref = db.collection("organizations").document(organizationId).collection("managerSiteBookings").document(booking.id.uuidString)
+        let ref = db.collection("organizations").document(organizationId).collection("managerSiteBookings").document(booking.documentKey)
         let uid = currentUser?.uid
         if let changedFields {
             let patch = BookingWritePatch.patch(
@@ -7688,7 +7483,7 @@ class FirebaseBackend: ObservableObject {
             return
         }
         var data = BookingWritePatch.managerValues(booking, deletesClearedFields: false)
-        data["id"] = booking.id.uuidString
+        data["id"] = booking.documentKey
         data["organizationId"] = organizationId
         data["createdAt"] = Timestamp(date: booking.createdAt)
         try await ref.setData(WriteMetadata.stamped(data, userId: uid), merge: true)
@@ -7711,8 +7506,9 @@ class FirebaseBackend: ObservableObject {
               let timeSlot = ManagerTimeSlot.fromStored(timeSlotRaw),
               let locationTypeRaw = data["locationType"] as? String,
               let locationType = ManagerLocationType(rawValue: locationTypeRaw) else { return nil }
-        let id = UUID(uuidString: doc.documentID) ?? UUID()
-        let locationId = (data["locationId"] as? String).flatMap { UUID(uuidString: $0) }
+        let id = UUID(uuidString: doc.documentID) ?? OperativeKeyRegistry.derivedUUID(for: "managerBooking.\(doc.documentID)")
+        let locationKey = (data["locationId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let locationId = (locationKey?.isEmpty == false ? locationKey : nil).map { WorkDocumentKeys.inAppId(for: $0) }
         let customLocationName = data["customLocationName"] as? String
         let workStartTime = data["workStartTime"] as? String
         let workEndTime = data["workEndTime"] as? String
@@ -7720,7 +7516,7 @@ class FirebaseBackend: ObservableObject {
         let bookingGroupId = data["bookingGroupId"] as? String
         let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
         let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-        return ManagerSiteBooking(
+        var booking = ManagerSiteBooking(
             id: id,
             userId: userId,
             date: date,
@@ -7735,6 +7531,9 @@ class FirebaseBackend: ObservableObject {
             createdAt: createdAt,
             updatedAt: updatedAt
         )
+        booking.documentId = doc.documentID == id.uuidString ? nil : doc.documentID
+        booking.locationKey = locationKey?.isEmpty == false ? locationKey : nil
+        return booking
     }
 
     func listenManagerSiteBookings(
@@ -7788,7 +7587,7 @@ class FirebaseBackend: ObservableObject {
         // Delete + `deletedBookings` tombstone in one batch (any member may write a managerSiteBookings tombstone).
         try await deleteBookingWithTombstone(
             collection: "managerSiteBookings",
-            bookingId: booking.id.uuidString,
+            bookingId: booking.documentKey,
             organizationId: organizationId
         )
     }
@@ -9699,7 +9498,8 @@ extension FirebaseBackend {
                 let contactId = contact.id.isEmpty ? "\(row.id)#contact-\(index)" : contact.id
                 let positionRaw = contact.text("position")
                 return SubcontractorContact(
-                    id: Manager.stableId(forFirestoreDocumentId: contactId),
+                    // RULEBOOK 1.7.0: remembered so a subcontractor booking writes the stored contact id back.
+                    id: WorkDocumentKeys.inAppId(for: contactId),
                     name: contact.text("name"),
                     email: contact.text("email"),
                     contactNumber: contact.text("contactNumber"),
@@ -9709,7 +9509,7 @@ extension FirebaseBackend {
                 )
             }
             return Subcontractor(
-                id: Manager.stableId(forFirestoreDocumentId: row.id),
+                id: WorkDocumentKeys.inAppId(for: row.id),
                 name: row.text("name"),
                 subcontractorType: row.text("subcontractorType"),
                 website: row.optionalText("website"),
@@ -9722,39 +9522,77 @@ extension FirebaseBackend {
         }
     }
     
-    func saveSubcontractorBooking(_ booking: SubcontractorBooking, organizationId: String) async throws {
-        var data: [String: Any] = [
-            "id": booking.id.uuidString,
-            "subcontractorId": booking.subcontractorId.uuidString,
-            "projectId": booking.projectId.uuidString,
+    /// RULEBOOK 1.7.0 §1: a new subcontractor booking is created with `subcontractorBookingCreateFields` at
+    /// `subcontractorBookings/{id}` (the same `id` in the document, `status`, `isBreakRemoved` and the contact lists
+    /// always written). An edit writes only what `subcontractorBookingWriteFields` names against the stored copy;
+    /// `bookedBy` is never rewritten and a booking deleted elsewhere is never re-created. Ids are the stored ids.
+    /// `operativeNames` are the firm contacts' names on site (nil leaves the stored names alone).
+    func saveSubcontractorBooking(_ booking: SubcontractorBooking, organizationId: String, operativeNames: [String]? = nil) async throws {
+        let ref = db.collection("organizations").document(organizationId)
+            .collection("subcontractorBookings")
+            .document(booking.documentId)
+        let uid = currentUser?.uid
+        func nonEmpty(_ value: String?) -> String? {
+            guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+            return value
+        }
+        guard booking.firestoreDocumentId != nil else {
+            guard var fields = CanonicalBusinessEngine.subcontractorBookingCreateFields(
+                id: booking.documentId,
+                subcontractorId: booking.storedSubcontractorId,
+                projectId: booking.storedProjectId,
+                date: booking.date,
+                timeSlot: booking.timeSlot.rawValue,
+                workStartTime: nonEmpty(booking.workStartTime),
+                workEndTime: nonEmpty(booking.workEndTime),
+                isBreakRemoved: booking.isBreakRemoved,
+                bookedBy: booking.bookedBy,
+                status: booking.status.rawValue,
+                bookedContactIds: booking.storedContactIds,
+                bookedOperativeNames: operativeNames ?? booking.storedOperativeNames,
+                createdAt: booking.createdAt
+            ) else {
+                throw CanonicalWriteUnavailableError(function: "subcontractorBookingCreateFields")
+            }
+            // The rulebook gives instants as milliseconds; this app writes its Timestamp type.
+            fields["date"] = Timestamp(date: booking.date)
+            fields["createdAt"] = Timestamp(date: booking.createdAt)
+            fields["updatedAt"] = Timestamp(date: booking.createdAt)
+            try await ref.setData(WriteMetadata.stamped(fields, userId: uid))
+            return
+        }
+        let snapshot = try await ref.getDocument(source: .server)
+        guard snapshot.exists, let stored = snapshot.data() else {
+            throw NSError(
+                domain: "FIRFirestoreErrorDomain",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: CanonicalBusinessEngine.bookingReplayRefusedMessage]
+            )
+        }
+        var next: [String: Any] = [
+            "subcontractorId": booking.storedSubcontractorId,
+            "projectId": booking.storedProjectId,
             "date": Timestamp(date: booking.date),
             "timeSlot": booking.timeSlot.rawValue,
+            "workStartTime": nonEmpty(booking.workStartTime).map { $0 as Any } ?? FieldValue.delete(),
+            "workEndTime": nonEmpty(booking.workEndTime).map { $0 as Any } ?? FieldValue.delete(),
             "isBreakRemoved": booking.isBreakRemoved,
-            "bookedBy": booking.bookedBy,
             "status": booking.status.rawValue,
-            "createdAt": Timestamp(date: booking.createdAt),
-            "updatedAt": Timestamp(date: booking.updatedAt)
+            "bookedContactIds": booking.storedContactIds
         ]
-        if let workStartTime = booking.workStartTime, !workStartTime.isEmpty {
-            data["workStartTime"] = workStartTime
+        if let operativeNames { next["bookedOperativeNames"] = operativeNames }
+        guard let write = CanonicalBusinessEngine.subcontractorBookingWrite(before: stored, next: next) else {
+            throw CanonicalWriteUnavailableError(function: "subcontractorBookingWriteFields")
         }
-        if let workEndTime = booking.workEndTime, !workEndTime.isEmpty {
-            data["workEndTime"] = workEndTime
-        }
-        if !booking.bookedContactIds.isEmpty {
-            data["bookedContactIds"] = booking.bookedContactIds.map(\.uuidString)
-        }
-        
-        try await db.collection("organizations").document(organizationId)
-            .collection("subcontractorBookings")
-            .document(booking.id.uuidString)
-            .setData(data)
+        let changes = write.firestoreFields(from: next)
+        guard !changes.isEmpty else { return }
+        try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
     }
 
     func deleteSubcontractorBooking(_ booking: SubcontractorBooking, organizationId: String) async throws {
         try await db.collection("organizations").document(organizationId)
             .collection("subcontractorBookings")
-            .document(booking.id.uuidString)
+            .document(booking.documentId)
             .delete()
     }
     
@@ -9762,49 +9600,44 @@ extension FirebaseBackend {
         let snapshot = try await db.collection("organizations").document(organizationId)
             .collection("subcontractorBookings")
             .getDocuments()
-        
-        var loaded: [SubcontractorBooking] = []
-        for doc in snapshot.documents {
-            let data = doc.data()
-            guard let idString = data["id"] as? String,
-                  let id = UUID(uuidString: idString),
-                  let subcontractorIdString = data["subcontractorId"] as? String,
-                  let subcontractorId = UUID(uuidString: subcontractorIdString),
-                  let projectIdString = data["projectId"] as? String,
-                  let projectId = UUID(uuidString: projectIdString),
-                  let date = (data["date"] as? Timestamp)?.dateValue(),
-                  let timeSlotRaw = data["timeSlot"] as? String,
-                  let timeSlot = TimeSlot.fromStored(timeSlotRaw),
-                  let bookedBy = data["bookedBy"] as? String,
-                  let statusRaw = data["status"] as? String,
-                  let status = BookingStatus(rawValue: statusRaw),
-                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-                  let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() else { continue }
-            let workStartTime = data["workStartTime"] as? String
-            let workEndTime = data["workEndTime"] as? String
-            let isBreakRemoved = data["isBreakRemoved"] as? Bool ?? false
-            let bookedContactIds = (data["bookedContactIds"] as? [String])?
-                .compactMap(UUID.init(uuidString:)) ?? []
-            
-            loaded.append(
-                SubcontractorBooking(
-                    id: id,
-                    subcontractorId: subcontractorId,
-                    projectId: projectId,
-                    date: date,
-                    timeSlot: timeSlot,
-                    workStartTime: workStartTime,
-                    workEndTime: workEndTime,
-                    isBreakRemoved: isBreakRemoved,
-                    bookedBy: bookedBy,
-                    status: status,
-                    bookedContactIds: bookedContactIds,
-                    createdAt: createdAt,
-                    updatedAt: updatedAt
-                )
+        return Self.subcontractorBookings(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+    }
+
+    /// RULEBOOK 1.7.0 §1 "Document readers": `subcontractorBookings/{id}` are read only through
+    /// `parseSubcontractorBookingDocument` (web uses the same reader), so a booking web created (lower-case id, no
+    /// `id`, `status` or slot field) shows here. The document id and the firm, job and contact ids are kept as
+    /// stored; a non-UUID id gets a stable in-app UUID. Tests call this with raw documents.
+    static func subcontractorBookings(fromDocuments documents: [(id: String, data: [String: Any])]) -> [SubcontractorBooking] {
+        documents.compactMap { doc -> SubcontractorBooking? in
+            guard let row = CanonicalBusinessEngine.parseSubcontractorBookingDocument(documentId: doc.id, data: doc.data),
+                  let date = row.date("dateMs"),
+                  let timeSlot = TimeSlot.fromStored(row.text("timeSlot")),
+                  let status = BookingStatus(rawValue: row.text("status")) else { return nil }
+            let contactKeys = row.strings("bookedContactIds")
+            let createdAt = row.date("createdAtMs") ?? date
+            var booking = SubcontractorBooking(
+                id: WorkDocumentKeys.inAppId(for: row.id),
+                subcontractorId: WorkDocumentKeys.inAppId(for: row.text("subcontractorId")),
+                projectId: WorkDocumentKeys.inAppId(for: row.text("projectId")),
+                date: date,
+                timeSlot: timeSlot,
+                workStartTime: row.optionalText("workStartTime"),
+                workEndTime: row.optionalText("workEndTime"),
+                isBreakRemoved: row.bool("isBreakRemoved"),
+                bookedBy: row.text("bookedBy"),
+                status: status,
+                bookedContactIds: contactKeys.map { WorkDocumentKeys.inAppId(for: $0) },
+                createdAt: createdAt,
+                updatedAt: row.date("updatedAtMs") ?? createdAt
             )
+            booking.firestoreDocumentId = row.id
+            booking.subcontractorKey = row.text("subcontractorId")
+            booking.projectKey = row.text("projectId")
+            booking.bookedContactKeys = contactKeys
+            booking.storedOperativeNames = row.strings("bookedOperativeNames")
+            return booking
         }
-        return loaded.sorted { $0.date < $1.date }
+        .sorted { $0.date < $1.date }
     }
     
     // MARK: - Material catalogue
@@ -10293,7 +10126,10 @@ extension FirebaseBackend {
             userId: userId,
             weekStart: weekStart
         ).getDocument()
-        return snapshot.data()
+        guard var data = snapshot.data() else { return nil }
+        // The sheet id `parseTimesheetEntries` derives entry ids from (as `listTimesheetStates` rows carry it).
+        data["__documentId"] = snapshot.documentID
+        return data
     }
 
     /// Writes the changed timesheet fields only (rulebook §6, §1 "Writes carry metadata").
@@ -10707,12 +10543,15 @@ extension FirebaseBackend {
     // MARK: - Deadlines (Project / Small Works)
 
     private func deadlinesStateDocumentRef(organizationId: String, project: Project) -> DocumentReference {
-        deadlinesStateDocumentRef(organizationId: organizationId, projectId: project.id, isSmallWorks: project.jobType == .smallWorks)
+        deadlinesStateDocumentRef(organizationId: organizationId, projectKey: project.documentId, isSmallWorks: project.jobType == .smallWorks)
     }
 
-    private func deadlinesStateDocumentRef(organizationId: String, projectId: UUID, isSmallWorks: Bool) -> DocumentReference {
+    /// `settings/deadlinesDocumentId(projectId, isSmallWorks)` (RULEBOOK 1.7.0): `deadlines_{collection}_{KEY}` with
+    /// the job key from `deadlineProjectKey` (upper case, the key both apps have always written).
+    private func deadlinesStateDocumentRef(organizationId: String, projectKey: String, isSmallWorks: Bool) -> DocumentReference {
         let collection = isSmallWorks ? "smallWorks" : "projects"
-        let docId = "deadlines_\(collection)_\(projectId.uuidString)"
+        let docId = CanonicalBusinessEngine.deadlinesDocumentId(projectId: projectKey, isSmallWorks: isSmallWorks)
+            ?? "deadlines_\(collection)_\(projectKey.uppercased())"
         return db.collection("organizations")
             .document(organizationId)
             .collection("settings")
@@ -10728,7 +10567,7 @@ extension FirebaseBackend {
 
     private func deadlineChangeMap(_ change: DLChange) -> [String: Any] {
         var map: [String: Any] = [
-            "id": change.id.uuidString,
+            "id": WorkDocumentKeys.storedId(for: change.id),
             "at": Timestamp(date: change.at),
             "author": change.author
         ]
@@ -10766,44 +10605,37 @@ extension FirebaseBackend {
         return map
     }
 
-    private func parseDeadlineChange(_ map: [String: Any]) -> DLChange? {
-        let id = (map["id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID()
-        let at = (map["at"] as? Timestamp)?.dateValue() ?? Date()
-        let author = (map["author"] as? String) ?? ""
-        let type = (map["type"] as? String) ?? "note"
+    /// One `parseDeadlineItem` history row (RULEBOOK 1.7.0): the stored change id is kept (UUID or not); an
+    /// unknown type reads as a note carrying the stored type.
+    private static func deadlineChange(fromCanonical row: CanonicalDocumentRow) -> DLChange? {
+        guard !row.id.isEmpty else { return nil }
         let kind: DLChange.Kind
-        switch type {
+        switch row.text("type") {
         case "created":
-            kind = .created(due: (map["due"] as? Timestamp)?.dateValue() ?? Date())
+            kind = .created(due: row.date("dueMs") ?? Date())
         case "rescheduled":
-            kind = .rescheduled(
-                from: (map["from"] as? Timestamp)?.dateValue() ?? Date(),
-                to: (map["to"] as? Timestamp)?.dateValue() ?? Date(),
-                reason: (map["reason"] as? String) ?? ""
-            )
+            kind = .rescheduled(from: row.date("fromMs") ?? Date(), to: row.date("toMs") ?? Date(), reason: row.text("reason"))
         case "progress":
-            kind = .progress(to: map["progress"] as? Int ?? 0)
+            kind = .progress(to: Int(row.number("progress") ?? 0))
         case "status":
-            kind = .status(to: DLStatus(rawValue: (map["status"] as? String) ?? "") ?? .notStarted)
-        case "note":
-            kind = .note((map["note"] as? String) ?? "")
+            kind = .status(to: DLStatus(rawValue: row.text("status")) ?? .notStarted)
         case "completed":
-            kind = .completed(on: (map["completedOn"] as? Timestamp)?.dateValue() ?? Date())
+            kind = .completed(on: row.date("completedOnMs") ?? Date())
         case "assigned":
-            kind = .assigned(to: (map["assignedTo"] as? String) ?? "")
+            kind = .assigned(to: row.text("assignedTo"))
         case "fileAttached":
-            kind = .fileAttached(name: (map["name"] as? String) ?? "File")
+            kind = .fileAttached(name: row.optionalText("name") ?? "File")
         case "siteAuditAttached":
-            kind = .siteAuditAttached(name: (map["name"] as? String) ?? "Site audit")
+            kind = .siteAuditAttached(name: row.optionalText("name") ?? "Site audit")
         default:
-            kind = .note(type)
+            kind = .note(row.text("note"))
         }
-        return DLChange(id: id, at: at, author: author, kind: kind)
+        return DLChange(id: WorkDocumentKeys.inAppId(for: row.id), at: row.date("atMs") ?? Date(), author: row.text("author"), kind: kind)
     }
 
     private func deadlineMap(_ item: DLDeadline) -> [String: Any] {
         [
-            "id": item.id.uuidString,
+            "id": WorkDocumentKeys.storedId(for: item.id),
             "title": item.title,
             "location": item.location ?? "",
             "trade": item.trade ?? "",
@@ -10817,13 +10649,13 @@ extension FirebaseBackend {
             "status": item.status.rawValue,
             "progress": item.progress,
             "isCritical": item.isCritical,
-            "dependsOn": item.dependsOn.map(\.uuidString),
+            "dependsOn": item.dependsOn.map { WorkDocumentKeys.storedId(for: $0) },
             "blockedReason": item.blockedReason ?? "",
             "reminderDaysBefore": item.reminderDaysBefore as Any,
             "originalDue": item.originalDue.map(Timestamp.init(date:)) as Any,
             "history": item.history.map(deadlineChangeMap),
             "contextKind": item.contextKind,
-            "projectId": item.projectId?.uuidString ?? "",
+            "projectId": item.projectId.map { WorkDocumentKeys.storedId(for: $0) } ?? "",
             "createdByUserId": item.createdByUserId,
             "fileURL": item.fileURL ?? "",
             "fileName": item.fileName ?? "",
@@ -10832,58 +10664,46 @@ extension FirebaseBackend {
         ]
     }
 
-    private func parseDeadline(_ map: [String: Any], fallbackProjectId: UUID) -> DLDeadline? {
-        guard let idString = map["id"] as? String, let id = UUID(uuidString: idString) else { return nil }
-        let status = DLStatus(rawValue: (map["status"] as? String) ?? "") ?? .notStarted
-        let due = (map["due"] as? Timestamp)?.dateValue() ?? Date()
-        let location = (map["location"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trade = (map["trade"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let detail = (map["detail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let company = (map["company"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let blocked = (map["blockedReason"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fileName = (map["fileName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let siteTitle = (map["siteAuditTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let projectId = (map["projectId"] as? String).flatMap(UUID.init(uuidString:)) ?? fallbackProjectId
-        let siteAuditId = (map["siteAuditId"] as? String).flatMap(UUID.init(uuidString:))
-        let reminder: Int?
-        if let n = map["reminderDaysBefore"] as? Int {
-            reminder = n
-        } else if let n = map["reminderDaysBefore"] as? NSNumber {
-            reminder = n.intValue
-        } else {
-            reminder = nil
+    /// RULEBOOK 1.7.0 §1 "Document readers": a deadlines document is read only through `parseDeadlineDocument`
+    /// (items keep their stored ids, UUID or not; an item without an id is skipped; ordered by due day). Tests call
+    /// this with a raw document.
+    static func deadlines(fromDocument documentId: String, data: [String: Any], projectKey: String) -> [DLDeadline]? {
+        guard let document = CanonicalBusinessEngine.parseDeadlineDocument(documentId: documentId, data: data, projectId: projectKey) else {
+            return nil
         }
-        let historyRaw = map["history"] as? [[String: Any]] ?? []
-        let item = DLDeadline(
-            id: id,
-            title: (map["title"] as? String) ?? "Untitled deadline",
-            location: location?.isEmpty == false ? location : nil,
-            trade: trade?.isEmpty == false ? trade : nil,
-            detail: detail?.isEmpty == false ? detail : nil,
-            start: (map["start"] as? Timestamp)?.dateValue(),
-            due: due,
-            completedAt: (map["completedAt"] as? Timestamp)?.dateValue(),
-            assignees: map["assignees"] as? [String] ?? [],
-            assigneeUserIds: map["assigneeUserIds"] as? [String] ?? [],
-            company: company?.isEmpty == false ? company : nil,
-            status: status,
-            progress: map["progress"] as? Double ?? 0,
-            isCritical: map["isCritical"] as? Bool ?? false,
-            dependsOn: (map["dependsOn"] as? [String] ?? []).compactMap(UUID.init(uuidString:)),
-            blockedReason: blocked?.isEmpty == false ? blocked : nil,
-            reminderDaysBefore: reminder,
-            originalDue: (map["originalDue"] as? Timestamp)?.dateValue(),
-            history: historyRaw.compactMap(parseDeadlineChange),
-            contextKind: (map["contextKind"] as? String) ?? "Project",
-            projectId: projectId,
-            createdByUserId: (map["createdByUserId"] as? String) ?? "",
-            fileURL: fileURL?.isEmpty == false ? fileURL : nil,
-            fileName: fileName?.isEmpty == false ? fileName : nil,
-            siteAuditId: siteAuditId,
-            siteAuditTitle: siteTitle?.isEmpty == false ? siteTitle : nil
+        return document.rows("items").map(deadline(fromCanonical:))
+    }
+
+    /// One `parseDeadlineItem` row as a `DLDeadline`. Ids get stable in-app UUIDs and are written back as stored.
+    static func deadline(fromCanonical row: CanonicalDocumentRow) -> DLDeadline {
+        DLDeadline(
+            id: WorkDocumentKeys.inAppId(for: row.id),
+            title: row.optionalText("title") ?? "Untitled deadline",
+            location: row.optionalText("location"),
+            trade: row.optionalText("trade"),
+            detail: row.optionalText("detail"),
+            start: row.date("startMs"),
+            due: row.date("dueMs") ?? Date(),
+            completedAt: row.date("completedAtMs"),
+            assignees: row.strings("assignees"),
+            assigneeUserIds: row.strings("assigneeUserIds"),
+            company: row.optionalText("company"),
+            status: DLStatus(rawValue: row.text("status")) ?? .notStarted,
+            progress: row.number("progress") ?? 0,
+            isCritical: row.bool("isCritical"),
+            dependsOn: row.strings("dependsOn").map { WorkDocumentKeys.inAppId(for: $0) },
+            blockedReason: row.optionalText("blockedReason"),
+            reminderDaysBefore: row.number("reminderDaysBefore").map { Int($0) },
+            originalDue: row.date("originalDueMs"),
+            history: row.rows("history").compactMap(deadlineChange(fromCanonical:)),
+            contextKind: row.optionalText("contextKind") ?? "Project",
+            projectId: row.optionalText("projectId").map { WorkDocumentKeys.inAppId(for: $0) },
+            createdByUserId: row.text("createdByUserId"),
+            fileURL: row.optionalText("fileURL"),
+            fileName: row.optionalText("fileName"),
+            siteAuditId: row.optionalText("siteAuditId").flatMap { UUID(uuidString: $0) },
+            siteAuditTitle: row.optionalText("siteAuditTitle")
         )
-        return item
     }
 
     func loadDeadlines(project: Project, organizationId: String) async throws -> [DLDeadline] {
@@ -10907,9 +10727,9 @@ extension FirebaseBackend {
             }
         }
         guard let data = doc.data() else { return ([], nil) }
-        let raw = data["items"] as? [[String: Any]] ?? []
-        let items = raw.compactMap { parseDeadline($0, fallbackProjectId: project.id) }
-            .sorted { $0.due < $1.due }
+        guard let items = Self.deadlines(fromDocument: ref.documentID, data: data, projectKey: project.documentId) else {
+            throw CanonicalWriteUnavailableError(function: "parseDeadlineDocument")
+        }
         let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue()
         return (items, updatedAt)
     }
@@ -10924,6 +10744,7 @@ extension FirebaseBackend {
         try await saveDeadlines(
             items,
             projectId: project.id,
+            projectKey: project.documentId,
             isSmallWorks: project.jobType == .smallWorks,
             organizationId: organizationId,
             baseUpdatedAt: baseUpdatedAt
@@ -10934,10 +10755,13 @@ extension FirebaseBackend {
     func saveDeadlines(
         _ items: [DLDeadline],
         projectId: UUID,
+        projectKey: String? = nil,
         isSmallWorks: Bool,
         organizationId: String,
         baseUpdatedAt: Date? = nil
     ) async throws -> [DLDeadline] {
+        // The job id as stored (RULEBOOK 1.7.0): the caller's, else the remembered stored id, else the UUID.
+        let jobKey = projectKey ?? WorkDocumentKeys.storedId(for: projectId)
         guard currentUser != nil else {
             throw NSError(
                 domain: "FirebaseBackend",
@@ -10963,7 +10787,7 @@ extension FirebaseBackend {
         await repairCurrentUserOrganizationAccess(organizationId: orgId)
         try await validateDataIntegrity(organizationId: orgId)
 
-        let ref = deadlinesStateDocumentRef(organizationId: orgId, projectId: projectId, isSmallWorks: isSmallWorks)
+        let ref = deadlinesStateDocumentRef(organizationId: orgId, projectKey: jobKey, isSmallWorks: isSmallWorks)
         var itemsToWrite = items
         if let baseUpdatedAt {
             do {
@@ -10971,8 +10795,7 @@ extension FirebaseBackend {
                 if let data = remoteDoc.data(),
                    let remoteUpdatedAt = (data["updatedAt"] as? Timestamp)?.dateValue(),
                    remoteUpdatedAt > baseUpdatedAt.addingTimeInterval(0.4) {
-                    let raw = data["items"] as? [[String: Any]] ?? []
-                    let remoteItems = raw.compactMap { parseDeadline($0, fallbackProjectId: projectId) }
+                    let remoteItems = Self.deadlines(fromDocument: ref.documentID, data: data, projectKey: jobKey) ?? []
                     itemsToWrite = mergeDeadlinesFirstWriterWins(remote: remoteItems, local: items)
                     print("🔥🔥🔥 DEBUG: [saveDeadlines] First writer already synced — merging local creates only")
                 }
@@ -10986,16 +10809,42 @@ extension FirebaseBackend {
         let payload: [String: Any] = [
             "items": itemsToWrite.map(deadlineMap),
             "updatedAt": Timestamp(date: Date()),
-            "projectId": projectId.uuidString
+            "projectId": jobKey
         ]
         try await ref.setData(payload, merge: true)
 
-        let assigneeIds = Array(Set(itemsToWrite.flatMap(\.assigneeUserIds))).sorted()
-        try await deadlineAssignmentsDocumentRef(organizationId: orgId).setData([
-            "projects.\(projectId.uuidString)": assigneeIds,
-            "updatedAt": Timestamp(date: Date())
-        ], merge: true)
+        try await writeDeadlineAssignments(
+            projectKey: jobKey,
+            assigneeUserIds: itemsToWrite.flatMap(\.assigneeUserIds),
+            organizationId: orgId
+        )
         return itemsToWrite
+    }
+
+    /// RULEBOOK 1.7.0 §1 "Partial writes only": one job's assignees in `settings/deadlineAssignments` are written
+    /// with `deadlineAssignmentWriteFields` as a field-path update (`['projects', KEY]`). The document is created
+    /// from `createFields` only when it is missing. Never a merge-set with a dotted key, which stored a literal
+    /// field named `projects.{KEY}` that nothing read back.
+    private func writeDeadlineAssignments(projectKey: String, assigneeUserIds: [String], organizationId orgId: String) async throws {
+        guard let write = CanonicalBusinessEngine.deadlineAssignmentWriteFields(projectId: projectKey, assigneeUserIds: assigneeUserIds) else {
+            throw CanonicalWriteUnavailableError(function: "deadlineAssignmentWriteFields")
+        }
+        let ref = deadlineAssignmentsDocumentRef(organizationId: orgId)
+        let update: [AnyHashable: Any] = [
+            FieldPath(write.fieldPath): write.value,
+            "updatedAt": Timestamp(date: Date())
+        ]
+        do {
+            try await ref.updateData(update)
+        } catch {
+            let nsError = error as NSError
+            guard nsError.domain == "FIRFirestoreErrorDomain", nsError.code == 5 else { throw error }
+            // Missing: create it. A nested map (never a dotted key); merge keeps any other job's entry a racing
+            // device wrote first.
+            var create = write.createFields
+            create["updatedAt"] = Timestamp(date: Date())
+            try await ref.setData(create, merge: true)
+        }
     }
 
     private func mergeDeadlinesFirstWriterWins(remote: [DLDeadline], local: [DLDeadline]) -> [DLDeadline] {
@@ -11015,10 +10864,11 @@ extension FirebaseBackend {
         do {
             let orgId = try await ensureReadableOrganization(resolved)
             let snap = try await deadlineAssignmentsDocumentRef(organizationId: orgId).getDocument()
-            guard let projects = snap.data()?["projects"] as? [String: [String]] else { return [] }
-            return Set(projects.compactMap { key, ids in
-                ids.contains(trimmed) ? UUID(uuidString: key) : nil
-            })
+            guard let data = snap.data() else { return [] }
+            // `deadlineAssignedProjectIds`: the nested map and older literal `projects.{KEY}` fields, ids compared
+            // without case. Keys are upper case (`deadlineProjectKey`); a UUID key is the job's in-app id.
+            let keys = CanonicalBusinessEngine.deadlineAssignedProjectIds(data, personIds: [trimmed]) ?? []
+            return Set(keys.map { UUID(uuidString: $0) ?? WorkDocumentKeys.inAppId(for: $0) })
         } catch {
             print("🔥🔥🔥 DEBUG: [loadDeadlineAssignedProjectIds] \(error.localizedDescription)")
             return []

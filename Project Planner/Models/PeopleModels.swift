@@ -607,7 +607,7 @@ struct Manager: Identifiable, Codable, Hashable {
     }
 
     /// Same document id always maps to the same in-memory id. A Firebase user id is not a UUID.
-    static func stableId(forFirestoreDocumentId documentId: String) -> UUID {
+    nonisolated static func stableId(forFirestoreDocumentId documentId: String) -> UUID {
         let trimmed = documentId.trimmingCharacters(in: .whitespacesAndNewlines)
         if let parsed = UUID(uuidString: trimmed) { return parsed }
         var h1: UInt64 = 14_695_981_039_346_656_037

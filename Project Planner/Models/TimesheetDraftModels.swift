@@ -29,6 +29,9 @@ struct TimesheetExpenseEntry: Codable, Identifiable, Hashable {
     var receiptName: String?
     var managerDecision: TimesheetManagerDecision = .approved
     var managerRevisedAmount: Double?
+    /// The entry id as `parseTimesheetEntries` read it (RULEBOOK 1.7.0 §8): the stored id in stored case, or the
+    /// deterministic `timesheetEntryId` for an entry stored without one. Written back on save. Nil on a new entry.
+    var storedId: String? = nil
 }
 
 struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
@@ -42,6 +45,8 @@ struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
     var amount: Double
     var managerDecision: TimesheetManagerDecision = .approved
     var managerRevisedAmount: Double?
+    /// The entry id as `parseTimesheetEntries` read it (stored case, or `timesheetEntryId`). Nil on a new entry.
+    var storedId: String? = nil
 }
 
 struct TimesheetDraft: Codable {

@@ -25,7 +25,8 @@ enum BookingWritePatch {
         var data: [String: Any] = [
             // A Firebase Auth uid stays a uid (web #189). Writing the in-app UUID would book nobody.
             "operativeId": booking.storedOperativeId,
-            "projectId": booking.projectId.uuidString,
+            // The job id as stored (RULEBOOK 1.7.0 §1); a lower-case or non-UUID job id is never re-spelt.
+            "projectId": booking.storedProjectId,
             "date": Timestamp(date: booking.date),
             "timeSlot": booking.timeSlot.rawValue,
             "bookedBy": booking.bookedBy,
@@ -51,7 +52,7 @@ enum BookingWritePatch {
     static func changedLabourFields(from old: Booking, to new: Booking) -> Set<String> {
         var changed = Set<String>()
         if old.storedOperativeId != new.storedOperativeId { changed.insert("operativeId") }
-        if old.projectId != new.projectId { changed.insert("projectId") }
+        if old.storedProjectId != new.storedProjectId { changed.insert("projectId") }
         if old.date != new.date { changed.insert("date") }
         if old.timeSlot != new.timeSlot { changed.insert("timeSlot") }
         if old.bookedBy != new.bookedBy { changed.insert("bookedBy") }
@@ -87,7 +88,7 @@ enum BookingWritePatch {
                 data[key] = FieldValue.delete()
             }
         }
-        optional("locationId", booking.locationId?.uuidString)
+        optional("locationId", booking.storedLocationId)
         optional("customLocationName", nonEmpty(booking.customLocationName))
         optional("workStartTime", nonEmpty(booking.workStartTime))
         optional("workEndTime", nonEmpty(booking.workEndTime))
@@ -101,7 +102,7 @@ enum BookingWritePatch {
         if old.date != new.date { changed.insert("date") }
         if old.timeSlot != new.timeSlot { changed.insert("timeSlot") }
         if old.locationType != new.locationType { changed.insert("locationType") }
-        if old.locationId != new.locationId { changed.insert("locationId") }
+        if old.storedLocationId != new.storedLocationId { changed.insert("locationId") }
         if nonEmpty(old.customLocationName) != nonEmpty(new.customLocationName) { changed.insert("customLocationName") }
         if nonEmpty(old.workStartTime) != nonEmpty(new.workStartTime) { changed.insert("workStartTime") }
         if nonEmpty(old.workEndTime) != nonEmpty(new.workEndTime) { changed.insert("workEndTime") }
