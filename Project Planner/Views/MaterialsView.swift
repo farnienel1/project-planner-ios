@@ -757,11 +757,6 @@ struct AddMaterialView: View {
                 }
             }
             
-            // Per job: keep ~1 year of past “needed” dates for this project only; older rows for this project are removed.
-            if smartCache.isOnline {
-                try? await firebaseBackend.cleanupOldMaterials(organizationId: organizationId, projectId: project.id, keepDays: 365)
-            }
-            
             await MainActor.run {
                 isSaving = false
                 if savedCount > 0 {

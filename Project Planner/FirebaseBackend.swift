@@ -8889,49 +8889,6 @@ extension FirebaseBackend {
         try await docRef.delete()
     }
     
-    /// Deletes materials for **this project only** whose **needed** `date` is older than `keepDays` before today. Other jobs in the org are untouched.
-    func cleanupOldMaterials(organizationId: String, projectId: UUID, keepDays: Int) async throws {
-        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
-        // RULEBOOK 1.8.0 §1: the needed day is the line's organisation-zone `dayKey` (`parseMaterialLineDocument`).
-        let calendar = OrganizationRulebookContext.calendar
-        let today = Date()
-        let cutoffDayKey = OrganizationRulebookContext.dayKey(
-            calendar.date(byAdding: .day, value: -keepDays, to: today) ?? today
-        )
-        
-        let snapshot = try await db.collection("organizations").document(orgId)
-            .collection("materials")
-            .whereField("projectId", in: JobKeys.queryValues(for: projectId))
-            .getDocuments()
-        
-        let toDelete = snapshot.documents.filter { doc in
-            guard let dayKey = CanonicalBusinessEngine.parseMaterialLineDocument(documentId: doc.documentID, data: doc.data())?
-                .optionalText("dayKey") else { return false }
-            return dayKey < cutoffDayKey
-        }
-        
-        var batch = db.batch()
-        var batchCount = 0
-        let maxBatchSize = 500 // Firestore batch limit
-        
-        for doc in toDelete {
-            batch.deleteDocument(doc.reference)
-            batchCount += 1
-            
-            if batchCount >= maxBatchSize {
-                try await batch.commit()
-                batch = db.batch()
-                batchCount = 0
-            }
-        }
-        
-        if batchCount > 0 {
-            try await batch.commit()
-        }
-        
-        print("🧹 [materials] Project \(projectId): removed \(toDelete.count) rows older than \(keepDays) days (needed date)")
-    }
-
     // MARK: - Site Audits
 
     /// Resolves the org document id for Firestore paths, preferring `users/{uid}.organizationId` from the server
