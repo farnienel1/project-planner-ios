@@ -9264,6 +9264,15 @@ extension FirebaseBackend {
         try await ref.setData(WriteMetadata.stamped(["trades": merged], userId: currentUser?.uid), merge: true)
     }
 
+    func loadSubcontractors(organizationId: String) async throws -> [Subcontractor] {
+        let snapshot = try await db.collection("organizations").document(organizationId)
+            .collection("subcontractors")
+            .getDocuments()
+
+        let loaded = Self.subcontractors(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+        return loaded.sorted { $0.name < $1.name }
+    }
+
     static func subcontractors(fromDocuments documents: [(id: String, data: [String: Any])]) -> [Subcontractor] {
         documents.compactMap { doc -> Subcontractor? in
             guard let row = CanonicalBusinessEngine.parseSubcontractorDocument(documentId: doc.id, data: doc.data) else { return nil }
