@@ -2340,10 +2340,17 @@ class FirebaseBackend: ObservableObject {
     /// RULEBOOK 1.7.0 §2: deleting a job removes its bookings from today on (`bookingsToRemoveOnProjectDelete`),
     /// each with its tombstone (`deleteBookingWithTombstone`); past bookings stay for timesheets and reports. A
     /// booking the rules refuse to delete (labour booking deletes are admin only) is logged and left in place.
+    /// Bookings are found under every spelling of the job id (stored, upper-case UUID older builds wrote, lower
+    /// case web wrote), like materials (`JobKeys.queryValues`); the rulebook then matches ids without case.
     private func removeFutureBookingsOfDeletedJob(_ job: Project, organizationId: String) async {
         do {
+            var lookup: [String] = []
+            for value in JobKeys.queryValues(for: job.id) + [job.documentId, job.documentId.uppercased(), job.documentId.lowercased()]
+            where !value.isEmpty && !lookup.contains(value) {
+                lookup.append(value)
+            }
             let snapshot = try await db.collection("organizations").document(organizationId).collection("bookings")
-                .whereField("projectId", isEqualTo: job.documentId)
+                .whereField("projectId", in: lookup)
                 .getDocuments()
             let bookings = bookingsFromFirestoreDocuments(snapshot.documents)
             guard !bookings.isEmpty,
