@@ -956,8 +956,14 @@ class FirebaseBackend: ObservableObject {
         )
         let invitedBy = currentUser?.uid ?? ""
         let invitationId = UUID().uuidString
+        // The invitation email is stored trimmed and lower case, as Add User stores it
+        // (`inviteEmailOrgLookupConstraints` normalises it), so the set-up page finds it whatever was typed.
+        let invitationEmail = CanonicalBusinessEngine.inviteEmailOrgLookupConstraints(
+            organizationId: organizationId,
+            email: email
+        )?.email ?? email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         var invitationData: [String: Any] = [
-            "email": email,
+            "email": invitationEmail,
             "organizationId": organizationId,
             "invitedBy": invitedBy,
             "firstName": firstName,
@@ -6530,6 +6536,7 @@ class FirebaseBackend: ObservableObject {
             )
         }
         let organizationId = lookup.organizationId
+        // Trimmed and lower case (`inviteEmailOrgLookupConstraints`): the invitation, placeholder and claim all store this.
         let email = lookup.email
 
         let claimInput = try await inviteEmailClaimInput(email: email, organizationId: organizationId)
