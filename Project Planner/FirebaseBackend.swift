@@ -7020,15 +7020,8 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: Preferred booking org \(preferredOrgId) was not readable: \(error.localizedDescription)")
         }
 
-        if let userId = currentUser?.uid,
-           let linkedOrgId = try? await validateUserOrganizationLink(userId: userId),
-           !linkedOrgId.isEmpty {
-            print("🔥🔥🔥 DEBUG: Falling back booking org to linked org \(linkedOrgId)")
-            let fallbackOrgId = try await ensureReadableOrganization(linkedOrgId)
-            await repairCurrentUserOrganizationAccess(organizationId: fallbackOrgId)
-            return fallbackOrgId
-        }
-
+        // Never fall back to another company (the user's linked organisation): the write is for this one or
+        // not at all (AGENTS rule 2, organisation context).
         throw NSError(
             domain: "FirebaseBackend",
             code: 403,
