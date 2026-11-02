@@ -48,20 +48,23 @@ extension AppUser {
         }
     }
 
-    /// `lineManagerIds(user)` from the packed script (RULEBOOK §8): `assignedManagerUserIds`, else the
-    /// legacy single id, and none when `hasNoLineManager`.
+    /// `CanonicalBusinessEngine.lineManagerIds(user:roster:)` from the packed script (RULEBOOK §8): `assignedManagerUserIds`, else the
+    /// legacy single id, none when `hasNoLineManager`; with the live roster only active managers count, an old
+    /// invite id is resolved to its roster row, and the person never counts under any of their ids.
     var canonicalLineManagerIds: [String] {
-        CanonicalBusinessEngine.lineManagerIds(
-            assignedManagerUserIds: assignedManagerUserIds,
-            assignedManagerUserId: assignedManagerUserId,
-            hasNoLineManager: hasNoLineManager
-        ) ?? (hasNoLineManager ? [] : lineManagerUserIds)
+        RulebookRosterSnapshot.lineManagerIds(self) ?? (hasNoLineManager ? [] : lineManagerUserIds)
     }
 
     func isLineManager(_ managerUserId: String) -> Bool {
         let wanted = managerUserId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !wanted.isEmpty else { return false }
-        return canonicalLineManagerIds.contains(wanted)
+        let ids = canonicalLineManagerIds
+        if ids.contains(wanted) { return true }
+        // `lineManagerIds` names roster rows; the roster may keep this person under another document id.
+        guard let row = RulebookRosterSnapshot.users.first(where: {
+            $0.id == wanted || $0.sameEmailUserIds.contains(wanted) || $0.formerUserIds.contains(wanted)
+        }) else { return false }
+        return ids.contains(row.id)
     }
 }
 

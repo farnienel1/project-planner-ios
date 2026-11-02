@@ -213,10 +213,24 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         let talkTitle = data.talks.first(where: { $0.id == issue.talkId })?.title
             ?? data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })?.title
             ?? "H&S sign-off"
-        for userId in pendingUserIds {
+        // RULEBOOK §13 catalog `hs_toolbox_reminder`: `toolboxTalkRecipients` (the unsigned people without the
+        // signed-in sender), each row stamped with `actorUserId`.
+        let senderUid = Auth.auth().currentUser?.uid
+        let sender: Any
+        if let me = userStore.currentUser {
+            sender = RulebookPeople.person(me)
+        } else {
+            sender = senderUid ?? ""
+        }
+        let recipients = CanonicalBusinessEngine.toolboxTalkRecipients(
+            ids: pendingUserIds,
+            issuer: sender,
+            roster: RulebookPeople.roster(userStore.organizationUsers)
+        ) ?? []
+        for userId in recipients {
             let notification = AppNotification(
                 organizationId: orgId,
-                type: .taskCreated,
+                type: .hsToolboxReminder,
                 title: "Toolbox Talk Reminder",
                 message: "\(talkTitle) is still awaiting your signature.",
                 userId: userId,
@@ -225,7 +239,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
                 createdAt: Date(),
                 requiresPermission: nil
             )
-            try? await firebaseBackend.saveNotification(notification, organizationId: orgId)
+            try? await firebaseBackend.saveNotification(notification, organizationId: orgId, actorUserId: senderUid)
         }
         return pendingUserIds.count
     }

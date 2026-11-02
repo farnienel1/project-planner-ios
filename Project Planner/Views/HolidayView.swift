@@ -25,7 +25,7 @@ struct HolidayView: View {
     private var isOperativeMode: Bool { userStore.isOperativeMode() }
     private var isManagerRequestMode: Bool {
         guard let u = userStore.displayUser else { return false }
-        return AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: u)
+        return AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: u, users: userStore.organizationUsers)
     }
     private var isRequestMode: Bool { isOperativeMode || isManagerRequestMode }
     /// Shown while `lineManagerRequiredError` says this person is missing a current line manager, so
@@ -115,10 +115,19 @@ struct HolidayView: View {
         )
     }
 
-    /// Managers/admins with self-book (or no line manager) book approved leave without a separate approver.
+    /// RULEBOOK §9: `CanonicalBusinessEngine.leaveSubmitLabel(user, roster)` — "Submit" when the leave saves approved, else "Submit request".
+    private var leaveSubmitButtonTitle: String {
+        if let u = userStore.displayUser,
+           let label = RulebookPeople.leaveSubmitLabel(u, users: userStore.organizationUsers) {
+            return label
+        }
+        return isRequestMode ? "Submit request" : "Submit"
+    }
+
+    /// `canSelfBookAnnualLeave(user, roster)`: the self-book permission, or an admin with no line manager.
     private var canShowSelfServeBookedAnnualLeave: Bool {
         guard let u = userStore.displayUser else { return false }
-        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: u)
+        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: u, users: userStore.organizationUsers)
     }
 
     private var bankHolidayRegion: BankHolidayRegion {
@@ -1733,7 +1742,7 @@ struct HolidayView: View {
                             .tint(.white)
                     } else {
                         Image(systemName: isRequestMode ? "paperplane.fill" : "checkmark.circle.fill")
-                        Text(isRequestMode ? "Submit request" : "Confirm booking")
+                        Text(leaveSubmitButtonTitle)
                     }
                 }
                 .font(.system(size: 16, weight: .semibold))
@@ -1784,7 +1793,7 @@ struct HolidayView: View {
     private func assignedApproverUserId(for request: HolidayBooking) -> String? {
         if let uid = request.userId,
            let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            if AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester) {
+            if AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester, users: userStore.organizationUsers) {
                 return requester.primaryLineManagerUserId
             }
             return nil
@@ -1834,9 +1843,11 @@ struct HolidayView: View {
         }
     }
 
-    private func peerNotice(for request: HolidayBooking, actorName: String, actionVerb: String) -> String {
-        let name = requesterName(for: request)
-        let dates = AnnualLeaveDateFormat.bookingTitle(request)
+    /// Web `buildLeaveDecisionPeerNotifications` copy: "{decider} {verb} {name}'s annual leave request|cancellation.
+    /// {dates}" with `annualLeaveDecisionDateText`.
+    private func peerNotice(for request: HolidayBooking, requester: AppUser, actorName: String, actionVerb: String) -> String {
+        let name = requester.fullName.isEmpty ? requester.email : requester.fullName
+        let dates = AnnualLeaveNoticeText.decisionDateText(request)
         let subject = request.cancellationRequestedAt != nil ? "annual leave cancellation" : "annual leave request"
         return "\(actorName) \(actionVerb) \(name)'s \(subject). \(dates)"
     }
@@ -1860,15 +1871,14 @@ struct HolidayView: View {
             return nil
         }()
         guard let requesterUser else { return }
-        let peers = requesterUser.lineManagerUserIds.filter { $0 != actorUserId }
-        guard !peers.isEmpty else { return }
+        // `lineManagerPeerRecipients(subject, actor, roster)` picks the other line managers.
         await notificationService.notifyLineManagerPeerAction(
             actorName: actorName,
-            actionSummary: peerNotice(for: request, actorName: actorName, actionVerb: actionVerb),
-            peerManagerUserIds: peers,
-            excludingActorUserId: actorUserId,
+            actionSummary: AnnualLeaveNoticeText.decisionDateText(request),
+            subject: requesterUser,
             actionVerb: actionVerb,
-            message: peerNotice(for: request, actorName: actorName, actionVerb: actionVerb)
+            message: peerNotice(for: request, requester: requesterUser, actorName: actorName, actionVerb: actionVerb),
+            relatedId: request.id
         )
     }
 
@@ -1897,16 +1907,7 @@ struct HolidayView: View {
                 decidedByName: decidedByName,
                 reason: reason
             )
-            if approved,
-               let requester = userStore.organizationUsers.first(where: { $0.id == requesterUserId }),
-               AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester),
-               requester.permissions.manager {
-                await notificationService.notifyAdminAnnualLeaveApproval(
-                    managerName: requester.fullName,
-                    approvedByName: decidedByName,
-                    excludingUserId: firebaseBackend.currentUser?.uid
-                )
-            }
+            // RULEBOOK §13: a decision notifies the requester only (`holidayDecisionRecipients`); no admin copy.
             return
         }
         if let oid = request.operativeId,
@@ -1980,7 +1981,8 @@ struct HolidayView: View {
                 endDate: booking.endDate,
                 assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser(),
                 requesterUserId: uid,
-                excludeUserIdMatchingRequester: uid
+                excludeUserIdMatchingRequester: uid,
+                cancellation: true
             )
         }
     }

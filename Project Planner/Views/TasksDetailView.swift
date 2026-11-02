@@ -528,20 +528,7 @@ struct TasksDetailView: View {
                 approved: approved,
                 decidedByName: decidedByName
             )
-            if approved,
-               let requester = userStore.organizationUsers.first(where: { $0.id == requesterUserId }),
-               requester.permissions.manager,
-               !requester.permissions.annualLeaveSelfBook,
-               !requester.permissions.operativeMode,
-               !requester.isSuperAdmin,
-               !requester.permissions.adminAccess,
-               requester.role != .admin {
-                await notificationService.notifyAdminAnnualLeaveApproval(
-                    managerName: requester.fullName,
-                    approvedByName: decidedByName,
-                    excludingUserId: userStore.currentUser?.id
-                )
-            }
+            // RULEBOOK §13: a decision notifies the requester only (`holidayDecisionRecipients`); no admin copy.
             return
         }
         if let oid = request.operativeId,

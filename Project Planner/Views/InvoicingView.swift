@@ -559,8 +559,13 @@ enum TimesheetApprovalPolicy {
         user.lineManagerUserIds
     }
 
+    /// RULEBOOK §8: the sheet waits for a line manager (or, with none, an admin) unless it is self-signed —
+    /// `timesheetSelfSigned(user, roster)`: an admin or super admin outside operative mode with no active line
+    /// manager. Every operative and manager needs a counter-signature. The stored line managers decide only
+    /// when the script did not answer.
     static func requiresLineManagerCounterSign(for user: AppUser) -> Bool {
-        user.hasLineManager
+        guard let selfSigned = RulebookRosterSnapshot.timesheetSelfSigned(user) else { return user.hasLineManager }
+        return !selfSigned
     }
 
     /// `timesheetWriterIsReviewer`: whether this save is the reviewer's (line manager or admin), the
@@ -606,11 +611,11 @@ enum TimesheetApprovalPolicy {
 
     static func isTimesheetFullyApproved(draft: TimesheetDraft, user: AppUser) -> Bool {
         guard let fields = TimesheetDraftStore.statusFields(for: draft) else { return false }
-        return CanonicalBusinessEngine.isTimesheetFullySigned(fields, hasLineManager: user.hasLineManager) == true
+        return CanonicalBusinessEngine.isTimesheetFullySigned(fields, hasLineManager: requiresLineManagerCounterSign(for: user)) == true
     }
 
     static func awaitingManagerSignOff(draft: TimesheetDraft, user: AppUser) -> Bool {
-        TimesheetDraftStore.listBucket(for: draft, hasLineManager: user.hasLineManager) == "awaiting"
+        TimesheetDraftStore.listBucket(for: draft, hasLineManager: requiresLineManagerCounterSign(for: user)) == "awaiting"
     }
 
     /// One row per pay period. An exported copy of that period never waits for sign-off.
@@ -909,7 +914,7 @@ enum TimesheetDraftStore {
             guard let keep = CanonicalBusinessEngine.timesheetOwnerWritableKeys(
                 Array(fields.keys),
                 // Unknown counts as having one: the snapshot is then left to the line manager (web).
-                subjectHasLineManager: subject?.hasLineManager ?? true,
+                subjectHasLineManager: subject.map { TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? true,
                 managerSigned: storedManagerSigned || draft.managerSignedAt != nil
             ) else {
                 return "Couldn't save your timesheet: the timesheet rules did not load. Try again."
@@ -1382,7 +1387,7 @@ private struct MyTimesheetsHubView: View {
 
     private var pendingWeeks: [WeekRange] {
         guard let user = userStore.displayUser else { return [] }
-        guard user.hasLineManager else { return [] }
+        guard TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) else { return [] }
         var weeks: [WeekRange] = [currentWeek]
         weeks.append(contentsOf: TimesheetPayrollPolicy.previousPayPeriods(count: 24, settings: settings))
         return weeks.filter { week in
@@ -2010,7 +2015,8 @@ private struct MyTimesheetView: View {
                     .buttonStyle(.plain)
                 }
 
-                if let user = userStore.displayUser, user.hasLineManager {
+                // RULEBOOK §8: no "note to manager" on a self-signed sheet (`timesheetSelfSigned`).
+                if let user = userStore.displayUser, TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Note to manager")
                             .font(.subheadline.weight(.semibold))
@@ -2031,7 +2037,7 @@ private struct MyTimesheetView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.red)
                     Text(
-                        (userStore.displayUser?.hasLineManager == true)
+                        (userStore.displayUser.map { TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } == true)
                         ? "If you don't agree with the hours shown, contact your line manager to amend your booking schedule before signing. Agreed changes appear on a new timesheet."
                         : "If you don't agree with the hours shown, amend your booking schedule before signing. Agreed changes appear on a new timesheet."
                     )
@@ -2122,7 +2128,7 @@ private struct MyTimesheetView: View {
 
                 if let currentUser = userStore.displayUser,
                    TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: currentUser) {
-                    if currentUser.hasLineManager {
+                    if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser) {
                         Text("To edit this timesheet, please go to the signed off timesheets page, export it and then edit within the exported timesheets tab.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -2510,15 +2516,13 @@ private struct MyTimesheetView: View {
         saveDraft()
         guard let current = userStore.displayUser else { return }
         guard TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: current) else { return }
-        let managerIds = TimesheetApprovalPolicy.lineManagerUserIds(for: current)
+        // `timesheetSubmittedRecipients(subject, roster)`: active line managers, else the admins; never the owner.
+        let weekStart = week.start
         Task {
-            for managerId in managerIds {
-                await notificationService.notifyTimesheetPendingManagerSignoff(
-                    signedByUser: current,
-                    lineManagerUserId: managerId,
-                    weekStart: week.start
-                )
-            }
+            await notificationService.notifyTimesheetSubmitted(
+                signedByUser: current,
+                weekStart: weekStart
+            )
         }
     }
 
@@ -3115,7 +3119,7 @@ private struct OperativeTimesheetsView: View {
         let _ = refreshVersion
         return directReports.filter { user in
             let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
-            let bucket = TimesheetDraftStore.listBucket(for: draft, hasLineManager: user.hasLineManager)
+            let bucket = TimesheetDraftStore.listBucket(for: draft, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user))
             switch selectedTab {
             case .awaiting:
                 return bucket == "awaiting"
@@ -3780,7 +3784,7 @@ private struct OperativeTimesheetsView: View {
                     TimesheetDraftStore.rememberBounds(from: row, userId: user.id, weekStart: day)
                     weekStarts.insert(day)
                     if let decoded = TimesheetDraftStore.decodeFirestoreMap(row),
-                       TimesheetDraftStore.listBucket(for: decoded, hasLineManager: user.hasLineManager) == "exported" {
+                       TimesheetDraftStore.listBucket(for: decoded, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user)) == "exported" {
                         let end = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: day)
                         TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, weekEnd: end)
                     }
@@ -3789,7 +3793,7 @@ private struct OperativeTimesheetsView: View {
 
             for start in weekStarts {
                 let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
-                guard TimesheetDraftStore.listBucket(for: draft, hasLineManager: user.hasLineManager) == "exported" else { continue }
+                guard TimesheetDraftStore.listBucket(for: draft, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user)) == "exported" else { continue }
                 let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: start)
                 let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, storedEnd: storedEnd, settings: settings)
                 let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? ""
@@ -3938,7 +3942,7 @@ private struct OperativeTimesheetReviewView: View {
         if TimesheetApprovalPolicy.isExported(draft) {
             return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative)
         }
-        return operative.hasLineManager
+        return TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative)
             && TimesheetApprovalPolicy.recordedSignatureDate(draft.managerSignedAt) == nil
             && TimesheetApprovalPolicy.operativeHasSigned(draft)
             && !TimesheetApprovalPolicy.isExported(draft)
@@ -4144,7 +4148,7 @@ private struct OperativeTimesheetReviewView: View {
             Text("Signatures")
                 .font(.headline)
             operativeSignatureBlock
-            if operative.hasLineManager {
+            if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative) {
                 managerSignatureBlock
             }
         }
@@ -4167,7 +4171,7 @@ private struct OperativeTimesheetReviewView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        } else if operative.hasLineManager, draft.managerSignedAt == nil {
+        } else if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative), draft.managerSignedAt == nil {
             if needsExtrasReviewMessage {
                 Text("Approve, decline or edit every expense and price-work line before signing off.")
                     .font(.caption)
@@ -4761,7 +4765,6 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 ) else { return }
                 onSaveDraft()
                 let signer = draft.managerSignedByName ?? "Line manager"
-                let signerId = userStore.displayUser?.id ?? ""
                 let operativeName = operative.fullName.isEmpty ? operative.email : operative.fullName
                 Task {
                     await notificationService.notifyTimesheetSignedByManager(
@@ -4769,16 +4772,13 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                         signedByName: signer,
                         weekStart: week.start
                     )
-                    let peers = operative.lineManagerUserIds.filter { $0 != signerId }
-                    if !peers.isEmpty {
-                        await notificationService.notifyLineManagerPeerAction(
-                            actorName: signer,
-                            actionSummary: "\(operativeName)'s timesheet (\(week.title))",
-                            peerManagerUserIds: peers,
-                            excludingActorUserId: signerId,
-                            actionVerb: "signed"
-                        )
-                    }
+                    // `lineManagerPeerRecipients(operative, signer, roster)` picks the other line managers.
+                    await notificationService.notifyLineManagerPeerAction(
+                        actorName: signer,
+                        actionSummary: "\(operativeName)'s timesheet (\(week.title))",
+                        subject: operative,
+                        actionVerb: "signed"
+                    )
                 }
                 showingManagerSignSheet = false
             }

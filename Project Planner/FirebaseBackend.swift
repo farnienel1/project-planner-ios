@@ -244,6 +244,8 @@ class FirebaseBackend: ObservableObject {
     private var acceptedMissingNotificationIds = Set<String>()
     /// Push tokens a send has already reported as dead. The full token is never logged.
     private var failedPushTokens = Set<String>()
+    /// The FCM token this device last wrote to the signed-in account, so sign-out can remove it (RULEBOOK §13).
+    private var registeredPushToken: String?
     /// `userEmails` documents confirmed missing. A second launch lookup does not retry them.
     private var userEmailClaimMisses = Set<String>()
     /// True when `organizations/{orgId}.settings.myScheduleOptions` exists in Firestore.
@@ -6462,6 +6464,8 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - Notifications
 
+    /// RULEBOOK §13: a device push token belongs to the signed-in account only. It is written to
+    /// `users/{uid}.pushTokens` of that account and never copied to other `users` documents on the same email.
     func registerPushToken(_ token: String) async {
         guard let authUser = currentUser else { return }
         let uid = authUser.uid
@@ -6469,32 +6473,71 @@ class FirebaseBackend: ObservableObject {
         guard !trimmed.isEmpty else { return }
         do {
             try await writePushTokens(userId: uid, currentDeviceToken: trimmed)
-            // Backward compatibility: invitations may still reference legacy users/{placeholderId}.
-            // Mirror this token into same-email docs so targeted push still works during id convergence.
-            let normalizedEmail = authUser.email?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !normalizedEmail.isEmpty,
-               let orgId = currentOrganization?.firestoreDocumentId,
-               !orgId.isEmpty {
-                // Same company only. With no open company this mirror is skipped, and users are not listed by email.
-                let orgUsers = try await db.collection("users")
-                    .whereField("organizationId", isEqualTo: orgId)
-                    .limit(to: 250)
-                    .getDocuments(source: .server)
-                let candidateDocs = orgUsers.documents.filter { doc in
-                    let email = (doc.data()["email"] as? String)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                        .lowercased() ?? ""
-                    return !email.isEmpty && email == normalizedEmail
-                }
-                for doc in candidateDocs where doc.documentID != uid {
-                    try await writePushTokens(userId: doc.documentID, currentDeviceToken: trimmed)
-                    print("🔥🔥🔥 DEBUG: Mirrored push token from \(uid) to legacy user doc \(doc.documentID)")
-                }
-            }
+            registeredPushToken = trimmed
             print("🔥🔥🔥 DEBUG: Registered push token for user \(uid)")
         } catch {
             print("🔥🔥🔥 DEBUG: Failed to register push token: \(error.localizedDescription)")
         }
+    }
+
+    /// RULEBOOK §13: signing out removes this device's token from every `users` document it was written to —
+    /// the signed-in account and, because older builds copied it there, every same-email `users` document in the
+    /// open company (`pushTokens` arrayRemove, a partial update). Call before `signOut()`. Waits at most
+    /// `timeoutSeconds` for the server; sign-out goes ahead either way.
+    func removeThisDevicePushTokenBeforeSignOut(timeoutSeconds: Double = 5) async {
+        guard let authUser = auth.currentUser else { return }
+        var token = registeredPushToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+#if canImport(FirebaseMessaging)
+        if token.isEmpty {
+            token = Messaging.messaging().fcmToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+#endif
+        guard !token.isEmpty else { return }
+        let uid = authUser.uid
+        let email = authUser.email?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let orgId = currentOrganization?.firestoreDocumentId ?? ""
+        let progress = PushTokenRemovalProgress()
+        Task {
+            await self.removePushToken(token, uid: uid, email: email, organizationId: orgId)
+            progress.finished = true
+        }
+        var waited = 0.0
+        while !progress.finished && waited < timeoutSeconds {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            waited += 0.1
+        }
+        registeredPushToken = nil
+    }
+
+    private func removePushToken(_ token: String, uid: String, email: String, organizationId: String) async {
+        var docIds: [String] = [uid]
+        if !email.isEmpty, !organizationId.isEmpty {
+            // Same company only, as the old mirror wrote it. Users are never listed by email alone.
+            do {
+                let orgUsers = try await db.collection("users")
+                    .whereField("organizationId", isEqualTo: organizationId)
+                    .limit(to: 250)
+                    .getDocuments()
+                for doc in orgUsers.documents where doc.documentID != uid {
+                    let docEmail = (doc.data()["email"] as? String)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased() ?? ""
+                    if docEmail == email { docIds.append(doc.documentID) }
+                }
+            } catch {
+                print("🔥🔥🔥 DEBUG: Sign-out token cleanup could not list same-email users: \(error.localizedDescription)")
+            }
+        }
+        for docId in docIds {
+            do {
+                try await db.collection("users").document(docId).updateData([
+                    "pushTokens": FieldValue.arrayRemove([token])
+                ])
+            } catch {
+                print("🔥🔥🔥 DEBUG: Sign-out token cleanup failed for a users document: \(error.localizedDescription)")
+            }
+        }
+        print("🔥🔥🔥 DEBUG: Removed this device's push token from \(docIds.count) users document(s) before sign-out")
     }
 
     /// Drops one token after FCM/APNs reports it dead. Does not clear tokens that have not failed.
@@ -6561,7 +6604,8 @@ class FirebaseBackend: ObservableObject {
         _ notification: AppNotification,
         organizationId: String,
         preserveExistingReadState: Bool = false,
-        onlyIfMissing: Bool = false
+        onlyIfMissing: Bool = false,
+        actorUserId: String? = nil
     ) async throws {
         let idKey = notification.id.uuidString
         guard LaunchStartupPolicy.shouldStartInboxWrite(
@@ -6610,7 +6654,12 @@ class FirebaseBackend: ObservableObject {
         if let catalogue = notification.catalogue, catalogue == "projects" || catalogue == "smallWorks" {
             data["catalogue"] = catalogue
         }
-        
+        // RULEBOOK §13: the signed-in user who caused the row. Security rules accept only request.auth.uid;
+        // the push function never pushes a row to its actor.
+        if let actor = actorUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !actor.isEmpty {
+            data["actorUserId"] = actor
+        }
+
         do {
             try await ref.setData(data)
         } catch {

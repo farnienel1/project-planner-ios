@@ -433,14 +433,15 @@ struct AddUserView: View {
         }
     }
 
+    /// RULEBOOK §8, §11: `lineManagerRequiredError` on the invite with nobody chosen says whether one is required
+    /// (every operative and manager, whatever self-book); only admins may have none.
     private var lineManagerPickerFootnote: String {
-        if permissions.operativeMode {
-            return "Holiday requests from this operative will go to their line manager(s) (and organisation admins)."
+        var unassigned = inviteDraftUserForValidation
+        unassigned.hasNoLineManager = false
+        if AnnualLeaveApproval.lineManagerRequiredError(for: unassigned, users: userStore.organizationUsers) != nil {
+            return "Required. Timesheets and annual leave requests from this person go to these line manager(s)."
         }
-        if !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: inviteDraftUserForValidation) {
-            return "Required while annual leave self-book is off. Requests route to these line manager(s)."
-        }
-        return "Optional for senior staff who book their own annual leave. Choose No line manager if they approve their own leave."
+        return "Optional for admins. With no line manager, an admin's own timesheets and annual leave are self-approved."
     }
 
     private var stepDetailsWithManager: some View {

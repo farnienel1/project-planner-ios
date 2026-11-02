@@ -183,46 +183,56 @@ enum UserRoleTransitionPolicy {
     }
 
     /// User was on the self-book path and is moving to request/approval routing.
-    static func shouldClearSelfBookedAnnualLeave(old: UserPermissions, new: UserPermissions, oldHasNoLineManager: Bool, newHasNoLineManager: Bool) -> Bool {
-        let oldUser = AppUser(
-            id: "transition-old",
-            email: "",
-            organizationId: "",
-            role: .manager,
-            permissions: old,
-            hasNoLineManager: oldHasNoLineManager
-        )
-        let newUser = AppUser(
-            id: "transition-new",
-            email: "",
-            organizationId: "",
-            role: .manager,
-            permissions: new,
-            hasNoLineManager: newHasNoLineManager
-        )
-        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: oldUser)
-            && !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: newUser)
+    /// `CanonicalBusinessEngine.canSelfBookAnnualLeave(user:roster:)` decides each side; pass the person's line managers and the roster
+    /// so an admin who has an active line manager is not taken for a self-approved admin.
+    static func shouldClearSelfBookedAnnualLeave(
+        old: UserPermissions,
+        new: UserPermissions,
+        oldHasNoLineManager: Bool,
+        newHasNoLineManager: Bool,
+        oldLineManagerUserIds: [String] = [],
+        newLineManagerUserIds: [String] = [],
+        users: [AppUser] = []
+    ) -> Bool {
+        let oldUser = transitionUser("transition-old", permissions: old, hasNoLineManager: oldHasNoLineManager, lineManagerUserIds: oldLineManagerUserIds)
+        let newUser = transitionUser("transition-new", permissions: new, hasNoLineManager: newHasNoLineManager, lineManagerUserIds: newLineManagerUserIds)
+        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: oldUser, users: users)
+            && !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: newUser, users: users)
     }
 
     /// User was on the “request / approval” holiday path and is moving to self-book.
-    static func shouldClearPendingAnnualLeave(old: UserPermissions, new: UserPermissions, oldHasNoLineManager: Bool = false, newHasNoLineManager: Bool = false) -> Bool {
-        let oldUser = AppUser(
-            id: "transition-old",
+    static func shouldClearPendingAnnualLeave(
+        old: UserPermissions,
+        new: UserPermissions,
+        oldHasNoLineManager: Bool = false,
+        newHasNoLineManager: Bool = false,
+        oldLineManagerUserIds: [String] = [],
+        newLineManagerUserIds: [String] = [],
+        users: [AppUser] = []
+    ) -> Bool {
+        let oldUser = transitionUser("transition-old", permissions: old, hasNoLineManager: oldHasNoLineManager, lineManagerUserIds: oldLineManagerUserIds)
+        let newUser = transitionUser("transition-new", permissions: new, hasNoLineManager: newHasNoLineManager, lineManagerUserIds: newLineManagerUserIds)
+        return AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: oldUser, users: users)
+            && AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: newUser, users: users)
+    }
+
+    private static func transitionUser(
+        _ id: String,
+        permissions: UserPermissions,
+        hasNoLineManager: Bool,
+        lineManagerUserIds: [String]
+    ) -> AppUser {
+        var user = AppUser(
+            id: id,
             email: "",
             organizationId: "",
             role: .manager,
-            permissions: old,
-            hasNoLineManager: oldHasNoLineManager
+            permissions: permissions,
+            hasNoLineManager: hasNoLineManager
         )
-        let newUser = AppUser(
-            id: "transition-new",
-            email: "",
-            organizationId: "",
-            role: .manager,
-            permissions: new,
-            hasNoLineManager: newHasNoLineManager
-        )
-        return AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: oldUser)
-            && AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: newUser)
+        if !hasNoLineManager && !lineManagerUserIds.isEmpty {
+            user.setLineManagerUserIds(lineManagerUserIds)
+        }
+        return user
     }
 }

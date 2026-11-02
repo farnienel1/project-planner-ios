@@ -442,7 +442,8 @@ private struct OperativeAnnualLeaveRequestsListView: View {
                     request: request,
                     actorUserId: uid,
                     actorName: approverName,
-                    actionVerb: "cancelled",
+                    // Web peer copy: accepting a cancellation is "approved … annual leave cancellation".
+                    actionVerb: "approved",
                     users: userStore.organizationUsers,
                     operatives: operativeStore.allOperatives,
                     notificationService: notificationService
@@ -1565,7 +1566,7 @@ enum AnnualLeavePersonBuilder {
         )
 
         for user in users where user.isActive {
-            if AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: user) { continue }
+            if AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: user, users: users) { continue }
             let email = user.email.lowercased()
             guard seenEmails.insert(email).inserted else { continue }
             let linkedOp = operativesByEmail[email]
@@ -1597,7 +1598,7 @@ enum AnnualLeavePersonBuilder {
         for op in operatives where op.isActive {
             let email = op.email.lowercased()
             if let linkedUser = users.first(where: { $0.email.lowercased() == email }),
-               AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: linkedUser) {
+               AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: linkedUser, users: users) {
                 continue
             }
             guard seenEmails.insert(email).inserted else { continue }

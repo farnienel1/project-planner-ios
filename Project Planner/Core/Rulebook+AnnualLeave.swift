@@ -210,9 +210,10 @@ extension CanonicalBusinessEngine {
 
     // MARK: - Self-booking, line-manager requirement, deciders (§8, §9, §11)
 
-    /// `canSelfBookAnnualLeave(user)`. Nil when the script did not answer.
-    nonisolated static func canSelfBookAnnualLeave(user: [String: Any]) -> Bool? {
-        callJSON("canSelfBookAnnualLeave", arguments: [user]) as? Bool
+    /// `canSelfBookAnnualLeave(user, roster)`: the self-book permission outside operative mode, or an admin /
+    /// super admin outside operative mode with no active line manager (§9). Nil when the script did not answer.
+    nonisolated static func canSelfBookAnnualLeave(user: [String: Any], roster: [[String: Any]]) -> Bool? {
+        callJSON("canSelfBookAnnualLeave", arguments: [user, roster]) as? Bool
     }
 
     /// `lineManagerRequiredError(user, roster)`: `LINE_MANAGER_REQUIRED_MESSAGE` when this person needs a
@@ -290,29 +291,14 @@ enum AnnualLeaveApproval {
             if let fallbackUserId, !fallbackUserId.isEmpty { payload["id"] = fallbackUserId }
             return payload
         }
-        var payload: [String: Any] = [
-            "id": requester.id,
-            "assignedManagerUserIds": requester.assignedManagerUserIds,
-            "hasNoLineManager": requester.hasNoLineManager,
-        ]
-        if let legacy = requester.assignedManagerUserId { payload["assignedManagerUserId"] = legacy }
-        return payload
+        return RulebookPeople.person(requester)
     }
 
-    /// `LeaveApproverMember & LeaveRequester` rows for the script (approver flags plus each person's own
-    /// line-manager fields, as `leaveDecisionQueue` reads them).
+    /// `LeaveApproverMember & LeaveRequester` rows for `CanonicalBusinessEngine.leaveApproverIds` / `canDecideLeave` /
+    /// `leaveDecisionQueue`: the full person (`RulebookPeople.person`:
+    /// email, active flag, role, role flags, alias ids, line-manager fields), as rulebook 1.3.0 reads them.
     static func rosterPayload(_ users: [AppUser]) -> [[String: Any]] {
-        users.map { user in
-            var row: [String: Any] = [
-                "id": user.id,
-                "isActive": user.isActive,
-                "role": rolePayload(user),
-                "assignedManagerUserIds": user.assignedManagerUserIds,
-                "hasNoLineManager": user.hasNoLineManager,
-            ]
-            if let legacy = user.assignedManagerUserId { row["assignedManagerUserId"] = legacy }
-            return row
-        }
+        RulebookPeople.roster(users)
     }
 
     /// `StaffAccountRole` for the script.
@@ -326,26 +312,15 @@ enum AnnualLeaveApproval {
         ]
     }
 
-    /// `LeaveDecisionViewer` for the script.
+    /// `LeaveDecisionViewer` for the script: the full person, so their alias ids count too.
     static func viewerPayload(_ viewer: AppUser) -> [String: Any] {
-        ["id": viewer.id, "role": rolePayload(viewer)]
+        RulebookPeople.person(viewer)
     }
 
     /// `LeaveSelfBookUser` fields of `users/{uid}` for `canSelfBookAnnualLeave` / `lineManagerRequiredError`.
     /// Pass the user as it will be saved (edited permissions and line managers).
     static func selfBookPayload(_ user: AppUser) -> [String: Any] {
-        var payload: [String: Any] = [
-            "id": user.id,
-            "role": user.role.rawValue,
-            "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
-            "operativeMode": user.permissions.operativeMode,
-            "isActive": user.isActive,
-            "annualLeaveEnabled": user.annualLeaveEnabled,
-            "assignedManagerUserIds": user.assignedManagerUserIds,
-            "hasNoLineManager": user.hasNoLineManager,
-        ]
-        if let legacy = user.assignedManagerUserId { payload["assignedManagerUserId"] = legacy }
-        return payload
+        RulebookPeople.person(user)
     }
 
     /// `lineManagerRequiredError(user, roster)` for a user as it will be saved. Nil when no line manager is needed.
@@ -355,7 +330,7 @@ enum AnnualLeaveApproval {
 
     /// `usersMissingLineManager(roster)`: the roster people an admin still has to give a line manager.
     static func usersMissingLineManager(_ users: [AppUser]) -> [AppUser] {
-        let roster: [[String: Any]] = users.map { selfBookPayload($0) }
+        let roster = RulebookPeople.roster(users)
         guard let ids = CanonicalBusinessEngine.usersMissingLineManager(roster: roster) else { return [] }
         let missing = Set(ids)
         return users.filter { missing.contains($0.id) }
@@ -451,9 +426,9 @@ enum AnnualLeaveApproval {
         return result
     }
 
-    /// `canSelfBookAnnualLeave`: the viewer books their own leave approved.
-    static func selfBooksOwnLeave(_ user: AppUser) -> Bool {
-        AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: user)
+    /// `canSelfBookAnnualLeave(user, roster)`: the viewer books their own leave approved.
+    static func selfBooksOwnLeave(_ user: AppUser, users: [AppUser]) -> Bool {
+        AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: user, users: users)
     }
 
     /// Shown while `lineManagerRequiredError` says this person is missing a current line manager.

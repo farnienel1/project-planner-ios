@@ -133,6 +133,12 @@ class LocalNotificationService {
         case .ideaShipped:
             content.title = "You asked, we built it"
             content.body = details.isEmpty ? "An idea you raised or voted for has shipped." : details
+        case .ideaComment:
+            content.title = "New comment on your feedback"
+            content.body = details.isEmpty ? "Someone commented on an idea you raised or voted for." : details
+        case .ideaMerged:
+            content.title = "Feedback merged"
+            content.body = details.isEmpty ? "An idea you raised or voted for was merged into another." : details
         }
         
         // Set sound

@@ -8,15 +8,25 @@
 import Foundation
 
 enum AppSignOut {
+    /// RULEBOOK §13: this device's push token is removed from every `users` document it was written to before
+    /// Firebase Auth signs out (bounded wait), so the next person on this phone never gets this account's pushes.
     @MainActor
     static func perform(firebaseBackend: FirebaseBackend, userStore: UserStore) {
-        do {
-            try firebaseBackend.signOut()
-        } catch {
-            print("🔥🔥🔥 DEBUG: Sign out error: \(error.localizedDescription)")
+        Task { @MainActor in
+            await firebaseBackend.removeThisDevicePushTokenBeforeSignOut()
+            do {
+                try firebaseBackend.signOut()
+            } catch {
+                print("🔥🔥🔥 DEBUG: Sign out error: \(error.localizedDescription)")
+            }
+            userStore.clearOnSignOut()
+            AppLockService.shared.deactivate()
+            firebaseBackend.syncPublishedAuthFromAuthSession()
         }
-        userStore.clearOnSignOut()
-        AppLockService.shared.deactivate()
-        firebaseBackend.syncPublishedAuthFromAuthSession()
     }
+}
+
+/// Whether the sign-out token cleanup has finished (`FirebaseBackend.removeThisDevicePushTokenBeforeSignOut`).
+final class PushTokenRemovalProgress {
+    var finished = false
 }

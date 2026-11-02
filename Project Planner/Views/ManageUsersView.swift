@@ -253,8 +253,8 @@ struct ManageUsersView: View {
         }
     }
 
-    /// `usersMissingLineManager` over the loaded roster: people saved before the line-manager requirement
-    /// whose leave still needs one (RULEBOOK §9, §11). Their requests reach every active admin meanwhile.
+    /// `usersMissingLineManager` over the loaded roster: operatives and managers saved before the line-manager
+    /// requirement (RULEBOOK §8, §11). Their timesheets and requests reach every active admin meanwhile.
     private var usersMissingLineManager: [AppUser] {
         AnnualLeaveApproval.usersMissingLineManager(userStore.organizationUsers)
     }
@@ -263,8 +263,8 @@ struct ManageUsersView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label(
                 usersMissingLineManager.count == 1
-                    ? "1 person needs a line manager for annual leave approval."
-                    : "\(usersMissingLineManager.count) people need a line manager for annual leave approval.",
+                    ? "1 person needs a line manager for timesheet and annual leave approval."
+                    : "\(usersMissingLineManager.count) people need a line manager for timesheet and annual leave approval.",
                 systemImage: "person.crop.circle.badge.exclamationmark"
             )
             .font(.subheadline.weight(.semibold))
@@ -1938,18 +1938,11 @@ struct EditUserView: View {
         lineManagerRequiredMessage
     }
 
+    /// `CanonicalBusinessEngine.canSelfBookAnnualLeave(user, roster)` before and after this save (RULEBOOK §9).
     private var willDisableAnnualLeaveSelfBookOnSave: Bool {
-        let subject = displayedUser
-        let oldDraft = AppUser(
-            id: subject.id,
-            email: subject.email,
-            organizationId: subject.organizationId,
-            role: subject.role,
-            permissions: subject.permissions,
-            hasNoLineManager: subject.hasNoLineManager
-        )
-        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: oldDraft)
-            && !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: draftUserForAnnualLeaveValidation)
+        let roster = userStore.organizationUsers
+        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: displayedUser, users: roster)
+            && !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: draftUserForAnnualLeaveValidation, users: roster)
     }
 
     private var lineManagerCandidates: [AppUser] {
@@ -3830,11 +3823,17 @@ struct EditUserView: View {
 
         let finalPermissions = didPersistPermissions ? permissions : subjectUser.permissions
         let finalHasNoLineManager = hasNoLineManagerChanged ? hasNoLineManagerDraft : subjectUser.hasNoLineManager
+        let finalLineManagerUserIds = managerAssignmentChanged
+            ? Array(selectedLineManagerUserIds).sorted()
+            : subjectUser.lineManagerUserIds
         let needsSelfBookClear = UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
             old: previousPermissions,
             new: finalPermissions,
             oldHasNoLineManager: previousHasNoLineManager,
-            newHasNoLineManager: finalHasNoLineManager
+            newHasNoLineManager: finalHasNoLineManager,
+            oldLineManagerUserIds: subjectUser.lineManagerUserIds,
+            newLineManagerUserIds: finalLineManagerUserIds,
+            users: userStore.organizationUsers
         )
         if needsSelfBookClear && permissionsSuccess && operativeDetailsSuccess {
             await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: user.id)

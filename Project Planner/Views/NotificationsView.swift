@@ -167,7 +167,7 @@ struct NotificationRowView: View {
         case .materialOrderCutOff: return "shippingbox"
         case .materialAdded, .materialOrderPlaced: return "shippingbox.fill"
         case .toolboxTalkIssued, .hsToolboxReminder: return "list.clipboard.fill"
-        case .ideaStatus, .ideaShipped: return "lightbulb.fill"
+        case .ideaStatus, .ideaShipped, .ideaComment, .ideaMerged: return "lightbulb.fill"
         case .holidayRequestSubmitted: return "sun.max"
         case .holidayRequestApproved: return "sun.max.fill"
         case .holidayRequestDeclined: return "xmark.circle.fill"
@@ -197,7 +197,7 @@ struct NotificationRowView: View {
         case .materialOrderCutOff: return .trade
         case .materialAdded, .materialOrderPlaced: return .sites
         case .toolboxTalkIssued, .hsToolboxReminder: return .plan
-        case .ideaStatus, .ideaShipped: return .sites
+        case .ideaStatus, .ideaShipped, .ideaComment, .ideaMerged: return .sites
         case .holidayRequestSubmitted: return .trade
         case .holidayRequestApproved: return .sites
         case .holidayRequestDeclined: return .alert

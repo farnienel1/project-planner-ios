@@ -18,7 +18,11 @@ class UserStore: ObservableObject {
     /// When set, tab visibility and `can*` helpers use a simulated role. Identity and Firestore still use `currentUser`.
     @Published var roleTestingPreset: RoleTestingPreset?
     @Published var organizationUsers: [AppUser] = [] {
-        didSet { restampSameEmailAliasesIfNeeded() }
+        didSet {
+            restampSameEmailAliasesIfNeeded()
+            // Rules that run without a store (`timesheetSelfSigned` in `TimesheetApprovalPolicy`) read this roster.
+            RulebookRosterSnapshot.update(organizationUsers)
+        }
     }
     /// Folded same-email `users` document id → the id the roster kept, from the last roster load.
     /// Bookings saved under the folded id (often the person's sign-in uid) must count for the kept person.
@@ -2009,7 +2013,10 @@ class UserStore: ObservableObject {
                                 old: previousPermissions,
                                 new: sanitized,
                                 oldHasNoLineManager: organizationUsers[index].hasNoLineManager,
-                                newHasNoLineManager: organizationUsers[index].hasNoLineManager
+                                newHasNoLineManager: organizationUsers[index].hasNoLineManager,
+                                oldLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
+                                newLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
+                                users: organizationUsers
                             ) {
                              await holidayStore.deletePendingHolidayRequestsFor(
                                  userId: userId,
@@ -2022,7 +2029,10 @@ class UserStore: ObservableObject {
                                 old: previousPermissions,
                                 new: sanitized,
                                 oldHasNoLineManager: organizationUsers[index].hasNoLineManager,
-                                newHasNoLineManager: organizationUsers[index].hasNoLineManager
+                                newHasNoLineManager: organizationUsers[index].hasNoLineManager,
+                                oldLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
+                                newLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
+                                users: organizationUsers
                             ) {
                              await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: userId)
                          }

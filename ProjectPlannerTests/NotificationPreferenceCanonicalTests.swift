@@ -168,8 +168,13 @@ final class NotificationPreferenceCanonicalTests: XCTestCase {
             CanonicalBusinessEngine.CanonicalUnreadNotificationRow(userId: "", isRead: false),
             CanonicalBusinessEngine.CanonicalUnreadNotificationRow(userId: "u1", isRead: false),
         ]
+        // Rulebook 1.3.0 §13: an ownerless row is not an inbox row and is never counted.
         XCTAssertEqual(
             try XCTUnwrap(CanonicalBusinessEngine.unreadNotificationBadgeCount(notifications: rows, userId: "u1")),
+            2
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(CanonicalBusinessEngine.unreadNotificationBadgeCount(rows: rows, userIds: ["u2", "U1"])),
             3
         )
         XCTAssertEqual(
