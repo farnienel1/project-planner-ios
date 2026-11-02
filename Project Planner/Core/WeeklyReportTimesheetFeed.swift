@@ -153,19 +153,8 @@ struct WeeklyReportTimesheetFeed {
                         viewer: nil,
                         relatedUsers: users
                     )
-                    if working.weeklyReportOverride != nil {
-                        TimesheetDraftStore.save(working, userId: user.id, weekStart: period.start, weekEnd: period.end)
-                        if let orgId {
-                            await TimesheetDraftStore.saveToCloud(
-                                working,
-                                userId: user.id,
-                                weekStart: period.start,
-                                weekEnd: period.end,
-                                firebaseBackend: firebaseBackend,
-                                organizationId: orgId
-                            )
-                        }
-                    }
+                    // Built in memory for this report only. Producing a report never writes anyone's
+                    // timesheet (§7: reports are not stored); the snapshot is written by their sign-off.
                 }
                 guard let override = working.weeklyReportOverride else { continue }
                 let aliases = StaffEmailIdentity.userIds(sharing: user.email, in: users)
