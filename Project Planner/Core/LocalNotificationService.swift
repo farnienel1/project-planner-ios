@@ -139,6 +139,9 @@ class LocalNotificationService {
         case .ideaMerged:
             content.title = "Feedback merged"
             content.body = details.isEmpty ? "An idea you raised or voted for was merged into another." : details
+        case .pushTest:
+            content.title = "Test notification"
+            content.body = details.isEmpty ? "Push notifications are working on this device." : details
         }
         
         // Set sound

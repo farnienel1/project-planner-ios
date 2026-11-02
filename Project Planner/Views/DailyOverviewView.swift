@@ -1273,7 +1273,8 @@ struct OnHolidayRowView: View {
     
     private var displayName: String {
         if let uid = booking.userId,
-           let user = userStore.organizationUsers.first(where: { $0.id == uid }) {
+           // Stored ids keep their case and compare without it (§1); a web record may store a lower-case id.
+           let user = userStore.organizationUsers.first(where: { $0.id.caseInsensitiveCompare(uid) == .orderedSame }) {
             return user.fullName.isEmpty ? user.email : user.fullName
         }
         if let oid = booking.operativeId,

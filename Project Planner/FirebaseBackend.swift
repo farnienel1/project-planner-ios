@@ -840,6 +840,14 @@ class FirebaseBackend: ObservableObject {
     func signOut() throws {
         try auth.signOut()
     }
+
+    /// RULEBOOK §13: a forced sign-out (expired session, blocked trial) removes this device's push token from every
+    /// `users` document it was written to before Firebase Auth signs out, exactly as `AppSignOut` does. The wait is
+    /// bounded (`removeThisDevicePushTokenBeforeSignOut`); sign-out goes ahead either way.
+    func forcedSignOutRemovingPushToken() async {
+        await removeThisDevicePushTokenBeforeSignOut()
+        try? auth.signOut()
+    }
     
     /// Sends a new verification code (invitation token) so the user can set or reset their password on the Project Planner page.
     /// Creates a fresh invitation document and emails the user with "Verification code" wording.
@@ -971,7 +979,7 @@ class FirebaseBackend: ObservableObject {
             try await user.updatePassword(to: newPassword)
         } catch {
             if isSessionExpiredOrInvalidCredential(error) {
-                try? auth.signOut()
+                await forcedSignOutRemovingPushToken()
                 errorMessage = FirebaseBackend.sessionExpiredMessage
             } else {
                 errorMessage = error.localizedDescription
@@ -1797,7 +1805,7 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: ✅✅✅ Organization loaded successfully - Name: \(organizationName), ID: \(organizationId)")
         } catch {
             if isSessionExpiredOrInvalidCredential(error) {
-                try? auth.signOut()
+                await forcedSignOutRemovingPushToken()
                 errorMessage = FirebaseBackend.sessionExpiredMessage
                 print("🔥🔥🔥 DEBUG: Session/credential expired – signed out so user can sign in again")
                 return
@@ -5323,33 +5331,28 @@ class FirebaseBackend: ObservableObject {
             )
         }
         let trimmed = bankHolidayRegionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 400,
-                userInfo: [NSLocalizedDescriptionKey: "Select an annual leave / bank holiday region."]
-            )
-        }
+        // Rulebook 1.4.0 §4.4: a country with no listed region (`bankHolidayRegionsForCountry` empty) has nothing
+        // to choose, so the leave defaults still save and the stored region is left alone.
         let payload: [String: Any] = [
             "daysPerYear": defaults.daysPerYear,
             "startMonth": defaults.startMonth,
             "endMonth": defaults.endMonth,
             "carriesOver": defaults.carriesOver,
         ]
-        // Dotted `settings.bankHolidayRegionId` is a path only in updateData (never setData(merge:)).
+        var fields: [String: Any] = ["annualLeaveDefaults": payload]
+        if !trimmed.isEmpty {
+            // Dotted `settings.bankHolidayRegionId` is a path only in updateData (never setData(merge:)).
+            fields["bankHolidayRegionId"] = trimmed
+            fields["settings.bankHolidayRegionId"] = trimmed
+        }
         try await db.collection("organizations").document(orgId).updateData(
-            WriteMetadata.stamped(
-                [
-                    "annualLeaveDefaults": payload,
-                    "bankHolidayRegionId": trimmed,
-                    "settings.bankHolidayRegionId": trimmed,
-                ],
-                userId: auth.currentUser?.uid
-            )
+            WriteMetadata.stamped(fields, userId: auth.currentUser?.uid)
         )
         guard var org = currentOrganization else { return }
         org.settings.annualLeaveDefaults = defaults
-        org.settings.bankHolidayRegionId = trimmed
+        if !trimmed.isEmpty {
+            org.settings.bankHolidayRegionId = trimmed
+        }
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -5507,7 +5510,8 @@ class FirebaseBackend: ObservableObject {
         countryCode: String,
         defaultLatitude: Double?,
         defaultLongitude: Double?,
-        documentAbbreviation: String?
+        documentAbbreviation: String?,
+        bankHolidayRegionId: String? = nil
     ) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(
@@ -5519,6 +5523,8 @@ class FirebaseBackend: ObservableObject {
         // Rulebook: `companyDetailsValidationError` then `companyDetailsWriteFields` → `{ set, remove }`.
         // A blank name is never written (`organizationNameWriteFields` inside it); blank optional fields and
         // the legacy nested `officeAddress` map are removed with `FieldValue.delete()`.
+        // Rulebook 1.4.0 §4.1: `previous` is the saved country and region, so a country change needs a region from
+        // the new country (`companyDetailsRegionPrompt`) and country + region go in this one partial update.
         let input = CanonicalBusinessEngine.companyDetailsInput(
             name: name,
             hasOfficeAddress: hasOfficeAddress,
@@ -5530,7 +5536,10 @@ class FirebaseBackend: ObservableObject {
             countryCode: countryCode,
             documentAbbreviation: documentAbbreviation,
             defaultLatitude: defaultLatitude,
-            defaultLongitude: defaultLongitude
+            defaultLongitude: defaultLongitude,
+            bankHolidayRegionId: bankHolidayRegionId,
+            previousCountryCode: currentOrganization?.countryCode,
+            previousBankHolidayRegionId: currentOrganization?.settings.bankHolidayRegionId
         )
         if let message = CanonicalBusinessEngine.companyDetailsValidationError(input) {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
@@ -5559,6 +5568,11 @@ class FirebaseBackend: ObservableObject {
         }
         if let country = written("countryCode") {
             org.countryCode = country
+        }
+        if let region = written("bankHolidayRegionId") {
+            org.settings.bankHolidayRegionId = region
+        } else if write.remove.contains("bankHolidayRegionId") {
+            org.settings.bankHolidayRegionId = nil
         }
         org.documentAbbreviation = OrganizationDocumentAbbreviation.normalized(written("documentAbbreviation"))
         org.officeAddressLine1 = written("officeAddressLine1")
@@ -7913,12 +7927,12 @@ class FirebaseBackend: ObservableObject {
     func saveHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws -> HolidayBooking {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         guard let fields = CanonicalBusinessEngine.holidayRequestWriteFields(
-            id: booking.id.uuidString,
+            id: booking.documentId,
             organizationId: orgId,
             userId: booking.userId,
-            operativeId: booking.operativeId?.uuidString,
-            startDayKey: OrganizationRulebookContext.dayKey(booking.startDate),
-            endDayKey: OrganizationRulebookContext.dayKey(booking.endDate),
+            operativeId: booking.operativeIdRaw,
+            startDayKey: booking.startDayKey,
+            endDayKey: booking.endDayKey,
             timeSlot: booking.timeSlot.rawValue,
             status: booking.status.rawValue,
             approvedByUserId: booking.approvedByUserId
@@ -7958,11 +7972,12 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Partial update of an existing leave document: only `fields` plus `WriteMetadata` (§1).
-    func updateHolidayBookingFields(bookingId: UUID, fields: [String: Any], organizationId: String) async throws {
+    /// `documentId` is the stored document id (`HolidayBooking.documentId`), never the in-memory UUID.
+    func updateHolidayBookingFields(documentId: String, fields: [String: Any], organizationId: String) async throws {
         guard !fields.isEmpty else { return }
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         try await db.collection("organizations").document(orgId).collection("holidayBookings")
-            .document(bookingId.uuidString)
+            .document(documentId)
             .updateData(WriteMetadata.stamped(fields, userId: auth.currentUser?.uid))
     }
 
@@ -7984,7 +7999,7 @@ class FirebaseBackend: ObservableObject {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "That decision is not valid."])
         }
         try await updateHolidayBookingFields(
-            bookingId: booking.id,
+            documentId: booking.documentId,
             fields: [
                 "status": decision.status,
                 "approvedByUserId": decision.approvedByUserId,
@@ -8068,117 +8083,95 @@ class FirebaseBackend: ObservableObject {
                 throw error
             }
         }
-        var parsed: [HolidayBooking] = []
-        var skipped = 0
-        for doc in snapshot.documents {
-            if let booking = holidayBookingFromFirestore(doc, organizationId: orgId) {
-                parsed.append(booking)
-            } else {
-                skipped += 1
-            }
-        }
-        print("🔥🔥🔥 DEBUG: [HOLIDAY LOAD] docs=\(snapshot.documents.count) parsed=\(parsed.count) skipped=\(skipped)")
+        let parsed = holidayBookingsFromFirestore(snapshot.documents, organizationId: orgId)
+        print("🔥🔥🔥 DEBUG: [HOLIDAY LOAD] docs=\(snapshot.documents.count) parsed=\(parsed.count) skipped=\(snapshot.documents.count - parsed.count)")
         return parsed
     }
 
-    private func holidayBookingFromFirestore(_ doc: QueryDocumentSnapshot, organizationId orgId: String) -> HolidayBooking? {
-        let data = doc.data()
-        let startDate = firstFirestoreDate(in: data, keys: ["startDate", "start_date", "start", "from", "dateFrom", "holidayStart", "date"])
-        let endDate = firstFirestoreDate(in: data, keys: ["endDate", "end_date", "end", "to", "dateTo", "holidayEnd"]) ?? startDate
-        guard let startDate, let endDate else {
-            print("🔥🔥🔥 DEBUG: [HOLIDAY LOAD] skip \(doc.documentID) — no start/end date")
+    /// RULEBOOK 1.5.0 §1 "Document readers", §9: leave documents are read only through the rulebook's
+    /// `parseHolidayDocuments` (web reads them with the same function), so keys, status and slot synonyms,
+    /// stored-case ids and organisation-zone day keys match web. Unreadable documents are dropped.
+    private func holidayBookingsFromFirestore(
+        _ documents: [QueryDocumentSnapshot],
+        organizationId orgId: String
+    ) -> [HolidayBooking] {
+        let rows: [(id: String, data: [String: Any])] = documents.map { doc in
+            (id: doc.documentID, data: doc.data())
+        }
+        return Self.holidayBookings(fromDocuments: rows, organizationId: orgId)
+    }
+
+    /// `parseHolidayDocuments` over stored `{ id, data }` rows (Firestore values; converted with
+    /// `firestoreJSON` for the script), mapped onto `HolidayBooking`. Tests call this with raw documents.
+    static func holidayBookings(
+        fromDocuments documents: [(id: String, data: [String: Any])],
+        organizationId orgId: String
+    ) -> [HolidayBooking] {
+        let rows: [(id: String, data: [String: Any])] = documents.map { doc in
+            (id: doc.id, data: (Self.firestoreJSON(doc.data) as? [String: Any]) ?? [:])
+        }
+        let records: [CanonicalHolidayDocument]
+        if let all = CanonicalBusinessEngine.parseHolidayDocuments(rows) {
+            records = all
+        } else {
+            // One document the script cannot take (for example a non-finite number) must not hide the rest.
+            NSLog("HOLIDAYS_PARSE_FAILED docs=%d — reading leave documents one at a time", documents.count)
+            records = rows.compactMap { CanonicalBusinessEngine.parseHolidayDocument(documentId: $0.id, data: $0.data) }
+        }
+        var rawById: [String: [String: Any]] = [:]
+        for doc in documents where rawById[doc.id] == nil {
+            rawById[doc.id] = doc.data
+        }
+        return records.compactMap { record in
+            Self.holidayBooking(fromCanonical: record, raw: rawById[record.id] ?? [:], organizationId: orgId)
+        }
+    }
+
+    /// Maps one `parseHolidayDocument` record onto `HolidayBooking`, keeping the document id, the stored
+    /// `userId` / `operativeId` strings and the reader's day keys. Only the display timestamps the reader does
+    /// not return (`createdAt`, `updatedAt`, `approvedAt`, `cancellationRequestedAt`) are read here.
+    static func holidayBooking(
+        fromCanonical record: CanonicalHolidayDocument,
+        raw data: [String: Any],
+        organizationId orgId: String
+    ) -> HolidayBooking? {
+        guard let startDate = OrganizationRulebookContext.date(fromDayKey: record.startDayKey),
+              let endDate = OrganizationRulebookContext.date(fromDayKey: record.endDayKey) else {
+            print("🔥🔥🔥 DEBUG: [HOLIDAY LOAD] skip \(record.id) — day keys \(record.startDayKey)…\(record.endDayKey)")
             return nil
         }
-        let status = holidayStatus(from: data) ?? .approved
-        let bookingOrgId = firstFirestoreString(in: data, keys: ["organizationId"]) ?? orgId
-        let id = Manager.stableId(forFirestoreDocumentId: doc.documentID)
-        let userId = holidayUserId(from: data)
-        let operativeId = firstFirestoreString(in: data, keys: ["operativeId", "operative_id", "operativeID"]).flatMap { UUID(uuidString: $0) }
-        let approvedByUserId = firstFirestoreString(in: data, keys: ["approvedByUserId", "approvedBy"])
-        let approvedAt = firstFirestoreDate(in: data, keys: ["approvedAt"])
-        let timeSlot = holidayTimeSlot(from: firstFirestoreString(in: data, keys: ["timeSlot", "slot", "halfDay"]))
-        let cancellationRequestedAt = firstFirestoreDate(in: data, keys: ["cancellationRequestedAt"])
-        let cancellationRequestedByUserId = firstFirestoreString(in: data, keys: ["cancellationRequestedByUserId"])
-        let decisionNote = firstFirestoreString(in: data, keys: ["decisionNote", "note"])
-        let createdAt = firstFirestoreDate(in: data, keys: ["createdAt"]) ?? Date()
-        let updatedAt = firstFirestoreDate(in: data, keys: ["updatedAt"]) ?? createdAt
+        func storedDate(_ key: String) -> Date? { firestoreDate(data[key]) }
+        let createdAt = storedDate("createdAt") ?? Date()
+        let updatedAt = storedDate("updatedAt") ?? createdAt
+        let cancellationRequestedAt: Date? = record.cancellationRequested
+            ? (storedDate("cancellationRequestedAt") ?? updatedAt)
+            : nil
         return HolidayBooking(
-            id: id,
-            organizationId: bookingOrgId,
-            userId: userId,
-            operativeId: operativeId,
-            startDate: min(startDate, endDate),
-            endDate: max(startDate, endDate),
-            status: status,
-            timeSlot: timeSlot,
-            approvedByUserId: approvedByUserId,
-            approvedAt: approvedAt,
+            id: Manager.stableId(forFirestoreDocumentId: record.id),
+            documentId: record.id,
+            organizationId: record.organizationId ?? orgId,
+            userId: record.userId,
+            operativeIdRaw: record.operativeId,
+            startDate: startDate,
+            endDate: endDate,
+            startDayKey: record.startDayKey,
+            endDayKey: record.endDayKey,
+            status: HolidayStatus(rawValue: record.status) ?? (record.approved ? .approved : .pending),
+            timeSlot: HolidayTimeSlot(rawValue: record.timeSlot) ?? .fullDay,
+            approvedByUserId: record.approvedByUserId,
+            approvedAt: storedDate("approvedAt"),
             cancellationRequestedAt: cancellationRequestedAt,
-            cancellationRequestedByUserId: cancellationRequestedByUserId,
-            decisionNote: decisionNote,
+            cancellationRequestedByUserId: record.cancellationRequestedByUserId,
+            decisionNote: record.decisionNote,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
     }
 
-    private func firstFirestoreDate(in data: [String: Any], keys: [String]) -> Date? {
-        for key in keys {
-            if let date = firestoreDate(data[key]) { return date }
-        }
-        return nil
-    }
-
-    private func firstFirestoreString(in data: [String: Any], keys: [String]) -> String? {
-        for key in keys {
-            if let text = data[key] as? String {
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { return trimmed }
-            }
-        }
-        return nil
-    }
-
-    private func holidayUserId(from data: [String: Any]) -> String? {
-        if let direct = firstFirestoreString(in: data, keys: ["userId", "user_id", "uid", "userID", "linkedUserId", "employeeUserId"]) {
-            return direct
-        }
-        if let user = data["user"] as? [String: Any] {
-            return firstFirestoreString(in: user, keys: ["id", "uid", "userId", "userID"])
-        }
-        return nil
-    }
-
-    private func holidayStatus(from data: [String: Any]) -> HolidayStatus? {
-        let raw = firstFirestoreString(in: data, keys: ["status", "holidayStatus", "approvalStatus"])?
-            .lowercased()
-        switch raw {
-        case nil, "":
-            return nil
-        case "pending", "requested", "awaiting", "awaiting approval", "submitted":
-            return .pending
-        case "approved", "approve", "accepted", "confirmed":
-            return .approved
-        case "rejected", "declined", "denied", "cancelled", "canceled":
-            return .rejected
-        default:
-            return nil
-        }
-    }
-
-    private func holidayTimeSlot(from raw: String?) -> HolidayTimeSlot {
-        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "am", "morning", "a.m.":
-            return .morning
-        case "pm", "afternoon", "p.m.":
-            return .afternoon
-        default:
-            return .fullDay
-        }
-    }
-
+    /// Deletes the document the record was read from (`documentId`, stored case; web ids need not be UUIDs).
     func deleteHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
-        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.id.uuidString).delete()
+        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.documentId).delete()
     }
 
     func recordOperativeDayRateChange(

@@ -287,14 +287,14 @@ enum TimesheetPayrollCollector {
         let idKeys = Set(ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
         let records: [CanonicalTimesheetLeaveRecord] = holidays.compactMap { holiday in
             let userKey = (holiday.userId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let operativeKey = holiday.operativeId?.uuidString.lowercased() ?? ""
+            let operativeKey = (holiday.operativeIdRaw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard (!userKey.isEmpty && idKeys.contains(userKey)) || (!operativeKey.isEmpty && idKeys.contains(operativeKey)) else {
                 return nil
             }
             return CanonicalTimesheetLeaveRecord(
-                id: holiday.id.uuidString,
-                startDayKey: OrganizationRulebookContext.dayKey(holiday.startDate),
-                endDayKey: OrganizationRulebookContext.dayKey(holiday.endDate),
+                id: holiday.documentId,
+                startDayKey: holiday.startDayKey,
+                endDayKey: holiday.endDayKey,
                 timeSlot: holiday.timeSlot.rawValue,
                 status: holiday.status.rawValue
             )

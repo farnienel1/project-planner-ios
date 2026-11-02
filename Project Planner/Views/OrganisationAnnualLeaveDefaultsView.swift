@@ -14,14 +14,14 @@ struct OrganisationAnnualLeaveDefaultsView: View {
     @State private var startMonth: Int = AnnualLeavePolicy.defaultStartMonth
     @State private var endMonth: Int = AnnualLeavePolicy.defaultEndMonth
     @State private var carriesOver: Bool = AnnualLeavePolicy.defaultCarriesOver
-    @State private var bankHolidayRegionId: String = BankHolidayRegionDirectory.defaultRegionId
+    @State private var bankHolidayRegionId: String = ""
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var baselineDaysText = ""
     @State private var baselineStartMonth = AnnualLeavePolicy.defaultStartMonth
     @State private var baselineEndMonth = AnnualLeavePolicy.defaultEndMonth
     @State private var baselineCarriesOver = AnnualLeavePolicy.defaultCarriesOver
-    @State private var baselineRegionId = BankHolidayRegionDirectory.defaultRegionId
+    @State private var baselineRegionId = ""
     @State private var didLoad = false
 
     private var isDirty: Bool {
@@ -37,9 +37,20 @@ struct OrganisationAnnualLeaveDefaultsView: View {
         "July", "August", "September", "October", "November", "December",
     ]
 
+    /// `bankHolidayRegionLabel` (the listed title, or the stored id when it is not listed).
     private var selectedRegionTitle: String {
-        BankHolidayRegionDirectory.region(id: bankHolidayRegionId)?.title
-            ?? BankHolidayRegionDirectory.defaultRegion(forCountryCode: "GB").title
+        CanonicalBusinessEngine.bankHolidayRegionLabel(bankHolidayRegionId)
+    }
+
+    /// Only the company country's regions (`bankHolidayRegionsForCountry`, rulebook §4.4). The country is set in
+    /// Company details.
+    private var regionChoices: [BankHolidayRegion] {
+        CanonicalBusinessEngine.bankHolidayRegionsForCountry(firebaseBackend.currentOrganization?.countryCode ?? "GB")
+    }
+
+    /// The saved region when it is not one of this country's choices, so the picker still shows it.
+    private var selectionIsListed: Bool {
+        regionChoices.contains { $0.id == bankHolidayRegionId }
     }
 
     private var leaveYearSummary: String {
@@ -140,19 +151,26 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                         Text("Syncs with the web app and applies organisation-wide.")
                             .font(.footnote)
                             .foregroundStyle(Color.secondary)
-                        Picker("Region", selection: $bankHolidayRegionId) {
-                            ForEach(BankHolidayRegionDirectory.pickerRegions(), id: \.group) { group in
-                                Section(group.group) {
-                                    ForEach(group.regions) { region in
-                                        Text(region.title).tag(region.id)
-                                    }
+                        if regionChoices.isEmpty {
+                            Text("No bank-holiday calendar is listed for this country.")
+                                .font(.subheadline)
+                                .foregroundStyle(Color.secondary)
+                                .padding(.vertical, 6)
+                        } else {
+                            Picker("Region", selection: $bankHolidayRegionId) {
+                                if !selectionIsListed {
+                                    Text(bankHolidayRegionId.isEmpty ? "Choose…" : selectedRegionTitle)
+                                        .tag(bankHolidayRegionId)
+                                }
+                                ForEach(regionChoices) { region in
+                                    Text(region.title).tag(region.id)
                                 }
                             }
+                            .accessibilityIdentifier("organisationAnnualLeaveDefaults.region")
+                            .pickerStyle(.menu)
+                            .font(.subheadline.weight(.medium))
+                            .tint(PPColor.brand)
                         }
-                        .accessibilityIdentifier("organisationAnnualLeaveDefaults.region")
-                        .pickerStyle(.menu)
-                        .font(.subheadline.weight(.medium))
-                        .tint(PPColor.brand)
                         Text("Currently set to \(selectedRegionTitle)")
                             .font(.footnote)
                             .foregroundStyle(Color.primary)
@@ -197,12 +215,14 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             startMonth = defaults.startMonth
             endMonth = defaults.endMonth
             carriesOver = defaults.carriesOver
-            bankHolidayRegionId = BankHolidayRegionDirectory.pickerSelection(
-                forStoredRegionId: firebaseBackend.currentOrganization?.settings.bankHolidayRegionId
-                    ?? BankHolidayRegionDirectory.defaultRegion(
-                        forCountryCode: firebaseBackend.currentOrganization?.countryCode ?? "GB"
-                    ).id
-            )
+            // The saved region (already `parseCompanyDetails`), aliases resolved; else the country's default.
+            let storedRegion = firebaseBackend.currentOrganization?.settings.bankHolidayRegionId
+            bankHolidayRegionId = CanonicalBusinessEngine.normalizeBankHolidayRegionId(storedRegion)
+                ?? storedRegion
+                ?? CanonicalBusinessEngine.defaultBankHolidayRegionForCountry(
+                    firebaseBackend.currentOrganization?.countryCode ?? "GB"
+                )
+                ?? ""
             captureBaseline()
             didLoad = true
         }
@@ -265,11 +285,13 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                 defaults: defaults,
                 bankHolidayRegionId: bankHolidayRegionId
             )
-            let region = BankHolidayRegionDirectory.region(id: bankHolidayRegionId) ?? BankHolidayRegionDirectory.defaultRegion(forCountryCode: "GB")
+            let region = CanonicalBusinessEngine.bankHolidayRegion(id: bankHolidayRegionId)
             captureBaseline()
-            Task {
-                BankHolidayService.shared.invalidateCache(for: region.id)
-                await BankHolidayService.shared.ensureLoaded(region: region, forceRefresh: true)
+            if let region {
+                Task {
+                    BankHolidayService.shared.invalidateCache(for: region.id)
+                    await BankHolidayService.shared.ensureLoaded(region: region, forceRefresh: true)
+                }
             }
         } catch {
             errorMessage = error.localizedDescription

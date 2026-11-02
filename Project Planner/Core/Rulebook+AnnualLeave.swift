@@ -408,7 +408,7 @@ enum AnnualLeaveApproval {
             let storedUid = booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let accountId = requester(for: booking, users: users, operatives: operatives)?.id ?? storedUid
             if !accountId.isEmpty { row["userId"] = accountId }
-            if let oid = booking.operativeId { row["operativeId"] = oid.uuidString }
+            if let oid = booking.operativeIdRaw, !oid.isEmpty { row["operativeId"] = oid }
             if let at = booking.cancellationRequestedAt { row["cancellationRequestedAt"] = at.timeIntervalSince1970 * 1000 }
             if let by = booking.cancellationRequestedByUserId { row["cancellationRequestedByUserId"] = by }
             rows.append(row)
@@ -475,17 +475,15 @@ enum LeaveRecordDays {
         return keys
     }
 
+    /// The record's own day keys (`parseHolidayDocument` → `startDayKey` / `endDayKey`), never recomputed.
     static func dayKeys(for booking: HolidayBooking) -> [String] {
-        dayKeys(
-            startDayKey: OrganizationRulebookContext.dayKey(booking.startDate),
-            endDayKey: OrganizationRulebookContext.dayKey(booking.endDate)
-        )
+        dayKeys(startDayKey: booking.startDayKey, endDayKey: booking.endDayKey)
     }
 
     /// True when `dayKey` is one of the record's leave days.
     static func covers(_ booking: HolidayBooking, dayKey: String) -> Bool {
-        let start = OrganizationRulebookContext.dayKey(booking.startDate)
-        let end = OrganizationRulebookContext.dayKey(booking.endDate)
+        let start = booking.startDayKey
+        let end = booking.endDayKey
         guard dayKey >= start, dayKey <= max(start, end) else { return false }
         return dayKeys(startDayKey: start, endDayKey: end).contains(dayKey)
     }

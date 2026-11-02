@@ -130,13 +130,15 @@ struct HolidayView: View {
         return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: u, users: userStore.organizationUsers)
     }
 
-    private var bankHolidayRegion: BankHolidayRegion {
-        BankHolidayRegionDirectory.resolvedRegion(for: firebaseBackend.currentOrganization)
+    /// `BANK_HOLIDAY_REGIONS` row for the saved region (rulebook §4.4). Nil only when the script did not answer.
+    private var bankHolidayRegion: BankHolidayRegion? {
+        CanonicalBusinessEngine.resolvedBankHolidayRegion(for: firebaseBackend.currentOrganization)
     }
 
     private func reloadBankHolidays(referenceDate: Date = Date(), forceRefresh: Bool = false) async {
+        guard let region = bankHolidayRegion else { return }
         await bankHolidayService.ensureLoaded(
-            region: bankHolidayRegion,
+            region: region,
             referenceDate: referenceDate,
             forceRefresh: forceRefresh
         )
@@ -305,7 +307,7 @@ struct HolidayView: View {
                 }
             }
         }
-        .task(id: bankHolidayRegion.id) {
+        .task(id: bankHolidayRegion?.id) {
             await reloadBankHolidays(forceRefresh: false)
         }
         .task(id: displayedMonth) {
