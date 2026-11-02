@@ -862,12 +862,12 @@ struct HolidayView: View {
             }
             return .none
         }()
-        let initials = away.prefix(2).map { initials(from: $0.displayName) }.joined(separator: " ")
+        let awayInitials = away.prefix(2).map { initials(from: $0.displayName) }.joined(separator: " ")
         return AnnualLeaveDayFace(
             dayNumber: calendar.component(.day, from: date),
             visual: away.count >= 2 ? .none : visual,
             isToday: calendar.isDateInToday(day),
-            initials: initials.isEmpty ? nil : initials,
+            initials: awayInitials.isEmpty ? nil : awayInitials,
             accessibilityLabel: teamDayLabel(date: day, away: away, block: block)
         )
         .background {
