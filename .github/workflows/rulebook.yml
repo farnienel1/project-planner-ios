@@ -76,4 +76,15 @@ jobs:
             -destination "platform=iOS Simulator,id=$sim" \
             -only-testing:ProjectPlannerTests \
             -skip-testing:ProjectPlannerTests/FixedSampleScreenSnapshotTests \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != 0 ]; then
+            echo "::group::Compiler errors (file:line)"
+            grep -E "^/.*:[0-9]+:[0-9]+: error:" xcodebuild.log | sed 's#^/Users/runner/work/project-planner-ios/project-planner-ios/##' | sort -u | head -200 || true
+            echo "::endgroup::"
+            echo "::group::Failed tests"
+            grep -E "error: -\[|Test Case .* failed|XCTAssert" xcodebuild.log | sort -u | head -200 || true
+            echo "::endgroup::"
+            grep -E "^/.*:[0-9]+:[0-9]+: error:" xcodebuild.log | sed 's#^/Users/runner/work/project-planner-ios/project-planner-ios/##' | sort -u | head -50 | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit "$status"
