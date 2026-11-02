@@ -101,9 +101,29 @@ nonisolated final class OrgListenerRegistry: @unchecked Sendable {
 /// How a listener snapshot replaces an in-memory list (the bookings rule, `BookingStore.applyRemoteBookings`):
 /// a server snapshot is the whole collection and replaces the list, so a record deleted on web leaves this
 /// device too. A cache snapshot never empties a list already on screen, and a shorter one only adds and updates.
+///
+/// `rowCount` is how many readable documents the snapshot or load held (`readableRowCount`). When it is above zero
+/// but the reader produced no record at all, the reader failed (the script did not answer, or a value it cannot
+/// take), not the collection: the list on screen is kept, the refusal is logged and recorded for the diagnostics
+/// report (`ReaderDiagnostics`). A collection that is really empty has `rowCount` 0 and still empties the list.
 enum LiveSnapshotMerge {
     /// The list to publish, or nil when the snapshot must not change what is on screen.
-    static func apply<T: Identifiable>(existing: [T], incoming: [T], fromCache: Bool) -> [T]? {
+    static func apply<T: Identifiable>(
+        existing: [T],
+        incoming: [T],
+        fromCache: Bool,
+        rowCount: Int? = nil,
+        collection: String = ""
+    ) -> [T]? {
+        if let rowCount, refusesUnreadSnapshot(
+            collection: collection,
+            rowCount: rowCount,
+            parsedCount: incoming.count,
+            existingCount: existing.count,
+            fromCache: fromCache
+        ) {
+            return nil
+        }
         guard fromCache else { return incoming }
         if incoming.isEmpty && !existing.isEmpty { return nil }
         guard incoming.count < existing.count else { return incoming }
@@ -117,6 +137,148 @@ enum LiveSnapshotMerge {
         }
         return order.compactMap { byId[$0] }
     }
+
+    /// True when `rowCount` documents arrived, the reader made none of them into a record, and a list is already
+    /// on screen: that list must stay. Logs and records the refusal. Used by every listener and loader whose list
+    /// a failed reader could otherwise empty (projects, small works, clients, operatives, managers, users, leave).
+    @discardableResult
+    static func refusesUnreadSnapshot(
+        collection: String,
+        rowCount: Int,
+        parsedCount: Int,
+        existingCount: Int,
+        fromCache: Bool
+    ) -> Bool {
+        guard rowCount > 0, parsedCount == 0 else { return false }
+        // Recorded even with nothing on screen: the owner can then see the reader failed, not the data.
+        ReaderDiagnostics.shared.record(
+            collection: collection,
+            rowCount: rowCount,
+            parsedCount: parsedCount,
+            keptCount: existingCount,
+            source: fromCache ? "cache snapshot" : "server snapshot"
+        )
+        return existingCount > 0
+    }
+
+    /// Documents in a snapshot that a reader could make into a record: every document except the legacy
+    /// placeholder, which `workDocuments` drops. When the script does not answer, every row counts (that is the
+    /// failure this count guards against).
+    static func readableRowCount(_ rows: LiveDocumentRows) -> Int {
+        readableRowCount(ids: rows.map(\.id))
+    }
+
+    /// A one-off load (`loadProjects`, `loadOperatives`, …): true, logged and recorded, when it read readable
+    /// documents and the reader made none of them into a record. The caller then keeps the list it has.
+    static func loadYieldedNothing(collection: String, documentIds: [String], parsedCount: Int) -> Bool {
+        guard parsedCount == 0 else { return false }
+        let rowCount = readableRowCount(ids: documentIds)
+        guard rowCount > 0 else { return false }
+        ReaderDiagnostics.shared.record(
+            collection: collection,
+            rowCount: rowCount,
+            parsedCount: 0,
+            keptCount: 0,
+            source: "one-off load (list on screen kept)"
+        )
+        return true
+    }
+
+    static func readableRowCount(ids: [String]) -> Int {
+        guard !ids.isEmpty else { return 0 }
+        let documents: [[String: Any]] = ids.map { ["id": $0] }
+        return CanonicalBusinessEngine.workDocuments(projects: documents, smallWorks: [])?.count ?? ids.count
+    }
+}
+
+/// Every time a reader turned a non-empty snapshot or load into no records (or a user document could not be read
+/// by the rulebook), with counts. NSLog'd as `READER_YIELDED_NOTHING` and listed in Settings → diagnostic report
+/// (`FirebaseBackend.diagnoseMissingData`), so a device that shows empty lists says why. App plumbing, not a rule.
+nonisolated final class ReaderDiagnostics: @unchecked Sendable {
+    static let shared = ReaderDiagnostics()
+
+    nonisolated struct Event: Equatable, Sendable {
+        let at: Date
+        let collection: String
+        let rowCount: Int
+        let parsedCount: Int
+        let keptCount: Int
+        let source: String
+    }
+
+    private let lock = NSLock()
+    private var stored: [Event] = []
+    private let limit = 40
+
+    init() {}
+
+    func record(collection: String, rowCount: Int, parsedCount: Int, keptCount: Int, source: String) {
+        let event = Event(
+            at: Date(),
+            collection: collection.isEmpty ? "?" : collection,
+            rowCount: rowCount,
+            parsedCount: parsedCount,
+            keptCount: keptCount,
+            source: source
+        )
+        NSLog(
+            "READER_YIELDED_NOTHING collection=%@ source=%@ documents=%d records=%d keptOnScreen=%d scriptAnswers=%@",
+            event.collection, source, rowCount, parsedCount, keptCount,
+            Self.scriptAnswers() ? "yes" : "NO"
+        )
+        lock.lock()
+        stored.append(event)
+        if stored.count > limit { stored.removeFirst(stored.count - limit) }
+        lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .rulebookReaderYieldedNothing, object: nil)
+        }
+    }
+
+    var events: [Event] {
+        lock.lock(); defer { lock.unlock() }
+        return stored
+    }
+
+    func reset() {
+        lock.lock(); stored.removeAll(); lock.unlock()
+    }
+
+    /// Whether the packed script answers at all (a cheap call that always returns a value).
+    static func scriptAnswers() -> Bool {
+        CanonicalBusinessEngine.callJSON("organizationTimeZone", arguments: ["GB"]) is String
+    }
+
+    /// Text for the diagnostic report.
+    func summary() -> String {
+        var text = "   Rulebook script answers: \(Self.scriptAnswers() ? "yes" : "NO — every reader returns nothing")\n"
+        let list = events
+        if list.isEmpty {
+            text += "   ✅ No reader refused a non-empty snapshot or load\n"
+            return text
+        }
+        let formatter = ISO8601DateFormatter()
+        for event in list.suffix(15) {
+            text += "   ⚠️ \(formatter.string(from: event.at)) \(event.collection) (\(event.source)): "
+            text += "\(event.rowCount) documents → \(event.parsedCount) records; kept \(event.keptCount) on screen\n"
+        }
+        return text
+    }
+}
+
+/// Thrown by a one-off load whose documents the reader could not read at all, so the store keeps its list
+/// (a failed load never empties a screen) instead of publishing nothing.
+nonisolated struct RulebookReaderYieldedNothingError: LocalizedError {
+    let collection: String
+    let rowCount: Int
+    var errorDescription: String? {
+        "\(rowCount) \(collection) records could not be read on this device. The list already on screen was kept."
+    }
+}
+
+extension Notification.Name {
+    /// `ReaderDiagnostics` recorded a refusal (a screen can show a "could not read" notice).
+    nonisolated static let rulebookReaderYieldedNothing = Notification.Name("rulebookReaderYieldedNothing")
 }
 
 /// The registry token of one listener, set after the listener is created (its error handler reads it).

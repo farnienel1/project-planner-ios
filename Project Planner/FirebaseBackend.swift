@@ -2121,7 +2121,13 @@ class FirebaseBackend: ObservableObject {
         )
         let startDate = row.date("startMs") ?? Date()
         let endDate = row.date("endMs") ?? startDate
-        let jobType = parseJobType(from: row.optionalText("jobType"), defaultValue: smallWorks ? .smallWorks : .catA)
+        // A `smallWorks` document is a small works job whatever its stored `jobType` says (web writes "CAT A" when
+        // the field was missing). `jobType` routes the in-app list and the save collection, so a small works
+        // document typed "CAT A" was dropped by the small works listener and, before that, shown and saved as a
+        // project. The stored `jobType` field is not rewritten: saves diff against this same read copy.
+        let jobType: JobType = smallWorks
+            ? .smallWorks
+            : parseJobType(from: row.optionalText("jobType"), defaultValue: .catA)
         let manager = parseManagerLegacy(from: row.optionalText("managerName") ?? storedManagerName)
         let storedManagerIds = row.strings("managerIds")
         let storedPrimary = row.optionalText("managerId")
@@ -2225,6 +2231,10 @@ class FirebaseBackend: ObservableObject {
         )
         let jobs = Self.jobs(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) }, smallWorks: false)
         print("🔥🔥🔥 DEBUG: [LOAD] ✅ Loaded \(jobs.count) of \(snapshot.documents.count) projects documents")
+        // Documents arrived but none could be read: a failed read, not an empty company (the store keeps its list).
+        if LiveSnapshotMerge.loadYieldedNothing(collection: "projects", documentIds: snapshot.documents.map(\.documentID), parsedCount: jobs.count) {
+            throw RulebookReaderYieldedNothingError(collection: "projects", rowCount: snapshot.documents.count)
+        }
         return jobs
     }
     
@@ -2299,7 +2309,10 @@ class FirebaseBackend: ObservableObject {
         
         let clients = Self.clients(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
         
-        print("🔥🔥🔥 DEBUG: Loaded \(clients.count) clients from Firebase")
+        print("🔥🔥🔥 DEBUG: Loaded \(clients.count) of \(snapshot.documents.count) clients from Firebase")
+        // Recorded only: an empty result keeps the clients on screen (`ProjectStore.loadData`); an error there
+        // would replace them with the clients named on jobs.
+        _ = LiveSnapshotMerge.loadYieldedNothing(collection: "clients", documentIds: snapshot.documents.map(\.documentID), parsedCount: clients.count)
         return clients
     }
     
@@ -2394,6 +2407,9 @@ class FirebaseBackend: ObservableObject {
         )
         let jobs = Self.jobs(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) }, smallWorks: true)
         print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] ✅ Loaded \(jobs.count) of \(snapshot.documents.count) smallWorks documents")
+        if LiveSnapshotMerge.loadYieldedNothing(collection: "smallWorks", documentIds: snapshot.documents.map(\.documentID), parsedCount: jobs.count) {
+            throw RulebookReaderYieldedNothingError(collection: "small works", rowCount: snapshot.documents.count)
+        }
         return jobs
     }
     
@@ -3162,6 +3178,9 @@ class FirebaseBackend: ObservableObject {
         
         let loaded = Self.operatives(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
         print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Keeping \(loaded.count) real operatives (placeholders skipped)")
+        // Recorded only: an empty result never replaces the operatives on screen (`OperativeStore.keepingKnownPeople`),
+        // and throwing here would also stop the managers and qualifications loads.
+        _ = LiveSnapshotMerge.loadYieldedNothing(collection: "operatives", documentIds: snapshot.documents.map(\.documentID), parsedCount: loaded.count)
         return loaded
     }
 
@@ -3505,7 +3524,10 @@ class FirebaseBackend: ObservableObject {
             )
             print("🔥🔥🔥 DEBUG: [LOAD MANAGERS] Found \(snapshot.documents.count) manager documents")
             
-            return Self.managers(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+            let loaded = Self.managers(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+            // Recorded only: an empty result never replaces the managers on screen (`keepingKnownManagers`).
+            _ = LiveSnapshotMerge.loadYieldedNothing(collection: "managers", documentIds: snapshot.documents.map(\.documentID), parsedCount: loaded.count)
+            return loaded
     }
 
     /// RULEBOOK 1.6.0 §1 "Document readers": `managers/{id}` rows are read only through the rulebook's
@@ -3931,6 +3953,9 @@ class FirebaseBackend: ObservableObject {
             )
             fallback.documentName = data["name"] as? String ?? ""
             fallback.documentDisplayName = data["displayName"] as? String ?? ""
+            // Stores never let this identity-only copy replace a profile the rulebook did read.
+            fallback.parsedWithoutRulebook = true
+            ReaderDiagnostics.shared.record(collection: "users", rowCount: 1, parsedCount: 0, keptCount: 0, source: "user \(userId)")
             return fallback
         }
         let flags = row.map("permissions")
@@ -7154,6 +7179,10 @@ class FirebaseBackend: ObservableObject {
             return map.mapValues { firestoreJSON($0) }
         case let list as [Any]:
             return list.map { firestoreJSON($0) }
+        case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID() && !number.doubleValue.isFinite:
+            // A stored NaN or Infinity is not JSON: `JSONSerialization` would refuse the whole call, so one such
+            // field made the reader return nothing for that document (and a batch reader for every document).
+            return NSNull()
         case is String, is NSNumber, is NSNull:
             return value
         default:
@@ -7722,6 +7751,10 @@ class FirebaseBackend: ObservableObject {
         }
         let parsed = holidayBookingsFromFirestore(snapshot.documents, organizationId: orgId)
         print("🔥🔥🔥 DEBUG: [HOLIDAY LOAD] docs=\(snapshot.documents.count) parsed=\(parsed.count) skipped=\(snapshot.documents.count - parsed.count)")
+        // `HolidayStore.loadData` replaces its list with this result; a failed read keeps the leave on screen.
+        if LiveSnapshotMerge.loadYieldedNothing(collection: "holidayBookings", documentIds: snapshot.documents.map(\.documentID), parsedCount: parsed.count) {
+            throw RulebookReaderYieldedNothingError(collection: "annual leave", rowCount: snapshot.documents.count)
+        }
         return parsed
     }
 
@@ -8270,6 +8303,14 @@ class FirebaseBackend: ObservableObject {
                                     .getDocuments()
                                 let projectCount = projectsSnapshot.documents.count
                                 report += "   Projects: \(projectCount) found\n"
+                                let readableProjects = Self.jobs(fromDocuments: projectsSnapshot.documents.map { (id: $0.documentID, data: $0.data()) }, smallWorks: false).count
+                                report += "   Projects read by the rulebook: \(readableProjects)\n"
+                                let smallWorksSnapshot = try await db.collection("organizations")
+                                    .document(orgId)
+                                    .collection("smallWorks")
+                                    .getDocuments()
+                                let readableSmallWorks = Self.jobs(fromDocuments: smallWorksSnapshot.documents.map { (id: $0.documentID, data: $0.data()) }, smallWorks: true).count
+                                report += "   Small works: \(smallWorksSnapshot.documents.count) found, \(readableSmallWorks) read by the rulebook\n"
                                 if projectCount > 0 {
                                     report += "   ✅ Projects exist in Firebase\n"
                                 } else {
@@ -8282,7 +8323,7 @@ class FirebaseBackend: ObservableObject {
                                     .collection("operatives")
                                     .getDocuments()
                                 let operativeCount = operativesSnapshot.documents.count
-                                report += "   Operatives: \(operativeCount) found\n"
+                                report += "   Operatives: \(operativeCount) found, \(Self.operatives(fromDocuments: operativesSnapshot.documents.map { (id: $0.documentID, data: $0.data()) }).count) read by the rulebook\n"
                                 if operativeCount > 0 {
                                     report += "   ✅ Operatives exist in Firebase\n"
                                 } else {
@@ -8295,7 +8336,7 @@ class FirebaseBackend: ObservableObject {
                                     .collection("managers")
                                     .getDocuments()
                                 let managerCount = managersSnapshot.documents.count
-                                report += "   Managers: \(managerCount) found\n"
+                                report += "   Managers: \(managerCount) found, \(Self.managers(fromDocuments: managersSnapshot.documents.map { (id: $0.documentID, data: $0.data()) }).count) read by the rulebook\n"
                                 if managerCount > 0 {
                                     report += "   ✅ Managers exist in Firebase\n"
                                 } else {
@@ -8308,7 +8349,7 @@ class FirebaseBackend: ObservableObject {
                                     .collection("clients")
                                     .getDocuments()
                                 let clientCount = clientsSnapshot.documents.count
-                                report += "   Clients: \(clientCount) found\n"
+                                report += "   Clients: \(clientCount) found, \(Self.clients(fromDocuments: clientsSnapshot.documents.map { (id: $0.documentID, data: $0.data()) }).count) read by the rulebook\n"
                                 if clientCount > 0 {
                                     report += "   ✅ Clients exist in Firebase\n"
                                 } else {
@@ -8324,7 +8365,10 @@ class FirebaseBackend: ObservableObject {
                                     report += "   ACTION: Try 'Force Reload Data' button\n"
                                 }
                                 
-                                report += "\n6. RECOMMENDATION\n"
+                                report += "\n6. RULEBOOK READERS\n"
+                                report += ReaderDiagnostics.shared.summary()
+
+                                report += "\n7. RECOMMENDATION\n"
                                 if currentOrganization == nil {
                                     report += "   ⚠️ Organization exists in Firebase but not loaded in app\n"
                                     report += "   ACTION: Tap 'Force Reload Data' in Settings\n"

@@ -490,6 +490,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// organisation's `annualLeaveDefaults` were not loaded yet, so the leave figures are the rulebook default.
     /// A save never writes those figures (`FirebaseBackend.userDocumentPayload`).
     var annualLeaveDefaultsPending: Bool = false
+    /// True when `parseUserDocument` did not answer and `FirebaseBackend.parseAppUserDocument` built an identity-only
+    /// copy (role viewer, no permissions). Such a copy never replaces a profile or roster row the rulebook did read
+    /// (`ReaderDiagnostics` records it). Not encoded.
+    var parsedWithoutRulebook: Bool = false
     
     init(
         id: String,

@@ -473,9 +473,16 @@ class ProjectStore: ObservableObject {
                 query: { $0.collection(collection) }
             ) { [weak self] rows, fromCache in
                 guard let self else { return }
+                // `job(fromCanonical:)` puts every `smallWorks` document in the small works slice, so this filter
+                // only leaves out a `projects` document typed Small Works (as `loadProjects` does).
                 let incoming = FirebaseBackend.jobs(fromDocuments: rows, smallWorks: smallWorks)
                     .filter { ($0.jobType == .smallWorks) == smallWorks }
-                self.applyLiveWorkSlice(incoming, smallWorks: smallWorks, fromCache: fromCache)
+                self.applyLiveWorkSlice(
+                    incoming,
+                    smallWorks: smallWorks,
+                    fromCache: fromCache,
+                    rowCount: LiveSnapshotMerge.readableRowCount(rows)
+                )
             }
         }
         firebaseBackend.listenOrganizationQuery(
@@ -485,7 +492,13 @@ class ProjectStore: ObservableObject {
         ) { [weak self] rows, fromCache in
             guard let self else { return }
             let incoming = FirebaseBackend.clients(fromDocuments: rows)
-            guard var next = LiveSnapshotMerge.apply(existing: self.clients, incoming: incoming, fromCache: fromCache) else { return }
+            guard var next = LiveSnapshotMerge.apply(
+                existing: self.clients,
+                incoming: incoming,
+                fromCache: fromCache,
+                rowCount: LiveSnapshotMerge.readableRowCount(rows),
+                collection: "clients"
+            ) else { return }
             let incomingIds = Set(next.map(\.id))
             next += self.clients.filter { self.pendingCreateIds.contains($0.id) && !incomingIds.contains($0.id) }
             guard next != self.clients else { return }
@@ -510,9 +523,15 @@ class ProjectStore: ObservableObject {
     }
 
     /// One collection's slice of `projects` (projects or small works) from a listener snapshot.
-    private func applyLiveWorkSlice(_ incoming: [Project], smallWorks: Bool, fromCache: Bool) {
+    private func applyLiveWorkSlice(_ incoming: [Project], smallWorks: Bool, fromCache: Bool, rowCount: Int) {
         let existingSlice = projects.filter { ($0.jobType == .smallWorks) == smallWorks }
-        guard var nextSlice = LiveSnapshotMerge.apply(existing: existingSlice, incoming: incoming, fromCache: fromCache) else { return }
+        guard var nextSlice = LiveSnapshotMerge.apply(
+            existing: existingSlice,
+            incoming: incoming,
+            fromCache: fromCache,
+            rowCount: rowCount,
+            collection: smallWorks ? "smallWorks" : "projects"
+        ) else { return }
         let incomingIds = Set(nextSlice.map(\.id))
         nextSlice += existingSlice.filter { pendingCreateIds.contains($0.id) && !incomingIds.contains($0.id) }
         guard nextSlice != existingSlice else { return }
