@@ -189,7 +189,7 @@ final class WarningScanCanonicalTests: XCTestCase {
         ])
         let ninth = try day("2026-10-09")
         let window = CanonicalBusinessEngine.warningBounds(
-            detection: kept,
+            detection: saved,
             invoicing: live.invoicing,
             reference: ninth
         )
