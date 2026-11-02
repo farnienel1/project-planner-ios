@@ -20,6 +20,8 @@ enum OfflineFieldValue: Codable, Equatable {
     case null
     /// `FieldValue.delete()` (only valid in an update).
     case delete
+    /// `FieldValue.serverTimestamp()` at replay (e.g. `updatedAt`, `createdAt`, `approvedAt`).
+    case serverTimestamp
 
     private enum CodingKeys: String, CodingKey { case kind, value }
 
@@ -33,6 +35,7 @@ enum OfflineFieldValue: Codable, Equatable {
         case "date": self = .date(try container.decode(Date.self, forKey: .value))
         case "strings": self = .strings(try container.decode([String].self, forKey: .value))
         case "delete": self = .delete
+        case "serverTimestamp": self = .serverTimestamp
         default: self = .null
         }
     }
@@ -59,6 +62,8 @@ enum OfflineFieldValue: Codable, Equatable {
             try container.encode("null", forKey: .kind)
         case .delete:
             try container.encode("delete", forKey: .kind)
+        case .serverTimestamp:
+            try container.encode("serverTimestamp", forKey: .kind)
         }
     }
 
@@ -72,7 +77,38 @@ enum OfflineFieldValue: Codable, Equatable {
         case .strings(let value): return value
         case .null: return NSNull()
         case .delete: return FieldValue.delete()
+        case .serverTimestamp: return FieldValue.serverTimestamp()
         }
+    }
+
+    /// A value from a write map built for the Firestore SDK (String, Bool, number, Date, Timestamp, [String],
+    /// NSNull). Nil for anything the outbox cannot store (a sentinel such as `FieldValue`, a nested map).
+    static func from(_ value: Any) -> OfflineFieldValue? {
+        switch value {
+        case is NSNull: return .null
+        case let text as String: return .string(text)
+        case let timestamp as Timestamp: return .date(timestamp.dateValue())
+        case let date as Date: return .date(date)
+        case let list as [String]: return .strings(list)
+        case let number as NSNumber:
+            // A Swift Bool bridges to an NSNumber whose type is the CFBoolean.
+            if CFGetTypeID(number) == CFBooleanGetTypeID() { return .bool(number.boolValue) }
+            return .number(number.doubleValue)
+        case let flag as Bool: return .bool(flag)
+        case let number as Double: return .number(number)
+        case let number as Int: return .number(Double(number))
+        default: return nil
+        }
+    }
+
+    /// Every value of `fields` as an outbox value, or nil when one cannot be queued.
+    static func fields(_ fields: [String: Any]) -> [String: OfflineFieldValue]? {
+        var out: [String: OfflineFieldValue] = [:]
+        for (key, value) in fields {
+            guard let converted = from(value) else { return nil }
+            out[key] = converted
+        }
+        return out
     }
 }
 
@@ -87,6 +123,9 @@ struct OfflinePartialUpdatePayload: Codable {
     var isCreate: Bool
     /// The signed-in user who queued it. Replay is dropped if someone else is signed in.
     let userId: String
+    /// False for a document whose rules allow only its own keys (`users/{uid}/private/taxIds`): replay adds no
+    /// write metadata. Nil (entries queued before this field) means true.
+    var stampsWriteMetadata: Bool? = nil
 }
 
 enum OfflinePartialUpdateWriter {
@@ -113,7 +152,9 @@ enum OfflinePartialUpdateWriter {
             if payload.isCreate, value == .delete { continue }
             data[key] = value.firestoreValue
         }
-        data = WriteMetadata.stamped(data, userId: signedInUserId)
+        if payload.stampsWriteMetadata != false {
+            data = WriteMetadata.stamped(data, userId: signedInUserId)
+        }
         if payload.isCreate {
             try await ref.setData(data, merge: true)
         } else {

@@ -1623,15 +1623,11 @@ struct HolidayView: View {
                         status: .pending,
                         approvedByUserId: nil
                     )
+                    // Approvers are told now, or once the outbox confirms a request made offline (§2).
                     for request in created {
-                        await notificationService.notifyHolidayRequestSubmitted(
-                            bookingId: request.id,
-                            operativeName: operativeDisplayName,
-                            startDate: request.startDate,
-                            endDate: request.endDate,
-                            assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser(),
-                            requesterUserId: uid,
-                            excludeUserIdMatchingRequester: uid
+                        await notificationService.notifyHolidayRequestSubmittedWhenSynced(
+                            leaveNotice(for: request, requesterUserId: uid, requesterName: operativeDisplayName),
+                            pendingSync: holidayStore.isPendingSync(request)
                         )
                     }
                     await MainActor.run {
@@ -1667,13 +1663,9 @@ struct HolidayView: View {
                     if !selfBooks {
                         let requesterName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
                         for request in created {
-                            await notificationService.notifyHolidayRequestSubmittedByUser(
-                                bookingId: request.id,
-                                requesterUserId: uid,
-                                requesterName: requesterName,
-                                startDate: request.startDate,
-                                endDate: request.endDate,
-                                assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser()
+                            await notificationService.notifyHolidayRequestSubmittedWhenSynced(
+                                leaveNotice(for: request, requesterUserId: uid, requesterName: requesterName),
+                                pendingSync: holidayStore.isPendingSync(request)
                             )
                         }
                     }
@@ -2011,18 +2003,35 @@ struct HolidayView: View {
     private func requestCancellation(for booking: HolidayBooking) {
         guard let uid = firebaseBackend.currentUser?.uid else { return }
         Task {
+            holidayStore.errorMessage = nil
             await holidayStore.requestCancellation(booking, by: uid)
-            await notificationService.notifyHolidayRequestSubmitted(
-                bookingId: booking.id,
-                operativeName: requesterName(for: booking),
-                startDate: booking.startDate,
-                endDate: booking.endDate,
-                assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser(),
-                requesterUserId: uid,
-                excludeUserIdMatchingRequester: uid,
-                cancellation: true
+            guard holidayStore.errorMessage == nil else { return }
+            // Approvers are told now, or once the outbox confirms a request made offline (§2).
+            await notificationService.notifyHolidayRequestSubmittedWhenSynced(
+                leaveNotice(for: booking, requesterUserId: uid, requesterName: requesterName(for: booking), cancellation: true),
+                pendingSync: holidayStore.isPendingSync(booking)
             )
         }
+    }
+
+    private func leaveNotice(
+        for request: HolidayBooking,
+        requesterUserId: String,
+        requesterName: String,
+        cancellation: Bool = false
+    ) -> DeferredLeaveNotice {
+        // The request's organisation is the one its outbox entry was queued under.
+        DeferredLeaveNotice(
+            entityId: request.documentId,
+            organizationId: request.organizationId,
+            bookingId: request.id,
+            requesterUserId: requesterUserId,
+            requesterName: requesterName,
+            startDate: request.startDate,
+            endDate: request.endDate,
+            assignedManagerUserId: effectiveAssignedManagerUserIdForCurrentUser(),
+            cancellation: cancellation
+        )
     }
 
     private func conflictingApprovedOperatives(for request: HolidayBooking) -> [String] {
@@ -2118,6 +2127,8 @@ struct HolidayRowView: View {
                 Text(statusText)
                     .font(.caption.weight(.bold))
                     .foregroundStyle(statusColor)
+                // RULEBOOK §2: a request made offline shows Pending sync until the server confirms it.
+                PendingSyncIndicator(entityId: booking.documentId)
                 if booking.status != .pending,
                    let note = CanonicalBusinessEngine.parseHolidayDecisionNote(booking.decisionNote) {
                     Text("Note: \(note)")

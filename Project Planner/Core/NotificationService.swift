@@ -21,7 +21,7 @@ class NotificationService: ObservableObject {
     @Published var unreadCount: Int = 0
     @Published var bookingToastMessage: String?
     
-    private var firebaseBackend: FirebaseBackend?
+    private(set) var firebaseBackend: FirebaseBackend?
     private var userStore: UserStore?
     private var operativeStore: OperativeStore?
     private var projectStore: ProjectStore?
@@ -67,6 +67,8 @@ class NotificationService: ObservableObject {
             }
         }
         #endif
+        // Leave requests made offline notify their approvers once the outbox confirms them (§2).
+        DeferredLeaveNoticeQueue.shared.attach(self)
     }
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {

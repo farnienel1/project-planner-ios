@@ -55,6 +55,7 @@ enum PlannerStoreWiring {
 
         taskStore.setFirebaseBackend(firebaseBackend)
         holidayStore.setFirebaseBackend(firebaseBackend)
+        holidayStore.setSmartCache(smartCache)
         subcontractorStore.setFirebaseBackend(firebaseBackend)
 
         notificationService.setFirebaseBackend(firebaseBackend)
@@ -65,6 +66,7 @@ enum PlannerStoreWiring {
         notificationService.setHolidayStore(holidayStore)
 
         appSettings.setFirebaseBackend(firebaseBackend)
+        appSettings.setSmartCache(smartCache)
     }
 
     /// RULEBOOK §1 live screens: attaches every organisation-scoped collection listener (one per collection;

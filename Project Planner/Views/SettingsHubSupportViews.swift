@@ -272,6 +272,11 @@ struct SettingsProfileDetailView: View {
                             )
                         }
                         SettingsHubChrome.divider()
+                        if let uid = userStore.currentUser?.id {
+                            // RULEBOOK §2: saved offline, waiting for the server.
+                            PendingSyncIndicator(entityId: UserStore.billingOutboxEntityId(userId: uid))
+                                .padding(.bottom, 4)
+                        }
                         if let billingSaveMessage {
                             Text(billingSaveMessage)
                                 .font(.caption)
@@ -429,6 +434,11 @@ struct SettingsNotificationsHubView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 SettingsHubChrome.sectionTitle("Notifications")
+                if let uid = userStore.currentUser?.id {
+                    // RULEBOOK §2: toggles saved offline, waiting for the server.
+                    PendingSyncIndicator(entityId: "notifications_\(uid)")
+                        .padding(.bottom, 8)
+                }
                 if preferenceKeys.isEmpty {
                     SettingsHubChrome.card {
                         Text("Notification options for this account are managed by your organisation.")

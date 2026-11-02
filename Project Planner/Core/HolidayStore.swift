@@ -15,6 +15,7 @@ class HolidayStore: ObservableObject {
     @Published var errorMessage: String?
 
     private var firebaseBackend: FirebaseBackend?
+    private var smartCache: SmartCacheService?
     private var isLoadingInFlight = false
 
     init() {
@@ -59,6 +60,76 @@ class HolidayStore: ObservableObject {
         firebaseBackend = backend
     }
 
+    func setSmartCache(_ smartCache: SmartCacheService) {
+        self.smartCache = smartCache
+    }
+
+    // MARK: Offline (RULEBOOK §2: annual leave requests are allowed offline)
+
+    private var isOffline: Bool { smartCache?.isOnline == false }
+
+    /// "Pending sync": this request has a queued change the server has not confirmed.
+    func isPendingSync(_ booking: HolidayBooking) -> Bool {
+        OfflineOutboxStore.shared.hasPendingSync(entityId: booking.documentId)
+    }
+
+    /// The signed-in person's own request: only those are queued offline. Deciding or booking leave for someone
+    /// else is an approval (online only, `approvals.annual_leave`).
+    private func isOwnRequest(_ booking: HolidayBooking) -> Bool {
+        guard let uid = firebaseBackend?.currentUser?.uid, !uid.isEmpty else { return false }
+        return booking.userId == uid
+    }
+
+    private func offlineOrganizationId() throws -> String {
+        if let orgId = firebaseBackend?.currentOrganization?.firestoreDocumentId, !orgId.isEmpty { return orgId }
+        if let orgId = firebaseBackend?.resolvedOrganizationIdForOfflineWrites(), !orgId.isEmpty { return orgId }
+        throw NSError(domain: "HolidayStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "Organization not loaded yet. Please try again in a moment."])
+    }
+
+    /// Offline and not the person's own request: refused with the online-only message.
+    private func requireOnlineUnlessOwn(_ booking: HolidayBooking) throws {
+        guard isOffline, !isOwnRequest(booking) else { return }
+        throw NSError(domain: "HolidayStore", code: 503, userInfo: [NSLocalizedDescriptionKey: OfflinePolicy.onlineOnlyMessage])
+    }
+
+    /// Queues the person's own new request (`holidayRequestWriteFields`) and keeps it on screen as Pending sync.
+    private func queueCreate(_ draft: HolidayBooking) throws -> HolidayBooking {
+        let orgId = try offlineOrganizationId()
+        guard let uid = firebaseBackend?.currentUser?.uid else {
+            throw NSError(domain: "HolidayStore", code: 401, userInfo: [NSLocalizedDescriptionKey: "You must be signed in to manage holidays."])
+        }
+        let create = try FirebaseBackend.holidayRequestCreate(draft, organizationId: orgId)
+        OfflineOutboxStore.shared.enqueueAnnualLeaveRequest(
+            documentPath: "organizations/\(orgId)/holidayBookings/\(create.documentId)",
+            fields: create.fields,
+            isCreate: true,
+            userId: uid,
+            organizationId: orgId,
+            entityId: create.documentId
+        )
+        bookings.removeAll { $0.id == create.stored.id }
+        bookings.append(create.stored)
+        return create.stored
+    }
+
+    /// Queues a partial update of the person's own request (edit of a pending request, or asking to cancel).
+    private func queueUpdate(_ booking: HolidayBooking, fields: [String: Any]) throws {
+        guard !fields.isEmpty else { return }
+        let orgId = try offlineOrganizationId()
+        guard let uid = firebaseBackend?.currentUser?.uid,
+              let queued = OfflineFieldValue.fields(fields) else {
+            throw NSError(domain: "HolidayStore", code: 503, userInfo: [NSLocalizedDescriptionKey: OfflinePolicy.onlineOnlyMessage])
+        }
+        OfflineOutboxStore.shared.enqueueAnnualLeaveRequest(
+            documentPath: "organizations/\(orgId)/holidayBookings/\(booking.documentId)",
+            fields: queued,
+            isCreate: false,
+            userId: uid,
+            organizationId: orgId,
+            entityId: booking.documentId
+        )
+    }
+
     /// RULEBOOK §1, §5, §9, §10: one live listener on the organisation's `holidayBookings`, read through
     /// `parseHolidayDocuments` (`FirebaseBackend.holidayBookings(fromDocuments:)`). A decision or a request made
     /// on web shows on Annual leave, Daily Overview, My Schedule and timesheet leave lines, and the warnings
@@ -72,7 +143,11 @@ class HolidayStore: ObservableObject {
         ) { [weak self] rows, fromCache in
             guard let self else { return }
             let parsed = FirebaseBackend.holidayBookings(fromDocuments: rows, organizationId: normalizedOrganizationId(organizationId))
-            guard let next = LiveSnapshotMerge.apply(existing: self.bookings, incoming: parsed, fromCache: fromCache),
+            // §2: a request queued offline stays on screen (Pending sync) until the outbox replays it.
+            let pending = self.bookings.filter { self.isPendingSync($0) }
+            let pendingIds = Set(pending.map(\.id))
+            let incoming = parsed.filter { !pendingIds.contains($0.id) } + pending
+            guard let next = LiveSnapshotMerge.apply(existing: self.bookings, incoming: incoming, fromCache: fromCache),
                   Set(next) != Set(self.bookings) else { return }
             self.bookings = next
             NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
@@ -122,6 +197,19 @@ class HolidayStore: ObservableObject {
     /// writes only the fields that changed (partial update + `WriteMetadata`), never a full merge-set.
     func saveBooking(_ booking: HolidayBooking) async throws {
         guard let fb = firebaseBackend else { return }
+        try requireOnlineUnlessOwn(booking)
+        if isOffline {
+            // RULEBOOK §2: the person's own request is queued and shows Pending sync.
+            if let previous = bookings.first(where: { $0.id == booking.id }) {
+                try queueUpdate(booking, fields: Self.changedFields(from: previous, to: booking))
+                if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
+                    bookings[index] = booking
+                }
+            } else {
+                _ = try queueCreate(booking)
+            }
+            return
+        }
         let orgId = try await resolveOrganizationId()
         if let previous = bookings.first(where: { $0.id == booking.id }) {
             let fields = Self.changedFields(from: previous, to: booking)
@@ -148,7 +236,17 @@ class HolidayStore: ObservableObject {
         approvedByUserId: String?
     ) async throws -> [HolidayBooking] {
         guard let fb = firebaseBackend else { return [] }
-        let orgId = try await resolveOrganizationId()
+        let signedIn = fb.currentUser?.uid
+        let ownRequest = signedIn != nil && userId == signedIn
+        if isOffline && !ownRequest {
+            throw NSError(domain: "HolidayStore", code: 503, userInfo: [NSLocalizedDescriptionKey: OfflinePolicy.onlineOnlyMessage])
+        }
+        let orgId: String
+        if isOffline {
+            orgId = try offlineOrganizationId()
+        } else {
+            orgId = try await resolveOrganizationId()
+        }
         let keyed = picks.map { (dayKey: OrganizationRulebookContext.dayKey($0.day), timeSlot: $0.timeSlot.rawValue) }
         guard let ranges = CanonicalBusinessEngine.holidayRequestRanges(picks: keyed) else {
             throw NSError(domain: "HolidayStore", code: 500, userInfo: [NSLocalizedDescriptionKey: "Annual leave could not be prepared. Please try again."])
@@ -167,6 +265,11 @@ class HolidayStore: ObservableObject {
                 timeSlot: HolidayTimeSlot(rawValue: range.timeSlot) ?? .fullDay,
                 approvedByUserId: status == .approved ? approvedByUserId : nil
             )
+            if isOffline {
+                // RULEBOOK §2: queued; approver notices wait for the server (`isPendingSync`).
+                saved.append(try queueCreate(draft))
+                continue
+            }
             let stored = try await fb.saveHolidayBooking(draft, organizationId: orgId)
             bookings.removeAll { $0.id == stored.id }
             bookings.append(stored)

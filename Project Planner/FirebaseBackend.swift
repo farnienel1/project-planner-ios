@@ -7549,6 +7549,21 @@ class FirebaseBackend: ObservableObject {
     @discardableResult
     func saveHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws -> HolidayBooking {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
+        let create = try Self.holidayRequestCreate(booking, organizationId: orgId)
+        let data: [String: Any] = WriteMetadata.stamped(
+            create.fields.mapValues(\.firestoreValue),
+            userId: auth.currentUser?.uid
+        )
+        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(create.documentId).setData(data)
+        return create.stored
+    }
+
+    /// The new leave request document (`holidayRequestWriteFields`, §9) as outbox values, so the online write and an
+    /// offline queued create (RULEBOOK §2) send the same fields. `stored` is the booking as saved.
+    static func holidayRequestCreate(
+        _ booking: HolidayBooking,
+        organizationId orgId: String
+    ) throws -> (documentId: String, fields: [String: OfflineFieldValue], stored: HolidayBooking) {
         guard let fields = CanonicalBusinessEngine.holidayRequestWriteFields(
             id: booking.documentId,
             organizationId: orgId,
@@ -7563,23 +7578,22 @@ class FirebaseBackend: ObservableObject {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "This annual leave request is not complete."])
         }
         let isApproved = fields.status == HolidayStatus.approved.rawValue
-        let data: [String: Any] = WriteMetadata.stamped([
-            "id": fields.id,
-            "organizationId": fields.organizationId,
-            "userId": fields.userId.map { $0 as Any } ?? NSNull(),
-            "operativeId": fields.operativeId.map { $0 as Any } ?? NSNull(),
-            "startDate": Timestamp(date: fields.startDate),
-            "endDate": Timestamp(date: fields.endDate),
-            "status": fields.status,
-            "timeSlot": fields.timeSlot,
-            "approvedByUserId": fields.approvedByUserId.map { $0 as Any } ?? NSNull(),
-            "approvedAt": isApproved ? (FieldValue.serverTimestamp() as Any) : (NSNull() as Any),
-            "cancellationRequestedAt": NSNull(),
-            "cancellationRequestedByUserId": NSNull(),
-            "decisionNote": NSNull(),
-            "createdAt": FieldValue.serverTimestamp(),
-        ], userId: auth.currentUser?.uid)
-        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(fields.id).setData(data)
+        let data: [String: OfflineFieldValue] = [
+            "id": .string(fields.id),
+            "organizationId": .string(fields.organizationId),
+            "userId": fields.userId.map { .string($0) } ?? .null,
+            "operativeId": fields.operativeId.map { .string($0) } ?? .null,
+            "startDate": .date(fields.startDate),
+            "endDate": .date(fields.endDate),
+            "status": .string(fields.status),
+            "timeSlot": .string(fields.timeSlot),
+            "approvedByUserId": fields.approvedByUserId.map { .string($0) } ?? .null,
+            "approvedAt": isApproved ? .serverTimestamp : .null,
+            "cancellationRequestedAt": .null,
+            "cancellationRequestedByUserId": .null,
+            "decisionNote": .null,
+            "createdAt": .serverTimestamp,
+        ]
         var stored = booking
         stored.organizationId = fields.organizationId
         stored.startDate = fields.startDate
@@ -7591,7 +7605,7 @@ class FirebaseBackend: ObservableObject {
         stored.cancellationRequestedAt = nil
         stored.cancellationRequestedByUserId = nil
         stored.decisionNote = nil
-        return stored
+        return (fields.id, data, stored)
     }
 
     /// Partial update of an existing leave document: only `fields` plus `WriteMetadata` (§1).

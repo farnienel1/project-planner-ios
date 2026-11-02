@@ -1035,6 +1035,9 @@ class UserStore: ObservableObject {
         }
         #endif
         guard let firebaseBackend = firebaseBackend else { return false }
+        if smartCache?.isOnline == false {
+            return queueOwnBillingProfile(userId: userId, vatNumber: vatNumber, utrNumber: utrNumber, firebaseBackend: firebaseBackend)
+        }
         do {
             try await firebaseBackend.saveSensitiveProfile(userId: userId, utrNumber: utrNumber, vatNumber: vatNumber)
             if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
@@ -1050,6 +1053,49 @@ class UserStore: ObservableObject {
             errorMessage = "Could not save billing details: \(error.localizedDescription)"
             return false
         }
+    }
+
+    /// Outbox entity id of the signed-in person's queued billing details ("Pending sync").
+    static func billingOutboxEntityId(userId: String) -> String { "taxIds_\(userId)" }
+
+    /// RULEBOOK §2: the person's own profile fields are allowed offline. Billing details are queued as the whole
+    /// `users/{uid}/private/taxIds` document (`sensitiveProfileDocPath`, `sensitiveProfileWriteFields`) with no write
+    /// metadata, since its rules allow only its own keys. Someone else's details stay online only.
+    private func queueOwnBillingProfile(
+        userId: String,
+        vatNumber: String?,
+        utrNumber: String?,
+        firebaseBackend: FirebaseBackend
+    ) -> Bool {
+        guard let signedIn = firebaseBackend.currentUser?.uid, signedIn == userId else {
+            errorMessage = OfflinePolicy.onlineOnlyMessage
+            return false
+        }
+        guard let path = CanonicalBusinessEngine.sensitiveProfileDocPath(userId: userId),
+              let write = CanonicalBusinessEngine.sensitiveProfileWriteFields(
+                utrNumber: utrNumber,
+                vatNumber: vatNumber,
+                updatedByUserId: signedIn
+              ), write.ok, let fields = write.fields else {
+            let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
+            errorMessage = "UTR and VAT number can be up to \(limit) characters each."
+            return false
+        }
+        OfflineOutboxStore.shared.enqueueOwnProfileFields(
+            userId: signedIn,
+            fields: [
+                "utrNumber": .string(fields.utrNumber),
+                "vatNumber": .string(fields.vatNumber),
+                "updatedByUserId": .string(fields.updatedByUserId),
+                "updatedAt": .serverTimestamp,
+            ],
+            organizationId: firebaseBackend.resolvedOrganizationIdForOfflineWrites() ?? "",
+            documentPath: path,
+            replacesDocument: true,
+            stampsWriteMetadata: false,
+            entityId: Self.billingOutboxEntityId(userId: signedIn)
+        )
+        return true
     }
 
     func updateUserTimesheetsEnabled(userId: String, enabled: Bool) async -> Bool {

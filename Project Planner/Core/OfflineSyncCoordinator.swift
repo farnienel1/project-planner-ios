@@ -35,10 +35,13 @@ enum OfflineSyncCoordinator {
                 try await execute(entry: entry, firebaseBackend: firebaseBackend)
                 outbox.removeEntry(id: entry.id)
                 synced += 1
+                // The server confirmed this change: follow-ups that wait for it (leave approver notices) run now.
+                NotificationCenter.default.post(name: .offlineOutboxEntrySynced, object: nil, userInfo: entryInfo(entry))
             } catch {
                 if let writeError = error as? OfflinePartialUpdateWriter.WriteError {
                     // Another account is signed in, or the path is unusable: retrying cannot help.
                     outbox.removeRefused(id: entry.id, message: writeError.localizedDescription)
+                    NotificationCenter.default.post(name: .offlineOutboxEntryRefused, object: nil, userInfo: entryInfo(entry))
                     failed += 1
                     continue
                 }
@@ -64,6 +67,15 @@ enum OfflineSyncCoordinator {
 
         print("🔥🔥🔥 DEBUG: [OfflineSync] Done — synced: \(synced), failed: \(failed), remaining: \(outbox.pendingCount)")
         return (synced, failed)
+    }
+
+    /// userInfo for `.offlineOutboxEntrySynced` / `.offlineOutboxEntryRefused`.
+    private static func entryInfo(_ entry: OfflineOutboxEntry) -> [String: String] {
+        [
+            "operation": entry.operation.rawValue,
+            "entityId": entry.entityId,
+            "organizationId": entry.organizationId,
+        ]
     }
 
     /// For a queued booking save: true for a create (no `changedFields`), false for an edit. Nil otherwise.
@@ -187,6 +199,7 @@ enum OfflineSyncCoordinator {
             message = "\(entry.displayTitle): this change was refused by the server and was not saved."
         }
         outbox.removeRefused(id: entry.id, message: message)
+        NotificationCenter.default.post(name: .offlineOutboxEntryRefused, object: nil, userInfo: entryInfo(entry))
         switch entry.operation {
         case .saveBooking, .deleteBooking:
             NotificationCenter.default.post(
@@ -211,4 +224,9 @@ extension Notification.Name {
     /// A queued booking write was refused for good. userInfo: `bookingId` (String), `collection`
     /// (`bookings` | `managerSiteBookings`), `operation` (outbox operation raw value).
     static let offlineBookingReplayRefused = Notification.Name("offlineBookingReplayRefused")
+    /// One outbox entry was written and confirmed by the server. userInfo: `operation`, `entityId`,
+    /// `organizationId` (Strings).
+    static let offlineOutboxEntrySynced = Notification.Name("offlineOutboxEntrySynced")
+    /// One outbox entry was refused for good and removed. userInfo as `offlineOutboxEntrySynced`.
+    static let offlineOutboxEntryRefused = Notification.Name("offlineOutboxEntryRefused")
 }

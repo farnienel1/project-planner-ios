@@ -356,20 +356,26 @@ final class OfflineOutboxStore: ObservableObject {
     /// RULEBOOK §2: queue the signed-in user's own profile fields on `users/{userId}` (partial update).
     /// Pay, role, line manager, active flag, employment type and permissions are not "own profile
     /// fields" (§16) and must not be passed here.
+    /// `replacesDocument`: the fields are the whole document (`users/{uid}/private/taxIds`), replayed as a set.
+    /// `stampsWriteMetadata` false for a document whose rules allow only its own keys.
     func enqueueOwnProfileFields(
         userId: String,
         fields: [String: OfflineFieldValue],
         organizationId: String,
-        documentPath: String? = nil
+        documentPath: String? = nil,
+        replacesDocument: Bool = false,
+        stampsWriteMetadata: Bool = true,
+        entityId: String? = nil
     ) {
         enqueuePartialUpdate(
             operation: .saveOwnProfileFields,
             documentPath: documentPath ?? "users/\(userId)",
             fields: fields,
-            isCreate: false,
+            isCreate: replacesDocument,
             userId: userId,
             organizationId: organizationId,
-            entityId: "profile_\(userId)"
+            entityId: entityId ?? "profile_\(userId)",
+            stampsWriteMetadata: stampsWriteMetadata
         )
     }
 
@@ -400,7 +406,8 @@ final class OfflineOutboxStore: ObservableObject {
         isCreate: Bool,
         userId: String,
         organizationId: String,
-        entityId: String?
+        entityId: String?,
+        stampsWriteMetadata: Bool = true
     ) {
         guard !fields.isEmpty, !documentPath.isEmpty, !userId.isEmpty else { return }
         let key = entityId ?? documentPath.split(separator: "/").last.map(String.init) ?? documentPath
@@ -416,7 +423,8 @@ final class OfflineOutboxStore: ObservableObject {
             documentPath: documentPath,
             fields: merged,
             isCreate: create,
-            userId: userId
+            userId: userId,
+            stampsWriteMetadata: stampsWriteMetadata ? nil : false
         )
         guard let payload = try? encoder.encode(payloadModel) else { return }
         enqueue(
