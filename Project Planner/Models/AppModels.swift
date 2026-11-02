@@ -288,6 +288,10 @@ struct OperativeDayRateHistoryEntry: Identifiable, Codable, Hashable {
     var createdAt: Date
     /// `day` or `hourly` (RULEBOOK §8). Nil on old rows, which count as day. `dayRate` holds the hourly figure for hourly rows.
     var payBasis: String? = nil
+    /// The Firestore document id, stored case (`parsePayRateHistoryDocuments`). `id` is the stable UUID for it.
+    var documentId: String? = nil
+    /// `operativeId` as stored (a non-UUID id is kept). `operativeId` is the in-app UUID for it.
+    var operativeIdRaw: String? = nil
 }
 
 /// Loaded `operativeDayRateHistory` documents bucketed for lookups (a single doc may appear in both maps).
@@ -478,6 +482,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     var payBasis: String? = nil
     /// `users/{uid}.profilePhotoUpdatedAt`: refreshes a cached avatar when the photo changes (RULEBOOK §12).
     var profilePhotoUpdatedAt: Date? = nil
+    /// The stored `operativeMode` flag (`parseUserDocument.operativeModeStored`). `permissions.operativeMode` is the
+    /// reader's list value, which ignores a stray flag on an admin; the approval rules and security rules still
+    /// read the stored flag (`adminOutsideOperativeMode`, RULEBOOK 1.6.0 §8).
+    var operativeModeStored: Bool = false
     
     init(
         id: String,
@@ -604,7 +612,7 @@ extension AppUser {
         case annualLeaveCarriesOver, annualLeaveYearAllowance, annualLeaveYearAllowanceKey
         case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
         case documentName, documentDisplayName, formerUserIds, documentUpdatedAt
-        case status, payBasis, profilePhotoUpdatedAt
+        case status, payBasis, profilePhotoUpdatedAt, operativeModeStored
     }
 
     init(from decoder: Decoder) throws {
@@ -655,6 +663,7 @@ extension AppUser {
         status = try container.decodeIfPresent(String.self, forKey: .status)
         payBasis = try container.decodeIfPresent(String.self, forKey: .payBasis)
         profilePhotoUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .profilePhotoUpdatedAt)
+        operativeModeStored = try container.decodeIfPresent(Bool.self, forKey: .operativeModeStored) ?? permissions.operativeMode
     }
 
     func encode(to encoder: Encoder) throws {
@@ -704,12 +713,19 @@ extension AppUser {
         try container.encodeIfPresent(status, forKey: .status)
         try container.encodeIfPresent(payBasis, forKey: .payBasis)
         try container.encodeIfPresent(profilePhotoUpdatedAt, forKey: .profilePhotoUpdatedAt)
+        try container.encode(operativeModeStored, forKey: .operativeModeStored)
     }
 
-    /// Operatives default on; self-employed managers/admins default on; PAYE managers/admins default off.
+    /// Timesheets when `timesheetsEnabled` is not stored: the rulebook's `defaultTimesheetsEnabled` (RULEBOOK 1.6.0 §8).
+    /// Operatives and self-employed people take part; PAYE managers and admins do not.
     static func defaultTimesheetsEnabled(for permissions: UserPermissions, employmentType: EmploymentType = .paye) -> Bool {
-        if permissions.operativeMode { return true }
-        if employmentType == .selfEmployed { return true }
+        if let answer = CanonicalBusinessEngine.defaultTimesheetsEnabled(
+            operativeMode: permissions.operativeMode,
+            employmentType: employmentType.rawValue
+        ) {
+            return answer
+        }
+        // The script did not run. No Swift copy of the rule: off until the script answers.
         return false
     }
 

@@ -101,8 +101,9 @@ enum PayrollRateResolver {
     ) -> [CanonicalBusinessEngine.CanonicalPayHistoryRow] {
         history.mergedEntries(userId: userId, operativeId: operativeId).map { entry in
             CanonicalBusinessEngine.CanonicalPayHistoryRow(
-                id: entry.id.uuidString,
+                id: entry.documentId ?? entry.id.uuidString,
                 userId: entry.userId,
+                // The in-app operative UUID, the same form `operativeIds` passes (rows are already this person's).
                 operativeId: entry.operativeId?.uuidString,
                 dayRate: entry.dayRate,
                 payBasis: entry.payBasis,
@@ -138,7 +139,7 @@ enum PayrollRateResolver {
             employment: employment,
             operativeId: operative?.id.uuidString,
             operativePay: operative.map {
-                CanonicalBusinessEngine.CanonicalStoredPay(payBasis: nil, dayRate: $0.dayRate, hourlyRate: $0.hourlyRate)
+                CanonicalBusinessEngine.CanonicalStoredPay(payBasis: $0.payBasis, dayRate: $0.dayRate, hourlyRate: $0.hourlyRate)
             },
             history: historyRows(history, userId: user?.id, operativeId: operative?.id),
             userIds: userIds,

@@ -503,7 +503,7 @@ enum WarningsComputation {
                 let first = sortedCluster[0].operativeId
                 let person = bookingPeople.person(for: first)
                 let catalogue = operativesById[first]
-                    ?? person?.operativeId.flatMap(UUID.init(uuidString:)).flatMap { operativesById[$0] }
+                    ?? person?.operativeId.map { Booking.internalOperativeId(for: $0) }.flatMap { operativesById[$0] }
                 let account = person?.accountId.flatMap { usersById[$0] }
                 let operative = catalogue ?? WarningsComputationSnapshot.OperativeSnapshot(
                     id: first,
@@ -709,7 +709,7 @@ enum WarningsComputation {
                 ]
             }
             return [
-                "id": operative.id.uuidString,
+                "id": Booking.storedOperativeId(for: operative.id),
                 "isActive": operative.isActive,
                 "email": operative.emailLowercased,
                 "name": operative.name,
@@ -772,7 +772,7 @@ enum WarningsComputation {
     nonisolated private static func unverifiedRows(_ input: WarningsComputationSnapshot, reference: Date) -> [Warning]? {
         let operatives: [[String: Any]] = input.operatives.map { operative in
             [
-                "id": operative.id.uuidString,
+                "id": Booking.storedOperativeId(for: operative.id),
                 "email": operative.emailLowercased,
                 "name": operative.name,
             ]
@@ -1019,7 +1019,7 @@ enum WarningsComputation {
             let foldedName = operative.name.lowercased()
             let foldedEmail = operative.email.lowercased()
             return [
-                "id": operative.id.uuidString,
+                "id": Booking.storedOperativeId(for: operative.id),
                 "email": operative.email.lowercased(),
                 "name": operative.name,
                 "isActive": operative.isActive,
@@ -1217,7 +1217,7 @@ enum WarningsComputation {
         let people: [[String: Any]] = orderedPeopleForUnbookedScript(peopleRows, excludedUserIds: excludedIds)
         let operatives: [[String: Any]] = input.operatives.map { operative in
             [
-                "id": operative.id.uuidString,
+                "id": Booking.storedOperativeId(for: operative.id),
                 "email": operative.emailLowercased,
                 "name": operative.name,
                 "isActive": operative.isActive,
@@ -1299,7 +1299,7 @@ enum WarningsComputation {
 
         var operativeIdsByEmail: [String: [String]] = [:]
         for operative in input.operatives where !operative.emailLowercased.isEmpty {
-            let id = operative.id.uuidString
+            let id = Booking.storedOperativeId(for: operative.id)
             if operativeIdsByEmail[operative.emailLowercased]?.contains(id) != true {
                 operativeIdsByEmail[operative.emailLowercased, default: []].append(id)
             }
@@ -1331,10 +1331,10 @@ enum WarningsComputation {
             if !email.isEmpty && claimedEmails.contains(email) { continue }
             if !email.isEmpty { claimedEmails.insert(email) }
             let ids = email.isEmpty
-                ? [operative.id.uuidString]
-                : (operativeIdsByEmail[email] ?? [operative.id.uuidString])
+                ? [Booking.storedOperativeId(for: operative.id)]
+                : (operativeIdsByEmail[email] ?? [Booking.storedOperativeId(for: operative.id)])
             people.append(CanonicalLeavePerson(
-                personKey: operative.id.uuidString,
+                personKey: Booking.storedOperativeId(for: operative.id),
                 name: operative.name,
                 userId: nil,
                 operativeIds: ids
@@ -1713,7 +1713,7 @@ private struct WarningsScheduleIndex {
                         "aliasIds": user.sameEmailUserIds
                     ]
                 },
-                "operatives": input.operatives.map { ["id": $0.id.uuidString, "email": $0.emailLowercased] }
+                "operatives": input.operatives.map { ["id": Booking.storedOperativeId(for: $0.id), "email": $0.emailLowercased] }
             ],
             "day": [
                 "standardDayStart": policy.standardDayStart,
@@ -1753,7 +1753,7 @@ nonisolated final class WarningsBookingPeople {
                 )
             },
             operatives: operatives.map {
-                CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.id.uuidString, email: $0.emailLowercased)
+                CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: Booking.storedOperativeId(for: $0.id), email: $0.emailLowercased)
             }
         )
         accountIdByFormerId = CanonicalBusinessEngine.formerIdAliases(

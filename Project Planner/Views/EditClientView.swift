@@ -135,7 +135,8 @@ struct EditClientView: View {
             contactPerson: client.contactPerson,
             email: clientEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : clientEmail.trimmingCharacters(in: .whitespacesAndNewlines),
             phone: clientPhone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : clientPhone.trimmingCharacters(in: .whitespacesAndNewlines),
-            address: clientAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : clientAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+            address: clientAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : clientAddress.trimmingCharacters(in: .whitespacesAndNewlines),
+            firestoreDocumentId: client.firestoreDocumentId
         )
         
         Task {

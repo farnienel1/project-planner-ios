@@ -697,7 +697,7 @@ struct OperativeQualificationsEditorView: View {
 
         do {
             try await firebaseBackend.patchOperativeQualificationMaps(
-                operativeId: operative.id,
+                operativeDocumentId: operative.documentId,
                 organizationId: organizationId,
                 write: assignment
             )
@@ -730,7 +730,7 @@ struct OperativeQualificationsEditorView: View {
                     let uploadedURL = try await firebaseBackend.uploadQualificationDocument(
                         data: data,
                         organizationId: organizationId,
-                        operativeId: operative.id,
+                        operativeId: operative.documentId,
                         qualificationId: qualificationId,
                         fileName: "certificate.\(kind.pathExtension)",
                         contentType: kind.contentType
@@ -757,7 +757,7 @@ struct OperativeQualificationsEditorView: View {
             withCertificates.qualificationCertificateURLs = mergedURLs
             do {
                 try await firebaseBackend.patchOperativeQualificationMaps(
-                    operativeId: operative.id,
+                    operativeDocumentId: operative.documentId,
                     organizationId: organizationId,
                     write: withCertificates
                 )

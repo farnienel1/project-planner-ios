@@ -2292,21 +2292,23 @@ class FirebaseBackend: ObservableObject {
         
         try await validateDataIntegrity(organizationId: orgId)
         
+        // RULEBOOK 1.6.0 §1, §11: a partial update of the fields `clientWriteFields` names (a new client is
+        // created whole). `id`, `createdAt` and `organizationId` are written on create only.
         let data: [String: Any] = [
-            "id": client.id.uuidString,
+            "id": client.documentId,
             "name": client.name,
             "contactPerson": client.contactPerson ?? "",
             "email": client.email ?? "",
             "phone": client.phone ?? "",
             "address": client.address ?? "",
             "organizationId": orgId,
-            "createdAt": Timestamp(date: client.createdAt),
-            "updatedAt": Timestamp(date: client.updatedAt)
+            "createdAt": Timestamp(date: client.createdAt)
         ]
         
-        print("🔥🔥🔥 DEBUG: Saving client to organizations/\(orgId)/clients/\(client.id.uuidString)")
+        print("🔥🔥🔥 DEBUG: Saving client to organizations/\(orgId)/clients/\(client.documentId)")
         
-        try await db.collection("organizations").document(orgId).collection("clients").document(client.id.uuidString).setData(data)
+        let ref = db.collection("organizations").document(orgId).collection("clients").document(client.documentId)
+        try await writeChangedRosterRow(ref, payload: data, previousPayload: nil, writeFields: "clientWriteFields")
         
         print("🔥🔥🔥 DEBUG: Client saved successfully to Firebase")
     }
@@ -2326,39 +2328,36 @@ class FirebaseBackend: ObservableObject {
             }
         }
         
-        let clients = snapshot.documents.compactMap { doc -> Client? in
-            let data = doc.data()
-            let idString = (data["id"] as? String) ?? doc.documentID
-            guard let id = UUID(uuidString: idString),
-                  let name = data["name"] as? String else {
-                return nil
-            }
-            
-            var client = Client(
-                id: id,
-                name: name,
-                contactPerson: data["contactPerson"] as? String,
-                email: data["email"] as? String,
-                phone: data["phone"] as? String,
-                address: data["address"] as? String
-            )
-            // Preserve dates from Firebase if available
-            if let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() {
-                client.createdAt = createdAt
-            }
-            if let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() {
-                client.updatedAt = updatedAt
-            }
-            return client
-        }
+        let clients = Self.clients(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
         
         print("🔥🔥🔥 DEBUG: Loaded \(clients.count) clients from Firebase")
         return clients
     }
     
+    /// RULEBOOK 1.6.0 §1 "Document readers": `clients/{id}` are read only through the rulebook's
+    /// `parseClientDocument`. The record id is the document id in stored case (a non-UUID id is kept; a stored
+    /// `id` field never replaces it). Tests call this with raw documents.
+    static func clients(fromDocuments documents: [(id: String, data: [String: Any])]) -> [Client] {
+        documents.compactMap { doc -> Client? in
+            guard let row = CanonicalBusinessEngine.parseClientDocument(documentId: doc.id, data: doc.data) else { return nil }
+            var client = Client(
+                id: Manager.stableId(forFirestoreDocumentId: row.id),
+                name: row.text("name"),
+                contactPerson: row.optionalText("contactPerson"),
+                email: row.optionalText("email"),
+                phone: row.optionalText("phone"),
+                address: row.optionalText("address"),
+                firestoreDocumentId: row.id
+            )
+            if let createdAt = row.date("createdAtMs") { client.createdAt = createdAt }
+            if let updatedAt = row.date("updatedAtMs") { client.updatedAt = updatedAt }
+            return client
+        }
+    }
+    
     func deleteClient(_ client: Client, organizationId: String) async throws {
         print("🔥🔥🔥 DEBUG: deleteClient called for client: \(client.name), organization: \(organizationId)")
-        try await db.collection("organizations").document(organizationId).collection("clients").document(client.id.uuidString).delete()
+        try await db.collection("organizations").document(organizationId).collection("clients").document(client.documentId).delete()
         print("🔥🔥🔥 DEBUG: Client deleted successfully from Firebase")
     }
     
@@ -3148,7 +3147,7 @@ class FirebaseBackend: ObservableObject {
     func uploadQualificationDocument(
         data: Data,
         organizationId: String,
-        operativeId: UUID,
+        operativeId: String,
         qualificationId: String,
         fileName: String,
         contentType: String
@@ -3166,7 +3165,7 @@ class FirebaseBackend: ObservableObject {
         )
         guard let path = CanonicalBusinessEngine.qualificationCertificateStoragePath(
             organizationId: organizationId,
-            operativeId: operativeId.uuidString,
+            operativeId: operativeId,
             qualificationId: qualificationId,
             fileName: prepared.objectName
         ) else {
@@ -3291,7 +3290,7 @@ class FirebaseBackend: ObservableObject {
     func uploadQualificationDocument(
         data: Data,
         organizationId: String,
-        operativeId: UUID,
+        operativeId: String,
         qualificationId: String,
         fileName: String,
         contentType: String
@@ -3302,47 +3301,29 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - Operative Management
 
-    /// Same value for a partial-write diff. A delete marker, a missing key and null are all "absent".
-    static func firestoreFieldValuesEqual(_ lhs: Any?, _ rhs: Any?) -> Bool {
-        func absent(_ value: Any?) -> Bool {
-            guard let value else { return true }
-            return value is NSNull || value is FieldValue
-        }
-        let lhsAbsent = absent(lhs)
-        let rhsAbsent = absent(rhs)
-        if lhsAbsent || rhsAbsent { return lhsAbsent == rhsAbsent }
-        guard let left = lhs as? NSObject, let right = rhs as? NSObject else { return false }
-        return left.isEqual(right)
-    }
-
-    /// Keys of `payload` whose value differs from `baseline` (RULEBOOK §1 "Partial writes only").
-    static func changedFirestoreFields(_ payload: [String: Any], baseline: [String: Any], ignoring: Set<String>) -> [String: Any] {
-        var changed: [String: Any] = [:]
-        for (key, value) in payload where !ignoring.contains(key) {
-            if !firestoreFieldValuesEqual(value, baseline[key]) {
-                changed[key] = value
-            }
-        }
-        return changed
-    }
-
-    /// Roster row write: creates the document when the server says it is missing, otherwise updates only
-    /// the fields that changed (against `previousPayload` when the caller has the copy it edited, else the
-    /// server copy), with `WriteMetadata`. Never rewrites the whole document.
+    /// People document write (RULEBOOK 1.6.0 §1, §11): creates the document when the server says it is missing,
+    /// otherwise updates only the fields the rulebook's partial-write helper (`writeFields`: `operativeRowWriteFields`,
+    /// `managerRowWriteFields`, `clientWriteFields`, `subcontractorWriteFields`) names — against `previousPayload`
+    /// when the caller has the copy it edited, else the server copy — with `WriteMetadata`. Never rewrites the
+    /// whole document and never deletes a field the copy lacks.
     private func writeChangedRosterRow(
         _ ref: DocumentReference,
         payload: [String: Any],
-        previousPayload: [String: Any]?
+        previousPayload: [String: Any]?,
+        writeFields: String = "operativeRowWriteFields"
     ) async throws {
-        let createOnly: Set<String> = ["createdAt", "organizationId", "updatedAt"]
         let uid = auth.currentUser?.uid
         let snapshot = try await ref.getDocument(source: .server)
         guard snapshot.exists, let stored = snapshot.data() else {
-            let createPayload = payload.filter { !($0.value is FieldValue) }
+            let createPayload = payload.filter { !($0.value is FieldValue) && !($0.value is NSNull) }
             try await ref.setData(WriteMetadata.stamped(createPayload, userId: uid))
             return
         }
-        let changes = Self.changedFirestoreFields(payload, baseline: previousPayload ?? stored, ignoring: createOnly)
+        guard let write = CanonicalBusinessEngine.peopleDocumentWrite(writeFields, before: previousPayload ?? stored, next: payload) else {
+            throw CanonicalWriteUnavailableError(function: writeFields)
+        }
+        var changes = write.firestoreFields(from: payload)
+        changes.removeValue(forKey: "updatedAt")
         guard !changes.isEmpty else { return }
         try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
     }
@@ -3379,9 +3360,11 @@ class FirebaseBackend: ObservableObject {
             "organizationId": organizationId,
             "createdAt": Timestamp(date: operative.createdAt)
         ]
-        // A missing rate is removed, never written as 0 (0 is a real rate, RULEBOOK §8).
-        data["dayRate"] = operative.dayRate.map { $0 as Any } ?? FieldValue.delete()
-        data["hourlyRate"] = operative.hourlyRate.map { $0 as Any } ?? FieldValue.delete()
+        // RULEBOOK §8: `payBasis` plus exactly one amount (`exclusiveRates`); a missing rate is removed, never
+        // written as 0 (0 is a real rate). An hourly row stays hourly.
+        for (key, value) in exclusivePayFields(payBasis: operative.storedPayBasis, amount: operative.storedPayAmount) {
+            data[key] = value
+        }
         return data
     }
 
@@ -3389,12 +3372,13 @@ class FirebaseBackend: ObservableObject {
     /// has the copy it edited, else the server document), plus `WriteMetadata`. A new row is created whole.
     func saveOperative(_ operative: Operative, organizationId: String, previous: Operative? = nil) async throws {
         print("🔥🔥🔥 DEBUG: saveOperative called with organizationId: \(organizationId)")
-        print("🔥🔥🔥 DEBUG: Operative details - Name: \(operative.name), ID: \(operative.id.uuidString)")
+        print("🔥🔥🔥 DEBUG: Operative details - Name: \(operative.name), document: \(operative.documentId)")
         let data = Self.operativeDocumentPayload(operative, organizationId: organizationId)
         let previousData = previous.map { Self.operativeDocumentPayload($0, organizationId: organizationId) }
-        let ref = db.collection("organizations").document(organizationId).collection("operatives").document(operative.id.uuidString)
+        // The stored document id (stored case; a non-UUID id is kept), never the in-memory UUID.
+        let ref = db.collection("organizations").document(organizationId).collection("operatives").document(operative.documentId)
         do {
-            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData)
+            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData, writeFields: "operativeRowWriteFields")
             print("🔥🔥🔥 DEBUG: Operative saved successfully to Firebase")
         } catch {
             print("🔥🔥🔥 DEBUG: ERROR saving operative: \(error.localizedDescription)")
@@ -3403,8 +3387,9 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Merges qualification maps onto the operative document. Other fields stay.
+    /// `operativeDocumentId` is the stored document id (`Operative.documentId`), never the in-memory UUID.
     func patchOperativeQualificationMaps(
-        operativeId: UUID,
+        operativeDocumentId: String,
         organizationId: String,
         write: CanonicalBusinessEngine.CanonicalOperativeQualificationMaps
     ) async throws {
@@ -3433,15 +3418,16 @@ class FirebaseBackend: ObservableObject {
             "qualificationCertificateURLs": write.qualificationCertificateURLs,
             "updatedAt": Timestamp(date: Date()),
         ]
-        try await db.collection("organizations").document(orgId).collection("operatives").document(operativeId.uuidString).setData(payload, merge: true)
+        try await db.collection("organizations").document(orgId).collection("operatives").document(operativeDocumentId).setData(payload, merge: true)
     }
     
-    func deleteOperative(operativeId: UUID, organizationId: String) async throws {
-        print("🔥🔥🔥 DEBUG: deleteOperative called for operative: \(operativeId.uuidString), organization: \(organizationId)")
+    /// `documentId` is the stored operative document id (`Operative.documentId`, stored case), never the in-memory UUID.
+    func deleteOperative(documentId: String, organizationId: String) async throws {
+        print("🔥🔥🔥 DEBUG: deleteOperative called for operative: \(documentId), organization: \(organizationId)")
         
         // Delete all bookings for this operative
         let bookingsSnapshot = try await db.collection("organizations").document(organizationId).collection("bookings")
-            .whereField("operativeId", isEqualTo: operativeId.uuidString)
+            .whereField("operativeId", isEqualTo: documentId)
             .getDocuments()
         
         print("🔥🔥🔥 DEBUG: Found \(bookingsSnapshot.documents.count) bookings to delete for operative")
@@ -3453,7 +3439,7 @@ class FirebaseBackend: ObservableObject {
         }
         
         // Delete the operative
-        try await db.collection("organizations").document(organizationId).collection("operatives").document(operativeId.uuidString).delete()
+        try await db.collection("organizations").document(organizationId).collection("operatives").document(documentId).delete()
         print("🔥🔥🔥 DEBUG: Operative and \(bookingsSnapshot.documents.count) bookings deleted successfully from Firebase")
     }
     
@@ -3464,129 +3450,80 @@ class FirebaseBackend: ObservableObject {
         let snapshot = try await getDocumentsPreferringServer(operativesRef)
         print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Found \(snapshot.documents.count) operative documents")
         
-        // Filter out legacy INITIAL-PLACEHOLDER documents and junk seed rows
-        let loaded = snapshot.documents.compactMap { (doc: QueryDocumentSnapshot) -> Operative? in
-            // Skip legacy placeholder documents
-            if doc.documentID == "INITIAL-PLACEHOLDER" {
-                return nil
-            }
-            let data = doc.data()
-            let nameLower = (data["name"] as? String ?? "").lowercased()
-            let emailLower = (data["email"] as? String ?? "").lowercased()
-            if nameLower.contains("placeholder")
-                || emailLower.contains("placeholder")
-                || nameLower.contains("initial operative") {
-                return nil
-            }
-            
-            // A missing start date or skills list used to drop the whole person, which then hid their bookings.
-            let startDate = (data["startDate"] as? Timestamp)?.dateValue()
-                ?? (data["createdAt"] as? Timestamp)?.dateValue()
-                ?? Date()
-            let skills = Set(data["skills"] as? [String] ?? [])
-            
-            // Parse qualifications
-            var qualifications: Set<Qualification> = []
-            if let qualificationsArray = data["qualifications"] as? [[String: Any]] {
-                for qualificationData in qualificationsArray {
-                    if let idString = qualificationData["id"] as? String,
-                       !idString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                       let name = qualificationData["name"] as? String,
-                       let hasEndDate = qualificationData["hasEndDate"] as? Bool,
-                       let createdAt = (qualificationData["createdAt"] as? Timestamp)?.dateValue(),
-                       let updatedAt = (qualificationData["updatedAt"] as? Timestamp)?.dateValue() {
-
-                        let endDate = (qualificationData["endDate"] as? Timestamp)?.dateValue()
-
-                        let qualification = Qualification(
-                            id: idString,
-                            name: name,
-                            hasEndDate: hasEndDate,
-                            endDate: endDate,
-                            createdAt: createdAt,
-                            updatedAt: updatedAt
-                        )
-                        
-                        qualifications.insert(qualification)
-                    }
-                }
-            }
-            
-            var qualificationExpiryDates: [String: Date] = [:]
-            if let expiryMap = data["qualificationExpiryDates"] as? [String: Any] {
-                for (key, rawDate) in expiryMap {
-                    let qualificationId = key.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !qualificationId.isEmpty else { continue }
-                    if let ts = rawDate as? Timestamp {
-                        qualificationExpiryDates[qualificationId] = ts.dateValue()
-                    } else if let date = rawDate as? Date {
-                        qualificationExpiryDates[qualificationId] = date
-                    }
-                }
-            }
-
-            var qualificationCertificateURLs: [String: String] = [:]
-            if let certificateMap = data["qualificationCertificateURLs"] as? [String: String] {
-                for (key, url) in certificateMap {
-                    let qualificationId = key.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !qualificationId.isEmpty else { continue }
-                    qualificationCertificateURLs[qualificationId] = url
-                }
-            } else if let certificateMapAny = data["qualificationCertificateURLs"] as? [String: Any] {
-                for (key, rawURL) in certificateMapAny {
-                    let qualificationId = key.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !qualificationId.isEmpty, let url = rawURL as? String else { continue }
-                    qualificationCertificateURLs[qualificationId] = url
-                }
-            }
-            
-                // Load firstName and lastName if available, otherwise parse from name (backward compatibility)
-                let firstName: String
-                let lastName: String
-                if let loadedFirstName = data["firstName"] as? String,
-                   let loadedLastName = data["lastName"] as? String {
-                    firstName = loadedFirstName
-                    lastName = loadedLastName
-                } else if let name = data["name"] as? String {
-                    // Legacy format - parse name into firstName and lastName
-                    let nameParts = name.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1)
-                    firstName = nameParts.count > 0 ? String(nameParts[0]) : name
-                    lastName = nameParts.count > 1 ? String(nameParts[1]) : ""
-                } else {
-                    firstName = ""
-                    lastName = ""
-                }
-                
-                let loadedHourly = data["hourlyRate"] as? Double
-                let loadedDay = data["dayRate"] as? Double
-                let tp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let tc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let operative = Operative(
-                    id: UUID(uuidString: doc.documentID) ?? UUID(),
-                    firstName: firstName,
-                    lastName: lastName,
-                    email: data["email"] as? String ?? "",
-                    phone: data["phone"] as? String ?? "",
-                    startDate: startDate,
-                    skills: skills,
-                    qualifications: Array(qualifications),
-                    qualificationExpiryDates: qualificationExpiryDates,
-                    qualificationCertificateURLs: qualificationCertificateURLs,
-                    isActive: firestoreBool(data["isActive"]) ?? true,
-                    hourlyRate: loadedHourly,
-                    dayRate: loadedDay ?? loadedHourly,
-                    currencySymbol: data["currencySymbol"] as? String,
-                    notes: data["notes"] as? String,
-                    tradeTypePreset: (tp?.isEmpty == false) ? tp : nil,
-                    tradeTypeCustom: (tc?.isEmpty == false) ? tc : nil,
-                    createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
-                    updatedAt: (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-                )
-                return operative
-            }
-
+        let loaded = Self.operatives(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
         print("🔥🔥🔥 DEBUG: [LOAD OPERATIVES] Keeping \(loaded.count) real operatives (placeholders skipped)")
         return loaded
+    }
+
+    /// RULEBOOK 1.6.0 §1 "Document readers": `operatives/{id}` rows are read only through the rulebook's
+    /// `parseOperativeDocument` (web uses the same reader). The document id is kept in stored case (a non-UUID id
+    /// is kept, never randomised), an hourly row stays hourly (`payBasis`), a nameless row with an email is kept,
+    /// and legacy placeholder rows (`isPlaceholder`) are skipped. Tests call this with raw documents.
+    static func operatives(fromDocuments documents: [(id: String, data: [String: Any])]) -> [Operative] {
+        documents.compactMap { doc -> Operative? in
+            guard let row = CanonicalBusinessEngine.parseOperativeDocument(documentId: doc.id, data: doc.data) else {
+                return nil
+            }
+            if row.bool("isPlaceholder") { return nil }
+            return operative(fromCanonical: row)
+        }
+    }
+
+    /// One `parseOperativeDocument` row as an `Operative`. `id` is the stable in-app UUID for the stored id
+    /// (`Booking.internalOperativeId`, so bookings, history and pickers that name this id agree); `documentId`
+    /// is the stored id every write addresses.
+    static func operative(fromCanonical row: CanonicalDocumentRow) -> Operative {
+        let documentId = row.id
+        let id = Booking.internalOperativeId(for: documentId)
+        if documentId != id.uuidString {
+            // A lower-case UUID (web) keeps its stored case when a booking or history row names this person.
+            OperativeKeyRegistry.shared.remember(raw: documentId, as: id)
+        }
+        let epoch = Date(timeIntervalSince1970: 0)
+        let qualifications: [Qualification] = row.rows("qualifications").compactMap { entry in
+            guard !entry.id.isEmpty, !entry.text("name").isEmpty else { return nil }
+            return Qualification(
+                id: entry.id,
+                name: entry.text("name"),
+                hasEndDate: entry.bool("hasEndDate"),
+                endDate: entry.date("endDateMs"),
+                createdAt: entry.date("createdAtMs") ?? epoch,
+                updatedAt: entry.date("updatedAtMs") ?? entry.date("createdAtMs") ?? epoch
+            )
+        }
+        var expiry: [String: Date] = [:]
+        for (key, value) in row.map("qualificationExpiryDates") {
+            if let ms = (value as? NSNumber)?.doubleValue { expiry[key] = Date(timeIntervalSince1970: ms / 1000) }
+        }
+        var certificates: [String: String] = [:]
+        for (key, value) in row.map("qualificationCertificateURLs") {
+            if let url = value as? String { certificates[key] = url }
+        }
+        var operative = Operative(
+            id: id,
+            firstName: row.text("firstName"),
+            lastName: row.text("lastName"),
+            email: row.text("email"),
+            phone: row.optionalText("phone"),
+            startDate: row.date("startDateMs") ?? row.date("createdAtMs") ?? Date(),
+            skills: Set(row.strings("skills")),
+            qualifications: qualifications,
+            qualificationExpiryDates: expiry,
+            qualificationCertificateURLs: certificates,
+            isActive: row.bool("isActive", default: true),
+            hourlyRate: row.number("hourlyRate"),
+            dayRate: row.number("dayRate"),
+            currencySymbol: row.optionalText("currencySymbol"),
+            notes: row.optionalText("notes"),
+            tradeTypePreset: row.optionalText("tradeTypePreset"),
+            tradeTypeCustom: row.optionalText("tradeTypeCustom"),
+            createdAt: row.date("createdAtMs") ?? Date(),
+            updatedAt: row.date("updatedAtMs") ?? Date()
+        )
+        operative.firestoreDocumentId = documentId
+        operative.payBasis = row.optionalText("payBasis")
+        operative.linkedUserId = row.optionalText("linkedUserId")
+        return operative
     }
     
     // MARK: - Debug Functions
@@ -3812,7 +3749,7 @@ class FirebaseBackend: ObservableObject {
             let storageId = documentId.isEmpty ? manager.id.uuidString : documentId
             print("🔥🔥🔥 DEBUG: Saving manager to organizations/\(organizationId)/managers/\(storageId)")
             let ref = db.collection("organizations").document(organizationId).collection("managers").document(storageId)
-            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData)
+            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData, writeFields: "managerRowWriteFields")
             print("🔥🔥🔥 DEBUG: Manager saved successfully to Firebase")
         }
 
@@ -3858,58 +3795,41 @@ class FirebaseBackend: ObservableObject {
             )
             print("🔥🔥🔥 DEBUG: [LOAD MANAGERS] Found \(snapshot.documents.count) manager documents")
             
-            var managers: [Manager] = []
-            
-            for doc in snapshot.documents {
-                let data = doc.data()
-                
-                guard let firstName = data["firstName"] as? String,
-                      let lastName = data["lastName"] as? String,
-                      let email = data["email"] as? String else {
-                    print("🔥🔥🔥 DEBUG: Failed to parse manager data for document: \(doc.documentID)")
-                    continue
-                }
-                let isActive = firestoreBool(data["isActive"]) ?? true
-                let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-                let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-                let mobileNumber = (data["mobileNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                
-                let documentId = doc.documentID.trimmingCharacters(in: .whitespacesAndNewlines)
-                let id = Manager.stableId(forFirestoreDocumentId: documentId)
-                let department = data["department"] as? String
-                let notes = data["notes"] as? String
-                
-                let mtp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let mtc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                var manager = Manager(
-                    id: id,
-                    firstName: firstName,
-                    lastName: lastName,
-                    email: email,
-                    mobileNumber: mobileNumber,
-                    department: department,
-                    isActive: isActive,
-                    notes: notes,
-                    tradeTypePreset: (mtp?.isEmpty == false) ? mtp : nil,
-                    tradeTypeCustom: (mtc?.isEmpty == false) ? mtc : nil,
-                    createdAt: createdAt,
-                    updatedAt: updatedAt,
-                    firestoreDocumentId: documentId
-                )
-                
-                // Set the actual dates from Firebase
-                manager.createdAt = createdAt
-                manager.updatedAt = updatedAt
-                
-                managers.append(manager)
+            return Self.managers(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+    }
+
+    /// RULEBOOK 1.6.0 §1 "Document readers": `managers/{id}` rows are read only through the rulebook's
+    /// `parseManagerDocument`: stored-case document id, names from either key, mobile from `mobileNumber` /
+    /// `mobile` / `phone`, pay basis with one amount; legacy placeholder rows (`isPlaceholder`) are skipped.
+    static func managers(fromDocuments documents: [(id: String, data: [String: Any])]) -> [Manager] {
+        documents.compactMap { doc -> Manager? in
+            guard let row = CanonicalBusinessEngine.parseManagerDocument(documentId: doc.id, data: doc.data) else {
+                print("🔥🔥🔥 DEBUG: Failed to parse manager data for document: \(doc.id)")
+                return nil
             }
-            
-            // Exclude legacy/placeholder managers (e.g. "Initial manager placeholder system") so only real users appear in the app
-            return managers.filter { manager in
-                let name = manager.fullName.lowercased()
-                let email = manager.email.lowercased()
-                return !name.contains("placeholder") && !email.contains("placeholder")
-            }
+            if row.bool("isPlaceholder") { return nil }
+            let documentId = row.id
+            var manager = Manager(
+                id: Manager.stableId(forFirestoreDocumentId: documentId),
+                firstName: row.text("firstName"),
+                lastName: row.text("lastName"),
+                email: row.text("email"),
+                mobileNumber: row.text("mobile"),
+                department: row.optionalText("department"),
+                isActive: row.bool("isActive", default: true),
+                notes: row.optionalText("notes"),
+                tradeTypePreset: row.optionalText("tradeTypePreset"),
+                tradeTypeCustom: row.optionalText("tradeTypeCustom"),
+                createdAt: row.date("createdAtMs") ?? Date(),
+                updatedAt: row.date("updatedAtMs") ?? Date(),
+                firestoreDocumentId: documentId
+            )
+            manager.payBasis = row.optionalText("payBasis")
+            manager.dayRate = row.number("dayRate")
+            manager.hourlyRate = row.number("hourlyRate")
+            manager.linkedUserId = row.optionalText("linkedUserId")
+            return manager
+        }
     }
     
     func deleteManager(_ manager: Manager, organizationId: String) async throws {
@@ -4048,27 +3968,41 @@ class FirebaseBackend: ObservableObject {
         try await db.collection("organizations").document(orgId).collection("qualifications").document(qualificationId).delete()
     }
     
-    func saveSkills(organizationId: String, skills: [OrganizationSkill]) async throws {
+    /// RULEBOOK 1.6.0 §1, §11: the skills catalogue is saved with the rulebook's `skillsCatalogueWrites` — a partial
+    /// write of the name / trade that changed per skill, and a delete only for a skill missing from a list that came
+    /// from a successful load (`loaded`) and is not empty. Never delete-all and rewrite.
+    func saveSkills(organizationId: String, skills: [OrganizationSkill], loaded: Bool) async throws {
         let skillsRef = db.collection("organizations").document(organizationId).collection("skills")
-        let existingSnapshot = try await skillsRef.getDocuments()
-        let newIds = Set(skills.map(\.id))
-        let batch = db.batch()
-        for document in existingSnapshot.documents where !newIds.contains(document.documentID) {
-            batch.deleteDocument(document.reference)
+        let existingSnapshot = try await skillsRef.getDocuments(source: .server)
+        let stored: [(id: String, name: String, trade: String)] = existingSnapshot.documents.map { doc in
+            guard let row = CanonicalBusinessEngine.parseSkillDocument(documentId: doc.documentID, data: doc.data()) else {
+                return (id: doc.documentID, name: "", trade: "")
+            }
+            return (id: row.id, name: row.text("name"), trade: row.text("trade"))
         }
-        let now = Date()
-        for skill in skills {
-            let docRef = skillsRef.document(skill.id)
-            let data: [String: Any] = [
-                "name": skill.name,
-                "trade": skill.trade,
-                "createdAt": Timestamp(date: skill.createdAt),
-                "updatedAt": Timestamp(date: now)
-            ]
-            batch.setData(data, forDocument: docRef, merge: true)
+        let next = skills.map { (id: $0.id, name: $0.name, trade: $0.trade) }
+        guard let plan = CanonicalBusinessEngine.skillsCatalogueWrites(stored: stored, next: next, loaded: loaded) else {
+            throw CanonicalWriteUnavailableError(function: "skillsCatalogueWrites")
+        }
+        guard !plan.write.isEmpty || !plan.remove.isEmpty else { return }
+        let storedIds = Set(existingSnapshot.documents.map(\.documentID))
+        let uid = auth.currentUser?.uid
+        let batch = db.batch()
+        for id in plan.remove {
+            batch.deleteDocument(skillsRef.document(id))
+        }
+        for write in plan.write {
+            let docRef = skillsRef.document(write.id)
+            if storedIds.contains(write.id) {
+                batch.updateData(WriteMetadata.stamped(write.set, userId: uid), forDocument: docRef)
+            } else {
+                var created = write.set
+                created["createdAt"] = Timestamp(date: Date())
+                batch.setData(WriteMetadata.stamped(created, userId: uid), forDocument: docRef)
+            }
         }
         try await batch.commit()
-        print("🔥🔥🔥 DEBUG: Successfully saved \(skills.count) organisation skills to Firebase")
+        print("🔥🔥🔥 DEBUG: Saved organisation skills: \(plan.write.count) written, \(plan.remove.count) removed")
     }
     
     func loadQualifications(organizationId: String) async throws -> [Qualification] {
@@ -4121,16 +4055,17 @@ class FirebaseBackend: ObservableObject {
         let orgId = try await ensureReadableOrganization(organizationId)
         let snapshot = try await db.collection("organizations").document(orgId).collection("skills").getDocuments(source: .server)
         
-        var skills: [OrganizationSkill] = []
-        
-        for doc in snapshot.documents {
-            let data = doc.data()
-            guard let skillName = data["name"] as? String else { continue }
-            let tradeRaw = (data["trade"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let trade = tradeRaw.isEmpty ? OrganizationSkill.defaultTrade : tradeRaw
-            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-            let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? createdAt
-            skills.append(OrganizationSkill(id: doc.documentID, name: skillName, trade: trade, createdAt: createdAt, updatedAt: updatedAt))
+        // RULEBOOK 1.6.0 §1 "Document readers": `parseSkillDocument` (a missing trade stays '').
+        var skills: [OrganizationSkill] = snapshot.documents.compactMap { doc in
+            guard let row = CanonicalBusinessEngine.parseSkillDocument(documentId: doc.documentID, data: doc.data()) else { return nil }
+            let createdAt = row.date("createdAtMs") ?? Date()
+            return OrganizationSkill(
+                id: row.id,
+                name: row.text("name"),
+                trade: row.text("trade"),
+                createdAt: createdAt,
+                updatedAt: row.date("updatedAtMs") ?? createdAt
+            )
         }
         skills.sort {
             if $0.trade.localizedCaseInsensitiveCompare($1.trade) != .orderedSame {
@@ -4149,7 +4084,7 @@ class FirebaseBackend: ObservableObject {
         }
         
         do {
-            try await db.collection("organizations").document(organizationId).collection("operatives").document(operativeId.uuidString).delete()
+            try await db.collection("organizations").document(organizationId).collection("operatives").document(Booking.storedOperativeId(for: operativeId)).delete()
             print("🔥🔥🔥 DEBUG: Successfully deleted operative \(operativeId) from Firebase")
         } catch {
             print("🔥🔥🔥 DEBUG: Error deleting operative from Firebase: \(error)")
@@ -4250,179 +4185,111 @@ class FirebaseBackend: ObservableObject {
         }
     }
     
-    static func parseAppUserDocument(userId: String, data: [String: Any]) -> AppUser {
-        let email = data["email"] as? String ?? ""
-        let organizationId = organizationIdFromFirestore(data["organizationId"]) ?? ""
-        let role = Self.roleFromStoredToken(data["role"] as? String)
-        let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-        let nestedPermissions = data["permissions"] as? [String: Any] ?? [:]
-
-        // Top-level flag wins when it is actually stored. Nested `permissions` covers website / older writes.
-        // `as? Bool` is not used: Firestore may return 0/1 or "true", and that used to zero every flag.
-        // Role text and operative/manager records do not invent these flags.
-        func flag(_ key: String, default defaultValue: Bool) -> Bool {
-            if let top = firestoreBool(data[key]) { return top }
-            if let nested = firestoreBool(nestedPermissions[key]) { return nested }
-            return defaultValue
+    /// RULEBOOK 1.6.0 §1 "Document readers", §8: `users/{uid}` is read only through the rulebook's
+    /// `parseUserDocument` (web reads it with the same function). Names and legacy keys, role token, permission
+    /// defaults, operative mode (a stray flag on an admin is ignored on lists; `operativeModeStored` keeps the
+    /// stored flag for the approval rules), line managers (`hasNoLineManager` clears them), pay basis, employment
+    /// transition, missing leave fields (the organisation `annualLeaveDefaults`) and missing `timesheetsEnabled`
+    /// (`defaultTimesheetsEnabled`) all come from the script. Only the stored `name` / `displayName` strings and the
+    /// legacy tax ids (moved to `users/{uid}/private/taxIds`) are read here as stored.
+    static func parseAppUserDocument(
+        userId: String,
+        data: [String: Any],
+        annualLeaveDefaults: OrganizationAnnualLeaveDefaults? = OrganizationRulebookContext.annualLeaveDefaults
+    ) -> AppUser {
+        func storedText(_ key: String) -> String? {
+            let text = (data[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return text.isEmpty ? nil : text
         }
-
-        let operativeMode = flag("operativeMode", default: false)
-        let adminAccess = flag("adminAccess", default: false)
-        let manager = flag("manager", default: false)
-        let isSuperAdmin = flag("isSuperAdmin", default: false)
-
+        guard let row = CanonicalBusinessEngine.parseUserDocument(
+            documentId: userId,
+            data: data,
+            annualLeaveDefaults: annualLeaveDefaults
+        ) else {
+            // The script did not answer. No Swift copy of the reader: identity only, no privileges, until it does.
+            NSLog("USER_PARSE_FAILED id=%@ — parseUserDocument did not answer", userId)
+            var fallback = AppUser(
+                id: userId,
+                email: storedText("email") ?? "",
+                organizationId: organizationIdFromFirestore(data["organizationId"]) ?? "",
+                role: .viewer,
+                firstName: storedText("firstName") ?? "",
+                surname: storedText("surname") ?? storedText("lastName") ?? "",
+                isActive: firestoreUserIsActive(from: data),
+                passwordSet: true
+            )
+            fallback.documentName = data["name"] as? String ?? ""
+            fallback.documentDisplayName = data["displayName"] as? String ?? ""
+            return fallback
+        }
+        let flags = row.map("permissions")
+        func permission(_ key: String) -> Bool { (flags[key] as? Bool) ?? false }
         let permissions = UserPermissions(
-            adminAccess: adminAccess,
-            manager: manager,
-            operatives: operativeMode ? false : flag("operatives", default: false),
-            skills: false,
-            qualifications: operativeMode ? false : flag("qualifications", default: false),
-            materials: operativeMode ? flag("materials", default: false) : flag("materials", default: true),
-            projects: operativeMode ? true : flag("projects", default: false),
-            smallWorks: operativeMode ? true : flag("smallWorks", default: false),
-            operativeMode: operativeMode,
-            annualLeaveSelfBook: flag("annualLeaveSelfBook", default: false),
-            weeklyReports: flag("weeklyReports", default: false),
-            dailyOverview: flag("dailyOverview", default: true),
-            subContractors: flag("subContractors", default: false),
-            siteAudit: flag("siteAudit", default: true),
-            wholesalersOrderHistory: flag("wholesalersOrderHistory", default: true)
+            adminAccess: permission("adminAccess"),
+            manager: permission("manager"),
+            operatives: permission("operatives"),
+            skills: permission("skills"),
+            qualifications: permission("qualifications"),
+            materials: permission("materials"),
+            projects: permission("projects"),
+            smallWorks: permission("smallWorks"),
+            operativeMode: row.bool("operativeMode"),
+            annualLeaveSelfBook: permission("annualLeaveSelfBook"),
+            weeklyReports: permission("weeklyReports"),
+            dailyOverview: permission("dailyOverview"),
+            subContractors: permission("subContractors"),
+            siteAudit: permission("siteAudit"),
+            wholesalersOrderHistory: permission("wholesalersOrderHistory")
         )
-        let policyAccepted = flag("policyAccepted", default: false)
-        let policyAcceptedAt = (data["policyAcceptedAt"] as? Timestamp)?.dateValue()
-        let resolvedRole = role
-        
-        let assignedManagerUserId = data["assignedManagerUserId"] as? String
-        let assignedManagerUserIdsRaw = data["assignedManagerUserIds"] as? [String] ?? []
-        let assignedManagerUserIds: [String] = {
-            var ids = assignedManagerUserIdsRaw
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            if ids.isEmpty,
-               let legacy = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !legacy.isEmpty {
-                ids = [legacy]
-            }
-            var seen = Set<String>()
-            return ids.filter { seen.insert($0).inserted }
-        }()
-        let dayRate = data["dayRate"] as? Double
-        let hourlyRate = data["hourlyRate"] as? Double
-        let utp = (data["tradeTypePreset"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let utc = (data["tradeTypeCustom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let profilePhotoRaw = (data["profilePhotoURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lastSeenAt = (data["lastSeenAt"] as? Timestamp)?.dateValue()
-        let employmentTypeRaw = (data["employmentType"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let employmentType = EmploymentType.fromCanonical(employmentTypeRaw)
-        let transitionFromRaw = (data["employmentTypeTransitionFrom"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let employmentTypeTransitionFrom = transitionFromRaw.flatMap { raw -> EmploymentType? in
-            guard !raw.isEmpty else { return nil }
-            return EmploymentType.fromCanonical(raw)
-        }
-        let employmentTypeEffectiveAt = (data["employmentTypeEffectiveAt"] as? Timestamp)?.dateValue()
-        let alDays = (data["annualLeaveDaysPerYear"] as? NSNumber)?.doubleValue
-            ?? (data["annualLeaveDaysPerYear"] as? Double)
-            ?? AnnualLeavePolicy.defaultDaysPerYear
-        let alStart = (data["annualLeaveYearStartMonth"] as? NSNumber)?.intValue
-            ?? (data["annualLeaveYearStartMonth"] as? Int)
-            ?? AnnualLeavePolicy.defaultStartMonth
-        let alEnd = (data["annualLeaveYearEndMonth"] as? NSNumber)?.intValue
-            ?? (data["annualLeaveYearEndMonth"] as? Int)
-            ?? AnnualLeavePolicy.defaultEndMonth
-        let alCarry = flag("annualLeaveCarriesOver", default: AnnualLeavePolicy.defaultCarriesOver)
-        let yearAllowance = (data["annualLeaveYearAllowance"] as? NSNumber)?.doubleValue
-            ?? (data["annualLeaveYearAllowance"] as? Double)
-        let yearAllowanceKey = (data["annualLeaveYearAllowanceKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let alEnabled = flag("annualLeaveEnabled", default: true)
-        let hasNoLineManager = flag("hasNoLineManager", default: false)
-        let timesheetsEnabledRaw = firestoreBool(data["timesheetsEnabled"]) ?? firestoreBool(nestedPermissions["timesheetsEnabled"])
-        let timesheetsEnabled = timesheetsEnabledRaw ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
-        let vatRaw = (data["vatNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let utrRaw = (data["utrNumber"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        let parsedName = Self.personName(from: data)
+        let managerIds = row.strings("assignedManagerUserIds")
         var parsed = AppUser(
             id: userId,
-            email: email,
-            organizationId: organizationId,
-            role: resolvedRole,
-            createdAt: createdAt,
-            firstName: parsedName.first,
-            surname: parsedName.surname,
-            mobileNumber: data["mobileNumber"] as? String,
-            isActive: firestoreUserIsActive(from: data),
-            passwordSet: {
-                // Invites write `passwordSet: false`. A missing field is an existing account.
-                // Treating missing as false moved every legacy manager and operative onto Pending,
-                // and the screens open on Active, so the lists looked empty.
-                let stored = firestoreBool(data["passwordSet"]) ?? firestoreBool(nestedPermissions["passwordSet"])
-                return stored ?? true
-            }(),
+            email: row.text("email"),
+            organizationId: organizationIdFromFirestore(row.optionalText("organizationId")) ?? "",
+            role: UserRole(rawValue: row.text("role")) ?? .viewer,
+            createdAt: row.date("createdAtMs") ?? Date(),
+            firstName: row.text("firstName"),
+            surname: row.text("surname"),
+            mobileNumber: row.optionalText("mobileNumber"),
+            isActive: row.bool("isActive", default: true),
+            passwordSet: row.bool("passwordSet", default: true),
             permissions: permissions,
-            isSuperAdmin: isSuperAdmin,
-            policyAccepted: policyAccepted,
-            policyAcceptedAt: policyAcceptedAt,
-            legalPackVersion: data["legalPackVersion"] as? String,
-            assignedManagerUserId: assignedManagerUserIds.first ?? assignedManagerUserId,
-            assignedManagerUserIds: assignedManagerUserIds,
-            hasNoLineManager: hasNoLineManager,
-            dayRate: dayRate,
-            hourlyRate: hourlyRate,
-            tradeTypePreset: (utp?.isEmpty == false) ? utp : nil,
-            tradeTypeCustom: (utc?.isEmpty == false) ? utc : nil,
-            profilePhotoURL: (profilePhotoRaw?.isEmpty == false) ? profilePhotoRaw : nil,
-            lastSeenAt: lastSeenAt,
-            employmentType: employmentType,
-            employmentTypeTransitionFrom: employmentTypeTransitionFrom,
-            employmentTypeEffectiveAt: employmentTypeEffectiveAt,
-            annualLeaveEnabled: alEnabled,
-            annualLeaveDaysPerYear: alDays,
-            annualLeaveYearStartMonth: alStart,
-            annualLeaveYearEndMonth: alEnd,
-            annualLeaveCarriesOver: alCarry,
-            annualLeaveYearAllowance: yearAllowance,
-            annualLeaveYearAllowanceKey: (yearAllowanceKey?.isEmpty == false) ? yearAllowanceKey : nil,
-            timesheetsEnabled: timesheetsEnabled,
-            vatNumber: (vatRaw?.isEmpty == false) ? vatRaw : nil,
-            utrNumber: (utrRaw?.isEmpty == false) ? utrRaw : nil
+            isSuperAdmin: row.bool("isSuperAdmin"),
+            policyAccepted: row.bool("policyAccepted"),
+            policyAcceptedAt: row.date("policyAcceptedAtMs"),
+            legalPackVersion: row.optionalText("legalPackVersion"),
+            assignedManagerUserId: managerIds.first ?? row.optionalText("assignedManagerUserId"),
+            assignedManagerUserIds: managerIds,
+            hasNoLineManager: row.bool("hasNoLineManager"),
+            dayRate: row.number("dayRate"),
+            hourlyRate: row.number("hourlyRate"),
+            tradeTypePreset: row.optionalText("tradeTypePreset"),
+            tradeTypeCustom: row.optionalText("tradeTypeCustom"),
+            profilePhotoURL: row.optionalText("profilePhotoURL"),
+            lastSeenAt: row.date("lastSeenAtMs"),
+            employmentType: EmploymentType.fromCanonical(row.optionalText("employmentType")),
+            employmentTypeTransitionFrom: row.optionalText("employmentTypeTransitionFrom").map { EmploymentType.fromCanonical($0) },
+            employmentTypeEffectiveAt: row.date("employmentTypeEffectiveAtMs"),
+            annualLeaveEnabled: row.bool("annualLeaveEnabled", default: true),
+            annualLeaveDaysPerYear: row.number("annualLeaveDaysPerYear") ?? AnnualLeavePolicy.defaultDaysPerYear,
+            annualLeaveYearStartMonth: row.number("annualLeaveYearStartMonth").map { Int($0) } ?? AnnualLeavePolicy.defaultStartMonth,
+            annualLeaveYearEndMonth: row.number("annualLeaveYearEndMonth").map { Int($0) } ?? AnnualLeavePolicy.defaultEndMonth,
+            annualLeaveCarriesOver: row.bool("annualLeaveCarriesOver"),
+            annualLeaveYearAllowance: row.number("annualLeaveYearAllowance"),
+            annualLeaveYearAllowanceKey: row.optionalText("annualLeaveYearAllowanceKey"),
+            timesheetsEnabled: row.bool("timesheetsEnabled"),
+            vatNumber: storedText("vatNumber"),
+            utrNumber: storedText("utrNumber")
         )
         parsed.documentName = data["name"] as? String ?? ""
         parsed.documentDisplayName = data["displayName"] as? String ?? ""
-        parsed.formerUserIds = CanonicalBusinessEngine.parseFormerUserIds(data["formerUserIds"]) ?? []
-        parsed.documentUpdatedAt = (data["updatedAt"] as? Timestamp)?.dateValue()
-        parsed.status = (data["status"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        parsed.payBasis = (data["payBasis"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        parsed.profilePhotoUpdatedAt = (data["profilePhotoUpdatedAt"] as? Timestamp)?.dateValue()
+        parsed.formerUserIds = row.strings("formerUserIds")
+        parsed.documentUpdatedAt = row.date("updatedAtMs")
+        parsed.status = row.optionalText("status")
+        parsed.payBasis = row.optionalText("payBasis")
+        parsed.profilePhotoUpdatedAt = row.date("profilePhotoUpdatedAtMs")
+        parsed.operativeModeStored = row.bool("operativeModeStored")
         return parsed
-    }
-    
-    /// Reads the name the list shows. Website rows sometimes store `lastName` or a single `name`.
-    private static func personName(from data: [String: Any]) -> (first: String, surname: String) {
-        func text(_ key: String) -> String {
-            (data[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        }
-        var first = text("firstName")
-        var surname = text("surname")
-        if surname.isEmpty { surname = text("lastName") }
-        if first.isEmpty && surname.isEmpty {
-            let combined = text("displayName").isEmpty ? text("name") : text("displayName")
-            let parts = combined.split(separator: " ", maxSplits: 1).map(String.init)
-            if let given = parts.first, !given.isEmpty { first = given }
-            if parts.count > 1 { surname = parts[1] }
-        }
-        return (first, surname)
-    }
-
-    /// "Manager", "managers", "administrator", and the org members-map token all count.
-    /// A strict `UserRole(rawValue:)` miss used to leave the person on no list.
-    private static func roleFromStoredToken(_ raw: String?) -> UserRole {
-        let token = raw?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? ""
-        if token.contains("operat") { return .operative }
-        if token.contains("admin") { return .admin }
-        if token.contains("manag") { return .manager }
-        return UserRole(rawValue: token) ?? .viewer
     }
 
     /// Server read of one user document.
@@ -5596,6 +5463,10 @@ class FirebaseBackend: ObservableObject {
         // Operative mode does not demote an admin. Tab order is admin, then operativeMode, then manager.
         let keepAdmin = user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin
         let operativeOnly = user.permissions.operativeMode && !keepAdmin
+        // RULEBOOK 1.6.0 §8: `parseUserDocument` ignores a stray `operativeMode` flag on an admin for lists, but the
+        // stored flag is what the approval and security rules read. A save writes the stored flag back unchanged
+        // unless the editor turned operative mode on.
+        let operativeModeToSave = user.permissions.operativeMode || (keepAdmin && user.operativeModeStored)
         let isSuperAdminToSave = operativeOnly ? false : user.isSuperAdmin
         let roleToSave: UserRole = operativeOnly ? .operative : user.role
         var userData: [String: Any] = [
@@ -5615,7 +5486,7 @@ class FirebaseBackend: ObservableObject {
             "materials": operativeOnly ? user.permissions.materials : true,
             "projects": user.permissions.projects,
             "smallWorks": user.permissions.smallWorks,
-            "operativeMode": user.permissions.operativeMode,
+            "operativeMode": operativeModeToSave,
             "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
             "weeklyReports": user.permissions.weeklyReports,
             "dailyOverview": user.permissions.dailyOverview,
@@ -5631,7 +5502,7 @@ class FirebaseBackend: ObservableObject {
                 "materials": operativeOnly ? user.permissions.materials : true,
                 "projects": user.permissions.projects,
                 "smallWorks": user.permissions.smallWorks,
-                "operativeMode": user.permissions.operativeMode,
+                "operativeMode": operativeModeToSave,
                 "siteAudit": operativeOnly ? user.permissions.siteAudit : true,
                 "subContractors": user.permissions.subContractors,
                 "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory,
@@ -5722,11 +5593,13 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Writes a profile (RULEBOOK §1, §11, §12).
-    /// - An existing document gets `updateData` of the fields that differ between `previous` (the copy the
-    ///   caller edited) and `user`, plus `WriteMetadata`. Without `previous`, the server document is read first
-    ///   and used as that copy. Never a full merge-set.
-    /// - Never `organizationId` of another user, never `createdAt`, and never a `profilePhotoURL` delete
-    ///   (a stale copy without the photo must not remove it; the photo upload path writes it).
+    /// - An existing document gets `updateData` of the fields the rulebook's `userProfileWriteFields` names between
+    ///   `previous` (the copy the caller edited) and `user`, plus `WriteMetadata`. Without `previous`, the server
+    ///   document is read through `parseUserDocument` and used as that copy. Never a full merge-set. Line manager
+    ///   ids with `hasNoLineManager`, pay basis with both rates, employment type with its transition and the name
+    ///   fields are written as groups; a field the copy lacks is never deleted.
+    /// - Never `organizationId` or `createdAt` (`userProfileWriteFields` create-only), and never a `profilePhotoURL`
+    ///   delete (a stale copy without the photo must not remove it; the photo upload path writes it).
     /// - A document the server confirms missing is created once with the full profile.
     func saveUser(_ user: AppUser, previous: AppUser? = nil) async throws {
         let payload = Self.userDocumentPayload(user)
@@ -5750,10 +5623,12 @@ class FirebaseBackend: ObservableObject {
             }
             baseline = Self.userDocumentPayload(Self.parseAppUserDocument(userId: user.id, data: stored))
         }
-        var changes = Self.changedFirestoreFields(payload, baseline: baseline, ignoring: ["createdAt", "updatedAt"])
-        if user.id != uid {
-            changes.removeValue(forKey: "organizationId")
+        guard let write = CanonicalBusinessEngine.peopleDocumentWrite("userProfileWriteFields", before: baseline, next: payload) else {
+            throw CanonicalWriteUnavailableError(function: "userProfileWriteFields")
         }
+        var changes = write.firestoreFields(from: payload)
+        changes.removeValue(forKey: "organizationId")
+        changes.removeValue(forKey: "createdAt")
         if changes["profilePhotoURL"] is FieldValue {
             changes.removeValue(forKey: "profilePhotoURL")
         }
@@ -8196,7 +8071,8 @@ class FirebaseBackend: ObservableObject {
         // null). The app adds `createdAt` and write metadata. History is never rewritten.
         guard let fields = CanonicalBusinessEngine.payRateHistoryWriteFields(
             userId: uid,
-            operativeId: operativeId?.uuidString,
+            // The stored operative id (a non-UUID or lower-case id keeps its stored form), never a re-cased UUID.
+            operativeId: operativeId.map { Booking.storedOperativeId(for: $0) },
             rate: dayRate,
             payBasis: payBasis,
             effective: effectiveAt
@@ -8227,41 +8103,47 @@ class FirebaseBackend: ObservableObject {
             .document(organizationId)
             .collection("operativeDayRateHistory")
             .getDocuments()
+        return Self.operativeDayRateHistory(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+    }
+
+    /// RULEBOOK 1.6.0 §1 "Document readers", §8: `operativeDayRateHistory` rows are read only through the
+    /// rulebook's `parsePayRateHistoryDocuments` (a "rate cleared" row keeps `dayRate` nil; a missing basis on an old
+    /// row is day). The entry keeps its document id and the stored `operativeId` (a non-UUID id is kept, never
+    /// dropped); `byOperativeId` is keyed by the in-app operative UUID string (`Booking.internalOperativeId`, the
+    /// same id `Operative.id` uses), so a lookup with `operative.id.uuidString` finds rows stored in any case.
+    static func operativeDayRateHistory(fromDocuments documents: [(id: String, data: [String: Any])]) -> OperativeDayRateHistoryCollection {
+        let rows: [CanonicalDocumentRow]
+        if let all = CanonicalBusinessEngine.parsePayRateHistoryDocuments(documents) {
+            rows = all
+        } else {
+            NSLog("PAY_HISTORY_PARSE_FAILED docs=%d — reading history rows one at a time", documents.count)
+            rows = documents.compactMap { CanonicalBusinessEngine.parsePayRateHistoryDocument(documentId: $0.id, data: $0.data) }
+                .sorted { ($0.number("effectiveAt") ?? 0, $0.number("createdAt") ?? 0) < ($1.number("effectiveAt") ?? 0, $1.number("createdAt") ?? 0) }
+        }
         var byUserId: [String: [OperativeDayRateHistoryEntry]] = [:]
         var byOperativeId: [String: [OperativeDayRateHistoryEntry]] = [:]
-        for doc in snapshot.documents {
-            let data = doc.data()
-            // `dayRate: null` is a "rate cleared" row (`payRateHistoryWriteFields`), read by `payRateOnDay`.
-            let rawRate = data["dayRate"]
-            let dayRate: Double? = (rawRate as? NSNumber)?.doubleValue
-            guard dayRate != nil || rawRate is NSNull,
-                  let effectiveAt = (data["effectiveAt"] as? Timestamp)?.dateValue() else { continue }
-            let rawUser = data["userId"] as? String
-            let userId: String? = (rawUser?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
-            let operativeId = (data["operativeId"] as? String).flatMap(UUID.init(uuidString:))
-            guard userId != nil || operativeId != nil else { continue }
-            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-            let entry = OperativeDayRateHistoryEntry(
-                id: UUID(uuidString: doc.documentID) ?? UUID(),
+        for row in rows {
+            guard let effectiveAt = row.date("effectiveAt") else { continue }
+            let userId = row.optionalText("userId")
+            let operativeIdRaw = row.optionalText("operativeId")
+            let operativeId = operativeIdRaw.map { Booking.internalOperativeId(for: $0) }
+            var entry = OperativeDayRateHistoryEntry(
+                id: Manager.stableId(forFirestoreDocumentId: row.id),
                 userId: userId,
                 operativeId: operativeId,
-                dayRate: dayRate,
+                dayRate: row.bool("cleared") ? nil : row.number("dayRate"),
                 effectiveAt: effectiveAt,
-                createdAt: createdAt,
-                payBasis: (data["payBasis"] as? String).flatMap { $0 == "hourly" || $0 == "day" ? $0 : nil }
+                createdAt: row.date("createdAt") ?? effectiveAt,
+                payBasis: row.optionalText("payBasis")
             )
+            entry.documentId = row.id
+            entry.operativeIdRaw = operativeIdRaw
             if let userId {
                 byUserId[userId, default: []].append(entry)
             }
             if let operativeId {
                 byOperativeId[operativeId.uuidString, default: []].append(entry)
             }
-        }
-        for key in byUserId.keys {
-            byUserId[key] = byUserId[key]?.sorted(by: { $0.effectiveAt < $1.effectiveAt })
-        }
-        for key in byOperativeId.keys {
-            byOperativeId[key] = byOperativeId[key]?.sorted(by: { $0.effectiveAt < $1.effectiveAt })
         }
         return OperativeDayRateHistoryCollection(byUserId: byUserId, byOperativeId: byOperativeId)
     }
@@ -9738,21 +9620,23 @@ extension FirebaseBackend {
             ] as [String : Any]
         }
         
+        // RULEBOOK 1.6.0 §1, §11: a partial update of the fields `subcontractorWriteFields` names (the contacts
+        // list is one field, written whole when it changes); a new firm is created whole. `id`, `createdAt` and
+        // `organizationId` are written on create only.
         let data: [String: Any] = [
-            "id": subcontractor.id.uuidString,
+            "id": subcontractor.documentId,
             "name": subcontractor.name,
             "subcontractorType": subcontractor.subcontractorType,
-            "website": subcontractor.website ?? NSNull(),
-            "address": subcontractor.address ?? NSNull(),
+            "website": subcontractor.website.map { $0 as Any } ?? FieldValue.delete(),
+            "address": subcontractor.address.map { $0 as Any } ?? FieldValue.delete(),
             "contacts": contactsData,
-            "createdAt": Timestamp(date: subcontractor.createdAt),
-            "updatedAt": Timestamp(date: subcontractor.updatedAt)
+            "createdAt": Timestamp(date: subcontractor.createdAt)
         ]
         
-        try await db.collection("organizations").document(organizationId)
+        let ref = db.collection("organizations").document(organizationId)
             .collection("subcontractors")
-            .document(subcontractor.id.uuidString)
-            .setData(data)
+            .document(subcontractor.documentId)
+        try await writeChangedRosterRow(ref, payload: data, previousPayload: nil, writeFields: "subcontractorWriteFields")
 
         let extraTrades = subcontractor.contacts.map(\.displayTrade) + [subcontractor.subcontractorType]
         try? await mergeOrganizationTradeTypes(extraTrades, organizationId: organizationId)
@@ -9800,54 +9684,42 @@ extension FirebaseBackend {
             .collection("subcontractors")
             .getDocuments()
         
-        var loaded: [Subcontractor] = []
-        for doc in snapshot.documents {
-            let data = doc.data()
-            guard let idString = data["id"] as? String,
-                  let id = UUID(uuidString: idString),
-                  let name = data["name"] as? String,
-                  let subcontractorType = data["subcontractorType"] as? String,
-                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-                  let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() else { continue }
-            let website = data["website"] as? String
-            let address = data["address"] as? String
-            
-            let contactsArray = data["contacts"] as? [[String: Any]] ?? []
-            let contacts: [SubcontractorContact] = contactsArray.compactMap { row in
-                guard let cidString = row["id"] as? String,
-                      let cid = UUID(uuidString: cidString),
-                      let cname = row["name"] as? String,
-                      let cemail = row["email"] as? String,
-                      let number = row["contactNumber"] as? String,
-                      let positionRaw = row["position"] as? String,
-                      let cCreatedAt = (row["createdAt"] as? Timestamp)?.dateValue() else { return nil }
-                let position = SubcontractorContactPosition(rawValue: positionRaw) ?? .installer
-                let storedTrade = (row["tradeType"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let loaded = Self.subcontractors(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+        return loaded.sorted { $0.name < $1.name }
+    }
+    
+    /// RULEBOOK 1.6.0 §1 "Document readers": `subcontractors/{id}` are read only through the rulebook's
+    /// `parseSubcontractorDocument`. The record id is the document id in stored case (a stored `id` field never
+    /// replaces it; a non-UUID id is kept). A contact without a readable id gets a stable in-app id.
+    static func subcontractors(fromDocuments documents: [(id: String, data: [String: Any])]) -> [Subcontractor] {
+        documents.compactMap { doc -> Subcontractor? in
+            guard let row = CanonicalBusinessEngine.parseSubcontractorDocument(documentId: doc.id, data: doc.data) else { return nil }
+            let createdAt = row.date("createdAtMs") ?? Date(timeIntervalSince1970: 0)
+            let contacts: [SubcontractorContact] = row.rows("contacts").enumerated().map { index, contact in
+                let contactId = contact.id.isEmpty ? "\(row.id)#contact-\(index)" : contact.id
+                let positionRaw = contact.text("position")
                 return SubcontractorContact(
-                    id: cid,
-                    name: cname,
-                    email: cemail,
-                    contactNumber: number,
-                    position: position,
-                    tradeType: storedTrade.isEmpty ? positionRaw : storedTrade,
-                    createdAt: cCreatedAt
+                    id: Manager.stableId(forFirestoreDocumentId: contactId),
+                    name: contact.text("name"),
+                    email: contact.text("email"),
+                    contactNumber: contact.text("contactNumber"),
+                    position: SubcontractorContactPosition(rawValue: positionRaw) ?? .installer,
+                    tradeType: contact.optionalText("tradeType") ?? positionRaw,
+                    createdAt: contact.date("createdAtMs") ?? createdAt
                 )
             }
-            
-            loaded.append(
-                Subcontractor(
-                    id: id,
-                    name: name,
-                    subcontractorType: subcontractorType,
-                    website: website,
-                    address: address,
-                    contacts: contacts,
-                    createdAt: createdAt,
-                    updatedAt: updatedAt
-                )
+            return Subcontractor(
+                id: Manager.stableId(forFirestoreDocumentId: row.id),
+                name: row.text("name"),
+                subcontractorType: row.text("subcontractorType"),
+                website: row.optionalText("website"),
+                address: row.optionalText("address"),
+                contacts: contacts,
+                createdAt: createdAt,
+                updatedAt: row.date("updatedAtMs") ?? createdAt,
+                firestoreDocumentId: row.id
             )
         }
-        return loaded.sorted { $0.name < $1.name }
     }
     
     func saveSubcontractorBooking(_ booking: SubcontractorBooking, organizationId: String) async throws {

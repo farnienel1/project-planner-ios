@@ -328,6 +328,15 @@ struct Client: Identifiable, Codable, Hashable {
     var address: String?
     var createdAt: Date
     var updatedAt: Date
+    /// `organizations/{org}/clients/{id}` as stored (RULEBOOK 1.6.0 §1: stored case, a non-UUID id is kept).
+    /// Nil on a client made in this app before it was saved: its id is `id.uuidString`. Use `documentId`.
+    var firestoreDocumentId: String? = nil
+
+    /// The Firestore document id every write, delete and lookup addresses.
+    var documentId: String {
+        let stored = firestoreDocumentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? id.uuidString : stored
+    }
     
     init(
         id: UUID = UUID(),
@@ -335,7 +344,8 @@ struct Client: Identifiable, Codable, Hashable {
         contactPerson: String? = nil,
         email: String? = nil,
         phone: String? = nil,
-        address: String? = nil
+        address: String? = nil,
+        firestoreDocumentId: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -345,6 +355,7 @@ struct Client: Identifiable, Codable, Hashable {
         self.address = address
         self.createdAt = Date()
         self.updatedAt = Date()
+        self.firestoreDocumentId = firestoreDocumentId
     }
 }
 
