@@ -692,7 +692,14 @@ class BookingStore: ObservableObject {
     /// A cache snapshot must not delete bookings that are already on screen. A server snapshot is the
     /// whole query result, so it replaces the list: a booking deleted or moved on the web leaves this
     /// device too instead of being merged back in. Rows older than the launch window are not kept.
-    private func applyRemoteBookings(_ remote: [Booking], fromCache: Bool) {
+    private func applyRemoteBookings(_ serverRows: [Booking], fromCache: Bool) {
+        // RULEBOOK §2: a booking created or edited offline stays on screen ("Pending sync") until the outbox
+        // replays it; a queued delete stays gone. The server copy is used for everything else.
+        var remote = serverRows
+        if let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId {
+            let pending = OfflineOutboxStore.shared.pendingLabourBookings(organizationId: organizationId)
+            remote = BookingStore.overlayingPendingOutbox(serverRows, pendingSaves: pending.saves, pendingDeletes: pending.deletedIds)
+        }
         let lowerBound = firebaseBackend?.scheduleBookingQueryStart()
         let existing = bookings.filter {
             LaunchStartupPolicy.launchBookingIncludes(date: $0.date, lowerBound: lowerBound)
@@ -741,6 +748,20 @@ class BookingStore: ObservableObject {
         ScheduleChangeNotifier.postBookingStoreDidChange()
     }
     
+    /// The server rows with this device's queued creates and edits in place of (or added to) the stored copy, and
+    /// its queued deletes left out. Pure, for tests.
+    static func overlayingPendingOutbox(
+        _ server: [Booking],
+        pendingSaves: [Booking],
+        pendingDeletes: Set<UUID>
+    ) -> [Booking] {
+        guard !pendingSaves.isEmpty || !pendingDeletes.isEmpty else { return server }
+        let pendingIds = Set(pendingSaves.map(\.id))
+        var out = server.filter { !pendingIds.contains($0.id) && !pendingDeletes.contains($0.id) }
+        out += pendingSaves.filter { !pendingDeletes.contains($0.id) }
+        return out
+    }
+
     /// Same ids and the same stored fields, in any order.
     static func sameBookings(_ lhs: [Booking], _ rhs: [Booking]) -> Bool {
         guard lhs.count == rhs.count else { return false }

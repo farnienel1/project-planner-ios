@@ -146,6 +146,29 @@ final class OfflineOutboxStore: ObservableObject {
         hasPendingSync(entityId: bookingId.uuidString)
     }
 
+    /// Labour bookings this device has queued to create or edit in `organizationId` (newest queued copy each), and the
+    /// ids it has queued to delete. A server snapshot is overlaid with these until the outbox replays (§2).
+    func pendingLabourBookings(organizationId: String) -> (saves: [Booking], deletedIds: Set<UUID>) {
+        var saves: [Booking] = []
+        var deleted = Set<UUID>()
+        for entry in entries where entry.organizationId == organizationId {
+            switch entry.operation {
+            case .saveBooking:
+                if let payload = try? decoder.decode(OfflineSaveBookingPayload.self, from: entry.payload) {
+                    saves.removeAll { $0.id == payload.booking.id }
+                    saves.append(payload.booking)
+                }
+            case .deleteBooking:
+                if let payload = try? decoder.decode(OfflineDeleteBookingPayload.self, from: entry.payload) {
+                    deleted.insert(payload.bookingId)
+                }
+            default:
+                break
+            }
+        }
+        return (saves, deleted)
+    }
+
     /// Every entity id with a queued change.
     var pendingEntityIds: Set<String> {
         Set(entries.map { $0.entityId.uppercased() })
