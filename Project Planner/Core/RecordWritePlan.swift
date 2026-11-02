@@ -28,7 +28,8 @@ nonisolated enum RecordWriteAction: Sendable, Equatable {
 }
 
 nonisolated enum RecordWritePlan {
-    /// `mode` nil is the legacy upsert still used by subcontractors and the material catalogue.
+    /// `mode` nil is the legacy upsert; every save now names its mode (subcontractors and the material catalogue
+    /// included), so nil is kept only for the plan's own tests.
     static func action(mode: RecordSaveMode?, documentExists: Bool) -> RecordWriteAction {
         if documentExists { return .update }
         switch mode {

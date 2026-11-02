@@ -2997,13 +2997,13 @@ class FirebaseBackend: ObservableObject {
         payload: [String: Any],
         previousPayload: [String: Any]?,
         writeFields: String = "operativeRowWriteFields",
-        mode: RecordSaveMode? = nil
+        mode: RecordSaveMode
     ) async throws {
         let uid = auth.currentUser?.uid
         let snapshot = try await ref.getDocument(source: .server)
         let storedData = snapshot.exists ? snapshot.data() : nil
         // An edit (`mode: .update`) of a document that is gone was deleted on another device: refuse it and never
-        // re-create it with setData. Only a genuine create (`.create`), or the legacy upsert (nil), creates.
+        // re-create it with setData. Only a genuine create (`.create`) creates.
         switch RecordWritePlan.action(mode: mode, documentExists: storedData != nil) {
         case .refuseDeletedElsewhere:
             throw RecordDeletedElsewhereError(collection: ref.parent.collectionID, documentId: ref.documentID)
@@ -8735,7 +8735,7 @@ extension FirebaseBackend {
             createdByUserId: currentUser?.uid ?? material.addedByUserId ?? "unknown",
             createdByName: creatorName
         )
-        try await saveMaterialCatalogueItem(catalogItem, organizationId: organizationId)
+        try await saveMaterialCatalogueItem(catalogItem, organizationId: organizationId, mode: .create)
     }
 
     func backfillMaterialCatalogueFromExistingMaterials(organizationId: String) async throws {
@@ -8770,7 +8770,7 @@ extension FirebaseBackend {
                 createdByUserId: currentUser?.uid ?? material.addedByUserId ?? "unknown",
                 createdByName: creatorName
             )
-            try? await saveMaterialCatalogueItem(entry, organizationId: orgId)
+            try? await saveMaterialCatalogueItem(entry, organizationId: orgId, mode: .create)
             knownKeys.insert(key)
         }
     }
@@ -9204,7 +9204,9 @@ extension FirebaseBackend {
     
     // MARK: - Subcontractors
     
-    func saveSubcontractor(_ subcontractor: Subcontractor, organizationId: String) async throws {
+    /// `mode` says whether this is a new firm (`.create`) or an edit of one already saved (`.update`): an edit of a
+    /// firm deleted on another device is refused (`RecordDeletedElsewhereError`), never re-created.
+    func saveSubcontractor(_ subcontractor: Subcontractor, organizationId: String, mode: RecordSaveMode) async throws {
         let contactsData = subcontractor.contacts.map { contact in
             [
                 "id": WorkDocumentKeys.storedId(for: contact.id),
@@ -9233,7 +9235,7 @@ extension FirebaseBackend {
         let ref = db.collection("organizations").document(organizationId)
             .collection("subcontractors")
             .document(subcontractor.documentId)
-        try await writeChangedRosterRow(ref, payload: data, previousPayload: nil, writeFields: "subcontractorWriteFields")
+        try await writeChangedRosterRow(ref, payload: data, previousPayload: nil, writeFields: "subcontractorWriteFields", mode: mode)
 
         let extraTrades = subcontractor.contacts.map(\.displayTrade) + [subcontractor.subcontractorType]
         try? await mergeOrganizationTradeTypes(extraTrades, organizationId: organizationId)
@@ -9451,8 +9453,9 @@ extension FirebaseBackend {
     }
 
     /// RULEBOOK 1.8.0 §1: one catalogue item saved as a partial update (`materialCatalogueItemWriteFields`; creator
-    /// fields and `createdAt` never rewritten), or created whole when it is new.
-    func saveMaterialCatalogueItem(_ item: MaterialCatalogItem, organizationId: String) async throws {
+    /// fields and `createdAt` never rewritten), or created whole when it is new (`mode: .create`). An edit
+    /// (`mode: .update`) of an item deleted on another device is refused, never re-created.
+    func saveMaterialCatalogueItem(_ item: MaterialCatalogItem, organizationId: String, mode: RecordSaveMode) async throws {
         let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
         guard let payload = Self.materialCatalogueItemPayload(item) else {
             throw CanonicalWriteUnavailableError(function: "materialCatalogueItemFields")
@@ -9460,7 +9463,7 @@ extension FirebaseBackend {
         let ref = db.collection("organizations").document(orgId)
             .collection("materialCatalogue")
             .document(WorkDocumentKeys.storedId(for: item.id))
-        try await writeChangedRosterRow(ref, payload: payload, previousPayload: nil, writeFields: "materialCatalogueItemWriteFields")
+        try await writeChangedRosterRow(ref, payload: payload, previousPayload: nil, writeFields: "materialCatalogueItemWriteFields", mode: mode)
     }
 
     func deleteMaterialCatalogueItem(_ itemId: UUID, organizationId: String) async throws {

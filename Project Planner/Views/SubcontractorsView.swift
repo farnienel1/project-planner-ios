@@ -464,7 +464,7 @@ private struct SubcontractorFirmDetailView: View {
         guard var subcontractor else { return }
         subcontractor.contacts.append(contact)
         subcontractor.updatedAt = Date()
-        Task { await subcontractorStore.saveSubcontractor(subcontractor) }
+        Task { await subcontractorStore.saveSubcontractor(subcontractor, mode: .update) }
     }
 
     private func upsertOperative(_ contact: SubcontractorContact) {
@@ -475,7 +475,7 @@ private struct SubcontractorFirmDetailView: View {
             subcontractor.contacts.append(contact)
         }
         subcontractor.updatedAt = Date()
-        Task { await subcontractorStore.saveSubcontractor(subcontractor) }
+        Task { await subcontractorStore.saveSubcontractor(subcontractor, mode: .update) }
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -824,7 +824,7 @@ private struct SubcontractorFirmEditorView: View {
         )
         Task {
             TradeTypeInventory.register(subcontractor.subcontractorType)
-            await subcontractorStore.saveSubcontractor(subcontractor)
+            await subcontractorStore.saveSubcontractor(subcontractor, mode: existingSubcontractor == nil ? .create : .update)
             if let message = subcontractorStore.errorMessage, !message.isEmpty {
                 await MainActor.run {
                     saveErrorMessage = message

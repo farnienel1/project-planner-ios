@@ -175,7 +175,7 @@ struct MaterialCatalogueRootView: View {
                 MaterialCatalogueEditorSheet(mode: .create) { item in
                     Task {
                         do {
-                            try await store.save(item)
+                            try await store.save(item, mode: .create)
                             showingAdd = false
                         } catch {
                             saveError = error.localizedDescription
@@ -211,7 +211,7 @@ struct MaterialCatalogueRootView: View {
                 MaterialCatalogueEditorSheet(mode: .edit(item)) { updated in
                     Task {
                         do {
-                            try await store.save(updated)
+                            try await store.save(updated, mode: .update)
                             editItem = nil
                             if selectedItem?.id == updated.id { selectedItem = updated }
                         } catch {
