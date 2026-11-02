@@ -409,3 +409,51 @@ extension FirebaseBackend {
         }
     }
 }
+
+/// RULEBOOK 1.9.0 §1: where iOS holds the listener for every `LIVE_COLLECTIONS` row with `listen: true`
+/// (`screenMustListen`). `OrgLiveListenersTests` compares this list with the packed script's `LIVE_COLLECTIONS`, so a
+/// collection web adds to the list fails the tests until iOS listens to it. Values say where; a row iOS never shows
+/// says so (it then needs no listener). App plumbing, not a rule.
+nonisolated enum IOSLiveListenerCoverage {
+    /// Marks a collection no iOS screen shows (no listener is needed until one does).
+    static let notShownOnIOS = "not shown on iOS"
+
+    static let listeners: [String: String] = [
+        "organization": "FirebaseBackend organizationDocumentListener (organizations/{orgId})",
+        "users": "FirebaseBackend users where organizationId (live roster) + observeCurrentUserDocument",
+        "bookings": "FirebaseBackend booking listener (bookingLoadStart)",
+        "managerSiteBookings": "FirebaseBackend managerSiteBookings listener (bookingLoadStart)",
+        "subcontractorBookings": "SubcontractorStore.startLiveUpdates (key subcontractorBookings)",
+        "projects": "ProjectStore.startLiveUpdates (key projects)",
+        "smallWorks": "ProjectStore.startLiveUpdates (key smallWorks)",
+        "holidayBookings": "HolidayStore live listener (key holidayBookings)",
+        "timesheets": "InvoicingView open sheet (listenOrganizationDocument settings/timesheet_*)",
+        "operatives": "OperativeStore.startLiveUpdates (key operatives)",
+        "managers": "OperativeStore.startLiveUpdates (key managers)",
+        "clients": "ProjectStore.startLiveUpdates (key clients)",
+        "subcontractors": "SubcontractorStore.startLiveUpdates (key subcontractors)",
+        "operativeDayRateHistory": "InvoicingView timesheet screens (listensWhileOpen)",
+        "warningResolutions": "WarningResolutionStore resolutionListener",
+        "acceptedBookingClashes": "WarningResolutionStore acceptedClashListener",
+        "dismissedWarnings": "FirebaseBackend.startDismissedWarningsListener",
+        "materials": "FirebaseBackend materials listener (per job)",
+        "materialSendRecords": "FirebaseBackend.listenMaterialSendRecords (order history open)",
+        "materialCatalogue": "MaterialsCatalogueFlow (listensWhileOpen)",
+        "wholesalers": "WholesalersView (listensWhileOpen)",
+        "siteAudits": "SiteAuditView job audits (listensWhileOpen)",
+        "tasks": "ProjectTaskStore.startLiveUpdates (key tasks)",
+        "healthSafety": "ProjectHealthSafetyView (listensWhileOpen on healthSafetyDocumentIds)",
+        "variations": "VariationStore.observeVariations",
+        "variationTrackers": "VariationStore.observeVariationTracker",
+        "deadlines": "ProjectDeadlinesView (listensWhileOpen on deadlines_{KEY} + deadlineAssignments)",
+        "notifications": "NotificationService notificationsListener (userId == signed-in user, newest 150)",
+        "jobTypes": "ProjectStore.startLiveUpdates (key jobTypes)",
+        "skills": notShownOnIOS + " (the skills catalogue is retired on iOS)",
+        "qualifications": "OperativeStore.startLiveUpdates (key qualifications)",
+    ]
+
+    /// `LIVE_COLLECTIONS` ids with `listen: true` that have no entry above. Empty when iOS covers them all.
+    static func uncoveredListenIds(_ rows: [CanonicalLiveCollection] = CanonicalBusinessEngine.liveCollections) -> [String] {
+        rows.filter { $0.listen && listeners[$0.id] == nil }.map(\.id)
+    }
+}

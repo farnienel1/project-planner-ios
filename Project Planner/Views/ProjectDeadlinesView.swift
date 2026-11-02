@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseFirestore
 import Combine
 import FirebaseAuth
 
@@ -102,7 +103,16 @@ struct ProjectDeadlinesView: View {
         .onReceive(NotificationCenter.default.publisher(for: .offlineSyncDidComplete)) { _ in
             Task { await load(preferRemote: true) }
         }
-        .reloadsOnForeground { await load(preferRemote: true) }
+        .listensWhileOpen("deadlines", key: "deadlines", targetSuffix: project.documentId,
+                          firebaseBackend: firebaseBackend,
+                          query: { org in
+                              let isSmallWorks = project.jobType == .smallWorks
+                              let docId = CanonicalBusinessEngine.deadlinesDocumentId(projectId: project.documentId, isSmallWorks: isSmallWorks)
+                                  ?? "deadlines_\(isSmallWorks ? "smallWorks" : "projects")_\(project.documentId.uppercased())"
+                              return org.collection("settings").whereField(FieldPath.documentID(), in: [docId, "deadlineAssignments"])
+                          }) {
+            await load(preferRemote: true)
+        }
         .onAppear {
             store.restrictToAssigneeUserId = canManage ? nil : userStore.currentUser?.id
             store.now = Date()

@@ -685,13 +685,23 @@ class FirebaseBackend: ObservableObject {
                     userInfo: [NSLocalizedDescriptionKey: "Organisation name is required"]
                 )
             }
-            var organizationData: [String: Any] = nameFields
-            organizationData["members"] = [result.user.uid: "admin"]
-            organizationData["creatorUserId"] = result.user.uid
-            organizationData["countryCode"] = "GB"
-            organizationData["settings"] = [:]
-            organizationData["createdAt"] = Timestamp(date: Date())
-            organizationData["updatedAt"] = Timestamp(date: Date())
+            // RULEBOOK 1.9.0 §14, §16: the whole new organisation document is `organizationCreateFields` (members,
+            // creator, pending subscription and billing written at create only, team onboarding, timestamps).
+            var setupFields: [String: Any] = nameFields
+            setupFields.removeValue(forKey: "name")
+            setupFields["countryCode"] = "GB"
+            let createdAt = Timestamp(date: Date())
+            guard let organizationData = CanonicalBusinessEngine.organizationCreateFields(
+                name: writtenName,
+                creatorUserId: result.user.uid,
+                planKey: nil,
+                createdAt: createdAt,
+                updatedAt: createdAt,
+                setupFields: setupFields,
+                settings: [:]
+            ) else {
+                throw CanonicalWriteUnavailableError(function: "organizationCreateFields")
+            }
             
             print("🔥🔥🔥 DEBUG: Creating organization with ID: \(organizationId)")
             try await db.collection("organizations").document(organizationId).setData(organizationData)
@@ -991,7 +1001,11 @@ class FirebaseBackend: ObservableObject {
         if let mobileNumber = data["mobileNumber"] as? String, !mobileNumber.isEmpty {
             invitationData["mobileNumber"] = mobileNumber
         }
-        try await db.collection("invitations").document(invitationId).setData(invitationData)
+        if let employmentType = data["employmentType"] as? String {
+            invitationData["employmentType"] = employmentType
+        }
+        // RULEBOOK 1.9.0 §11: the invitation is created once with `invitationCreateFields`.
+        try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
         let orgName = currentOrganization?.name
         await sendPasswordResetVerificationEmail(email: email, firstName: firstName, surname: surname, verificationCode: invitationId, fromName: orgName)
     }
@@ -2439,7 +2453,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - Job Types Management
     
-    func saveJobTypes(organizationId: String, jobTypes: Set<String>) async throws {
+    func saveJobTypes(organizationId: String, jobTypes: Set<String>, removed: [String] = []) async throws {
         print("🔥🔥🔥 DEBUG: saveJobTypes called for organization: \(organizationId)")
         guard currentUser != nil else {
             throw NSError(
@@ -2464,16 +2478,13 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: [saveJobTypes] ensureUserDocumentLinked: \(error.localizedDescription)")
         }
         await repairCurrentUserOrganizationAccess(organizationId: orgId)
-        if jobTypes.isEmpty {
-            print("🔥🔥🔥 DEBUG: Refusing to overwrite job types with an empty list")
-            return
-        }
-        // RULEBOOK 1.8.0 §1: `jobTypesWriteFields` (canonical names, de-duplicated, sorted; a field update of
+        // RULEBOOK 1.9.0: an empty list is written only when the user removed every stored name (`removed`);
+        // `jobTypesWriteFields` decides. RULEBOOK 1.8.0 §1: `jobTypesWriteFields` (canonical names, de-duplicated, sorted; a field update of
         // `jobTypes` only; no write when the list is empty or unchanged). §16: admins and managers only.
         let ref = db.collection("organizations").document(orgId).collection("settings").document("jobTypes")
         let snapshot = try await ref.getDocument(source: .server)
         let stored = snapshot.exists ? CanonicalBusinessEngine.parseJobTypesDocument(snapshot.data()) : nil
-        guard let answer = CanonicalBusinessEngine.jobTypesWriteFields(stored: stored, next: Array(jobTypes)) else {
+        guard let answer = CanonicalBusinessEngine.jobTypesWriteFields(stored: stored, next: Array(jobTypes), removed: removed) else {
             throw CanonicalWriteUnavailableError(function: "jobTypesWriteFields")
         }
         guard let names = answer else { return }
@@ -3762,13 +3773,19 @@ class FirebaseBackend: ObservableObject {
             db.collection("organizations").document(orgId).collection("qualifications")
         )
         
+        return Self.qualifications(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+    }
+
+    /// The organisation qualification library from `qualifications` documents (the one-off load and the live
+    /// listener read the same way), sorted by name.
+    static func qualifications(fromDocuments documents: [(id: String, data: [String: Any])]) -> [Qualification] {
         var qualifications: [Qualification] = []
         
-        for doc in snapshot.documents {
-            let data = doc.data()
+        for doc in documents {
+            let data = doc.data
             let name = (data["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !name.isEmpty else {
-                print("🔥🔥🔥 DEBUG: Failed to parse qualification data for document: \(doc.documentID)")
+                print("🔥🔥🔥 DEBUG: Failed to parse qualification data for document: \(doc.id)")
                 continue
             }
             
@@ -3778,7 +3795,7 @@ class FirebaseBackend: ObservableObject {
             let endDate = (data["endDate"] as? Timestamp)?.dateValue()
 
             let qualification = Qualification(
-                id: doc.documentID,
+                id: doc.id,
                 name: name,
                 hasEndDate: hasEndDate,
                 endDate: endDate,
@@ -4043,6 +4060,7 @@ class FirebaseBackend: ObservableObject {
         parsed.profilePhotoUpdatedAt = row.date("profilePhotoUpdatedAtMs")
         parsed.operativeModeStored = row.bool("operativeModeStored")
         parsed.annualLeaveDefaultsPending = row.bool("annualLeaveDefaultsPending")
+        parsed.annualLeaveStoredKeys = row.map("annualLeaveStored").filter { !($0.value is NSNull) }.map(\.key).sorted()
         return parsed
     }
 
@@ -5213,7 +5231,7 @@ class FirebaseBackend: ObservableObject {
     
     /// Every `users/{uid}` field a profile save manages, as it is stored. `saveUser` diffs two of these
     /// (the copy the caller edited and the edited copy) so only changed fields are written (RULEBOOK §1).
-    static func userDocumentPayload(_ user: AppUser) -> [String: Any] {
+    static func userDocumentPayload(_ user: AppUser, editedLeaveFields: [String] = []) -> [String: Any] {
         // Operative mode does not demote an admin. Tab order is admin, then operativeMode, then manager.
         let keepAdmin = user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin
         let operativeOnly = user.permissions.operativeMode && !keepAdmin
@@ -5329,12 +5347,23 @@ class FirebaseBackend: ObservableObject {
             userData["profilePhotoURL"] = FieldValue.delete()
         }
         
-        // RULEBOOK 1.8.0: figures read before the organisation's leave defaults loaded are not the person's own and
-        // are never saved (`annualLeaveDefaultsPending`).
-        if !user.annualLeaveDefaultsPending {
+        // RULEBOOK 1.9.0: figures read before the organisation's leave defaults loaded are not the person's own and
+        // are left out (`annualLeavePendingOmitFields`), unless the user document stores them or the editor changed them.
+        let omitLeave = Set(CanonicalBusinessEngine.annualLeavePendingOmitFields(
+            pending: user.annualLeaveDefaultsPending,
+            storedKeys: user.annualLeaveStoredKeys,
+            edited: editedLeaveFields
+        ) ?? (user.annualLeaveDefaultsPending ? CanonicalBusinessEngine.userAnnualLeaveFigureFields : []))
+        if !omitLeave.contains("annualLeaveDaysPerYear") {
             userData["annualLeaveDaysPerYear"] = AnnualLeavePolicy.clampDaysPerYear(user.annualLeaveDaysPerYear)
+        }
+        if !omitLeave.contains("annualLeaveYearStartMonth") {
             userData["annualLeaveYearStartMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearStartMonth)
+        }
+        if !omitLeave.contains("annualLeaveYearEndMonth") {
             userData["annualLeaveYearEndMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearEndMonth)
+        }
+        if !omitLeave.contains("annualLeaveCarriesOver") {
             userData["annualLeaveCarriesOver"] = user.annualLeaveCarriesOver
         }
         userData["annualLeaveEnabled"] = user.annualLeaveEnabled
@@ -5360,7 +5389,15 @@ class FirebaseBackend: ObservableObject {
     ///   delete (a stale copy without the photo must not remove it; the photo upload path writes it).
     /// - A document the server confirms missing is created once with the full profile.
     func saveUser(_ user: AppUser, previous: AppUser? = nil) async throws {
-        let payload = Self.userDocumentPayload(user)
+        // The leave figures this editor changed are the person's own even while the defaults were pending.
+        var editedLeave: [String] = []
+        if let previous, previous.id == user.id {
+            if previous.annualLeaveDaysPerYear != user.annualLeaveDaysPerYear { editedLeave.append("annualLeaveDaysPerYear") }
+            if previous.annualLeaveYearStartMonth != user.annualLeaveYearStartMonth { editedLeave.append("annualLeaveYearStartMonth") }
+            if previous.annualLeaveYearEndMonth != user.annualLeaveYearEndMonth { editedLeave.append("annualLeaveYearEndMonth") }
+            if previous.annualLeaveCarriesOver != user.annualLeaveCarriesOver { editedLeave.append("annualLeaveCarriesOver") }
+        }
+        let payload = Self.userDocumentPayload(user, editedLeaveFields: editedLeave)
         if sessionsAreSeparate(for: user) {
             var membershipPayload = payload
             membershipPayload["updatedAt"] = Timestamp(date: Date())
@@ -5371,7 +5408,7 @@ class FirebaseBackend: ObservableObject {
         let uid = auth.currentUser?.uid
         let baseline: [String: Any]
         if let previous, previous.id == user.id {
-            baseline = Self.userDocumentPayload(previous)
+            baseline = Self.userDocumentPayload(previous, editedLeaveFields: editedLeave)
         } else {
             let snapshot = try await ref.getDocument(source: .server)
             guard snapshot.exists, let stored = snapshot.data() else {
@@ -5500,12 +5537,19 @@ class FirebaseBackend: ObservableObject {
                 : "Could not save UTR and VAT number. Try again."
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
         }
-        try await ref.setData([
+        // RULEBOOK 1.9.0 §12: the whole private document is `taxIdsDocumentFields` (its only fields), written with a
+        // set without merge plus the server `updatedAt`.
+        var document = CanonicalBusinessEngine.taxIdsDocumentFields(
+            utrNumber: utrNumber,
+            vatNumber: vatNumber,
+            updatedByUserId: signedIn
+        ) ?? [
             "utrNumber": fields.utrNumber,
             "vatNumber": fields.vatNumber,
-            "updatedByUserId": fields.updatedByUserId,
-            "updatedAt": FieldValue.serverTimestamp()
-        ])
+            "updatedByUserId": fields.updatedByUserId
+        ]
+        document["updatedAt"] = FieldValue.serverTimestamp()
+        try await ref.setData(document)
         do {
             try await db.collection("users").document(userId.trimmingCharacters(in: .whitespacesAndNewlines)).updateData([
                 "utrNumber": FieldValue.delete(),
@@ -6259,47 +6303,32 @@ class FirebaseBackend: ObservableObject {
             acceptedMissingNotificationIds.insert(idKey)
         }
         let ref = db.collection("organizations").document(organizationId).collection("notifications").document(WorkDocumentKeys.storedId(for: notification.id))
-        var isRead = notification.isRead
-        if onlyIfMissing || preserveExistingReadState {
-            let existing = try? await ref.getDocument()
-            if existing?.exists == true {
-                if onlyIfMissing { return }
-                if (existing?.data()?["isRead"] as? Bool) == true {
-                    isRead = true
-                }
-            }
-        }
-        let relatedIdValue: Any
-        if notification.type == .timesheetSubmissionReminder,
-           let dayKey = notification.dayKey,
-           AppNotification.isInboxDayKey(dayKey) {
-            relatedIdValue = dayKey
-        } else {
-            relatedIdValue = notification.relatedKey ?? NSNull()
-        }
-        var data: [String: Any] = [
-            "organizationId": notification.organizationId,
-            "type": notification.typeText,
-            "title": notification.title,
-            "message": notification.message,
-            "userId": notification.userId ?? NSNull(),
-            "relatedId": relatedIdValue,
-            "isRead": isRead,
-            "createdAt": Timestamp(date: notification.createdAt),
-            "requiresPermission": notification.requiresPermission ?? NSNull(),
-            "deepLinkUserId": notification.deepLinkUserId ?? NSNull(),
-            "deepLinkWeekStart": (notification.deepLinkWeekStart.map(Timestamp.init(date:)) ?? NSNull()) as Any
-        ]
-        if let dayKey = notification.dayKey, !dayKey.isEmpty {
-            data["dayKey"] = dayKey
-        }
-        if let catalogue = notification.catalogue, catalogue == "projects" || catalogue == "smallWorks" {
-            data["catalogue"] = catalogue
-        }
-        // RULEBOOK §13: the signed-in user who caused the row. Security rules accept only request.auth.uid;
-        // the push function never pushes a row to its actor.
-        if let actor = actorUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !actor.isEmpty {
-            data["actorUserId"] = actor
+        // RULEBOOK 1.9.0 §13: an inbox row is created once (`notificationCreateFields`): a row whose id is already
+        // stored (a dedupe hit) is left alone, so its read state is never reset. A failed read is treated as missing
+        // (the write is a create of the same deterministic id). `preserveExistingReadState` is kept for callers; the
+        // rule now always keeps the stored row.
+        _ = preserveExistingReadState
+        let storedExists = (try? await ref.getDocument())?.exists == true
+        if storedExists { return }
+        guard let data = CanonicalBusinessEngine.notificationCreateFields(
+            organizationId: notification.organizationId,
+            type: notification.typeText,
+            title: notification.title,
+            message: notification.message,
+            userId: notification.userId,
+            actorUserId: actorUserId,
+            relatedId: Self.notificationRelatedId(for: notification),
+            requiresPermission: notification.requiresPermission,
+            deepLinkUserId: notification.deepLinkUserId,
+            deepLinkWeekStart: notification.deepLinkWeekStart.map(Timestamp.init(date:)),
+            dayKey: notification.dayKey,
+            catalogue: notification.catalogue,
+            createdAt: Timestamp(date: notification.createdAt),
+            storedExists: storedExists
+        ) else {
+            // No `userId` (not an inbox row), no type, or the script did not answer: nothing is written.
+            if onlyIfMissing { acceptedMissingNotificationIds.remove(idKey) }
+            return
         }
 
         do {
@@ -6313,6 +6342,31 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: [FIREBASE SAVE NOTIFICATION OK] org=\(organizationId) id=\(notification.id.uuidString) type=\(notification.type.rawValue) target=\(notification.userId ?? "broadcast")")
     }
     
+    /// `notificationRelatedId(type, ids)` (RULEBOOK 1.9.0 §13): the id the type names, never a random one. The row's
+    /// related key is offered as the id of the kind `NOTIFICATION_RELATED_ID[type]` names (a job id in its stored
+    /// spelling); the timesheet submission reminder carries its payment day key.
+    static func notificationRelatedId(for notification: AppNotification) -> String? {
+        let type = notification.typeText
+        var ids: [String: String] = [:]
+        if let key = notification.relatedKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
+            let kind = CanonicalBusinessEngine.notificationRelatedIdKind(type)
+            let stored: String
+            if kind == "job", let uuid = UUID(uuidString: key) {
+                stored = WorkDocumentKeys.storedId(for: uuid)
+            } else {
+                stored = key
+            }
+            for field in ["holidayBookingId", "jobId", "variationId", "clientId", "userId", "taskId", "deadlineId",
+                          "issueId", "warningKey", "ideaId"] {
+                ids[field] = stored
+            }
+        }
+        if let dayKey = notification.dayKey, AppNotification.isInboxDayKey(dayKey) {
+            ids["paymentDayKey"] = dayKey
+        }
+        return CanonicalBusinessEngine.notificationRelatedId(type: type, ids: ids)
+    }
+
     func loadNotifications(organizationId: String, userId: String, limit: Int = 50) async throws -> [AppNotification] {
         let owner = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !owner.isEmpty else { return [] }
@@ -6676,7 +6730,8 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Invitation keys: \(invitationData.keys.sorted().joined(separator: ", "))")
         #endif
         
-        try await db.collection("invitations").document(invitationId).setData(invitationData)
+        // RULEBOOK 1.9.0 §11: the invitation is created once with `invitationCreateFields`.
+        try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
         
         print("🔥🔥🔥 DEBUG: Invitation document created successfully")
         
@@ -7468,6 +7523,33 @@ class FirebaseBackend: ObservableObject {
                 fields: changedFields
             )
             guard !patch.isEmpty else { return }
+            // RULEBOOK 1.9.0 §1, §2: an edit is `managerSiteBookingUpdateWriteFields` against the stored copy — only
+            // the fields the user changed, the slot group and the location group each together, never `id`,
+            // `createdAt` or `organizationId`. An edit of a booking gone from the server is refused
+            // (`editOfMissingDocumentIsRefused`), never re-created. Without a server read, the patch is sent with
+            // `updateData` (which fails on a missing document).
+            if let snapshot = try? await ref.getDocument(source: .server) {
+                guard snapshot.exists, let stored = snapshot.data() else {
+                    if CanonicalBusinessEngine.editOfMissingDocumentIsRefused(isCreate: false, exists: false) ?? true {
+                        throw NSError(
+                            domain: "FIRFirestoreErrorDomain",
+                            code: 5,
+                            userInfo: [NSLocalizedDescriptionKey: CanonicalBusinessEngine.editOfMissingDocumentMessage]
+                        )
+                    }
+                    return
+                }
+                var next = stored
+                for (key, value) in patch { next[key] = value }
+                guard let write = CanonicalBusinessEngine.managerSiteBookingUpdateWriteFields(before: stored, next: next) else {
+                    throw CanonicalWriteUnavailableError(function: "managerSiteBookingUpdateWriteFields")
+                }
+                var changes = write.firestoreFields(from: next)
+                for key in ["updatedAt", "updatedBy", "updatedFrom"] { changes.removeValue(forKey: key) }
+                guard !changes.isEmpty else { return }
+                try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+                return
+            }
             try await ref.updateData(WriteMetadata.stamped(patch, userId: uid))
             return
         }
@@ -10385,7 +10467,9 @@ extension FirebaseBackend {
         _ safetyData: HSProjectSafetyData,
         project: Project,
         organizationId: String,
-        fields: Set<String> = ["talks", "issues", "signatures", "ramsDocuments", "otherDocuments"]
+        fields: Set<String> = ["talks", "issues", "signatures", "ramsDocuments", "otherDocuments"],
+        removedIds: [String: [String]] = [:],
+        signatureRemovals: [(issueId: String, userId: String?)] = []
     ) async throws {
         guard currentUser != nil else {
             throw NSError(
@@ -10426,16 +10510,33 @@ extension FirebaseBackend {
         if fields.contains("signatures") { next["signatures"] = safetyData.signatures.map(hsSignatureMap) }
         if fields.contains("ramsDocuments") { next["ramsDocuments"] = safetyData.ramsDocuments.map(hsRamsMap) }
         if fields.contains("otherDocuments") { next["otherDocuments"] = safetyData.otherDocuments.map(hsOtherDocMap) }
-        guard let write = CanonicalBusinessEngine.healthSafetyDocumentWriteFields(stored: stored, next: next) else {
+        guard let write = CanonicalBusinessEngine.healthSafetyDocumentWriteFields(stored: stored, next: next, removedIds: removedIds) else {
             throw CanonicalWriteUnavailableError(function: "healthSafetyDocumentWriteFields")
         }
         var changes: [String: Any] = [:]
         for (key, value) in write.set { changes[key] = ScriptFirestoreValue.native(value) }
         for key in write.remove { changes[key] = FieldValue.delete() }
-        guard !changes.isEmpty else { return }
+        // RULEBOOK 1.9.0: removing a recipient or an issue removes its signatures (`healthSafetySignatureRemovalWrites`),
+        // in the same update: each matching `signatureRecords.{key}` entry is deleted by field path.
+        var signatureRecordDeletes: [[String]] = []
+        if !signatureRemovals.isEmpty, snapshot.exists {
+            guard let removal = CanonicalBusinessEngine.healthSafetySignatureRemovalWrites(stored: stored, removals: signatureRemovals) else {
+                throw CanonicalWriteUnavailableError(function: "healthSafetySignatureRemovalWrites")
+            }
+            if let removal {
+                signatureRecordDeletes = removal.removeFieldPaths
+                if changes["signatures"] == nil, let signatures = removal.signatures {
+                    changes["signatures"] = signatures.map { (ScriptFirestoreValue.native($0) as? [String: Any]) ?? $0 }
+                }
+            }
+        }
+        guard !changes.isEmpty || !signatureRecordDeletes.isEmpty else { return }
         let stamped = WriteMetadata.stamped(changes, userId: currentUser?.uid)
         if snapshot.exists {
-            try await ref.updateData(stamped)
+            var update: [AnyHashable: Any] = [:]
+            for (key, value) in stamped { update[key] = value }
+            for path in signatureRecordDeletes { update[FieldPath(path)] = FieldValue.delete() }
+            try await ref.updateData(update)
         } else {
             try await ref.setData(stamped.filter { !($0.value is FieldValue) || $0.key == "updatedAt" }, merge: true)
         }

@@ -315,3 +315,16 @@ extension CanonicalBusinessEngine {
         return converted
     }
 }
+
+extension CanonicalBusinessEngine {
+    // MARK: 1.9.0 timesheet diff
+
+    /// `timesheetChangedFields(base, next)`: the partial update a timesheet save sends — the fields that differ
+    /// between the sheet as this editor loaded it (`base`, stored field shape) and the sheet it would save (`next`).
+    /// Write metadata and `createdAt` are ignored; `userId` is create-only. The caller writes its own native values
+    /// for the set keys (`CanonicalDocumentWrite.firestoreFields`). Nil when the script did not answer.
+    nonisolated static func timesheetChangedFields(base: [String: Any]?, next: [String: Any]) -> CanonicalDocumentWrite? {
+        let baseJSON: Any = base.map { peopleDocumentJSON($0) as Any } ?? NSNull()
+        return CanonicalDocumentWrite(callJSON("timesheetChangedFields", arguments: [baseJSON, peopleDocumentJSON(next)]))
+    }
+}

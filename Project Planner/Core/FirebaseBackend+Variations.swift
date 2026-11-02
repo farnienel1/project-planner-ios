@@ -286,31 +286,30 @@ extension FirebaseBackend {
         organizationId: String
     ) async throws {
         let ref = variationsFallbackDocument(organizationId: organizationId, parentId: variation.parentId)
-        var items: [[String: Any]] = []
-        if let existing = try? await ref.getDocument(), let data = existing.data() {
-            items = fallbackItemMaps(from: data)
+        let existing = try await ref.getDocument()
+        let stored = existing.exists ? existing.data() : nil
+        // RULEBOOK 1.9.0 §1: `variationLogWriteFields` — the stored entries (each with its id from `variationLogItems`,
+        // never random), this entry laid over the one with the same id or appended; never another entry removed and
+        // never the log rewritten from a local copy. A new log also carries its parent fields.
+        var map = map
+        map["id"] = variation.id
+        guard let set = CanonicalBusinessEngine.variationLogWriteFields(
+            stored: stored,
+            entry: map,
+            parentId: variation.parentId,
+            parentType: variation.parentType.rawValue,
+            organizationId: organizationId
+        ) else {
+            throw CanonicalWriteUnavailableError(function: "variationLogWriteFields")
         }
-        let storedItems = items
-        if let idx = items.firstIndex(where: { ($0["id"] as? String)?.lowercased() == variation.id.lowercased() }) {
-            items[idx] = map
+        var fields: [String: Any] = [:]
+        for (key, value) in set { fields[key] = ScriptFirestoreValue.native(value) }
+        fields["updatedAt"] = Timestamp(date: Date())
+        if stored != nil {
+            try await ref.updateData(fields)
         } else {
-            items.append(map)
+            try await ref.setData(fields, merge: true)
         }
-        // RULEBOOK 1.8.0 §1: each log entry laid over its stored row (`mergeStoredRows`), so fields web writes stay.
-        if let merged = CanonicalBusinessEngine.mergeStoredRows(stored: storedItems, next: items) {
-            items = merged.map { (ScriptFirestoreValue.native($0) as? [String: Any]) ?? $0 }
-        }
-        try await ref.setData(
-            [
-                "parentId": variation.parentId,
-                "parentType": variation.parentType.rawValue,
-                "organizationId": organizationId,
-                "recordType": "variationLog",
-                "items": items,
-                "updatedAt": Timestamp(date: Date())
-            ],
-            merge: true
-        )
     }
 
     private func saveVariationItemDocument(
@@ -330,23 +329,29 @@ extension FirebaseBackend {
         ) { _ in data }
     }
 
+    /// `settings/variationTrades` through `parseVariationTrades` (1.9.0). Picker suggestions: read when the picker
+    /// opens (`LIVE_COLLECTIONS` `listen: false`).
     func loadCustomVariationTrades(organizationId: String) async -> [String] {
         let snap = try? await variationTradesDocument(organizationId: organizationId).getDocument()
-        return (snap?.data()?["customTrades"] as? [String]) ?? []
+        return CanonicalBusinessEngine.parseVariationTrades(snap?.data()) ?? []
     }
 
+    /// Adds one trade with `variationTradesWriteFields` against the stored list (only what the user added, so a
+    /// stale list never drops another device's trade). A standard trade is not stored (app picker list).
     func addCustomVariationTrade(_ trade: String, organizationId: String) async {
         let trimmed = trade.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        var existing = await loadCustomVariationTrades(organizationId: organizationId)
-        let key = trimmed.lowercased()
-        if existing.contains(where: { $0.lowercased() == key }) { return }
-        if VariationTrades.standard.contains(where: { $0.lowercased() == key }) { return }
-        existing.append(trimmed)
-        try? await variationTradesDocument(organizationId: organizationId).setData(
-            ["customTrades": existing],
-            merge: true
-        )
+        if VariationTrades.standard.contains(where: { $0.lowercased() == trimmed.lowercased() }) { return }
+        let ref = variationTradesDocument(organizationId: organizationId)
+        guard let snap = try? await ref.getDocument() else { return }
+        let stored = snap.exists ? snap.data() : nil
+        guard let answer = CanonicalBusinessEngine.variationTradesWriteFields(stored: stored, add: [trimmed]),
+              let trades = answer else { return }
+        if snap.exists {
+            try? await ref.updateData(["customTrades": trades])
+        } else {
+            try? await ref.setData(["customTrades": trades], merge: true)
+        }
     }
 
     func countOpenVariations(organizationId: String, parentId: String) async -> Int {
@@ -522,7 +527,16 @@ nonisolated private func fallbackItemMaps(from data: [String: Any]) -> [[String:
 
 nonisolated private func variationsFromFallbackDocument(_ data: [String: Any]?) -> [Variation] {
     guard let data else { return [] }
-    // RULEBOOK 1.8.0: an entry's id is its stored `id` (`parseVariationDocument`); never a random id.
+    // RULEBOOK 1.9.0: each entry's id from `variationLogItems` (stored `id`, map key, or the derived
+    // `variationLogItemId` — never random), read with `parseVariationDocument`.
+    let parentId = (data["parentId"] as? String) ?? ""
+    if let items = CanonicalBusinessEngine.variationLogItems(parentId: parentId, data: data) {
+        return items.compactMap { item in
+            var row = (ScriptFirestoreValue.native(item.row) as? [String: Any]) ?? item.row
+            row["id"] = item.id
+            return VariationCodec.variation(from: row, documentId: item.id)
+        }
+    }
     return fallbackItemMaps(from: data).compactMap { row in
         VariationCodec.variation(from: row, documentId: (row["id"] as? String) ?? "")
     }

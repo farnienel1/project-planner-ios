@@ -228,3 +228,22 @@ extension CanonicalBusinessEngine {
         return (write: writes, remove: remove.compactMap { $0 as? String })
     }
 }
+
+extension CanonicalBusinessEngine {
+    // MARK: 1.9.0 leave defaults pending
+
+    /// `USER_ANNUAL_LEAVE_FIGURE_FIELDS`: the four `users/{uid}` leave figure field names.
+    nonisolated static var userAnnualLeaveFigureFields: [String] {
+        (constant("USER_ANNUAL_LEAVE_FIGURE_FIELDS", as: [[String]].self) ?? []).compactMap(\.first)
+    }
+
+    /// `annualLeavePendingOmitFields(user, edited)`: the leave figure fields a `users/{uid}` save leaves out while
+    /// `annualLeaveDefaultsPending` — each figure the document does not store (`storedKeys` are the
+    /// `annualLeaveStored` keys it does) and the editor did not change. Nil when the script did not answer.
+    nonisolated static func annualLeavePendingOmitFields(pending: Bool, storedKeys: [String], edited: [String]) -> [String]? {
+        var stored: [String: Any] = [:]
+        for key in storedKeys { stored[key] = true }
+        let user: [String: Any] = ["annualLeaveDefaultsPending": pending, "annualLeaveStored": stored]
+        return (callJSON("annualLeavePendingOmitFields", arguments: [user, edited]) as? [Any])?.compactMap { $0 as? String }
+    }
+}

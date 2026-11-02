@@ -254,10 +254,12 @@ extension CanonicalBusinessEngine {
         (callJSON("mergeJobTypeCatalogues", arguments: [stored, recovered]) as? [Any])?.compactMap { $0 as? String }
     }
 
-    /// `jobTypesWriteFields(stored, next)`: the names to write, or nil when the list is empty or unchanged (no write).
-    /// The outer optional is nil when the script did not answer.
-    nonisolated static func jobTypesWriteFields(stored: [String]?, next: [String]) -> [String]?? {
-        guard let value = callJSON("jobTypesWriteFields", arguments: [stored.map { $0 as Any } ?? NSNull(), next]) else { return nil }
+    /// `jobTypesWriteFields(stored, next, { removed })`: the names to write, or nil when the list is unchanged, or
+    /// empty without every stored name in `removed` (1.9.0: deleting the last job types is written). The outer
+    /// optional is nil when the script did not answer.
+    nonisolated static func jobTypesWriteFields(stored: [String]?, next: [String], removed: [String] = []) -> [String]?? {
+        let options: [String: Any] = ["removed": removed]
+        guard let value = callJSON("jobTypesWriteFields", arguments: [stored.map { $0 as Any } ?? NSNull(), next, options]) else { return nil }
         if value is NSNull { return .some(nil) }
         guard let names = ((value as? [String: Any])?["set"] as? [String: Any])?["jobTypes"] as? [Any] else { return nil }
         return .some(names.compactMap { $0 as? String })
@@ -309,16 +311,44 @@ extension CanonicalBusinessEngine {
         opsRow("parseHealthSafetyDocument", [peopleDocumentJSON(data), ["projectId": projectId, "timeZone": timeZone] as [String: Any]])
     }
 
-    /// `healthSafetyDocumentWriteFields(stored, next)`: `{ set, remove }` for the five arrays only. `next` rows are
-    /// native maps; the merged rows come back as JSON (instants as `{ seconds, nanoseconds }` or ms), so the caller
-    /// converts them with `ScriptFirestoreValue.native(_:)`.
-    nonisolated static func healthSafetyDocumentWriteFields(stored: [String: Any]?, next: [String: [[String: Any]]]) -> (set: [String: Any], remove: [String])? {
+    /// `healthSafetyDocumentWriteFields(stored, next, { removedIds })`: `{ set, remove }` for the five arrays only.
+    /// `next` rows are native maps; the merged rows come back as JSON (instants as `{ seconds, nanoseconds }` or ms),
+    /// so the caller converts them with `ScriptFirestoreValue.native(_:)`. `removedIds` (1.9.0) names, per array, the
+    /// rows the user deliberately removed, so removing the last one is written (an empty list otherwise never is).
+    nonisolated static func healthSafetyDocumentWriteFields(
+        stored: [String: Any]?,
+        next: [String: [[String: Any]]],
+        removedIds: [String: [String]] = [:]
+    ) -> (set: [String: Any], remove: [String])? {
         let storedJSON: Any = stored.map { peopleDocumentJSON($0) as Any } ?? NSNull()
         let nextJSON = next.mapValues { $0.map { peopleDocumentJSON($0) } }
-        guard let row = callJSON("healthSafetyDocumentWriteFields", arguments: [storedJSON, nextJSON]) as? [String: Any],
+        let options: [String: Any] = ["removedIds": removedIds]
+        guard let row = callJSON("healthSafetyDocumentWriteFields", arguments: [storedJSON, nextJSON, options]) as? [String: Any],
               let set = row["set"] as? [String: Any],
               let remove = row["remove"] as? [Any] else { return nil }
         return (set, remove.compactMap { $0 as? String })
+    }
+
+    /// `healthSafetySignatureRemovalWrites(stored, removals)` (1.9.0): removing a recipient (`userId`) or a whole issue
+    /// (`userId` nil) removes the matching signatures — field paths `['signatureRecords', key]` to delete and the
+    /// `signatures` array without those rows (nil: do not write the array). `.some(nil)` when nothing matches; nil
+    /// when the script did not answer.
+    nonisolated static func healthSafetySignatureRemovalWrites(
+        stored: [String: Any]?,
+        removals: [(issueId: String, userId: String?)]
+    ) -> (removeFieldPaths: [[String]], signatures: [[String: Any]]?)?? {
+        let storedJSON: Any = stored.map { peopleDocumentJSON($0) as Any } ?? NSNull()
+        let rows: [[String: Any]] = removals.map { removal in
+            var row: [String: Any] = ["issueId": removal.issueId]
+            if let userId = removal.userId { row["userId"] = userId }
+            return row
+        }
+        guard let value = callJSON("healthSafetySignatureRemovalWrites", arguments: [storedJSON, rows]) else { return nil }
+        if value is NSNull { return .some(nil) }
+        guard let result = value as? [String: Any], let paths = result["removeFieldPaths"] as? [Any] else { return nil }
+        let fieldPaths = paths.compactMap { ($0 as? [Any])?.compactMap { $0 as? String } }.filter { $0.count == 2 }
+        let signatures = result["signatures"] as? [[String: Any]]
+        return .some(.some((removeFieldPaths: fieldPaths, signatures: signatures)))
     }
 
     /// `healthSafetySignatureWriteFields(input)`. Instants are passed as epoch ms.
@@ -377,6 +407,73 @@ extension CanonicalBusinessEngine {
     nonisolated static func parseVariationTrackerDocument(parentId: String, data: [String: Any]?) -> CanonicalDocumentRow? {
         let arg: Any = data.map { peopleDocumentJSON($0) as Any } ?? NSNull()
         return opsRow("parseVariationTrackerDocument", [parentId, arg])
+    }
+
+    /// `variationTrackerWriteFields(stored, action)` (1.9.0): `{ set, remove }` for one tracker change (`enable`,
+    /// `disable`, `lock`, `unlock`, `mode`, `renumbered`). `action` is the script's action map (instants as epoch ms).
+    /// `.some(nil)` when nothing changes; nil when the script did not answer. iOS reads trackers only today.
+    nonisolated static func variationTrackerWriteFields(stored: [String: Any]?, action: [String: Any]) -> CanonicalDocumentWrite?? {
+        let storedJSON: Any = stored.map { peopleDocumentJSON($0) as Any } ?? NSNull()
+        guard let value = callJSON("variationTrackerWriteFields", arguments: [storedJSON, action]) else { return nil }
+        if value is NSNull { return .some(nil) }
+        guard let write = CanonicalDocumentWrite(value) else { return nil }
+        return .some(write)
+    }
+
+    /// `VARIATION_TRADES_DOCUMENT_ID` ("variationTrades").
+    nonisolated static var variationTradesDocumentId: String {
+        constant("VARIATION_TRADES_DOCUMENT_ID", as: String.self) ?? "variationTrades"
+    }
+
+    /// `parseVariationTrades(data).customTrades`: trimmed, de-duplicated without case, stored order.
+    nonisolated static func parseVariationTrades(_ data: [String: Any]?) -> [String]? {
+        let arg: Any = data.map { peopleDocumentJSON($0) as Any } ?? NSNull()
+        return ((callJSON("parseVariationTrades", arguments: [arg]) as? [String: Any])?["customTrades"] as? [Any])?
+            .compactMap { $0 as? String }
+    }
+
+    /// `variationTradesWriteFields(stored, { add, remove })`: the `customTrades` list to write, `.some(nil)` when
+    /// nothing changes, nil when the script did not answer.
+    nonisolated static func variationTradesWriteFields(stored: [String: Any]?, add: [String], remove: [String] = []) -> [String]?? {
+        let arg: Any = stored.map { peopleDocumentJSON($0) as Any } ?? NSNull()
+        guard let value = callJSON("variationTradesWriteFields", arguments: [arg, ["add": add, "remove": remove]]) else { return nil }
+        if value is NSNull { return .some(nil) }
+        guard let trades = ((value as? [String: Any])?["set"] as? [String: Any])?["customTrades"] as? [Any] else { return nil }
+        return .some(trades.compactMap { $0 as? String })
+    }
+
+    /// `variationLogItems(parentId, data)`: each settings-log entry with its id (stored `id`, map key, or the derived
+    /// `variationLogItemId` — never random) and its stored row (script JSON). Nil when the script did not answer.
+    nonisolated static func variationLogItems(parentId: String, data: [String: Any]?) -> [(id: String, idStored: Bool, row: [String: Any])]? {
+        let arg: Any = data.map { peopleDocumentJSON($0) as Any } ?? NSNull()
+        guard let rows = callJSON("variationLogItems", arguments: [parentId, arg]) as? [[String: Any]] else { return nil }
+        return rows.compactMap { item in
+            guard let id = item["id"] as? String, let row = item["row"] as? [String: Any] else { return nil }
+            return (id: id, idStored: item["idStored"] as? Bool ?? false, row: row)
+        }
+    }
+
+    /// `parseVariationLogDocument(parentId, data)`: every variation in a settings log, read with
+    /// `parseVariationDocument`. Nil when the script did not answer.
+    nonisolated static func parseVariationLogDocument(parentId: String, data: [String: Any]?) -> [CanonicalDocumentRow]? {
+        let arg: Any = data.map { peopleDocumentJSON($0) as Any } ?? NSNull()
+        return (callJSON("parseVariationLogDocument", arguments: [parentId, arg]) as? [Any])?.compactMap { CanonicalDocumentRow($0) }
+    }
+
+    /// `variationLogWriteFields(stored, entry, { parentId, parentType, organizationId })`: the `set` map (`items`,
+    /// and on a new log `parentId` / `parentType` / `organizationId` / `recordType`) as script JSON — convert with
+    /// `ScriptFirestoreValue.native`. Nil when the entry has no id or the script did not answer.
+    nonisolated static func variationLogWriteFields(
+        stored: [String: Any]?,
+        entry: [String: Any],
+        parentId: String,
+        parentType: String,
+        organizationId: String
+    ) -> [String: Any]? {
+        let arg: Any = stored.map { peopleDocumentJSON($0) as Any } ?? NSNull()
+        let context: [String: Any] = ["parentId": parentId, "parentType": parentType, "organizationId": organizationId]
+        let result = callJSON("variationLogWriteFields", arguments: [arg, peopleDocumentJSON(entry), context]) as? [String: Any]
+        return result?["set"] as? [String: Any]
     }
 
     // MARK: Notifications

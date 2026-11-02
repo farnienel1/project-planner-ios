@@ -421,7 +421,8 @@ class NotificationService: ObservableObject {
             type: .bookingCreated,
             title: "New Booking Created",
             message: "\(createdBy) created \(bookingCount) \(plural) for \(projectName).",
-            relatedId: UUID(),
+            // RULEBOOK 1.9.0: never a random relatedId (`notificationRelatedId`); this row names no job.
+            relatedId: nil,
             requiresPermission: "superAdminOrAdmin"
         )
         await saveNotification(notification)
@@ -1377,7 +1378,8 @@ class NotificationService: ObservableObject {
             title: "Test notification",
             message: "Test notification for \(currentUser.fullName).",
             userId: targetId,
-            relatedId: UUID(),
+            // `push_test` carries no relatedId (`NOTIFICATION_RELATED_ID`); never a random id.
+            relatedId: nil,
             requiresPermission: nil
         )
         await saveNotification(notification)

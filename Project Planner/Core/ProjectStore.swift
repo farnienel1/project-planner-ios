@@ -1101,23 +1101,24 @@ class ProjectStore: ObservableObject {
     func removeJobType(_ jobType: String) {
         jobTypes.remove(jobType)
         Task {
-            await saveJobTypesCatalogue()
+            // RULEBOOK 1.9.0: a deliberate removal, so deleting the last job type is written (`jobTypesWriteFields`).
+            await saveJobTypesCatalogue(removed: [jobType])
         }
     }
 
     /// Writes the job type list after an edit in Job Types Management (admins and managers, RULEBOOK §16).
     /// A settings document is online only (§2): offline, the edit stays on this device and is not queued.
-    private func saveJobTypesCatalogue() async {
+    private func saveJobTypesCatalogue(removed: [String] = []) async {
         guard let firebaseBackend,
               firebaseBackend.isAuthenticated,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
-              !jobTypes.isEmpty else { return }
+              !jobTypes.isEmpty || !removed.isEmpty else { return }
         guard firebaseBackend.userRole == .admin || firebaseBackend.userRole == .manager else {
             errorMessage = "Only admins and managers can change job types."
             return
         }
         do {
-            try await firebaseBackend.saveJobTypes(organizationId: organizationId, jobTypes: jobTypes)
+            try await firebaseBackend.saveJobTypes(organizationId: organizationId, jobTypes: jobTypes, removed: removed)
         } catch {
             errorMessage = "Job types were not saved: \(error.localizedDescription)"
             print("🔥🔥🔥 DEBUG: Error saving job types catalogue: \(error.localizedDescription)")

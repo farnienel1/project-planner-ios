@@ -225,3 +225,16 @@ extension CanonicalBusinessEngine {
         return CanonicalDeadlineAssignmentWrite(callJSON("deadlineAssignmentWriteFields", arguments: [input]))
     }
 }
+
+extension CanonicalBusinessEngine {
+    // MARK: 1.9.0 manager site booking edits
+
+    /// `managerSiteBookingUpdateWriteFields(before, next)`: partial update of an existing `managerSiteBookings/{id}` —
+    /// changed fields only, the slot group and the location group (`MANAGER_SITE_BOOKING_LOCATION_WRITE_GROUP`) each
+    /// together, `id` / `createdAt` / `organizationId` never rewritten. Empty when `before` is nil (an edit of a missing
+    /// document writes nothing). Nil when the script did not answer.
+    nonisolated static func managerSiteBookingUpdateWriteFields(before: [String: Any]?, next: [String: Any]) -> CanonicalDocumentWrite? {
+        let beforeJSON: Any = before.map { peopleDocumentJSON($0) as Any } ?? NSNull()
+        return CanonicalDocumentWrite(callJSON("managerSiteBookingUpdateWriteFields", arguments: [beforeJSON, peopleDocumentJSON(next)]))
+    }
+}

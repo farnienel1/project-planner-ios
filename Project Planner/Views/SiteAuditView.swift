@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseFirestore
 import PhotosUI
 import UIKit
 import FirebaseAuth
@@ -590,7 +591,11 @@ struct SiteAuditProjectAuditsView: View {
                 guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
                 await loadAudits()
             }
-            .reloadsOnForeground { await loadAudits() }
+            .listensWhileOpen("siteAudits", key: "siteAudits.projectAudits", targetSuffix: project.id.uuidString,
+                              firebaseBackend: firebaseBackend,
+                              query: { $0.collection("siteAudits").whereField("projectId", in: JobKeys.queryValues(for: project.id)) }) {
+                await loadAudits()
+            }
             .sheet(isPresented: $showingCreate, onDismiss: {
                 Task { await loadAudits() }
             }) {
@@ -663,7 +668,11 @@ struct SiteAuditProjectHubView: View {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await loadAudits()
         }
-        .reloadsOnForeground { await loadAudits() }
+        .listensWhileOpen("siteAudits", key: "siteAudits.projectHub", targetSuffix: project.id.uuidString,
+                          firebaseBackend: firebaseBackend,
+                          query: { $0.collection("siteAudits").whereField("projectId", in: JobKeys.queryValues(for: project.id)) }) {
+            await loadAudits()
+        }
         .sheet(isPresented: $showingCreate, onDismiss: {
             Task { await loadAudits() }
         }) {

@@ -494,6 +494,9 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// copy (role viewer, no permissions). Such a copy never replaces a profile or roster row the rulebook did read
     /// (`ReaderDiagnostics` records it). Not encoded.
     var parsedWithoutRulebook: Bool = false
+    /// RULEBOOK 1.9.0: the `parseUserDocument` `annualLeaveStored` keys (`daysPerYear`, `startMonth`, `endMonth`,
+    /// `carriesOver`) the user document stores itself, for `CanonicalBusinessEngine.annualLeavePendingOmitFields`. Not encoded.
+    var annualLeaveStoredKeys: [String] = []
     
     init(
         id: String,

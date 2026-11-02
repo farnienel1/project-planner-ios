@@ -1134,14 +1134,21 @@ class UserStore: ObservableObject {
             errorMessage = "UTR and VAT number can be up to \(limit) characters each."
             return false
         }
+        // RULEBOOK 1.9.0 §12: the queued document is `taxIdsDocumentFields` (its only fields) plus `updatedAt`.
+        let document = CanonicalBusinessEngine.taxIdsDocumentFields(
+            utrNumber: utrNumber,
+            vatNumber: vatNumber,
+            updatedByUserId: signedIn
+        )
+        var queued: [String: OfflineFieldValue] = [
+            "utrNumber": .string(document?["utrNumber"] as? String ?? fields.utrNumber),
+            "vatNumber": .string(document?["vatNumber"] as? String ?? fields.vatNumber),
+            "updatedByUserId": .string(document?["updatedByUserId"] as? String ?? fields.updatedByUserId),
+        ]
+        queued["updatedAt"] = .serverTimestamp
         OfflineOutboxStore.shared.enqueueOwnProfileFields(
             userId: signedIn,
-            fields: [
-                "utrNumber": .string(fields.utrNumber),
-                "vatNumber": .string(fields.vatNumber),
-                "updatedByUserId": .string(fields.updatedByUserId),
-                "updatedAt": .serverTimestamp,
-            ],
+            fields: queued,
             organizationId: firebaseBackend.resolvedOrganizationIdForOfflineWrites() ?? "",
             documentPath: path,
             replacesDocument: true,

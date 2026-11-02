@@ -1030,7 +1030,7 @@ struct ManageUserRowView: View {
                     .whereField("email", isEqualTo: user.email)
                     .getDocuments()
                 for doc in existing.documents {
-                    try? await doc.reference.updateData(["isUsed": true])
+                    try? await doc.reference.updateData(InvitationDocument.usedFields())
                 }
 
                 // Always create a brand new invitation (never reuse old link)
@@ -1063,7 +1063,9 @@ struct ManageUserRowView: View {
                 if let mobileNumber = user.mobileNumber {
                     invitationData["mobileNumber"] = mobileNumber
                 }
-                try await db.collection("invitations").document(invitationId).setData(invitationData)
+                invitationData["employmentType"] = user.employmentType.rawValue
+                // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
 
                 let success = await userStore.sendSignUpEmailWithVerification(
                     email: user.email,
@@ -3919,7 +3921,7 @@ struct EditUserView: View {
                 .whereField("email", isEqualTo: user.email)
                 .getDocuments()
             for doc in existing.documents {
-                try? await doc.reference.updateData(["isUsed": true])
+                try? await doc.reference.updateData(InvitationDocument.usedFields())
             }
         } catch {
             // Continue anyway; we'll create a new invitation
@@ -3955,9 +3957,11 @@ struct EditUserView: View {
         if let mobileNumber = user.mobileNumber {
             invitationData["mobileNumber"] = mobileNumber
         }
+        invitationData["employmentType"] = user.employmentType.rawValue
         
         do {
-            try await db.collection("invitations").document(invitationId).setData(invitationData)
+            // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+            try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
 
             await userStore.resendInvitationEmail(
                 email: user.email,
@@ -3992,7 +3996,7 @@ struct EditUserView: View {
                     .whereField("email", isEqualTo: user.email)
                     .getDocuments()
                 for doc in existing.documents {
-                    try? await doc.reference.updateData(["isUsed": true])
+                    try? await doc.reference.updateData(InvitationDocument.usedFields())
                 }
 
                 // Always create a brand new invitation (never reuse old link)
@@ -4025,7 +4029,9 @@ struct EditUserView: View {
                 if let mobileNumber = user.mobileNumber {
                     invitationData["mobileNumber"] = mobileNumber
                 }
-                try await db.collection("invitations").document(invitationId).setData(invitationData)
+                invitationData["employmentType"] = user.employmentType.rawValue
+                // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
 
                 let success = await userStore.sendSignUpEmailWithVerification(
                     email: user.email,

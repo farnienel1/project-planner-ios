@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import FirebaseFirestore
 
 struct WholesalersView: View {
     @EnvironmentObject var userStore: UserStore
@@ -22,7 +23,8 @@ struct WholesalersView: View {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await loadWholesalers()
         }
-        .reloadsOnForeground { await loadWholesalers() }
+        .listensWhileOpen("wholesalers", key: "wholesalers", firebaseBackend: firebaseBackend,
+                          query: { $0.collection("wholesalers") }) { await loadWholesalers() }
     }
 
     private func loadWholesalers() async {

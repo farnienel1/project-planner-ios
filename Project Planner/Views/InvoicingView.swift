@@ -743,15 +743,30 @@ enum TimesheetDraftStore {
         }
     }
 
-    /// Removes the local copy of one organisation's sheet for this person and period (draft and bounds).
+    /// Removes the local copy of one organisation's sheet for this person and period (draft, loaded copy and bounds).
     /// Used when the server reports no sheet: the device cache never outlives the server copy (§1).
     static func clear(userId: String, weekStart: Date, organizationId: String? = nil) {
         if let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId) {
             defaults.removeObject(forKey: storageKey)
+            defaults.removeObject(forKey: storageKey + ".loaded")
         }
         if let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart, organizationId: organizationId) {
             defaults.removeObject(forKey: boundsKey)
         }
+    }
+
+    /// RULEBOOK 1.9.0 §8: the sheet as this device last loaded (or wrote) it — the `base` of `timesheetChangedFields`,
+    /// so a save sends only what this editor changed and never resends fields another device wrote since.
+    static func loadedCopy(userId: String, weekStart: Date, organizationId: String? = nil) -> TimesheetDraft? {
+        guard let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId),
+              let data = defaults.data(forKey: storageKey + ".loaded") else { return nil }
+        return try? JSONDecoder().decode(TimesheetDraft.self, from: data)
+    }
+
+    static func rememberLoadedCopy(_ draft: TimesheetDraft, userId: String, weekStart: Date, organizationId: String? = nil) {
+        guard let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId),
+              let encoded = try? JSONEncoder().encode(draft) else { return }
+        defaults.set(encoded, forKey: storageKey + ".loaded")
     }
 
     static func storedPeriodEnd(userId: String, weekStart: Date, organizationId: String? = nil) -> Date? {
@@ -879,6 +894,7 @@ enum TimesheetDraftStore {
             rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: weekStart, organizationId: organizationId)
         }
         save(decoded, userId: userId, weekStart: weekStart, organizationId: organizationId)
+        rememberLoadedCopy(decoded, userId: userId, weekStart: weekStart, organizationId: organizationId)
         return decoded
     }
 
@@ -910,7 +926,7 @@ enum TimesheetDraftStore {
         writer: AppUser? = nil,
         subject: AppUser? = nil
     ) async -> String? {
-        let end = weekEnd ?? storedPeriodEnd(userId: userId, weekStart: weekStart) ?? weekStart
+        let end = weekEnd ?? storedPeriodEnd(userId: userId, weekStart: weekStart, organizationId: organizationId) ?? weekStart
         let writerId = Auth.auth().currentUser?.uid ?? writer?.id ?? ""
         let server: [String: Any]?
         do {
@@ -932,12 +948,13 @@ enum TimesheetDraftStore {
         var frozenEntriesChanged = false
         if !reviewer {
             for key in managerSignOffKeys { fields.removeValue(forKey: key) }
+            // RULEBOOK 1.9.0 §8: "manager signed" is read from the stored copy, never from this device's draft.
             let storedManagerSigned = server.flatMap { statusFields(fromFirestore: $0)?.managerSignedAtMs } != nil
             guard let keep = CanonicalBusinessEngine.timesheetOwnerWritableKeys(
                 Array(fields.keys),
                 // Unknown counts as having one: the snapshot is then left to the line manager (web).
                 subjectHasLineManager: subject.map { TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? true,
-                managerSigned: storedManagerSigned || draft.managerSignedAt != nil
+                managerSigned: storedManagerSigned
             ) else {
                 return "Couldn't save your timesheet: the timesheet rules did not load. Try again."
             }
@@ -949,8 +966,20 @@ enum TimesheetDraftStore {
             fields = fields.filter { keep.contains($0.key) }
         }
         var changed: [String: Any] = [:]
-        for (key, value) in fields where server == nil || !firestoreValuesEqual(value, server?[key]) {
-            changed[key] = value
+        if server != nil, let loaded = loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId) {
+            // RULEBOOK 1.9.0 §1, §8: `timesheetChangedFields(base, next)` — only what this editor changed since it
+            // loaded the sheet. A reviewer never resends the owner's signature, expenses or price work, and the owner
+            // never resends the manager's fields.
+            let base = asFirestoreMap(loaded).filter { fields[$0.key] != nil }
+            guard let write = CanonicalBusinessEngine.timesheetChangedFields(base: base, next: fields) else {
+                return "Couldn't save your timesheet: the timesheet rules did not load. Try again."
+            }
+            changed = write.firestoreFields(from: fields)
+        } else {
+            // Never loaded on this device (or no stored sheet yet): the fields that differ from the server copy.
+            for (key, value) in fields where server == nil || !firestoreValuesEqual(value, server?[key]) {
+                changed[key] = value
+            }
         }
         if reviewer {
             let storedIds = storedEntryIds(server)
@@ -984,6 +1013,8 @@ enum TimesheetDraftStore {
         } catch {
             return "Couldn't save your timesheet: \(error.localizedDescription)"
         }
+        // What this device wrote is now its loaded copy (the base of the next save).
+        rememberLoadedCopy(draft, userId: userId, weekStart: weekStart, organizationId: organizationId)
         if frozenEntriesChanged {
             return "Price work and expenses can't be changed after your line manager has signed. Ask them to amend it."
         }
@@ -2302,7 +2333,8 @@ private struct MyTimesheetView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadDraft() }
         .task { await loadDayRateHistory() }
-        .reloadsOnForeground { await loadDayRateHistory() }
+        .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.myTimesheet", firebaseBackend: firebaseBackend,
+                          query: { $0.collection("operativeDayRateHistory") }) { await loadDayRateHistory() }
         // Approved leave rows read the holiday list (read only); load it when nothing is cached yet.
         .task { if holidayStore.bookings.isEmpty { await holidayStore.loadData() } }
         // Live sheet while open: a line manager's sign-off or review on web shows here. An edit sheet that is
@@ -4083,7 +4115,8 @@ private struct OperativeTimesheetReviewView: View {
                 Task { await refreshDraftFromCloud() }
             }
             .task { await loadDayRateHistory() }
-            .reloadsOnForeground { await loadDayRateHistory() }
+            .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.review", firebaseBackend: firebaseBackend,
+                              query: { $0.collection("operativeDayRateHistory") }) { await loadDayRateHistory() }
             .task { if holidayStore.bookings.isEmpty { await holidayStore.loadData() } }
             // Live sheet while open: the person's own edit or another reviewer's decision on web shows here.
             // An entry being edited, or the sign sheet, is never overwritten — the server copy loads after.

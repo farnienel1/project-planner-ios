@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import FirebaseFirestore
 import UniformTypeIdentifiers
 import FirebaseAuth
 import UIKit
@@ -163,7 +164,8 @@ struct MaterialCatalogueRootView: View {
                 await store.load()
                 refreshCategoryGroups()
             }
-            .reloadsOnForeground {
+            .listensWhileOpen("materialCatalogue", key: "materialCatalogue", firebaseBackend: firebaseBackend,
+                              query: { $0.collection("materialCatalogue") }) {
                 guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
                 await store.load()
                 refreshCategoryGroups()
