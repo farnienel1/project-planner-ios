@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import FirebaseAuth
 
 // MARK: - Operation payloads
 
@@ -75,6 +76,9 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
     let createdAt: Date
     var attemptCount: Int
     var lastError: String?
+    /// The signed-in account that queued it. Replay drops the entry when another account is signed in.
+    /// Nil only for entries queued before this field existed.
+    var userId: String?
 
     var displayTitle: String {
         switch operation {
@@ -107,7 +111,8 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
         payload: Data,
         createdAt: Date = Date(),
         attemptCount: Int = 0,
-        lastError: String? = nil
+        lastError: String? = nil,
+        userId: String? = nil
     ) {
         self.id = id
         self.organizationId = organizationId
@@ -117,6 +122,28 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
         self.createdAt = createdAt
         self.attemptCount = attemptCount
         self.lastError = lastError
+        self.userId = userId
+    }
+
+    /// Whether this entry may replay for `signedInUserId`: never with nobody signed in, never for another
+    /// account. An entry queued before `userId` existed falls back to its partial-update payload's user,
+    /// else it cannot be told apart and replays (the rules still check the writer).
+    func mayReplay(signedInUserId: String?) -> Bool {
+        let signedIn = signedInUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !signedIn.isEmpty else { return false }
+        let owner = queuedByUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return owner.isEmpty || owner == signedIn
+    }
+
+    /// `userId`, else (older entries) the user stored in a partial-update payload.
+    var queuedByUserId: String? {
+        if let userId, !userId.isEmpty { return userId }
+        switch operation {
+        case .saveAnnualLeaveRequest, .saveOwnProfileFields, .saveOwnNotificationToggles:
+            return (try? JSONDecoder().decode(OfflinePartialUpdatePayload.self, from: payload))?.userId
+        default:
+            return nil
+        }
     }
 }
 
@@ -480,6 +507,11 @@ final class OfflineOutboxStore: ObservableObject {
     }
 
     private func enqueue(_ entry: OfflineOutboxEntry, dedupeSameEntity: Bool) {
+        var entry = entry
+        if (entry.userId ?? "").isEmpty {
+            // Every entry records who queued it, so it never replays for another account.
+            entry.userId = Auth.auth().currentUser?.uid
+        }
         if dedupeSameEntity {
             entries.removeAll { $0.entityId == entry.entityId && $0.operation == entry.operation }
         }

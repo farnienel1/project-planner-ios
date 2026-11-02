@@ -364,6 +364,7 @@ extension FirebaseBackend {
             currentOrganization = nil
             sessionOrganizationId = ""
             try? auth.signOut()
+            clearDeviceQueuesOnSignOut()
             return true
         }
 
@@ -386,6 +387,7 @@ extension FirebaseBackend {
         currentOrganization = nil
         sessionOrganizationId = ""
         try? auth.signOut()
+        clearDeviceQueuesOnSignOut()
         return true
     }
 

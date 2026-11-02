@@ -46,7 +46,21 @@ enum OfflineSyncCoordinator {
 
         print("🔥🔥🔥 DEBUG: [OfflineSync] Processing \(pending.count) outbox entries…")
 
+        let signedInUserId = firebaseBackend.currentUser?.uid
+
         for entry in pending {
+            if (signedInUserId ?? "").isEmpty {
+                // Nobody signed in: nothing replays (and nothing is counted as a failure).
+                break
+            }
+            if !entry.mayReplay(signedInUserId: signedInUserId) {
+                // Queued by another account on this device: never written as this one (§2, §16).
+                outbox.removeEntry(id: entry.id)
+                postDropped(entry: entry)
+                failed += 1
+                print("🔥🔥🔥 DEBUG: [OfflineSync] Dropped \(entry.operation.rawValue) queued by another account")
+                continue
+            }
             if reachedAttemptLimit(entry) {
                 // Waits for Retry or Discard in the queue sheet.
                 failed += 1
@@ -256,4 +270,6 @@ extension Notification.Name {
     static let offlineOutboxEntrySynced = Notification.Name("offlineOutboxEntrySynced")
     /// One outbox entry was refused for good and removed. userInfo as `offlineOutboxEntrySynced`.
     static let offlineOutboxEntryRefused = Notification.Name("offlineOutboxEntryRefused")
+    /// The signed-in account signed out; device caches for it are cleared.
+    static let appDidSignOut = Notification.Name("appDidSignOut")
 }

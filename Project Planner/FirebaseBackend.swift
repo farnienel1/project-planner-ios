@@ -862,6 +862,16 @@ class FirebaseBackend: ObservableObject {
     
     func signOut() throws {
         try auth.signOut()
+        clearDeviceQueuesOnSignOut()
+    }
+
+    /// Sign-out leaves nothing this account queued or cached on the device: the offline outbox (it would
+    /// otherwise replay as the next account), every cached timesheet draft, and the SmartCacheService
+    /// cache (`clearAllCache`, through `.appDidSignOut`).
+    func clearDeviceQueuesOnSignOut() {
+        OfflineOutboxStore.shared.clearAll()
+        TimesheetDraftStore.clearAll()
+        NotificationCenter.default.post(name: .appDidSignOut, object: nil)
     }
 
     /// RULEBOOK §13: a forced sign-out (expired session, blocked trial) removes this device's push token from every
@@ -870,6 +880,7 @@ class FirebaseBackend: ObservableObject {
     func forcedSignOutRemovingPushToken() async {
         await removeThisDevicePushTokenBeforeSignOut()
         try? auth.signOut()
+        clearDeviceQueuesOnSignOut()
     }
     
     /// Sends a new verification code (invitation token) so the user can set or reset their password on the Project Planner page.

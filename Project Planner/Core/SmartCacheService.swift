@@ -65,6 +65,14 @@ class SmartCacheService: ObservableObject {
                 self?.refreshOutboxCounts()
             }
         startNetworkMonitoring()
+        // Sign-out clears this account's cache and outbox (`FirebaseBackend.clearDeviceQueuesOnSignOut`).
+        NotificationCenter.default.addObserver(
+            forName: .appDidSignOut,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.clearAllCache() }
+        }
         #if canImport(UIKit)
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
