@@ -64,7 +64,7 @@ jobs:
           if [ -z "$xcode" ]; then echo "::error::No Xcode 26 on this runner image"; ls -d /Applications/Xcode*.app; exit 1; fi
           sudo xcode-select -s "$xcode/Contents/Developer"
           xcodebuild -version
-      - name: RulebookParityTests and CanonicalParityFixtureTests
+      - name: ProjectPlannerTests (unit tests; snapshot tests are pinned to iPhone 16e / iOS 26.2 and skipped here)
         run: |
           sim=$(xcrun simctl list devices available -j | node -e '
             const d=JSON.parse(require("fs").readFileSync(0,"utf8")).devices;
@@ -74,6 +74,6 @@ jobs:
             -project "Project Planner.xcodeproj" \
             -scheme ProjectPlannerTests \
             -destination "platform=iOS Simulator,id=$sim" \
-            -only-testing:ProjectPlannerTests/RulebookParityTests \
-            -only-testing:ProjectPlannerTests/CanonicalParityFixtureTests \
+            -only-testing:ProjectPlannerTests \
+            -skip-testing:ProjectPlannerTests/FixedSampleScreenSnapshotTests \
             CODE_SIGNING_ALLOWED=NO
