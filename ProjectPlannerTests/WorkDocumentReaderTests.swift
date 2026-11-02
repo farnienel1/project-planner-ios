@@ -130,7 +130,7 @@ final class WorkDocumentReaderTests: XCTestCase {
             fields: ["status", "notes", "workStartTime", "bookedBy"]
         )
         let write = try XCTUnwrap(CanonicalBusinessEngine.bookingUpdateWrite(
-            before: ["status": "Confirmed", "timeSlot": "AM", "bookedBy": "someone else"],
+            before: ["status": "Confirmed", "timeSlot": "AM", "bookedBy": "someone else", "notes": ""],
             next: next
         ))
         XCTAssertEqual(write.setKeys, ["status"], "bookedBy is create-only; unchanged fields are not sent")
