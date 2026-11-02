@@ -15,9 +15,22 @@ enum HSToolboxTalkCategory: String, Codable, CaseIterable, Hashable {
     case trade
 }
 
+/// RULEBOOK 1.8.0 (`HS_ISSUE_STATUSES`, `HS_ISSUE_STATUS_STORED`): awaiting, scheduled, complete. A finished issue
+/// is stored `completed` (the raw value here); web's `complete` reads as `.completed` through
+/// `parseHealthSafetyDocument`.
 enum HSToolboxIssueStatus: String, Codable, CaseIterable, Hashable {
     case awaiting
+    case scheduled
     case completed
+
+    /// The reader's token (`awaiting` / `scheduled` / `complete`) as a case.
+    static func fromRulebook(_ token: String) -> HSToolboxIssueStatus {
+        switch token {
+        case "complete", "completed": return .completed
+        case "scheduled": return .scheduled
+        default: return .awaiting
+        }
+    }
 }
 
 enum HSToolboxSignatureStatus: String, Codable, CaseIterable, Hashable {

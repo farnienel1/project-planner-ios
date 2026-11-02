@@ -112,13 +112,13 @@ class LocalNotificationService {
         case .toolboxTalkIssued:
             content.title = "Toolbox Talk issued"
             content.body = details.isEmpty ? "A toolbox talk needs your signature." : details
-        case .variationAdded:
+        case .variationAdded, .variation:
             content.title = "New variation added"
             content.body = details.isEmpty ? "A new variation was added." : details
         case .variationFromTracker:
             content.title = "New variation from the QS"
             content.body = details.isEmpty ? "A variation was added from the tracker." : details
-        case .variationNumbersUpdated:
+        case .variationNumbersUpdated, .variationRenumbered:
             content.title = "Variation numbers updated"
             content.body = details.isEmpty ? "Variation numbers were updated." : details
         case .timesheetSubmissionReminder:
@@ -142,6 +142,15 @@ class LocalNotificationService {
         case .pushTest:
             content.title = "Test notification"
             content.body = details.isEmpty ? "Push notifications are working on this device." : details
+        case .bookedOntoJob:
+            content.title = "Booked onto a job"
+            content.body = details.isEmpty ? "You have been booked onto a job." : details
+        case .materialOrderCreated:
+            content.title = "Material order"
+            content.body = details.isEmpty ? "A material order was created." : details
+        case .unknown:
+            content.title = "Notification"
+            content.body = details
         }
         
         // Set sound

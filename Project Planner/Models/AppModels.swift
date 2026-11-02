@@ -486,6 +486,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// reader's list value, which ignores a stray flag on an admin; the approval rules and security rules still
     /// read the stored flag (`adminOutsideOperativeMode`, RULEBOOK 1.6.0 §8).
     var operativeModeStored: Bool = false
+    /// RULEBOOK 1.8.0 (`CanonicalBusinessEngine.parseUserDocument` `annualLeaveDefaultsPending`): some leave fields were missing and the
+    /// organisation's `annualLeaveDefaults` were not loaded yet, so the leave figures are the rulebook default.
+    /// A save never writes those figures (`FirebaseBackend.userDocumentPayload`).
+    var annualLeaveDefaultsPending: Bool = false
     
     init(
         id: String,
@@ -2036,10 +2040,13 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .qualificationExpiry: return .qualificationExpiry
         case .materialOrderCutOff: return .materialOrderCutOff
         case .deadlineAssigned, .deadlineReminder, .deadlineDue: return nil
-        case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return nil
+        case .variationAdded, .variationFromTracker, .variationNumbersUpdated, .variation, .variationRenumbered: return nil
         case .timesheetSubmissionReminder: return nil
         case .ideaStatus, .ideaShipped, .ideaComment, .ideaMerged: return nil
         case .pushTest: return nil
+        case .bookedOntoJob: return .bookingCreated
+        case .materialOrderCreated: return .materialAdded
+        case .unknown: return nil
         }
     }
 }

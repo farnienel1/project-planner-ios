@@ -52,15 +52,38 @@ struct AppNotification: Identifiable, Codable, Hashable {
         /// Settings "send a test notification" (rulebook 1.4.0 §13, `PUSH_TEST_NOTICE_TYPE`): written to the sender
         /// (`pushTestRecipients`); its push reaches the actor (`notificationPushesToActor`). No toggle.
         case pushTest = "push_test"
+        /// RULEBOOK 1.8.0 §13 (`KNOWN_NOTIFICATION_TYPES`): variation types and push allow-list types nothing writes yet.
+        case variation = "variation"
+        case variationRenumbered = "variation_renumbered"
+        case bookedOntoJob = "booked_onto_job"
+        case materialOrderCreated = "material_order_created"
+        /// A type this build does not know. The row is kept (never dropped); its stored text is
+        /// `AppNotification.storedType`.
+        case unknown = "unknown"
+
+        /// A stored type word as a case; an unknown word is `.unknown` (`parseNotificationDocument` keeps the row).
+        init(stored: String) {
+            self = NotificationType(rawValue: stored.trimmingCharacters(in: .whitespacesAndNewlines)) ?? .unknown
+        }
+
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self.init(stored: raw)
+        }
     }
     
+    /// RULEBOOK 1.8.0 §1: in-app id of the document; the stored spelling is remembered (`JobKeys`), so a non-UUID
+    /// document id is kept, never replaced with a random id.
     let id: UUID
     var organizationId: String
     var type: NotificationType
     var title: String
     var message: String
     var userId: String? // Target user ID (nil means all users with permission)
-    var relatedId: UUID? // Related entity ID (booking, operative, manager, client, task)
+    /// RULEBOOK 1.8.0 §13: `relatedId` as stored, any shape (a UUID, a day key, a Firebase uid, a job id).
+    var relatedKey: String?
+    /// The stored type text when `type` is `.unknown` (kept so the row is written back unchanged).
+    var storedType: String? = nil
     var isRead: Bool
     var createdAt: Date
     var requiresPermission: String? // Permission required to see this notification (e.g., "canViewOperatives")
@@ -80,6 +103,7 @@ struct AppNotification: Identifiable, Codable, Hashable {
         message: String,
         userId: String? = nil,
         relatedId: UUID? = nil,
+        relatedKey: String? = nil,
         isRead: Bool = false,
         createdAt: Date = Date(),
         requiresPermission: String? = nil,
@@ -94,7 +118,7 @@ struct AppNotification: Identifiable, Codable, Hashable {
         self.title = title
         self.message = message
         self.userId = userId
-        self.relatedId = relatedId
+        self.relatedKey = relatedKey ?? relatedId?.uuidString
         self.isRead = isRead
         self.createdAt = createdAt
         self.requiresPermission = requiresPermission
@@ -102,6 +126,24 @@ struct AppNotification: Identifiable, Codable, Hashable {
         self.deepLinkWeekStart = deepLinkWeekStart
         self.dayKey = dayKey
         self.catalogue = catalogue
+    }
+
+    /// The related id as a UUID, when it is one (views that open a booking, task or job by in-app id).
+    var relatedId: UUID? {
+        get { relatedKey.flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) } }
+        set { relatedKey = newValue?.uuidString }
+    }
+
+    /// The type word written for this row (the stored text for an unknown type).
+    var typeText: String {
+        type == .unknown ? (storedType ?? type.rawValue) : type.rawValue
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, organizationId, type, title, message, userId
+        // Older caches encoded the UUID under `relatedId`; it decodes as its string.
+        case relatedKey = "relatedId"
+        case storedType, isRead, createdAt, requiresPermission, deepLinkUserId, deepLinkWeekStart, dayKey, catalogue
     }
 
     /// `YYYY-MM-DD` stored on the row, or the same shape in `relatedId` when that field is the payment day.

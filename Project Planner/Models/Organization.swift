@@ -216,7 +216,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
             return (data[key] as? NSNumber)?.doubleValue
         }
         let organization = Organization(
-            id: UUID(uuidString: orgId) ?? UUID(),
+            id: Manager.stableId(forFirestoreDocumentId: orgId),
             firestoreDocumentId: orgId,
             name: name,
             settings: settings,

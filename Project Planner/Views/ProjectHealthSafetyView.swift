@@ -196,7 +196,20 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
             )
         }
         recalculateIssueStatuses()
-        await persist(firebaseBackend: firebaseBackend, userStore: userStore)
+        // RULEBOOK 1.8.0 §1: the signature is its own per-signer write (`healthSafetySignatureWriteFields`), so a
+        // colleague signing at the same moment is never overwritten; only the issue statuses are saved as a list.
+        guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore),
+              let signature = data.signatures.first(where: { $0.issueId == issueId && $0.userId == userId }) else {
+            errorMessage = "Cannot save without organization."
+            return
+        }
+        do {
+            try await firebaseBackend.saveHealthSafetySignature(signature, project: project, organizationId: orgId)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        await persist(firebaseBackend: firebaseBackend, userStore: userStore, fields: ["issues"])
     }
 
     func sendReminder(issueId: String, firebaseBackend: FirebaseBackend, userStore: UserStore) async -> Int {
@@ -208,8 +221,15 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         for idx in data.signatures.indices where data.signatures[idx].issueId == issueId && data.signatures[idx].status == .pending {
             data.signatures[idx].reminderSentAt = Date()
         }
-        await persist(firebaseBackend: firebaseBackend, userStore: userStore)
         guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) else { return pendingUserIds.count }
+        // RULEBOOK 1.8.0 §1: each reminder stamp is that signer's own entry (`healthSafetySignatureWriteFields`).
+        for signature in data.signatures where signature.issueId == issueId && signature.status == .pending {
+            do {
+                try await firebaseBackend.saveHealthSafetySignature(signature, project: project, organizationId: orgId)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
         let talkTitle = data.talks.first(where: { $0.id == issue.talkId })?.title
             ?? data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })?.title
             ?? "H&S sign-off"
@@ -491,23 +511,35 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         return ToolboxTalkLibrary.resolvedTitle(talkId: issue.talkId, storedTalks: data.talks)
     }
 
+    /// RULEBOOK 1.8.0: `healthSafetyIssueStatus` (complete when every recipient signed; scheduled stays scheduled).
     private func recalculateIssueStatuses() {
+        let rows = data.signatures.map { (issueId: $0.issueId, userId: $0.userId, status: $0.status.rawValue) }
         data.issues = data.issues.map { issue in
-            let issueSignatures = data.signatures.filter { $0.issueId == issue.id }
             var updated = issue
-            updated.status = (!issueSignatures.isEmpty && issueSignatures.allSatisfy { $0.status == .signed }) ? .completed : .awaiting
+            if let token = CanonicalBusinessEngine.healthSafetyIssueStatus(
+                issueId: issue.id,
+                status: issue.status == .completed ? "complete" : issue.status.rawValue,
+                recipientUserIds: issue.recipientUserIds,
+                signatures: rows
+            ) {
+                updated.status = HSToolboxIssueStatus.fromRulebook(token)
+            }
             return updated
         }
     }
 
-    private func persist(firebaseBackend: FirebaseBackend, userStore: UserStore) async {
+    private func persist(
+        firebaseBackend: FirebaseBackend,
+        userStore: UserStore,
+        fields: Set<String> = ["talks", "issues", "signatures", "ramsDocuments", "otherDocuments"]
+    ) async {
         guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) else {
             errorMessage = "Cannot save without organization."
             return
         }
         data.updatedAt = Date()
         do {
-            try await firebaseBackend.saveHealthSafetyData(data, project: project, organizationId: orgId)
+            try await firebaseBackend.saveHealthSafetyData(data, project: project, organizationId: orgId, fields: fields)
         } catch {
             errorMessage = error.localizedDescription
         }

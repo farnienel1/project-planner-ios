@@ -356,14 +356,15 @@ enum WarningsComputation {
                 projectId: item.projectId,
                 dayStart: cal.startOfDay(for: item.date),
                 isOrdered: item.status == .ordered,
-                id: item.id.uuidString,
+                id: WorkDocumentKeys.storedId(for: item.id),
                 status: item.status.rawValue,
                 dayKey: CanonicalBusinessEngine.dayKey(for: item.date, calendar: cal)
             )
         }
         let materialCutOffBookings: [WarningsComputationSnapshot.MaterialCutOffBookingSnapshot] = input.materialCutOffBookings.map { booking in
             WarningsComputationSnapshot.MaterialCutOffBookingSnapshot(
-                projectId: booking.projectId.uuidString,
+                // RULEBOOK 1.8.0 §1 "Job keys": the job's stored document id (the `materials-{job}-{day}` key web uses).
+                projectId: JobKeys.storedJobId(for: booking.projectId),
                 status: booking.status.rawValue,
                 dayKey: CanonicalBusinessEngine.dayKey(for: booking.date, calendar: cal)
             )
@@ -371,7 +372,7 @@ enum WarningsComputation {
         let materialSendRecords: [WarningsComputationSnapshot.MaterialSendRecordSnapshot] = input.materialSendRecords.map { record in
             WarningsComputationSnapshot.MaterialSendRecordSnapshot(
                 requestType: record.requestType.rawValue,
-                materialIds: record.lines.map { $0.materialId.uuidString }
+                materialIds: record.lines.map { WorkDocumentKeys.storedId(for: $0.materialId) }
             )
         }
 
@@ -641,13 +642,13 @@ enum WarningsComputation {
             "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
             "cutOff": input.materialCutOff?.canonicalMap() ?? NSNull(),
             "projects": input.projects.map { project -> [String: Any] in
-                ["id": project.id.uuidString, "jobNumber": project.jobNumber, "siteName": project.siteName]
+                ["id": JobKeys.storedJobId(for: project.id), "jobNumber": project.jobNumber, "siteName": project.siteName]
             },
             "bookings": input.materialCutOffBookings.map { booking -> [String: Any] in
                 ["projectId": booking.projectId, "status": booking.status, "dayKey": booking.dayKey]
             },
             "materials": input.materialItemsForTomorrow.map { line -> [String: Any] in
-                ["id": line.id, "projectId": line.projectId.uuidString, "status": line.status, "dayKey": line.dayKey]
+                ["id": line.id, "projectId": JobKeys.storedJobId(for: line.projectId), "status": line.status, "dayKey": line.dayKey]
             },
             "sendRecords": input.materialSendRecords.map { record -> [String: Any] in
                 ["requestType": record.requestType, "materialIds": record.materialIds]
@@ -662,10 +663,10 @@ enum WarningsComputation {
                   let message = row["message"] as? String,
                   let dayKey = row["dayKey"] as? String,
                   let date = CanonicalBusinessEngine.date(fromDayKey: dayKey, calendar: calendar),
-                  let projectText = row["projectId"] as? String,
-                  let projectId = UUID(uuidString: projectText) else {
+                  let projectText = row["projectId"] as? String, !projectText.isEmpty else {
                 return nil
             }
+            let projectId = JobKeys.inAppId(projectText)
             let unordered = (row["unorderedCount"] as? NSNumber)?.intValue ?? 0
             // The key iOS saved before the shared row (`materials-{uuid}-{epoch}`), for the D3 migration.
             let legacyKey = "materials-\(projectId.uuidString)-\(date.timeIntervalSince1970)"
