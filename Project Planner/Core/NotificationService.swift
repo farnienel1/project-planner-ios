@@ -174,7 +174,8 @@ class NotificationService: ObservableObject {
     }
 
     /// Inbox row once the notice is due. The device alert is the FCM send for that id, not a local banner.
-    /// Only the signed-in person who already participates in timesheets. The toggle does not add recipients.
+    /// Only the signed-in person who already participates in timesheets. The toggle neither adds recipients nor
+    /// removes the row; it only stops the push.
     private func performTimesheetSubmissionReminderRefresh() async {
         let noticeType = CanonicalBusinessEngine.timesheetSubmissionNoticeType
             ?? AppNotification.NotificationType.timesheetSubmissionReminder.rawValue
@@ -182,7 +183,12 @@ class NotificationService: ObservableObject {
             await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
             return
         }
-        guard deliveryAllowed(type: noticeType) else {
+        // §13: the toggle stops the device push only (`devicePushAllowed`, enforced by the push function for this
+        // row); the inbox row is written whatever the toggle says (`notificationShowsInInbox`).
+        guard CanonicalBusinessEngine.notificationShowsInInbox(
+            prefs: appSettingsStore?.settings.notifications.preferenceValues,
+            type: noticeType
+        ) else {
             await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
             return
         }
