@@ -512,7 +512,7 @@ class OperativeStore: ObservableObject {
            let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId {
             _ = await DataPersistenceManager.shared.saveWithRetry(
                 operation: {
-                    try await firebaseBackend.deleteOperative(operativeId: operative.id, organizationId: organizationId)
+                    try await firebaseBackend.deleteOperative(documentId: operative.documentId, organizationId: organizationId)
                 },
                 description: "deleting operative \(operativeName)",
                 onSuccess: { _ in

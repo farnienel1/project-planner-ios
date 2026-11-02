@@ -133,7 +133,7 @@ extension Qualification: Hashable {
 struct OrganizationSkill: Identifiable, Hashable, Codable, Sendable {
     let id: String
     var name: String
-    /// Trade grouping for filtering and display (e.g. preset trade label or "General").
+    /// Trade as stored (`parseSkillDocument`): '' when missing. Lists show '' as "General" (display only).
     var trade: String
     var createdAt: Date
     var updatedAt: Date
@@ -149,15 +149,20 @@ struct OrganizationSkill: Identifiable, Hashable, Codable, Sendable {
     ) {
         self.id = id
         self.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let t = trade.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.trade = t.isEmpty ? Self.defaultTrade : t
+        // RULEBOOK 1.6.0: a missing trade stays '' (web reads it so); "General" is only how a list shows it.
+        self.trade = trade.trimmingCharacters(in: .whitespacesAndNewlines)
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
 
-    /// Line shown in lists: `Trade · Skill` (trade omitted when `General`).
+    /// Trade as a list shows it: '' reads "General".
+    var displayTrade: String {
+        trade.isEmpty ? Self.defaultTrade : trade
+    }
+
+    /// Line shown in lists: `Trade · Skill` (trade omitted when `General` or not stored).
     var listTitle: String {
-        if trade.caseInsensitiveCompare(Self.defaultTrade) == .orderedSame {
+        if trade.isEmpty || trade.caseInsensitiveCompare(Self.defaultTrade) == .orderedSame {
             return name
         }
         return "\(trade) · \(name)"
@@ -195,6 +200,34 @@ struct Operative: Identifiable, Codable {
     var tradeTypeCustom: String?
     var createdAt: Date
     var updatedAt: Date
+    /// `organizations/{org}/operatives/{id}` as stored (RULEBOOK 1.6.0 §1: stored case, a non-UUID id is kept).
+    /// Nil on a row made in this app before it was saved: its id is `id.uuidString`. Use `documentId`.
+    var firestoreDocumentId: String? = nil
+    /// `payBasis` as `parseOperativeDocument` read it (`day` | `hourly`); exactly one of `dayRate` / `hourlyRate` is set.
+    var payBasis: String? = nil
+    /// The account this row belongs to, when stored (`linkedUserId` / `userId` / `uid`).
+    var linkedUserId: String? = nil
+
+    /// The Firestore document id every write, delete and lookup addresses. Never `id.uuidString` for a stored row.
+    var documentId: String {
+        let stored = firestoreDocumentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? Booking.storedOperativeId(for: id) : stored
+    }
+
+    /// The basis a save writes: the only amount set decides it; with both set, the stored basis (else day).
+    var storedPayBasis: String? {
+        switch (dayRate, hourlyRate) {
+        case (nil, nil): return nil
+        case (.some, nil): return "day"
+        case (nil, .some): return "hourly"
+        default: return payBasis == "hourly" ? "hourly" : "day"
+        }
+    }
+
+    /// The amount for `storedPayBasis`.
+    var storedPayAmount: Double? {
+        storedPayBasis == "hourly" ? hourlyRate : dayRate
+    }
     
     // Computed property for backward compatibility
     var name: String {
@@ -365,7 +398,7 @@ func bookingPersonInput(operatives: [Operative], users: [AppUser]) -> CanonicalB
             )
         },
         operatives: operatives.map {
-            CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.id.uuidString, email: $0.email)
+            CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.documentId, email: $0.email)
         }
     )
 }
@@ -397,7 +430,10 @@ final class LabourBookingPeople {
             found = LabourBookingPerson(
                 user: resolved.accountId.flatMap { id in users.first { $0.id == id } },
                 operative: resolved.operativeId.flatMap { id in
-                    operatives.first { $0.id.uuidString.caseInsensitiveCompare(id) == .orderedSame }
+                    operatives.first {
+                        $0.documentId.caseInsensitiveCompare(id) == .orderedSame
+                            || $0.id.uuidString.caseInsensitiveCompare(id) == .orderedSame
+                    }
                 }
             )
         } else {
@@ -421,11 +457,11 @@ func labourBookingIds(for user: AppUser, operatives: [Operative]) -> Set<UUID> {
     )
     let ids = CanonicalBusinessEngine.bookingIdsForAccount(
         account,
-        operatives: operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.id.uuidString, email: $0.email) }
+        operatives: operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.documentId, email: $0.email) }
     ) ?? {
         // The script did not answer: the account's own ids and the catalogue rows on its email.
         let key = StaffEmailIdentity.emailKey(user.email)
-        let catalogue = key.isEmpty ? [] : operatives.filter { StaffEmailIdentity.emailKey($0.email) == key }.map(\.id.uuidString)
+        let catalogue = key.isEmpty ? [] : operatives.filter { StaffEmailIdentity.emailKey($0.email) == key }.map(\.documentId)
         return [user.id] + user.formerUserIds + user.sameEmailUserIds + catalogue
     }()
     return Set(ids.map { Booking.internalOperativeId(for: $0) })
@@ -531,6 +567,13 @@ struct Manager: Identifiable, Codable, Hashable {
     var updatedAt: Date
     /// `organizations/{org}/managers/{id}`. Kept when that id is not a UUID so a save updates the same document.
     var firestoreDocumentId: String
+    /// Pay on the row as `parseManagerDocument` read it (RULEBOOK 1.6.0 §8): `payBasis` plus exactly one amount.
+    /// Read only here; a manager's pay is changed by admins on the user document, and a row save leaves it alone.
+    var payBasis: String? = nil
+    var dayRate: Double? = nil
+    var hourlyRate: Double? = nil
+    /// The account this row belongs to, when stored (`linkedUserId` / `userId` / `uid`).
+    var linkedUserId: String? = nil
 
     init(
         id: UUID = UUID(),
@@ -593,6 +636,7 @@ struct Manager: Identifiable, Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, firstName, lastName, email, mobileNumber, department, isActive, notes
         case tradeTypePreset, tradeTypeCustom, createdAt, updatedAt, firestoreDocumentId
+        case payBasis, dayRate, hourlyRate, linkedUserId
     }
 
     init(from decoder: Decoder) throws {
@@ -613,6 +657,10 @@ struct Manager: Identifiable, Codable, Hashable {
         let stored = try container.decodeIfPresent(String.self, forKey: .firestoreDocumentId)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         firestoreDocumentId = stored.isEmpty ? id.uuidString : stored
+        payBasis = try container.decodeIfPresent(String.self, forKey: .payBasis)
+        dayRate = try container.decodeIfPresent(Double.self, forKey: .dayRate)
+        hourlyRate = try container.decodeIfPresent(Double.self, forKey: .hourlyRate)
+        linkedUserId = try container.decodeIfPresent(String.self, forKey: .linkedUserId)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -630,6 +678,10 @@ struct Manager: Identifiable, Codable, Hashable {
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encode(firestoreDocumentId, forKey: .firestoreDocumentId)
+        try container.encodeIfPresent(payBasis, forKey: .payBasis)
+        try container.encodeIfPresent(dayRate, forKey: .dayRate)
+        try container.encodeIfPresent(hourlyRate, forKey: .hourlyRate)
+        try container.encodeIfPresent(linkedUserId, forKey: .linkedUserId)
     }
     
     var fullName: String {

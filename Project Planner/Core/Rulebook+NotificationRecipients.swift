@@ -137,7 +137,9 @@ enum RulebookPeople {
             "adminAccess": user.permissions.adminAccess,
             "isAdmin": user.permissions.adminAccess,
             "manager": user.permissions.manager,
-            "operativeMode": user.permissions.operativeMode,
+            // The stored flag, as `adminOutsideOperativeMode` and the security rules read it (RULEBOOK 1.6.0 §8):
+            // a stray flag on an admin is ignored on lists (`permissions.operativeMode`) but still counts here.
+            "operativeMode": user.permissions.operativeMode || (user.isRosterAdmin && user.operativeModeStored),
             "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
             "annualLeaveEnabled": user.annualLeaveEnabled,
             "formerUserIds": user.formerUserIds,

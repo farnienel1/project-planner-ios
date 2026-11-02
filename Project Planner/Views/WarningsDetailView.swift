@@ -1018,7 +1018,7 @@ struct WarningsDetailView: View {
         if let direct = userStore.organizationUsers.first(where: { $0.id.lowercased() == needle && $0.isStoredUserDocument }) {
             return direct
         }
-        guard let operative = operativeStore.allOperatives.first(where: { $0.id.uuidString.lowercased() == needle }) else {
+        guard let operative = operativeStore.allOperatives.first(where: { $0.documentId.lowercased() == needle || $0.id.uuidString.lowercased() == needle }) else {
             return nil
         }
         let email = operative.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

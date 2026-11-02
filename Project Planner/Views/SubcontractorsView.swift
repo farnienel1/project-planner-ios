@@ -819,7 +819,8 @@ private struct SubcontractorFirmEditorView: View {
             address: address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : address.trimmingCharacters(in: .whitespacesAndNewlines),
             contacts: contacts,
             createdAt: createdAt,
-            updatedAt: Date()
+            updatedAt: Date(),
+            firestoreDocumentId: existingSubcontractor?.firestoreDocumentId
         )
         Task {
             TradeTypeInventory.register(subcontractor.subcontractorType)

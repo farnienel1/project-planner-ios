@@ -16,6 +16,9 @@ nonisolated enum OrganizationRulebookContext {
     nonisolated(unsafe) private(set) static var timeZoneIdentifier = "Europe/London"
     /// `resolveOrganizationCurrency`-equivalent input: the saved code, else `defaultCurrencyForCountry`.
     nonisolated(unsafe) private(set) static var currencyCode = "GBP"
+    /// The organisation's `annualLeaveDefaults` (§4.4), which `CanonicalBusinessEngine.parseUserDocument` applies to a user document
+    /// with no leave fields. Nil until an organisation is loaded (the rulebook default then applies).
+    nonisolated(unsafe) private(set) static var annualLeaveDefaults: OrganizationAnnualLeaveDefaults? = nil
 
     @MainActor static func update(from org: Organization?) {
         let country = org?.countryCode ?? "GB"
@@ -25,6 +28,7 @@ nonisolated enum OrganizationRulebookContext {
         if let code = org?.settings.currencyCode, !code.isEmpty { doc["currencyCode"] = code }
         currencyCode = CanonicalBusinessEngine.callJSON("resolveOrganizationCurrency", arguments: [doc]) as? String
             ?? "GBP"
+        annualLeaveDefaults = org?.settings.annualLeaveDefaults
     }
 
     static var timeZone: TimeZone {

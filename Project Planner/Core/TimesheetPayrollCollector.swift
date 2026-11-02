@@ -282,7 +282,7 @@ enum TimesheetPayrollCollector {
         )
         let ids = CanonicalBusinessEngine.bookingIdsForAccount(
             account,
-            operatives: operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.id.uuidString, email: $0.email) }
+            operatives: operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.documentId, email: $0.email) }
         ) ?? [user.id]
         let idKeys = Set(ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
         let records: [CanonicalTimesheetLeaveRecord] = holidays.compactMap { holiday in
