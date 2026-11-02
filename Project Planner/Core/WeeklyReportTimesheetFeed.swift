@@ -29,7 +29,7 @@ struct WeeklyReportTimesheetFeed {
 
     static let empty = WeeklyReportTimesheetFeed(weeks: [])
 
-    func covers(userId: String?, day: Date, calendar: Calendar = .current) -> Bool {
+    func covers(userId: String?, day: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> Bool {
         guard let userId, !userId.isEmpty else { return false }
         let dayStart = calendar.startOfDay(for: day)
         return weeks.contains { week in
@@ -40,7 +40,7 @@ struct WeeklyReportTimesheetFeed {
         }
     }
 
-    func labourLines(in range: ClosedRange<Date>, calendar: Calendar = .current) -> [(week: ApprovedWeek, line: TimesheetWeeklyReportLabourLine)] {
+    func labourLines(in range: ClosedRange<Date>, calendar: Calendar = OrganizationRulebookContext.calendar) -> [(week: ApprovedWeek, line: TimesheetWeeklyReportLabourLine)] {
         let start = calendar.startOfDay(for: range.lowerBound)
         let end = calendar.startOfDay(for: range.upperBound)
         var out: [(ApprovedWeek, TimesheetWeeklyReportLabourLine)] = []
@@ -57,7 +57,7 @@ struct WeeklyReportTimesheetFeed {
     func moneyLines(
         _ keyPath: KeyPath<TimesheetWeeklyReportOverride, [TimesheetWeeklyReportMoneyLine]>,
         in range: ClosedRange<Date>,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> [(week: ApprovedWeek, line: TimesheetWeeklyReportMoneyLine)] {
         let start = calendar.startOfDay(for: range.lowerBound)
         let end = calendar.startOfDay(for: range.upperBound)
@@ -103,8 +103,9 @@ struct WeeklyReportTimesheetFeed {
                     for row in rows {
                         if let weekStart = (row["weekStart"] as? Timestamp)?.dateValue(),
                            let decoded = TimesheetDraftStore.decodeFirestoreMap(row) {
-                            let day = Calendar.current.startOfDay(for: weekStart)
-                            TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day)
+                            // The sheet key is the organisation-zone day, never the device's (§1).
+                            let day = OrganizationRulebookContext.calendar.startOfDay(for: weekStart)
+                            TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, organizationId: orgId)
                         }
                     }
                 }
@@ -120,7 +121,7 @@ struct WeeklyReportTimesheetFeed {
             let tradeSortKey = StaffTradeType.sortKey(presetRaw: reportingUser.tradeTypePreset, custom: reportingUser.tradeTypeCustom)
 
             for period in periods {
-                var draft = TimesheetDraftStore.load(userId: user.id, weekStart: period.start)
+                var draft = TimesheetDraftStore.load(userId: user.id, weekStart: period.start, organizationId: orgId)
                 if !listedFromCloud, let orgId {
                     if let remote = await TimesheetDraftStore.refreshFromCloud(
                         userId: user.id,
@@ -188,7 +189,7 @@ struct WeeklyReportTimesheetFeed {
     }
 
     /// One approved week per email. Shared booking ids count once. A booking that exists on only one draft stays.
-    static func mergeApprovedWeeks(_ weeks: [ApprovedWeek], users: [AppUser], calendar: Calendar = .current) -> [ApprovedWeek] {
+    static func mergeApprovedWeeks(_ weeks: [ApprovedWeek], users: [AppUser], calendar: Calendar = OrganizationRulebookContext.calendar) -> [ApprovedWeek] {
         var groups: [String: [ApprovedWeek]] = [:]
         for week in weeks {
             let email = StaffEmailIdentity.emailKey(users.first { $0.id == week.userId }?.email)
@@ -239,7 +240,7 @@ struct WeeklyReportTimesheetFeed {
         if !bookingId.isEmpty {
             return "booking:\(bookingId)|\(line.isOvertime)"
         }
-        let day = Calendar.current.startOfDay(for: line.date).timeIntervalSince1970
+        let day = OrganizationRulebookContext.calendar.startOfDay(for: line.date).timeIntervalSince1970
         return [
             "content",
             String(day),
@@ -256,7 +257,7 @@ struct WeeklyReportTimesheetFeed {
     }
 
     private static func moneyIdentity(_ line: TimesheetWeeklyReportMoneyLine) -> String {
-        let day = Calendar.current.startOfDay(for: line.date).timeIntervalSince1970
+        let day = OrganizationRulebookContext.calendar.startOfDay(for: line.date).timeIntervalSince1970
         return [
             line.title,
             line.jobNumber,
