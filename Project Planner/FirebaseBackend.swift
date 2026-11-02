@@ -3279,7 +3279,7 @@ class FirebaseBackend: ObservableObject {
         )
         
         do {
-            try await saveProject(testProject, organizationId: organizationId)
+            try await saveProject(testProject, organizationId: organizationId, mode: .create)
             print("🔥🔥🔥 DEBUG: Test project saved successfully!")
             
             // Try to load it back
@@ -3327,7 +3327,7 @@ class FirebaseBackend: ObservableObject {
         
         do {
             // Save the test project
-            try await saveProject(testProject, organizationId: organizationId)
+            try await saveProject(testProject, organizationId: organizationId, mode: .create)
             print("🔥🔥🔥 DEBUG: Test project saved to Firebase")
             
             // Wait a moment for Firebase to process
