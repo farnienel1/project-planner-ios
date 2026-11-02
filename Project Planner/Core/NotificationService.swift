@@ -44,21 +44,14 @@ class NotificationService: ObservableObject {
     private var lastProcessedNotificationAt: Date?
     private static let persistedLocalAlertDedupKey = "NotificationService.localAlertDedupKeysV2"
     private static let persistedLastProcessedAtKey = "NotificationService.lastProcessedNotificationAtV1"
-    private static let dismissedSyntheticPrefix = "NotificationService.dismissedSynthetic."
     private static let maxPersistedDedupKeys = 400
     private var materialCutoffRefreshTask: Task<Void, Never>?
-    /// Locally read ids waiting for Firestore listener to catch up (keeps badge cleared after mark-all-read).
-    private var pendingReadNotificationIds: Set<UUID> = []
-    private var dismissedSyntheticNotificationIds: Set<UUID> = []
-    private var dismissedSyntheticStableKeys: Set<String> = []
-    private var dismissedSyntheticLoadedForUserId: String?
     /// Deadline reminder/due docs whose `createdAt` is still in the future (inbox hides them until fire time).
     private var pendingScheduledDeadlineNotifications: [AppNotification] = []
     /// True after a launch-time badge warm or an explicit inbox load.
     private var hasLoadedNotificationsThisSession = false
     private var notificationAuthorizationTask: Task<Bool, Never>?
     private var didLogNotificationAuthorization = false
-    private static let dismissedSyntheticKeyPrefix = "NotificationService.dismissedSyntheticKey."
     /// Sets the app-icon badge to the unread inbox count when the app leaves the foreground (§13).
     private var appBackgroundObserver: NSObjectProtocol?
 
@@ -1438,22 +1431,19 @@ class NotificationService: ObservableObject {
               let currentUser = userStore?.currentUser else { return }
 
         hasLoadedNotificationsThisSession = true
+        removeLegacyLocalInboxState(userId: currentUser.id)
         let fetched = try? await firebaseBackend.loadNotifications(
             organizationId: organizationId,
             userId: currentUser.id,
             limit: 150
         )
-        let fallbackExisting = notifications.filter { !isSyntheticInboxItem($0) }
-        let allNotifications = fetched ?? fallbackExisting
+        let allNotifications = fetched ?? notifications
         print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] currentUser=\(currentUser.id) totalLoaded=\(allNotifications.count)")
         capturePendingDeadlineNotifications(from: allNotifications, currentUser: currentUser)
 
-        let synthetic = syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
-        let delivered = await deliveredLocalInboxNotifications(organizationId: organizationId, userId: currentUser.id)
-        let merged = dedupeVisibleNotifications(
-            dedupeHolidayNotificationRows(allNotifications + synthetic + delivered)
-        )
-        let listed = listedInbox(applyLocalReadState(to: merged), userId: currentUser.id)
+        // RULEBOOK §13: the inbox is only the Firestore rows addressed to the person, with their stored read state
+        // (`inboxNotificationVisibleToUser`, `unreadNotificationBadgeCount`). No derived rows, no device read state.
+        let listed = listedInbox(allNotifications, userId: currentUser.id)
         print("🔥🔥🔥 DEBUG: [NOTIFY LOAD] listed=\(listed.count)")
         
         await MainActor.run {
@@ -1480,25 +1470,14 @@ class NotificationService: ObservableObject {
         let newlyVisible = pendingScheduledDeadlineNotifications.filter { $0.createdAt <= now }
         guard !newlyVisible.isEmpty else { return }
         pendingScheduledDeadlineNotifications.removeAll { $0.createdAt <= now }
-        let merged = dedupeVisibleNotifications(notifications + newlyVisible)
+        let known = Set(notifications.map(\.id))
+        let merged = notifications + newlyVisible.filter { !known.contains($0.id) }
         let userId = userStore?.currentUser?.id ?? ""
-        notifications = listedInbox(applyLocalReadState(to: merged), userId: userId)
+        notifications = listedInbox(merged, userId: userId)
         setUnreadCount(from: notifications)
     }
     
     func markAsRead(_ notification: AppNotification) async {
-        pendingReadNotificationIds.insert(notification.id)
-        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
-            notifications[index].isRead = true
-            setUnreadCount(from: notifications)
-        }
-        if isSyntheticInboxItem(notification) {
-            dismissSyntheticNotification(notification.id)
-            if let stableKey = syntheticStableKey(for: notification) {
-                dismissSyntheticStableKey(stableKey)
-            }
-            return
-        }
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         
@@ -1518,38 +1497,18 @@ class NotificationService: ObservableObject {
         }
     }
 
-    /// Marks every listed row read. The notification centre does not call this; a row is marked when it is opened.
-    func prepareInboxPresentation() {
-        loadDismissedSyntheticIdsIfNeeded()
-        pendingReadNotificationIds = Set(notifications.map(\.id))
-        notifications = notifications.map { notification in
-            var updated = notification
-            updated.isRead = true
-            if isSyntheticInboxItem(notification) {
-                dismissedSyntheticNotificationIds.insert(notification.id)
-                if let stableKey = syntheticStableKey(for: notification) {
-                    dismissSyntheticStableKey(stableKey)
-                }
-            }
-            return updated
-        }
-        persistDismissedSyntheticIds()
-        persistDismissedSyntheticStableKeys()
-        setUnreadCount(from: notifications)
-    }
-
     /// Marks every listed row read and writes that state. Opening the centre does not call this.
     func markAllAsRead() async {
-        prepareInboxPresentation()
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             return
         }
-        for notification in notifications where !isSyntheticInboxItem(notification) {
+        for notification in notifications where !notification.isRead {
             var updated = notification
             updated.isRead = true
             do {
-                try await firebaseBackend.saveNotification(updated, organizationId: organizationId)
+                // `notificationReadWriteFields`: `{ isRead: true }` only.
+                try await firebaseBackend.markNotificationRead(updated, wasRead: false, organizationId: organizationId)
                 if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
                     notifications[index] = updated
                 }
@@ -1600,30 +1559,6 @@ class NotificationService: ObservableObject {
         return CanonicalBusinessEngine.notificationPreferenceAllowsDelivery(prefs: prefs, type: type) ?? true
     }
 
-    private func dedupeVisibleNotifications(_ notifications: [AppNotification]) -> [AppNotification] {
-        var seen = Set<String>()
-        var out: [AppNotification] = []
-        let preferred = notifications.filter { !isSyntheticInboxItem($0) }.sorted { $0.createdAt > $1.createdAt }
-        let rest = notifications.filter { isSyntheticInboxItem($0) }.sorted { $0.createdAt > $1.createdAt }
-        for notification in preferred + rest {
-            let target = notification.userId.map(resolvedRecipientUserId) ?? "broadcast"
-            let related = notification.relatedKey ?? "none"
-            let key: String
-            switch notification.type {
-            case .deadlineReminder, .deadlineDue:
-                // Prefer the persisted inbox row over a delivered OS banner with stale wording.
-                key = "\(notification.type.rawValue)|\(target)|\(related)"
-            default:
-                let normalizedMessage = notification.message.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                key = "\(notification.type.rawValue)|\(target)|\(related)|\(normalizedMessage)"
-            }
-            if seen.contains(key) { continue }
-            seen.insert(key)
-            out.append(notification)
-        }
-        return out.sorted { $0.createdAt > $1.createdAt }
-    }
-    
     /// `stampsActor`: the row carries `actorUserId` = the signed-in uid (RULEBOOK §13), the person who caused it.
     /// Scheduled rows nobody caused (the timesheet submission reminder to the signed-in person, deadline
     /// reminders) pass false, or the push function's actor guard would drop their device push.
@@ -1722,19 +1657,15 @@ class NotificationService: ObservableObject {
 
                     let parsed = snapshot.documents.compactMap { self.parseNotificationDocument($0) }
                     self.capturePendingDeadlineNotifications(from: parsed, currentUser: currentUser)
-                    let synthetic = self.syntheticAnnualLeaveNotifications(for: currentUser, organizationId: organizationId)
                     let changedParsed = snapshot.documentChanges.compactMap { change -> AppNotification? in
                         guard change.type == .added else { return nil }
                         return self.parseNotificationDocument(change.document)
                     }
                     .filter { self.shouldShowNotification($0, for: currentUser) }
 
-                    let delivered = await self.deliveredLocalInboxNotifications(organizationId: organizationId, userId: currentUser.id)
-                    let merged = self.dedupeVisibleNotifications(
-                        self.dedupeHolidayNotificationRows(parsed + synthetic + delivered)
-                    )
-                    let reconciled = self.applyLocalReadState(to: merged)
-                    let listed = self.listedInbox(reconciled, userId: currentUser.id)
+                    // RULEBOOK §13: only the Firestore rows addressed to the person, read state as stored.
+                    let merged = parsed
+                    let listed = self.listedInbox(merged, userId: currentUser.id)
                     self.notifications = listed
                     self.setUnreadCount(from: listed)
                     self.hasLoadedNotificationsThisSession = true
@@ -1965,59 +1896,6 @@ class NotificationService: ObservableObject {
         return preliminary
     }
 
-    /// Prefer persisted Firestore notifications over derived synthetic rows for the same holiday event + user.
-    private func dedupeHolidayNotificationRows(_ items: [AppNotification]) -> [AppNotification] {
-        let nonSynthetic = items.filter { !isSyntheticInboxItem($0) }
-        let synthetic = items.filter { isSyntheticInboxItem($0) }
-        var keys = Set(nonSynthetic.compactMap { holidayEventDedupeKey($0) })
-        var kept = nonSynthetic
-        for s in synthetic {
-            guard let k = holidayEventDedupeKey(s) else {
-                kept.append(s)
-                continue
-            }
-            if keys.contains(k) { continue }
-            keys.insert(k)
-            kept.append(s)
-        }
-        return kept.sorted { $0.createdAt > $1.createdAt }
-    }
-
-    private func holidayEventDedupeKey(_ n: AppNotification) -> String? {
-        guard let rid = n.relatedId else { return nil }
-        let uid = n.userId ?? ""
-        switch n.type {
-        case .holidayRequestSubmitted:
-            return "holiday_submitted|\(rid.uuidString)|\(uid)"
-        case .holidayRequestApproved, .holidayRequestDeclined:
-            return "holiday_decision|\(rid.uuidString)|\(uid)"
-        default:
-            return nil
-        }
-    }
-
-    private func isCurrentUserHolidayRequester(request: HolidayBooking, user: AppUser) -> Bool {
-        if let uid = request.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty {
-            if uid == user.id { return true }
-            let canonicalRequester = resolvedRecipientUserId(uid)
-            let canonicalUser = resolvedRecipientUserId(user.id)
-            if canonicalRequester == canonicalUser { return true }
-            if let requester = userStore?.organizationUsers.first(where: { $0.id == uid || resolvedRecipientUserId($0.id) == canonicalRequester }) {
-                let requesterEmail = requester.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                let userEmail = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                if !requesterEmail.isEmpty, requesterEmail == userEmail { return true }
-            }
-        }
-        if let oid = request.operativeId,
-           let operativeStore,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }) {
-            let oEmail = op.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            let uEmail = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            if !oEmail.isEmpty, oEmail == uEmail { return true }
-        }
-        return false
-    }
-
     private func scheduleLocalBookingAlert(message: String, dedupeIdentifier: String) {
         requestLocalNotificationPermissionIfNeeded()
         let content = UNMutableNotificationContent()
@@ -2055,7 +1933,7 @@ class NotificationService: ObservableObject {
             relatedId: notification.relatedKey,
             targetUserId: notification.userId.map { resolvedRecipientUserId($0) },
             isRead: notification.isRead,
-            isSynthetic: isSyntheticInboxItem(notification),
+            isSynthetic: false,
             isFutureScheduledDeadline: isFutureScheduledDeadline(notification)
         )
     }
@@ -2173,117 +2051,6 @@ class NotificationService: ObservableObject {
             bytes[12], bytes[13], bytes[14], bytes[15]
         )
         return UUID(uuidString: uuidString) ?? UUID()
-    }
-
-    private func syntheticAnnualLeaveNotifications(for user: AppUser, organizationId: String) -> [AppNotification] {
-        guard let holidayStore else { return [] }
-        let recentCutoff = Date().addingTimeInterval(-60 * 60 * 24 * 14)
-
-        if !user.permissions.operativeMode && (user.permissions.manager || user.permissions.adminAccess || user.isSuperAdmin || user.role == .admin) {
-            // D6: admins decide every request; anyone else only where `leaveApproverIds` names them. Never their own.
-            let users = userStore?.organizationUsers ?? []
-            let operatives = operativeStore?.allOperatives ?? []
-            let pending = holidayStore.pendingRequests.filter { request in
-                if isCurrentUserHolidayRequester(request: request, user: user) {
-                    return false
-                }
-                return AnnualLeaveApproval.canDecide(request, viewer: user, users: users, operatives: operatives)
-            }
-            return pending.map { request in
-                let requester = requesterName(for: request)
-                let isCancellation = request.cancellationRequestedAt != nil
-                let key = "annualLeaveRequest|\(request.id.uuidString)|\(user.id)|\(isCancellation)"
-                return AppNotification(
-                    id: syntheticNotificationId(from: key),
-                    organizationId: organizationId,
-                    type: .holidayRequestSubmitted,
-                    title: isCancellation ? "Annual Leave Cancellation" : "Annual Leave Request",
-                    message: isCancellation ? "\(requester) requested annual leave cancellation." : "\(requester) requested annual leave.",
-                    userId: user.id,
-                    relatedId: request.id,
-                    isRead: isSyntheticMarkedRead(id: syntheticNotificationId(from: key), stableKey: key),
-                    createdAt: request.updatedAt,
-                    requiresPermission: "syntheticAnnualLeave"
-                )
-            }
-        }
-
-        let myDecisions = holidayStore.myBookings(userId: user.id, operativeId: nil)
-            .filter { ($0.status == .approved || $0.status == .rejected) && $0.updatedAt >= recentCutoff }
-        return myDecisions.map { booking in
-            let key = "annualLeaveDecision|\(booking.id.uuidString)|\(user.id)|\(booking.status.rawValue)"
-            let dateText = annualLeaveDateText(for: booking)
-            let when = dateText.isEmpty ? "" : " for \(dateText)"
-            let note = CanonicalBusinessEngine.parseHolidayDecisionNote(booking.decisionNote) ?? ""
-            let decisionMessage: String
-            if booking.status == .approved {
-                decisionMessage = note.isEmpty
-                    ? "Your annual leave request was approved\(when)."
-                    : "Your annual leave request was approved\(when). \(note)"
-            } else if note.isEmpty {
-                decisionMessage = "Your annual leave request was declined\(when)."
-            } else {
-                decisionMessage = "Your annual leave request was declined\(when). \(note)"
-            }
-            return AppNotification(
-                id: syntheticNotificationId(from: key),
-                organizationId: organizationId,
-                type: booking.status == .approved ? .holidayRequestApproved : .holidayRequestDeclined,
-                title: booking.status == .approved ? "Annual Leave Approved" : "Annual Leave Declined",
-                message: decisionMessage,
-                userId: user.id,
-                relatedId: booking.id,
-                isRead: isSyntheticMarkedRead(id: syntheticNotificationId(from: key), stableKey: key),
-                createdAt: booking.updatedAt,
-                requiresPermission: "syntheticAnnualLeave"
-            )
-        }
-    }
-
-    private func approverUserId(for request: HolidayBooking) -> String? {
-        guard let userStore else { return nil }
-        if let uid = request.userId,
-           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            return requester.assignedManagerUserId
-        }
-        if let oid = request.operativeId,
-           let operative = operativeStore?.allOperatives.first(where: { $0.id == oid }),
-           let requester = userStore.organizationUsers.first(where: { $0.email.lowercased() == operative.email.lowercased() }) {
-            return requester.assignedManagerUserId
-        }
-        return nil
-    }
-
-    private func requesterName(for request: HolidayBooking) -> String {
-        guard let userStore else { return "Operative" }
-        if let uid = request.userId,
-           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            return requester.fullName
-        }
-        if let oid = request.operativeId,
-           let operative = operativeStore?.allOperatives.first(where: { $0.id == oid }) {
-            return "\(operative.firstName) \(operative.lastName)"
-        }
-        return "Operative"
-    }
-
-    private func applyLocalReadState(to items: [AppNotification]) -> [AppNotification] {
-        loadDismissedSyntheticIdsIfNeeded()
-        return items.map { notification in
-            var updated = notification
-            if pendingReadNotificationIds.contains(notification.id) {
-                updated.isRead = true
-            }
-            if isSyntheticInboxItem(notification) {
-                if isSyntheticDismissed(notification.id) {
-                    updated.isRead = true
-                } else if let stableKey = syntheticStableKey(for: notification),
-                          isSyntheticStableKeyDismissed(stableKey) {
-                    updated.isRead = true
-                }
-            }
-            return updated
-        }
     }
 
     /// Server-push types must not also schedule a local banner for the same inbox id.
@@ -2423,15 +2190,6 @@ class NotificationService: ObservableObject {
         return [trimmed]
     }
 
-    private func isSyntheticInboxItem(_ notification: AppNotification) -> Bool {
-        switch notification.requiresPermission {
-        case "syntheticAnnualLeave", "syntheticLocalDelivered":
-            return true
-        default:
-            return false
-        }
-    }
-
     private func isDeadlineLifecycle(_ type: AppNotification.NotificationType) -> Bool {
         switch type {
         case .deadlineReminder, .deadlineDue:
@@ -2479,119 +2237,11 @@ class NotificationService: ObservableObject {
         }
     }
 
-    private func deliveredLocalInboxNotifications(organizationId: String, userId: String) async -> [AppNotification] {
-        let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
-        var result: [AppNotification] = []
-        for note in delivered {
-            let ident = note.request.identifier
-            if ident.hasPrefix("inapp-local-") || ident.hasPrefix("test_notification_") {
-                continue
-            }
-            let type: AppNotification.NotificationType
-            var relatedId: UUID?
-            if let parsed = DeadlineLocalNotifications.parsedIdentifier(ident) {
-                type = parsed.isDue ? .deadlineDue : .deadlineReminder
-                relatedId = parsed.deadlineId
-            } else if ident.hasPrefix(LocalNotificationService.qualificationExpiryIdentifierPrefix)
-                        || ident.hasPrefix("hs-toolbox-scheduled-") {
-                type = .qualificationExpiry
-            } else if ident.hasPrefix(LocalNotificationService.dailyMaterialCutoffIdentifierPrefix) {
-                type = .materialOrderCutOff
-            } else {
-                continue
-            }
-            let key = "delivered|\(ident)|\(userId)"
-            let syntheticId = syntheticNotificationId(from: key)
-            result.append(
-                AppNotification(
-                    id: syntheticId,
-                    organizationId: organizationId,
-                    type: type,
-                    title: note.request.content.title,
-                    message: note.request.content.body,
-                    userId: userId,
-                    relatedId: relatedId,
-                    isRead: isSyntheticMarkedRead(id: syntheticId, stableKey: key),
-                    createdAt: note.date,
-                    requiresPermission: "syntheticLocalDelivered"
-                )
-            )
-        }
-        return result
-    }
-
-    private func syntheticStableKey(for notification: AppNotification) -> String? {
-        guard notification.requiresPermission == "syntheticAnnualLeave",
-              let relatedId = notification.relatedId else { return nil }
-        let uid = notification.userId ?? ""
-        switch notification.type {
-        case .holidayRequestSubmitted:
-            let isCancellation = notification.title.localizedCaseInsensitiveContains("cancellation")
-            return "annualLeaveRequest|\(relatedId.uuidString)|\(uid)|\(isCancellation)"
-        case .holidayRequestApproved:
-            return "annualLeaveDecision|\(relatedId.uuidString)|\(uid)|approved"
-        case .holidayRequestDeclined:
-            return "annualLeaveDecision|\(relatedId.uuidString)|\(uid)|rejected"
-        default:
-            return nil
-        }
-    }
-
-    private func isSyntheticMarkedRead(id: UUID, stableKey: String) -> Bool {
-        isSyntheticDismissed(id) || isSyntheticStableKeyDismissed(stableKey)
-    }
-
-    private func isSyntheticStableKeyDismissed(_ key: String) -> Bool {
-        loadDismissedSyntheticIdsIfNeeded()
-        return dismissedSyntheticStableKeys.contains(key)
-    }
-
-    private func dismissSyntheticStableKey(_ key: String) {
-        loadDismissedSyntheticIdsIfNeeded()
-        dismissedSyntheticStableKeys.insert(key)
-        persistDismissedSyntheticStableKeys()
-    }
-
-    private func dismissSyntheticNotification(_ id: UUID) {
-        loadDismissedSyntheticIdsIfNeeded()
-        dismissedSyntheticNotificationIds.insert(id)
-        persistDismissedSyntheticIds()
-    }
-
-    private func isSyntheticDismissed(_ id: UUID) -> Bool {
-        loadDismissedSyntheticIdsIfNeeded()
-        return dismissedSyntheticNotificationIds.contains(id)
-    }
-
-    private func loadDismissedSyntheticIdsIfNeeded() {
-        guard let userId = userStore?.currentUser?.id else { return }
-        if dismissedSyntheticLoadedForUserId == userId { return }
-        dismissedSyntheticLoadedForUserId = userId
-        let key = Self.dismissedSyntheticPrefix + userId
-        if let stored = UserDefaults.standard.stringArray(forKey: key) {
-            dismissedSyntheticNotificationIds = Set(stored.compactMap(UUID.init(uuidString:)))
-        } else {
-            dismissedSyntheticNotificationIds = []
-        }
-        let stableKey = Self.dismissedSyntheticKeyPrefix + userId
-        if let storedKeys = UserDefaults.standard.stringArray(forKey: stableKey) {
-            dismissedSyntheticStableKeys = Set(storedKeys)
-        } else {
-            dismissedSyntheticStableKeys = []
-        }
-    }
-
-    private func persistDismissedSyntheticIds() {
-        guard let userId = userStore?.currentUser?.id else { return }
-        let key = Self.dismissedSyntheticPrefix + userId
-        let values = dismissedSyntheticNotificationIds.map(\.uuidString)
-        UserDefaults.standard.set(Array(values.prefix(500)), forKey: key)
-    }
-
-    private func persistDismissedSyntheticStableKeys() {
-        guard let userId = userStore?.currentUser?.id else { return }
-        let key = Self.dismissedSyntheticKeyPrefix + userId
-        UserDefaults.standard.set(Array(dismissedSyntheticStableKeys.prefix(500)), forKey: key)
+    /// Pre-1.9 builds kept device-local read state for derived inbox rows; drop those keys once per user.
+    private func removeLegacyLocalInboxState(userId: String) {
+        guard !userId.isEmpty else { return }
+        UserDefaults.standard.removeObject(forKey: "NotificationService.dismissedSynthetic." + userId)
+        UserDefaults.standard.removeObject(forKey: "NotificationService.dismissedSyntheticKey." + userId)
     }
 }
 
