@@ -5484,48 +5484,13 @@ private enum InvoicePDFGenerationSupport {
             scheduleOptions: scheduleOptions,
             relatedUsers: relatedUsers
         )
-        // PAYE and leave lines never go on an invoice: `invoiceLines` filters the rows below.
-        var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
-
         let draft = TimesheetDraftStore.load(
             userId: currentUser.id,
             weekStart: OrganizationRulebookContext.calendar.startOfDay(for: period.startDate)
         )
-        for entry in draft.priceWorkEntries {
-            rows.append(
-                InvoiceLineItem(
-                    lineId: "pw-\(entry.id.uuidString)",
-                    date: entry.startDate,
-                    jobNumber: entry.jobNumber,
-                    projectName: "Price work",
-                    details: entry.title,
-                    paidHours: 0,
-                    payrollBasis: .dayRate,
-                    dayRate: 0,
-                    hourlyRate: nil,
-                    amount: entry.amount,
-                    isPayeDay: currentUser.employmentType(on: entry.startDate) == .paye
-                )
-            )
-        }
-        for entry in draft.expenseEntries {
-            rows.append(
-                InvoiceLineItem(
-                    lineId: "exp-\(entry.id.uuidString)",
-                    date: entry.date,
-                    jobNumber: "—",
-                    projectName: "Expense",
-                    details: entry.title,
-                    paidHours: 0,
-                    payrollBasis: .dayRate,
-                    dayRate: 0,
-                    hourlyRate: nil,
-                    amount: entry.amount,
-                    isPayeDay: currentUser.employmentType(on: entry.date) == .paye
-                )
-            )
-        }
-
+        // Built like the signed-sheet export (`weeklyReportOverride` first, then reviews and entry decisions);
+        // PAYE and leave lines never go on an invoice: `invoiceLines` filters the rows below.
+        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft)
         return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
@@ -5949,48 +5914,13 @@ private struct GenerateInvoiceView: View {
             scheduleOptions: scheduleOptions,
             relatedUsers: userStore.organizationUsers
         )
-        // PAYE and leave lines never go on an invoice: `invoiceLines` filters the rows below.
-        var rows = summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
-
         let draft = TimesheetDraftStore.load(
             userId: currentUser.id,
             weekStart: OrganizationRulebookContext.calendar.startOfDay(for: period.startDate)
         )
-        for entry in draft.priceWorkEntries {
-            rows.append(
-                InvoiceLineItem(
-                    lineId: "pw-\(entry.id.uuidString)",
-                    date: entry.startDate,
-                    jobNumber: entry.jobNumber,
-                    projectName: "Price work",
-                    details: entry.title,
-                    paidHours: 0,
-                    payrollBasis: .dayRate,
-                    dayRate: 0,
-                    hourlyRate: nil,
-                    amount: entry.amount,
-                    isPayeDay: currentUser.employmentType(on: entry.startDate) == .paye
-                )
-            )
-        }
-        for entry in draft.expenseEntries {
-            rows.append(
-                InvoiceLineItem(
-                    lineId: "exp-\(entry.id.uuidString)",
-                    date: entry.date,
-                    jobNumber: "—",
-                    projectName: "Expense",
-                    details: entry.title,
-                    paidHours: 0,
-                    payrollBasis: .dayRate,
-                    dayRate: 0,
-                    hourlyRate: nil,
-                    amount: entry.amount,
-                    isPayeDay: currentUser.employmentType(on: entry.date) == .paye
-                )
-            )
-        }
-
+        // Built like the signed-sheet export (`weeklyReportOverride` first, then reviews and entry decisions);
+        // PAYE and leave lines never go on an invoice: `invoiceLines` filters the rows below.
+        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft)
         return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
@@ -6177,6 +6107,182 @@ private struct TimesheetLeaveInfoRows: View {
     private static func dayText(_ dayKey: String) -> String {
         guard let date = OrganizationRulebookContext.date(fromDayKey: dayKey) else { return dayKey }
         return date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone))
+    }
+}
+
+/// The rows one person's timesheet puts on an invoice, before `invoiceLines` and sorting. Shared by the
+/// owner's "Generate invoice" and the signed-sheet export so both read the same sheet the same way:
+/// a signed `weeklyReportOverride` wins when present (declined and zero lines left out); otherwise live
+/// payroll lines with their `payrollLineReviews` applied, then price work and expenses at the decision in
+/// effect (`timesheetEntryDecision`, already resolved by `parseTimesheetEntries` when the sheet is read)
+/// through `timesheetEntryEffectiveAmount` (declined left out, revised amount used).
+private enum TimesheetInvoiceRows {
+    static func rows(
+        for user: AppUser,
+        summary: TimesheetPayrollSummary,
+        draft: TimesheetDraft
+    ) -> [InvoiceLineItem] {
+        var rows: [InvoiceLineItem] = []
+        if let override = draft.weeklyReportOverride {
+            let liveById = Dictionary(summary.lineItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for line in override.lines where line.decision != .declined && line.amount > 0.0001 {
+                if let live = liveById[line.id] {
+                    var row = InvoiceLineItem(
+                        lineId: live.id,
+                        date: live.date,
+                        jobNumber: live.jobNumber,
+                        projectName: live.projectName,
+                        details: live.details,
+                        paidHours: live.paidHours,
+                        payrollBasis: live.payrollBasis,
+                        dayRate: live.dayRate,
+                        hourlyRate: live.hourlyRate,
+                        amount: line.amount,
+                        isPayeDay: live.isPayeDay,
+                        isOvertimeLine: live.isOvertimeLine
+                    )
+                    row.isOverlapping = live.isOverlapping
+                    row.bookingId = live.bookingId
+                    rows.append(row)
+                } else {
+                    rows.append(
+                        InvoiceLineItem(
+                            lineId: line.id,
+                            date: line.date,
+                            jobNumber: line.jobNumber,
+                            projectName: line.projectName,
+                            details: line.details,
+                            paidHours: line.paidHours,
+                            payrollBasis: .dayRate,
+                            dayRate: 0,
+                            hourlyRate: nil,
+                            amount: line.amount,
+                            isPayeDay: user.employmentType(on: line.date) == .paye,
+                            isOvertimeLine: line.isOvertime
+                        )
+                    )
+                }
+            }
+            for line in override.priceWork where line.decision != .declined && line.amount > 0.0001 {
+                rows.append(
+                    InvoiceLineItem(
+                        lineId: "pw-\(line.id)",
+                        date: line.date,
+                        jobNumber: line.jobNumber,
+                        projectName: "Price work",
+                        details: line.title,
+                        paidHours: 0,
+                        payrollBasis: .dayRate,
+                        dayRate: 0,
+                        hourlyRate: nil,
+                        amount: line.amount,
+                        isPayeDay: user.employmentType(on: line.date) == .paye
+                    )
+                )
+            }
+            for line in override.expenses where line.decision != .declined && line.amount > 0.0001 {
+                rows.append(
+                    InvoiceLineItem(
+                        lineId: "exp-\(line.id)",
+                        date: line.date,
+                        jobNumber: line.jobNumber.isEmpty ? "—" : line.jobNumber,
+                        projectName: "Expense",
+                        details: line.title,
+                        paidHours: 0,
+                        payrollBasis: .dayRate,
+                        dayRate: 0,
+                        hourlyRate: nil,
+                        amount: line.amount,
+                        isPayeDay: user.employmentType(on: line.date) == .paye
+                    )
+                )
+            }
+            return rows
+        }
+
+        for line in summary.lineItems {
+            if TimesheetDraftAdjustments.isPayrollLineRemoved(
+                line: line,
+                draft: draft,
+                managerHasSigned: false,
+                applyLiveReview: true
+            ) {
+                continue
+            }
+            let amount = TimesheetDraftAdjustments.effectivePayrollAmount(
+                line: line,
+                draft: draft,
+                managerHasSigned: false,
+                applyLiveReview: true
+            )
+            guard amount > 0.0001 else { continue }
+            var row = InvoiceLineItem(
+                lineId: line.id,
+                date: line.date,
+                jobNumber: line.jobNumber,
+                projectName: line.projectName,
+                details: line.details,
+                paidHours: line.paidHours,
+                payrollBasis: line.payrollBasis,
+                dayRate: line.dayRate,
+                hourlyRate: line.hourlyRate,
+                amount: amount,
+                isPayeDay: line.isPayeDay,
+                isOvertimeLine: line.isOvertimeLine
+            )
+            row.isOverlapping = line.isOverlapping
+            row.bookingId = line.bookingId
+            rows.append(row)
+        }
+        for entry in draft.priceWorkEntries {
+            guard entry.managerDecision != .declined,
+                  let amount = CanonicalBusinessEngine.timesheetEntryEffectiveAmount(
+                    decision: entry.managerDecision.rawValue,
+                    revisedAmount: entry.managerRevisedAmount,
+                    amount: entry.amount
+                  ),
+                  amount > 0.0001 else { continue }
+            rows.append(
+                InvoiceLineItem(
+                    lineId: "pw-\(entry.id.uuidString)",
+                    date: entry.startDate,
+                    jobNumber: entry.jobNumber,
+                    projectName: "Price work",
+                    details: entry.title,
+                    paidHours: 0,
+                    payrollBasis: .dayRate,
+                    dayRate: 0,
+                    hourlyRate: nil,
+                    amount: amount,
+                    isPayeDay: user.employmentType(on: entry.startDate) == .paye
+                )
+            )
+        }
+        for entry in draft.expenseEntries {
+            guard entry.managerDecision != .declined,
+                  let amount = CanonicalBusinessEngine.timesheetEntryEffectiveAmount(
+                    decision: entry.managerDecision.rawValue,
+                    revisedAmount: entry.managerRevisedAmount,
+                    amount: entry.amount
+                  ),
+                  amount > 0.0001 else { continue }
+            rows.append(
+                InvoiceLineItem(
+                    lineId: "exp-\(entry.id.uuidString)",
+                    date: entry.date,
+                    jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber,
+                    projectName: "Expense",
+                    details: entry.title,
+                    paidHours: 0,
+                    payrollBasis: .dayRate,
+                    dayRate: 0,
+                    hourlyRate: nil,
+                    amount: amount,
+                    isPayeDay: user.employmentType(on: entry.date) == .paye
+                )
+            )
+        }
+        return rows
     }
 }
 
@@ -6843,163 +6949,7 @@ private enum TimesheetExportHelper {
             scheduleOptions: scheduleOptions,
             relatedUsers: relatedUsers
         )
-        var rows: [InvoiceLineItem] = []
-        let managerHasSigned = draft.managerSignedAt != nil || TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user)
-        if let override = draft.weeklyReportOverride {
-            let liveById = Dictionary(summary.lineItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            for line in override.lines where line.decision != .declined && line.amount > 0.0001 {
-                if let live = liveById[line.id] {
-                    rows.append(
-                        InvoiceLineItem(
-                            lineId: live.id,
-                            date: live.date,
-                            jobNumber: live.jobNumber,
-                            projectName: live.projectName,
-                            details: live.details,
-                            paidHours: live.paidHours,
-                            payrollBasis: live.payrollBasis,
-                            dayRate: live.dayRate,
-                            hourlyRate: live.hourlyRate,
-                            amount: line.amount,
-                            isPayeDay: live.isPayeDay,
-                            isOvertimeLine: live.isOvertimeLine
-                        )
-                    )
-                } else {
-                    rows.append(
-                        InvoiceLineItem(
-                            lineId: line.id,
-                            date: line.date,
-                            jobNumber: line.jobNumber,
-                            projectName: line.projectName,
-                            details: line.details,
-                            paidHours: line.paidHours,
-                            payrollBasis: .dayRate,
-                            dayRate: 0,
-                            hourlyRate: nil,
-                            amount: line.amount,
-                            isPayeDay: user.employmentType(on: line.date) == .paye,
-                            isOvertimeLine: line.isOvertime
-                        )
-                    )
-                }
-            }
-            for line in override.priceWork where line.decision != .declined && line.amount > 0.0001 {
-                rows.append(
-                    InvoiceLineItem(
-                        lineId: "pw-\(line.id)",
-                        date: line.date,
-                        jobNumber: line.jobNumber,
-                        projectName: "Price work",
-                        details: line.title,
-                        paidHours: 0,
-                        payrollBasis: .dayRate,
-                        dayRate: 0,
-                        hourlyRate: nil,
-                        amount: line.amount,
-                        isPayeDay: user.employmentType(on: line.date) == .paye
-                    )
-                )
-            }
-            for line in override.expenses where line.decision != .declined && line.amount > 0.0001 {
-                rows.append(
-                    InvoiceLineItem(
-                        lineId: "exp-\(line.id)",
-                        date: line.date,
-                        jobNumber: line.jobNumber.isEmpty ? "—" : line.jobNumber,
-                        projectName: "Expense",
-                        details: line.title,
-                        paidHours: 0,
-                        payrollBasis: .dayRate,
-                        dayRate: 0,
-                        hourlyRate: nil,
-                        amount: line.amount,
-                        isPayeDay: user.employmentType(on: line.date) == .paye
-                    )
-                )
-            }
-        } else {
-            for line in summary.lineItems {
-                if TimesheetDraftAdjustments.isPayrollLineRemoved(
-                    line: line,
-                    draft: draft,
-                    managerHasSigned: managerHasSigned,
-                    applyLiveReview: true
-                ) {
-                    continue
-                }
-                let amount = TimesheetDraftAdjustments.effectivePayrollAmount(
-                    line: line,
-                    draft: draft,
-                    managerHasSigned: managerHasSigned,
-                    applyLiveReview: true
-                )
-                guard amount > 0.0001 else { continue }
-                rows.append(
-                    InvoiceLineItem(
-                        lineId: line.id,
-                        date: line.date,
-                        jobNumber: line.jobNumber,
-                        projectName: line.projectName,
-                        details: line.details,
-                        paidHours: line.paidHours,
-                        payrollBasis: line.payrollBasis,
-                        dayRate: line.dayRate,
-                        hourlyRate: line.hourlyRate,
-                        amount: amount,
-                        isPayeDay: line.isPayeDay,
-                        isOvertimeLine: line.isOvertimeLine
-                    )
-                )
-            }
-            for entry in draft.priceWorkEntries {
-                let amount = TimesheetDraftAdjustments.effectivePriceWorkAmount(
-                    entry,
-                    managerHasSigned: managerHasSigned,
-                    applyLiveReview: true
-                )
-                guard amount > 0.0001, entry.managerDecision != .declined else { continue }
-                rows.append(
-                    InvoiceLineItem(
-                        lineId: "pw-\(entry.id.uuidString)",
-                        date: entry.startDate,
-                        jobNumber: entry.jobNumber,
-                        projectName: "Price work",
-                        details: entry.title,
-                        paidHours: 0,
-                        payrollBasis: .dayRate,
-                        dayRate: 0,
-                        hourlyRate: nil,
-                        amount: amount,
-                        isPayeDay: user.employmentType(on: entry.startDate) == .paye
-                    )
-                )
-            }
-            for entry in draft.expenseEntries {
-                let amount = TimesheetDraftAdjustments.effectiveExpenseAmount(
-                    entry,
-                    managerHasSigned: managerHasSigned,
-                    applyLiveReview: true
-                )
-                guard amount > 0.0001, entry.managerDecision != .declined else { continue }
-                rows.append(
-                    InvoiceLineItem(
-                        lineId: "exp-\(entry.id.uuidString)",
-                        date: entry.date,
-                        jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber,
-                        projectName: "Expense",
-                        details: entry.title,
-                        paidHours: 0,
-                        payrollBasis: .dayRate,
-                        dayRate: 0,
-                        hourlyRate: nil,
-                        amount: amount,
-                        isPayeDay: user.employmentType(on: entry.date) == .paye
-                    )
-                )
-            }
-        }
-
+        let rows = TimesheetInvoiceRows.rows(for: user, summary: summary, draft: draft)
         return rows.sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
