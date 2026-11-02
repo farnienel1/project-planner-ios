@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import FirebaseFirestore
 
 @MainActor
 class SubcontractorStore: ObservableObject {
@@ -12,6 +13,43 @@ class SubcontractorStore: ObservableObject {
     
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         firebaseBackend = backend
+    }
+
+    /// Live `subcontractors` and `subcontractorBookings` (one listener each for the organisation), read through
+    /// `parseSubcontractorDocument` and `parseSubcontractorBookingDocument`. A firm or booking added, moved or
+    /// deleted on web shows here without reopening the screen. Cached copy first; offline keeps the last copy.
+    func startLiveUpdates(organizationId: String) {
+        guard let firebaseBackend else { return }
+        firebaseBackend.listenOrganizationQuery(
+            key: "subcontractors",
+            organizationId: organizationId,
+            query: { $0.collection("subcontractors") }
+        ) { [weak self] rows, fromCache in
+            guard let self else { return }
+            let firms = FirebaseBackend.subcontractors(fromDocuments: rows)
+                .sorted { $0.name < $1.name }
+                .map { firm -> Subcontractor in
+                    // Duplicate contact ids crash SwiftUI ForEach (same as loadData).
+                    var copy = firm
+                    var seen = Set<UUID>()
+                    copy.contacts = firm.contacts.filter { seen.insert($0.id).inserted }
+                    return copy
+                }
+            guard let next = LiveSnapshotMerge.apply(existing: self.subcontractors, incoming: firms, fromCache: fromCache),
+                  next != self.subcontractors else { return }
+            self.subcontractors = next
+        }
+        firebaseBackend.listenOrganizationQuery(
+            key: "subcontractorBookings",
+            organizationId: organizationId,
+            query: { $0.collection("subcontractorBookings") }
+        ) { [weak self] rows, fromCache in
+            guard let self else { return }
+            let incoming = FirebaseBackend.subcontractorBookings(fromDocuments: rows)
+            guard let next = LiveSnapshotMerge.apply(existing: self.bookings, incoming: incoming, fromCache: fromCache),
+                  next != self.bookings else { return }
+            self.bookings = next
+        }
     }
     
     func loadData() async {

@@ -1702,6 +1702,8 @@ private struct MyTimesheetView: View {
     @State private var pendingExtraMode: TimesheetExtraMode?
     @State private var showPriceWorkSheet = false
     @State private var showExpenseSheet = false
+    /// A server copy of this sheet arrived while an edit sheet was open; it loads when that sheet closes.
+    @State private var serverTimesheetChangedWhileEditing = false
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var showInvoiceUTRWarning = false
     /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
@@ -2239,8 +2241,19 @@ private struct MyTimesheetView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadDraft() }
         .task { await loadDayRateHistory() }
+        .reloadsOnForeground { await loadDayRateHistory() }
         // Approved leave rows read the holiday list (read only); load it when nothing is cached yet.
         .task { if holidayStore.bookings.isEmpty { await holidayStore.loadData() } }
+        // Live sheet while open: a line manager's sign-off or review on web shows here. An edit sheet that is
+        // open is never overwritten — the server copy loads when it closes.
+        .task(id: week.start) { listenToServerTimesheet() }
+        .onDisappear { firebaseBackend.stopLiveListener(key: Self.liveTimesheetKey) }
+        .onChange(of: isEditingTimesheet) { _, editing in
+            if !editing && serverTimesheetChangedWhileEditing {
+                serverTimesheetChangedWhileEditing = false
+                Task { await refreshDraftFromCloud() }
+            }
+        }
         .confirmationDialog(
             "Re-sign required",
             isPresented: $showPostSignExtraWarning,
@@ -2501,6 +2514,29 @@ private struct MyTimesheetView: View {
     private func loadDraft() {
         draft = TimesheetDraftStore.load(userId: currentUserId, weekStart: week.start)
         Task { await refreshDraftFromCloud() }
+    }
+
+    private static let liveTimesheetKey = "timesheet.owner"
+
+    /// An add / edit sheet or the re-sign prompt is open: the person may be part-way through a change.
+    private var isEditingTimesheet: Bool {
+        showAddExpense || showAddPriceWork || showPriceWorkSheet || showExpenseSheet || showPostSignExtraWarning
+    }
+
+    private func listenToServerTimesheet() {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        firebaseBackend.listenTimesheetState(
+            key: Self.liveTimesheetKey,
+            organizationId: orgId,
+            userId: currentUserId,
+            weekStart: week.start
+        ) {
+            if isEditingTimesheet {
+                serverTimesheetChangedWhileEditing = true
+            } else {
+                Task { await refreshDraftFromCloud() }
+            }
+        }
     }
 
     private func markTimesheetSigned(signatureImageData: Data) {
@@ -3935,6 +3971,8 @@ private struct OperativeTimesheetReviewView: View {
     @State private var editingPayrollLineId: String?
     @State private var editingExpenseId: UUID?
     @State private var editingPriceWorkId: UUID?
+    /// A server copy of this sheet arrived while the reviewer was editing; it loads when they finish.
+    @State private var serverTimesheetChangedWhileEditing = false
     @State private var showExtrasReviewRequiredAlert = false
     /// Shown when the cloud save failed.
     @State private var saveErrorMessage: String?
@@ -3976,7 +4014,18 @@ private struct OperativeTimesheetReviewView: View {
                 Task { await refreshDraftFromCloud() }
             }
             .task { await loadDayRateHistory() }
+            .reloadsOnForeground { await loadDayRateHistory() }
             .task { if holidayStore.bookings.isEmpty { await holidayStore.loadData() } }
+            // Live sheet while open: the person's own edit or another reviewer's decision on web shows here.
+            // An entry being edited, or the sign sheet, is never overwritten — the server copy loads after.
+            .task(id: week.start) { listenToServerTimesheet() }
+            .onDisappear { firebaseBackend.stopLiveListener(key: Self.liveTimesheetKey) }
+            .onChange(of: isEditingReview) { _, editing in
+                if !editing && serverTimesheetChangedWhileEditing {
+                    serverTimesheetChangedWhileEditing = false
+                    Task { await refreshDraftFromCloud() }
+                }
+            }
             .alert("Review required", isPresented: $showExtrasReviewRequiredAlert) {
                 Button("OK", role: .cancel) {}
                     .accessibilityIdentifier("operativeTimesheetReview.ok")
@@ -4513,6 +4562,28 @@ private struct OperativeTimesheetReviewView: View {
                 writer: writer,
                 subject: subject
             )
+        }
+    }
+
+    private static let liveTimesheetKey = "timesheet.review"
+
+    private var isEditingReview: Bool {
+        showingManagerSignSheet || editingPayrollLineId != nil || editingExpenseId != nil || editingPriceWorkId != nil
+    }
+
+    private func listenToServerTimesheet() {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        firebaseBackend.listenTimesheetState(
+            key: Self.liveTimesheetKey,
+            organizationId: orgId,
+            userId: operative.id,
+            weekStart: week.start
+        ) {
+            if isEditingReview {
+                serverTimesheetChangedWhileEditing = true
+            } else {
+                Task { await refreshDraftFromCloud() }
+            }
         }
     }
 

@@ -59,6 +59,26 @@ class HolidayStore: ObservableObject {
         firebaseBackend = backend
     }
 
+    /// RULEBOOK §1, §5, §9, §10: one live listener on the organisation's `holidayBookings`, read through
+    /// `parseHolidayDocuments` (`FirebaseBackend.holidayBookings(fromDocuments:)`). A decision or a request made
+    /// on web shows on Annual leave, Daily Overview, My Schedule and timesheet leave lines, and the warnings
+    /// scan runs again (`.liveWarningInputsDidChange`). Cached copy first; offline keeps the last copy.
+    func startLiveUpdates(organizationId: String) {
+        guard let fb = firebaseBackend else { return }
+        fb.listenOrganizationQuery(
+            key: "holidayBookings",
+            organizationId: organizationId,
+            query: { $0.collection("holidayBookings") }
+        ) { [weak self] rows, fromCache in
+            guard let self else { return }
+            let parsed = FirebaseBackend.holidayBookings(fromDocuments: rows, organizationId: normalizedOrganizationId(organizationId))
+            guard let next = LiveSnapshotMerge.apply(existing: self.bookings, incoming: parsed, fromCache: fromCache),
+                  Set(next) != Set(self.bookings) else { return }
+            self.bookings = next
+            NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+        }
+    }
+
     func loadData() async {
         guard let fb = firebaseBackend else {
             errorMessage = "Holiday service unavailable. Please reopen the app."

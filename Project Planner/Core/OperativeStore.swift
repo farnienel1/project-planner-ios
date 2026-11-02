@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import FirebaseFirestore
 import FirebaseAuth
 
 @MainActor
@@ -164,6 +165,42 @@ class OperativeStore: ObservableObject {
     }
     
     // MARK: - Data Loading
+
+    /// Live `operatives` and `managers` (one listener each for the organisation), read through
+    /// `operatives(fromDocuments:)` (`parseOperativeDocument`) and `managers(fromDocuments:)`
+    /// (`parseManagerDocument`). A server snapshot replaces the list (a row deleted on web leaves here too); a
+    /// cache snapshot never empties it. The warnings scan and qualification reminders run again on a change.
+    func startLiveUpdates(organizationId: String) {
+        guard let firebaseBackend else { return }
+        firebaseBackend.listenOrganizationQuery(
+            key: "operatives",
+            organizationId: organizationId,
+            query: { $0.collection("operatives") }
+        ) { [weak self] rows, fromCache in
+            guard let self else { return }
+            let incoming = FirebaseBackend.operatives(fromDocuments: rows)
+            guard let next = LiveSnapshotMerge.apply(existing: self.operatives, incoming: incoming, fromCache: fromCache) else { return }
+            // `Operative ==` compares ids only, so a server snapshot always publishes (it fires only on a change).
+            if fromCache && next.count == self.operatives.count && next.map(\.id) == self.operatives.map(\.id) { return }
+            self.operatives = next
+            self.smartCache?.cacheOperatives(next)
+            NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+            NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
+        }
+        firebaseBackend.listenOrganizationQuery(
+            key: "managers",
+            organizationId: organizationId,
+            query: { $0.collection("managers") }
+        ) { [weak self] rows, fromCache in
+            guard let self else { return }
+            let incoming = FirebaseBackend.managers(fromDocuments: rows)
+            guard let next = LiveSnapshotMerge.apply(existing: self.managers, incoming: incoming, fromCache: fromCache),
+                  next != self.managers else { return }
+            self.managers = next
+            self.smartCache?.cacheManagers(next)
+            NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+        }
+    }
 
     func discardInMemoryForOrganizationSwitch() {
         loadGeneration += 1

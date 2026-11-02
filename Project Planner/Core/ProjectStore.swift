@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import FirebaseFirestore
 import FirebaseAuth
 
 @MainActor
@@ -28,6 +29,9 @@ class ProjectStore: ObservableObject {
     private var didAttemptOrgAutoSwitch = false
     private var pendingReloadAfterCurrentLoad = false
     private var loadGeneration = 0
+    /// Jobs and clients this device just created whose save has not finished. A listener snapshot taken before
+    /// the create reached Firestore must not drop them (the create would then never be written).
+    private var pendingCreateIds = Set<UUID>()
 
     private func isPermissionDeniedError(_ error: Error?) -> Bool {
         guard let nsError = error as NSError? else { return false }
@@ -454,6 +458,77 @@ class ProjectStore: ObservableObject {
         _ = await hydrateFromLocalCacheIfNeeded(generation: loadGeneration)
     }
 
+    /// Live `projects`, `smallWorks`, `clients` and `settings/jobTypes` (one listener each for the organisation),
+    /// read through the same readers as the load: `jobs(fromDocuments:)` (`parseWorkDocument`, `workDocuments`),
+    /// `clients(fromDocuments:)` (`parseClientDocument`) and `parseJobTypesDocument` + `mergeJobTypeCatalogues`.
+    /// A server snapshot replaces that slice, so a job edited or deleted on web is edited or gone here too; that
+    /// is also what keeps the in-memory copy from going stale. Cached copy first; offline keeps the last copy.
+    func startLiveUpdates(organizationId: String) {
+        guard let firebaseBackend else { return }
+        for smallWorks in [false, true] {
+            let collection = smallWorks ? "smallWorks" : "projects"
+            firebaseBackend.listenOrganizationQuery(
+                key: collection,
+                organizationId: organizationId,
+                query: { $0.collection(collection) }
+            ) { [weak self] rows, fromCache in
+                guard let self else { return }
+                let incoming = FirebaseBackend.jobs(fromDocuments: rows, smallWorks: smallWorks)
+                    .filter { ($0.jobType == .smallWorks) == smallWorks }
+                self.applyLiveWorkSlice(incoming, smallWorks: smallWorks, fromCache: fromCache)
+            }
+        }
+        firebaseBackend.listenOrganizationQuery(
+            key: "clients",
+            organizationId: organizationId,
+            query: { $0.collection("clients") }
+        ) { [weak self] rows, fromCache in
+            guard let self else { return }
+            let incoming = FirebaseBackend.clients(fromDocuments: rows)
+            guard var next = LiveSnapshotMerge.apply(existing: self.clients, incoming: incoming, fromCache: fromCache) else { return }
+            let incomingIds = Set(next.map(\.id))
+            next += self.clients.filter { self.pendingCreateIds.contains($0.id) && !incomingIds.contains($0.id) }
+            guard next != self.clients else { return }
+            self.clients = next
+            self.persistLiveSnapshotLocally()
+        }
+        firebaseBackend.listenOrganizationDocument(
+            key: "jobTypes",
+            organizationId: organizationId,
+            document: { $0.collection("settings").document("jobTypes") }
+        ) { [weak self] data, fromCache, _ in
+            guard let self, let data, !fromCache else { return }
+            let stored = CanonicalBusinessEngine.parseJobTypesDocument(data) ?? []
+            guard !stored.isEmpty,
+                  let merged = CanonicalBusinessEngine.mergeJobTypeCatalogues(
+                    stored: stored,
+                    recovered: Array(self.jobTypesRecoveredFromWorks(self.projects))
+                  ), !merged.isEmpty else { return }
+            let next = Set(merged)
+            if next != self.jobTypes { self.jobTypes = next }
+        }
+    }
+
+    /// One collection's slice of `projects` (projects or small works) from a listener snapshot.
+    private func applyLiveWorkSlice(_ incoming: [Project], smallWorks: Bool, fromCache: Bool) {
+        let existingSlice = projects.filter { ($0.jobType == .smallWorks) == smallWorks }
+        guard var nextSlice = LiveSnapshotMerge.apply(existing: existingSlice, incoming: incoming, fromCache: fromCache) else { return }
+        let incomingIds = Set(nextSlice.map(\.id))
+        nextSlice += existingSlice.filter { pendingCreateIds.contains($0.id) && !incomingIds.contains($0.id) }
+        guard nextSlice != existingSlice else { return }
+        let others = projects.filter { ($0.jobType == .smallWorks) != smallWorks }
+        projects = ProjectWorksMerge.uniqueWorks(others + nextSlice)
+        if !fromCache { lastWorkLoadUnreliable = false }
+        persistLiveSnapshotLocally()
+    }
+
+    private func persistLiveSnapshotLocally() {
+        smartCache?.cacheProjects(projects)
+        smartCache?.cacheClients(clients)
+        let projects = self.projects, clients = self.clients
+        Task { try? await persistenceService.saveProjectData(projects: projects, clients: clients) }
+    }
+
     func discardInMemoryForOrganizationSwitch() {
         loadGeneration += 1
         pendingReloadAfterCurrentLoad = false
@@ -605,6 +680,8 @@ class ProjectStore: ObservableObject {
         
         // Add to local array first
         projects.append(project)
+        pendingCreateIds.insert(project.id)
+        defer { pendingCreateIds.remove(project.id) }
         print("🔥🔥🔥 DEBUG: Current projects count after adding: \(projects.count)")
         
         // CRITICAL: Save immediately with retry logic and check result
@@ -698,6 +775,8 @@ class ProjectStore: ObservableObject {
         
         // Add to local array first
         projects.append(smallWork)
+        pendingCreateIds.insert(smallWork.id)
+        defer { pendingCreateIds.remove(smallWork.id) }
         print("🔥🔥🔥 DEBUG: Current projects count after adding: \(projects.count)")
         
         // CRITICAL: Wait for organization before saving
@@ -916,6 +995,8 @@ class ProjectStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: addClient called with client: \(client.name)")
         print("🔥🔥🔥 DEBUG: Current clients count before adding: \(clients.count)")
         clients.append(client)
+        pendingCreateIds.insert(client.id)
+        defer { pendingCreateIds.remove(client.id) }
         print("🔥🔥🔥 DEBUG: Current clients count after adding: \(clients.count)")
         
         let saveResult = await saveDataWithRetry(.createClient(client), description: "adding client \(client.name)")

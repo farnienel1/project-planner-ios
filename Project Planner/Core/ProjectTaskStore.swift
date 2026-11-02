@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import FirebaseFirestore
 
 @MainActor
 class ProjectTaskStore: ObservableObject {
@@ -20,6 +21,30 @@ class ProjectTaskStore: ObservableObject {
     
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         self.firebaseBackend = backend
+    }
+
+    /// Live `tasks` for the organisation (one listener), read through `projectTask(documentId:data:)`
+    /// (`parseTaskDocument`). A server snapshot replaces the list, except tasks this device still has queued
+    /// in the outbox ("Pending sync", RULEBOOK §2). Cached copy first; offline keeps the last copy.
+    func startLiveUpdates(organizationId: String) {
+        guard let firebaseBackend else { return }
+        firebaseBackend.listenOrganizationQuery(
+            key: "tasks",
+            organizationId: organizationId,
+            query: { $0.collection("tasks") }
+        ) { [weak self] rows, fromCache in
+            guard let self else { return }
+            let incoming = rows.compactMap { FirebaseBackend.projectTask(documentId: $0.id, data: $0.data) }
+            guard var next = LiveSnapshotMerge.apply(existing: self.tasks, incoming: incoming, fromCache: fromCache) else { return }
+            let incomingIds = Set(next.map(\.id))
+            let queued = self.tasks.filter {
+                !incomingIds.contains($0.id) && OfflineOutboxStore.shared.hasPendingSync(entityId: $0.id.uuidString)
+            }
+            next = (next + queued).sorted { $0.createdAt > $1.createdAt }
+            guard next != self.tasks else { return }
+            self.tasks = next
+            OfflineTaskLocalStore.shared.save(next, organizationId: organizationId)
+        }
     }
 
     func discardInMemoryForOrganizationSwitch() {

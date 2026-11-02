@@ -590,6 +590,7 @@ struct SiteAuditProjectAuditsView: View {
                 guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
                 await loadAudits()
             }
+            .reloadsOnForeground { await loadAudits() }
             .sheet(isPresented: $showingCreate, onDismiss: {
                 Task { await loadAudits() }
             }) {
@@ -662,6 +663,7 @@ struct SiteAuditProjectHubView: View {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await loadAudits()
         }
+        .reloadsOnForeground { await loadAudits() }
         .sheet(isPresented: $showingCreate, onDismiss: {
             Task { await loadAudits() }
         }) {

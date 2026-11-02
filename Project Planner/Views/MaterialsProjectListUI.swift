@@ -475,8 +475,25 @@ struct MaterialsOrderHistorySheet: View {
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("materialSendHistoryDidChange"))) { _ in
                 Task { await loadHistory() }
             }
+            // Live while open: an order or quote sent from web for this job appears without reopening.
+            .task { listenToSendRecords() }
+            .onDisappear { firebaseBackend.stopLiveListener(key: "materialSendRecords") }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func listenToSendRecords() {
+        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        firebaseBackend.listenMaterialSendRecords(organizationId: organizationId, projectId: project.id) { live in
+            // An empty answer may be records stored under another job-id form; `loadHistory` has that fallback.
+            if live.isEmpty {
+                if !records.isEmpty { Task { await loadHistory() } }
+                return
+            }
+            records = live
+            isLoading = false
+            loadErrorMessage = nil
+        }
     }
 
     private func loadHistory() async {

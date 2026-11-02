@@ -170,6 +170,21 @@ class FirebaseBackend: ObservableObject {
         didSet {
             OrganizationDocumentAbbreviation.update(from: currentOrganization)
             OrganizationRulebookContext.update(from: currentOrganization)
+            // Users parsed before the organisation's leave defaults were known (`annualLeaveDefaultsPending` from
+            // `CanonicalBusinessEngine.parseUserDocument`) are read again once they arrive or change.
+            if let next = currentOrganization {
+                let sameOrganization = oldValue != nil
+                    && organizationIdsMatch(oldValue?.firestoreDocumentId, next.firestoreDocumentId)
+                let defaultsChanged = sameOrganization
+                    && oldValue?.settings.annualLeaveDefaults != next.settings.annualLeaveDefaults
+                if !sameOrganization || defaultsChanged {
+                    NotificationCenter.default.post(
+                        name: .organizationAnnualLeaveDefaultsDidChange,
+                        object: nil,
+                        userInfo: ["changed": defaultsChanged]
+                    )
+                }
+            }
         }
     }
     @Published var userRole: UserRole = .basic
@@ -241,6 +256,9 @@ class FirebaseBackend: ObservableObject {
     @Published private(set) var lastBookingDecodeReport: BookingDecodeReport?
     private var managerScheduleLiveListener: ListenerRegistration?
     private var managerScheduleLiveListenerTarget: String?
+    /// Every other organisation-scoped live listener (`OrgLiveListeners.swift`). Emptied with the schedule
+    /// listeners on an organisation switch and on sign-out.
+    let liveListeners = OrgListenerRegistry()
     /// Lower bound of the launch booking and manager-site listeners. Nil with `scheduleHistoryIsFull` means every date.
     var scheduleHistoryStart: Date?
     private var scheduleHistoryIsFull = false
@@ -335,6 +353,7 @@ class FirebaseBackend: ObservableObject {
         managerScheduleLiveListener?.remove()
         managerScheduleLiveListener = nil
         managerScheduleLiveListenerTarget = nil
+        liveListeners.removeAll()
     }
 
     private func startOrganizationDocumentListener(organizationId: String) {
@@ -9899,6 +9918,29 @@ extension FirebaseBackend {
             .document(organizationId)
             .collection("settings")
             .document(docId)
+    }
+
+    /// Live `settings/timesheet_{uid}_{unix}` (`timesheetDocumentId`) while a timesheet screen is open, so a sign-off,
+    /// review or export made on web shows without reopening it. `onServerChange` runs for confirmed server copies
+    /// only (this device's own unsent write and cache copies are skipped). `key` names the screen's listener;
+    /// the screen stops it with `stopLiveListener(key:)` when it closes.
+    func listenTimesheetState(
+        key: String,
+        organizationId: String,
+        userId: String,
+        weekStart: Date,
+        onServerChange: @escaping @MainActor () -> Void
+    ) {
+        guard let ref = try? timesheetStateDocumentRef(organizationId: normalizedOrganizationId(organizationId), userId: userId, weekStart: weekStart) else { return }
+        let documentId = ref.documentID
+        listenOrganizationDocument(
+            key: key,
+            organizationId: organizationId,
+            document: { $0.collection("settings").document(documentId) }
+        ) { data, fromCache, pending in
+            guard data != nil, !fromCache, !pending else { return }
+            onServerChange()
+        }
     }
 
     func loadTimesheetState(

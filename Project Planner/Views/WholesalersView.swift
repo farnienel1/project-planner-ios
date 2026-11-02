@@ -22,6 +22,7 @@ struct WholesalersView: View {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await loadWholesalers()
         }
+        .reloadsOnForeground { await loadWholesalers() }
     }
 
     private func loadWholesalers() async {
