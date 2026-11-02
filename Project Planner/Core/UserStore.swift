@@ -1678,29 +1678,10 @@ class UserStore: ObservableObject {
                      return
                  }
                  
-                 let isManager = user.permissions.manager || user.permissions.adminAccess || user.isSuperAdmin
                  let isOperative = user.permissions.operativeMode
                  
-                 // If this is a manager, update all bookings' bookedBy to super admin
-                 if isManager, let bookingStore = bookingStore {
-                     // Find super admin
-                     let superAdmin = organizationUsers.first { $0.isSuperAdmin }
-                     let superAdminName = superAdmin?.fullName ?? "Super Admin"
-                     
-                     // Update all bookings where this manager is the booker
-                     let bookingsToUpdate = bookingStore.bookings.filter { $0.bookedBy == userName }
-                     print("🔥🔥🔥 DEBUG: Updating \(bookingsToUpdate.count) bookings from manager \(userName) to super admin \(superAdminName)")
-                     
-                     for booking in bookingsToUpdate {
-                         var updatedBooking = booking
-                         updatedBooking.bookedBy = superAdminName
-                         await bookingStore.updateBooking(updatedBooking)
-                     }
-                     
-                     if !bookingsToUpdate.isEmpty {
-                         print("🔥🔥🔥 DEBUG: ✅ Updated \(bookingsToUpdate.count) bookings to super admin")
-                     }
-                 }
+                 // Historic bookings keep the stored `bookedBy` name (AGENTS rule 4); deleting the booker never
+                 // rewrites them.
                  
                  // Rulebook `bookingsToRemoveOnOperativeDelete`: this person's bookings from today on, under every id they
                  // have had (`bookingIdsForAccount`). Past bookings stay for timesheets and weekly reports. Never by name.
