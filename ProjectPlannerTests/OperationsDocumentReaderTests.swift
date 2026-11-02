@@ -15,7 +15,7 @@ final class OperationsDocumentReaderTests: XCTestCase {
     private let julyFourteenthLondonMidnight: Int64 = 1_783_983_600
 
     func testTheScriptAnswersTheOperationsReaders() {
-        XCTAssertEqual(CanonicalBusinessEngine.rulebookStamp()?.version, "1.8.0")
+        XCTAssertEqual(CanonicalBusinessEngine.rulebookStamp()?.version, "1.9.0")
         XCTAssertNotNil(CanonicalBusinessEngine.parseMaterialLineDocument(documentId: "m", data: ["projectId": "j", "material": "x"]))
         XCTAssertNotNil(CanonicalBusinessEngine.parseHealthSafetyDocument([:], projectId: "j"))
     }

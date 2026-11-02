@@ -18,7 +18,7 @@ final class WorkDocumentReaderTests: XCTestCase {
     private let createdSeconds: Int64 = 1_791_190_800
 
     func testTheScriptAnswersTheWorkReaders() throws {
-        XCTAssertEqual(CanonicalBusinessEngine.rulebookStamp()?.version, "1.8.0")
+        XCTAssertEqual(CanonicalBusinessEngine.rulebookStamp()?.version, "1.9.0")
         XCTAssertNotNil(CanonicalBusinessEngine.parseJobDocument(documentId: "j", data: [:], smallWorks: false))
         XCTAssertNotNil(CanonicalBusinessEngine.parseTimesheetEntries(sheetDocumentId: "s", sheet: [:]))
         XCTAssertEqual(CanonicalBusinessEngine.deadlineProjectKey(" abc "), "ABC")
