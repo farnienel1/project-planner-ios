@@ -1480,20 +1480,22 @@ class NotificationService: ObservableObject {
     }
     
     func markAsRead(_ notification: AppNotification) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        
         var updatedNotification = notification
         updatedNotification.isRead = true
-        
+
+        // Show the row as read straight away (also offline); the live listener then reflects the stored row.
+        if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
+            notifications[index] = updatedNotification
+            setUnreadCount(from: notifications)
+        }
+
+        guard !notification.isRead,
+              let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+
         do {
             // RULEBOOK 1.8.0 §13: `notificationReadWriteFields` — `{ isRead: true }` only, never a rewrite of the row.
             try await firebaseBackend.markNotificationRead(updatedNotification, wasRead: notification.isRead, organizationId: organizationId)
-            
-            if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
-                notifications[index] = updatedNotification
-                setUnreadCount(from: notifications)
-            }
         } catch {
             print("🔥🔥🔥 DEBUG: Error marking notification as read: \(error)")
         }
@@ -1501,24 +1503,30 @@ class NotificationService: ObservableObject {
 
     /// Marks every listed row read and writes that state. Opening the centre does not call this.
     func markAllAsRead() async {
+        let unread = notifications.filter { !$0.isRead }
+        guard !unread.isEmpty else { return }
+        // Show every row as read straight away (also offline); the live listener then reflects the stored rows.
+        notifications = notifications.map { row in
+            var copy = row
+            copy.isRead = true
+            return copy
+        }
+        setUnreadCount(from: notifications)
+
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             return
         }
-        for notification in notifications where !notification.isRead {
+        for notification in unread {
             var updated = notification
             updated.isRead = true
             do {
                 // `notificationReadWriteFields`: `{ isRead: true }` only.
                 try await firebaseBackend.markNotificationRead(updated, wasRead: false, organizationId: organizationId)
-                if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
-                    notifications[index] = updated
-                }
             } catch {
                 print("🔥🔥🔥 DEBUG: Error marking notification as read: \(error)")
             }
         }
-        setUnreadCount(from: notifications)
     }
     
     private func shouldShowNotification(_ notification: AppNotification, for user: AppUser) -> Bool {
