@@ -54,9 +54,16 @@ jobs:
 
   parity-tests:
     if: github.event_name != 'schedule'
-    runs-on: macos-15
+    # The project is Xcode 26.2 (LastUpgradeCheck 2620): iOS 26 SDK APIs and Swift 6.2 default MainActor isolation.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Select Xcode 26
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$xcode" ]; then echo "::error::No Xcode 26 on this runner image"; ls -d /Applications/Xcode*.app; exit 1; fi
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
       - name: RulebookParityTests and CanonicalParityFixtureTests
         run: |
           sim=$(xcrun simctl list devices available -j | node -e '
