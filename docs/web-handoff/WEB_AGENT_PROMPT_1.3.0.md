@@ -7,7 +7,7 @@ Paste this whole file into the agent working in **project-planner-web**.
 Rulebook **1.3.0** was written and implemented in both apps from the iOS session, on the product owner's instructions:
 
 - **Web PR #208** (`rulebook-1.3.0-line-managers-notifications` into `main-kr70k9`) carries:
-  - `docs/RULEBOOK.md` 1.3.0 and `lib/canonical`, packed as `3b30d33dddd58c58eb1f9802041d227c1df9904c65621d289ce2b8d90d6b171c`;
+  - `docs/RULEBOOK.md` 1.3.0 and `lib/canonical`, packed as `644bb679d3bcf5a9483a6a24f8272d9300806c4fa940a429315cbd3a14f277c1`;
   - `firestore.rules` and `functions/index.js`;
   - the web app call sites.
 - **iOS PR #142** (`main-vr2rt0-uoqzwv` into `main`) mirrors that pack exactly and makes the same app changes.
@@ -81,8 +81,8 @@ Ownerless rows (`*_created`, `warning_removed`) are written without a `userId`, 
 3. Confirm admins see the timesheets of legacy operatives and managers who have no line manager. Those sheets now wait for an admin.
 
 ## Web follow-ups (yours)
-1. **Organisation time zone for leave notice dates.** `annualLeaveDecisionDateText` / `abbreviatedLeaveDay` are hard-coded to Europe/London. Use the organisation zone (§1). iOS uses it, so the notice text and de-dupe keys differ for non-London organisations.
-2. **Scheduled deadline reminders.** iOS leaves `actorUserId` off scheduled deadline reminder/due rows (local-only, no push). Write that exception into §13 next to `timesheet_submission_reminder`, or say otherwise.
+1. **Done in #208:** leave notice dates use the organisation zone (`annualLeaveDecisionDateText(booking, timeZone)`). Other web leave code still imports `lib/ios-parity/londonTime` (`formatLeaveDays.ts`, `holidayApprovalUtils.ts`, `leaveRequestDecision.ts`). Move those day keys to the organisation zone too (§1).
+2. **Done in #208:** §13 lists `deadline_reminder` / `deadline_due` as scheduled notices without `actorUserId`.
 3. **Ownerless rows decision.** They are written on both apps and never delivered. Either address them to admins with a recipient function, or stop writing them. Put the decision in §13.
 4. **Settings push diagnostic.** The iOS diagnostic writes `task_created` to the signed-in user. Now that it carries `actorUserId`, it never pushes. The catalog says remove it; confirm.
 5. **Forced sign-outs on iOS** (expired session, trial blocked) don't remove the push token yet. That's an iOS follow-up; just note it in §13.
