@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 
 struct ChangePasswordView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
