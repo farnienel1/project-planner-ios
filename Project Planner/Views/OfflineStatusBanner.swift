@@ -170,6 +170,9 @@ struct OfflineSyncQueueSheet: View {
                                 Text(entry.displayDetail)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                if OfflineSyncCoordinator.reachedAttemptLimit(entry) {
+                                    stuckEntryControls(entry)
+                                }
                             }
                             .padding(.vertical, 2)
                         }
@@ -193,5 +196,29 @@ struct OfflineSyncQueueSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    /// An entry that stopped retrying on its own: try again, or drop it (and its local copy) for good.
+    @ViewBuilder
+    private func stuckEntryControls(_ entry: OfflineOutboxEntry) -> some View {
+        Text("Couldn't sync after \(OfflineSyncCoordinator.maxAttempts) tries.")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.red)
+        HStack(spacing: 16) {
+            Button("Retry") {
+                OfflineSyncCoordinator.retry(entryId: entry.id)
+                Task { await smartCache.refreshConnectionAndSync() }
+            }
+            .buttonStyle(.borderless)
+            .disabled(smartCache.isSyncing)
+            .accessibilityIdentifier("offlineSyncQueue.retryEntry")
+            Button("Discard", role: .destructive) {
+                OfflineSyncCoordinator.discard(entryId: entry.id)
+            }
+            .buttonStyle(.borderless)
+            .disabled(smartCache.isSyncing)
+            .accessibilityIdentifier("offlineSyncQueue.discardEntry")
+        }
+        .font(.caption.weight(.semibold))
     }
 }

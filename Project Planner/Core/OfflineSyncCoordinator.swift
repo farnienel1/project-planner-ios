@@ -10,7 +10,28 @@ import FirebaseAuth
 
 @MainActor
 enum OfflineSyncCoordinator {
-    private static let maxAttempts = 5
+    /// After this many failed replays an entry is no longer retried on its own: the queue sheet offers
+    /// Retry (start again) or Discard (dropped like a refused replay, §2).
+    static let maxAttempts = 5
+
+    /// Whether `entry` has stopped retrying on its own and waits for Retry or Discard.
+    static func reachedAttemptLimit(_ entry: OfflineOutboxEntry) -> Bool {
+        entry.attemptCount >= maxAttempts
+    }
+
+    /// Retry: the entry starts its attempts again on the next sync.
+    static func retry(entryId: UUID, outbox: OfflineOutboxStore? = nil) {
+        (outbox ?? OfflineOutboxStore.shared).resetAttempts(id: entryId)
+    }
+
+    /// Discard: the entry leaves the queue for good and the stores drop its local pending copy, as for a
+    /// refused replay (§2). No alert: the person chose it.
+    static func discard(entryId: UUID, outbox: OfflineOutboxStore? = nil) {
+        let outbox = outbox ?? OfflineOutboxStore.shared
+        guard let entry = outbox.entries.first(where: { $0.id == entryId }) else { return }
+        outbox.removeEntry(id: entry.id)
+        postDropped(entry: entry)
+    }
 
     static func processOutbox(
         firebaseBackend: FirebaseBackend,
@@ -26,7 +47,8 @@ enum OfflineSyncCoordinator {
         print("🔥🔥🔥 DEBUG: [OfflineSync] Processing \(pending.count) outbox entries…")
 
         for entry in pending {
-            if entry.attemptCount >= maxAttempts {
+            if reachedAttemptLimit(entry) {
+                // Waits for Retry or Discard in the queue sheet.
                 failed += 1
                 continue
             }
@@ -199,6 +221,11 @@ enum OfflineSyncCoordinator {
             message = "\(entry.displayTitle): this change was refused by the server and was not saved."
         }
         outbox.removeRefused(id: entry.id, message: message)
+        postDropped(entry: entry)
+    }
+
+    /// Tells the stores an entry left the queue unsynced, so they drop its local pending copy.
+    private static func postDropped(entry: OfflineOutboxEntry) {
         NotificationCenter.default.post(name: .offlineOutboxEntryRefused, object: nil, userInfo: entryInfo(entry))
         switch entry.operation {
         case .saveBooking, .deleteBooking:

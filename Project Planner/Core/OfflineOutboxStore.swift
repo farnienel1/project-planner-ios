@@ -458,6 +458,14 @@ final class OfflineOutboxStore: ObservableObject {
         persistToDisk()
     }
 
+    /// Retry after the attempt limit: the entry is tried again from the start.
+    func resetAttempts(id: UUID) {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[index].attemptCount = 0
+        entries[index].lastError = nil
+        persistToDisk()
+    }
+
     func clearAll() {
         entries.removeAll()
         lastRefusalMessage = nil
