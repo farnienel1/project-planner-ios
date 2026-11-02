@@ -146,6 +146,29 @@ final class OfflineOutboxStore: ObservableObject {
         hasPendingSync(entityId: bookingId.uuidString)
     }
 
+    /// Labour bookings this device has queued to create or edit in `organizationId` (newest queued copy each), and the
+    /// ids it has queued to delete. A server snapshot is overlaid with these until the outbox replays (§2).
+    func pendingLabourBookings(organizationId: String) -> (saves: [Booking], deletedIds: Set<UUID>) {
+        var saves: [Booking] = []
+        var deleted = Set<UUID>()
+        for entry in entries where entry.organizationId == organizationId {
+            switch entry.operation {
+            case .saveBooking:
+                if let payload = try? decoder.decode(OfflineSaveBookingPayload.self, from: entry.payload) {
+                    saves.removeAll { $0.id == payload.booking.id }
+                    saves.append(payload.booking)
+                }
+            case .deleteBooking:
+                if let payload = try? decoder.decode(OfflineDeleteBookingPayload.self, from: entry.payload) {
+                    deleted.insert(payload.bookingId)
+                }
+            default:
+                break
+            }
+        }
+        return (saves, deleted)
+    }
+
     /// Every entity id with a queued change.
     var pendingEntityIds: Set<String> {
         Set(entries.map { $0.entityId.uppercased() })
@@ -333,20 +356,26 @@ final class OfflineOutboxStore: ObservableObject {
     /// RULEBOOK §2: queue the signed-in user's own profile fields on `users/{userId}` (partial update).
     /// Pay, role, line manager, active flag, employment type and permissions are not "own profile
     /// fields" (§16) and must not be passed here.
+    /// `replacesDocument`: the fields are the whole document (`users/{uid}/private/taxIds`), replayed as a set.
+    /// `stampsWriteMetadata` false for a document whose rules allow only its own keys.
     func enqueueOwnProfileFields(
         userId: String,
         fields: [String: OfflineFieldValue],
         organizationId: String,
-        documentPath: String? = nil
+        documentPath: String? = nil,
+        replacesDocument: Bool = false,
+        stampsWriteMetadata: Bool = true,
+        entityId: String? = nil
     ) {
         enqueuePartialUpdate(
             operation: .saveOwnProfileFields,
             documentPath: documentPath ?? "users/\(userId)",
             fields: fields,
-            isCreate: false,
+            isCreate: replacesDocument,
             userId: userId,
             organizationId: organizationId,
-            entityId: "profile_\(userId)"
+            entityId: entityId ?? "profile_\(userId)",
+            stampsWriteMetadata: stampsWriteMetadata
         )
     }
 
@@ -377,7 +406,8 @@ final class OfflineOutboxStore: ObservableObject {
         isCreate: Bool,
         userId: String,
         organizationId: String,
-        entityId: String?
+        entityId: String?,
+        stampsWriteMetadata: Bool = true
     ) {
         guard !fields.isEmpty, !documentPath.isEmpty, !userId.isEmpty else { return }
         let key = entityId ?? documentPath.split(separator: "/").last.map(String.init) ?? documentPath
@@ -393,7 +423,8 @@ final class OfflineOutboxStore: ObservableObject {
             documentPath: documentPath,
             fields: merged,
             isCreate: create,
-            userId: userId
+            userId: userId,
+            stampsWriteMetadata: stampsWriteMetadata ? nil : false
         )
         guard let payload = try? encoder.encode(payloadModel) else { return }
         enqueue(

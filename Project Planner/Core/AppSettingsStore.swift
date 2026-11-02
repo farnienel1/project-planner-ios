@@ -19,6 +19,7 @@ class AppSettingsStore: ObservableObject {
     
     private let persistenceService: PersistenceService
     private weak var firebaseBackend: FirebaseBackend?
+    private weak var smartCache: SmartCacheService?
     private var cancellables = Set<AnyCancellable>()
     
     init(persistenceService: PersistenceService? = nil) {
@@ -37,6 +38,10 @@ class AppSettingsStore: ObservableObject {
         }
     }
     
+    func setSmartCache(_ smartCache: SmartCacheService) {
+        self.smartCache = smartCache
+    }
+
     func setupObservers() {
         // Listen for user sign in/out notifications
         NotificationCenter.default.addObserver(
@@ -199,7 +204,20 @@ class AppSettingsStore: ObservableObject {
     /// Keeps the full local map. Firestore receives only `changedKeys`, each as its own dotted field.
     func updateNotifications(_ notificationSettings: NotificationSettings, changedKeys: [String: Bool]) async {
         settings.notifications = notificationSettings
-        if let backend = firebaseBackend, let userId = backend.currentUser?.uid, !changedKeys.isEmpty {
+        if let backend = firebaseBackend, let userId = backend.currentUser?.uid, !changedKeys.isEmpty,
+           smartCache?.isOnline == false {
+            // RULEBOOK §2: the user's own toggles are allowed offline — queued as dotted partial updates
+            // (`userNotificationPreferenceFieldPatch`) and shown as Pending sync until the server confirms them.
+            if let patch = CanonicalBusinessEngine.userNotificationPreferenceFieldPatch(changedKeys), !patch.isEmpty {
+                OfflineOutboxStore.shared.enqueueOwnNotificationToggles(
+                    userId: userId,
+                    fields: patch.mapValues { OfflineFieldValue.bool($0) },
+                    organizationId: backend.resolvedOrganizationIdForOfflineWrites() ?? ""
+                )
+            } else {
+                errorMessage = "Failed to sync notification preferences."
+            }
+        } else if let backend = firebaseBackend, let userId = backend.currentUser?.uid, !changedKeys.isEmpty {
             do {
                 try await backend.saveUserNotificationPreferenceKeys(changedKeys, userId: userId)
             } catch {

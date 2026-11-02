@@ -742,51 +742,72 @@ struct WeeklyReportView: View {
         }
     }
 
-    private func refreshReportWarnings() async {
+    /// RULEBOOK §5, §7: the report's warnings are scanned for the chosen range (not copied from the live
+    /// detection window), on the private export service so Home's live list is untouched. The scan is the shared
+    /// one (`WarningsComputation`): `operativeClashGroups` (High), `managerClashGroups` (Medium) and
+    /// `unbookedLabourRows` over the range's days (weekends only with include-weekends) — as web
+    /// `weeklyReportData`. Approved clashes (`isClashApproved` / `isClashGroupApproved`) are listed separately
+    /// and are not counted as open. Returns false when the scan could not run (the reason is in `message`).
+    private func refreshReportWarnings() async -> Bool {
         let service = exportWarningsService ?? WarningsService(hydrateFromDisk: false)
         exportWarningsService = service
         let range = reportDateRange
         let cal = CanonicalBusinessEngine.businessCalendar
-        let shared = WarningsService.shared
 
-        // REBUILD: prefer live cache filtered by report dates — avoids Generate jetsam.
-        if shared.hasCompletedLiveDetection {
-            let filtered = shared.allGeneratedWarnings.filter { w in
-                guard let raw = w.occurrenceDate else { return false }
-                let day = cal.startOfDay(for: raw)
-                return day >= cal.startOfDay(for: range.lowerBound) && day <= cal.startOfDay(for: range.upperBound)
-            }
-            service.replaceWithPeriodWarnings(filtered)
-            periodHighCount = service.operativeBookingClashes(in: range, source: .period).count
-                + service.unresolvedManagerClashes(in: range, source: .period).count
-                + service.approvedManagerClashes(in: range, source: .period).count
-                + service.unbookedLabourWarnings(in: range, source: .period).count
+        // Missing bookings must never become unbooked warnings: say why and stop.
+        if let reason = WarningsDataCompleteness.blockingReason(
+            bookingsLoadFailed: bookingStore.lastLoadFailed,
+            managerBookingsLoadFailed: managerScheduleStore.lastLoadFailed,
+            bookingDecode: firebaseBackend.lastBookingDecodeReport
+        ) {
+            periodHighCount = 0
             periodMediumCount = 0
-            periodLowCount = service.materialsCutoffWarnings(in: range, source: .period).count
+            periodLowCount = 0
             periodSummaryReady = true
-            print("🔥🔥🔥 DEBUG: WEEKLY_REPORT period from LIVE cache count=\(filtered.count)")
-            return
+            message = reason
+            return false
         }
 
-        print("🔥🔥🔥 DEBUG: WEEKLY_REPORT no live cache — open Warnings and tap Refresh first")
-        periodHighCount = 0
-        periodMediumCount = 0
+        let start = cal.startOfDay(for: range.lowerBound)
+        let end = cal.startOfDay(for: range.upperBound)
+        let settings = firebaseBackend.currentOrganization?.settings
+        let bookings = bookingStore.bookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= start && day <= end
+        }
+        let managerBookings = managerScheduleStore.managerSiteBookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= start && day <= end
+        }
+        // The reader's organisation-zone day keys (`parseHolidayDocument`).
+        let startKey = OrganizationRulebookContext.dayKey(start)
+        let endKey = OrganizationRulebookContext.dayKey(end)
+        let holidays = holidayStore.bookings.filter { $0.endDayKey >= startKey && $0.startDayKey <= endKey }
+
+        await service.updateWarningsAsync(
+            operatives: operativeStore.allOperatives.filter(\.isActive),
+            bookings: bookings,
+            projects: projectStore.projects,
+            users: userStore.organizationUsers,
+            managerSiteBookings: managerBookings,
+            holidayBookings: holidays,
+            payrollTimePolicy: settings?.payrollTimePolicy ?? .default,
+            warningDetection: settings?.warningDetection ?? .default,
+            invoicingSettings: settings?.invoicing ?? .default,
+            labourCoverageStart: start,
+            labourCoverageEnd: end,
+            unbookedCoverageEnd: end,
+            // The material cut-off is a live "tomorrow" warning; it is not part of a period report.
+            materialOrderCutOffEnabled: false,
+            publishToLiveCache: false
+        )
+        periodHighCount = service.operativeBookingClashes(in: range, source: .period).count
+            + service.unbookedLabourWarnings(in: range, source: .period).count
+        periodMediumCount = service.unresolvedManagerClashes(in: range, source: .period).count
         periodLowCount = 0
         periodSummaryReady = true
-        message = "Open Warnings and tap Refresh first, then Generate again."
-    }
-
-    @MainActor
-    private func refreshPeriodSummaryFromShared() {
-        let range = reportDateRange
-        let shared = WarningsService.shared
-        periodHighCount = shared.operativeBookingClashes(in: range).count
-            + shared.unresolvedManagerClashes(in: range).count
-            + shared.approvedManagerClashes(in: range).count
-            + shared.unbookedLabourWarnings(in: range).count
-        periodMediumCount = 0
-        periodLowCount = shared.materialsCutoffWarnings(in: range).count
-        periodSummaryReady = true
+        print("🔥🔥🔥 DEBUG: WEEKLY_REPORT period scan high=\(periodHighCount) medium=\(periodMediumCount) approved=\(service.approvedManagerClashes(in: range, source: .period).count)")
+        return true
     }
 
     private var thisWeekRange: (start: Date, end: Date) {
@@ -817,10 +838,8 @@ struct WeeklyReportView: View {
         let range = reportDateRange
         print("🔥🔥🔥 DEBUG: WEEKLY_REPORT generate \(String(describing: quickRange)) \(range.lowerBound) \(range.upperBound)")
         Task {
-            // REBUILD: never period-scan on Generate. Use Warnings live cache only.
-            await refreshReportWarnings()
-            let hasLiveCache = await MainActor.run { WarningsService.shared.hasCompletedLiveDetection }
-            guard hasLiveCache else {
+            // The report's own range is scanned (§7); the live Warnings window is not used.
+            guard await refreshReportWarnings() else {
                 await MainActor.run { isGenerating = false }
                 return
             }

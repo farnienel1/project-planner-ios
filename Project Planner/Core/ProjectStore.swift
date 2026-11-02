@@ -570,13 +570,6 @@ class ProjectStore: ObservableObject {
         }
     }
 
-    private func replaceProjectsPreservingSmallWorks(_ loadedProjects: [Project]) {
-        guard !loadedProjects.isEmpty else { return }
-        let smallWorks = self.projects.filter { $0.jobType == .smallWorks }
-        let remoteProjects = loadedProjects.filter { $0.jobType != .smallWorks }
-        self.projects = ProjectWorksMerge.uniqueWorks(remoteProjects + smallWorks)
-    }
-
     private func withTimeout<T>(seconds: Double, operation: @escaping () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
             group.addTask {
@@ -707,63 +700,8 @@ class ProjectStore: ObservableObject {
             throw error
         }
         
-        // CRITICAL: Reload data immediately after save to ensure it's persisted
-        print("🔥🔥🔥 DEBUG: Reloading data to verify project was saved...")
-        if let firebaseBackend = firebaseBackend,
-           firebaseBackend.isAuthenticated,
-           let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-            do {
-                // Wait a brief moment for Firebase to propagate
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                
-                // Reload projects from Firebase
-                let loadedProjects = try await firebaseBackend.loadProjects(organizationId: organizationId)
-                print("🔥🔥🔥 DEBUG: Reloaded \(loadedProjects.count) projects from Firebase")
-                
-                // Check if our project is in the loaded list
-                let verified = loadedProjects.contains { $0.id == project.id }
-                if verified {
-                    print("🔥🔥🔥 DEBUG: ✅✅✅ VERIFIED: Project \(project.siteName) was saved and loaded successfully!")
-                    replaceProjectsPreservingSmallWorks(loadedProjects)
-                } else {
-                    print("🔥🔥🔥 DEBUG: ⚠️⚠️⚠️ WARNING: Project save verification failed!")
-                    print("🔥🔥🔥 DEBUG: Project ID we're looking for: \(project.id.uuidString)")
-                    print("🔥🔥🔥 DEBUG: Loaded project IDs: \(loadedProjects.map { $0.id.uuidString }.joined(separator: ", "))")
-                    print("🔥🔥🔥 DEBUG: Retrying save...")
-                    // Retry save
-                    let retryResult = await saveDataWithRetry(.createWork(project), description: "re-saving project \(project.siteName) after verification failure")
-                    
-                    switch retryResult {
-                    case .success:
-                        // Reload again after retry
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                        let retryLoadedProjects = try await firebaseBackend.loadProjects(organizationId: organizationId)
-                        replaceProjectsPreservingSmallWorks(retryLoadedProjects)
-                        if retryLoadedProjects.contains(where: { $0.id == project.id }) {
-                            print("🔥🔥🔥 DEBUG: ✅ Project saved successfully after retry!")
-                        } else {
-                            print("🔥🔥🔥 DEBUG: ❌❌❌ CRITICAL: Project still not found after retry!")
-                            throw NSError(domain: "ProjectStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Project could not be verified in Firebase after save"])
-                        }
-                    case .failure(let error):
-                        print("🔥🔥🔥 DEBUG: ❌ Retry save failed: \(error.localizedDescription)")
-                        throw error
-                    }
-                }
-            } catch {
-                print("🔥🔥🔥 DEBUG: ❌ Could not verify project save: \(error.localizedDescription)")
-                print("🔥🔥🔥 DEBUG: Error type: \(type(of: error))")
-                let nsError = error as NSError
-                print("🔥🔥🔥 DEBUG: Error domain: \(nsError.domain), code: \(nsError.code)")
-                // Don't throw here - save may have succeeded even if verification failed
-            }
-        } else {
-            print("🔥🔥🔥 DEBUG: ⚠️ Cannot verify save - Firebase not available or not authenticated")
-            print("🔥🔥🔥 DEBUG: Firebase backend: \(firebaseBackend != nil)")
-            print("🔥🔥🔥 DEBUG: Authenticated: \(firebaseBackend?.isAuthenticated ?? false)")
-            print("🔥🔥🔥 DEBUG: Organization: \(firebaseBackend?.currentOrganization?.name ?? "nil")")
-            // If Firebase is not available, save should have already thrown an error
-        }
+        // A create writes once. The live projects listener shows the saved job; no sleep, reload or re-save (a
+        // second create could re-create a job deleted on another device in between).
         print("🔥🔥🔥 DEBUG: ========== ADD PROJECT END ==========")
     }
     
@@ -872,70 +810,7 @@ class ProjectStore: ObservableObject {
             throw error
         }
         
-        // CRITICAL: Reload data immediately after save to ensure it's persisted
-        print("🔥🔥🔥 DEBUG: Reloading data to verify small works was saved...")
-        do {
-            // Wait a brief moment for Firebase to propagate
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-            
-            // Reload small works from Firebase
-            let loadedSmallWorks = try await firebaseBackend.loadSmallWorks(organizationId: organizationId)
-            print("🔥🔥🔥 DEBUG: Reloaded \(loadedSmallWorks.count) small works from Firebase")
-            
-            // Check if our small works is in the loaded list
-            let verified = loadedSmallWorks.contains { $0.id == smallWork.id }
-            if verified {
-                print("🔥🔥🔥 DEBUG: ✅✅✅ VERIFIED: Small Works \(smallWork.siteName) was saved and loaded successfully!")
-                if !loadedSmallWorks.isEmpty {
-                    let currentProjects = projects.filter { $0.jobType != .smallWorks }
-                    self.projects = currentProjects + loadedSmallWorks
-                }
-            } else {
-                print("🔥🔥🔥 DEBUG: ⚠️⚠️⚠️ WARNING: Small Works save verification failed!")
-                print("🔥🔥🔥 DEBUG: Small Works ID we're looking for: \(smallWork.id.uuidString)")
-                print("🔥🔥🔥 DEBUG: Loaded small works IDs: \(loadedSmallWorks.map { $0.id.uuidString }.joined(separator: ", "))")
-                print("🔥🔥🔥 DEBUG: Retrying save...")
-                // Retry save directly
-                let retryResult = await DataPersistenceManager.shared.saveWithRetry(
-                    operation: {
-                        try await firebaseBackend.saveSmallWorks(smallWork, organizationId: organizationId, mode: .create)
-                    },
-                    description: "re-saving small works \(smallWork.siteName) after verification failure",
-                    onSuccess: { _ in
-                        print("🔥🔥🔥 DEBUG: ✅ Retry save successful")
-                    },
-                    onFailure: { error in
-                        print("🔥🔥🔥 DEBUG: ❌ Retry save failed: \(error.localizedDescription)")
-                    }
-                )
-                
-                switch retryResult {
-                case .success:
-                    // Reload again after retry
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    let retryLoadedSmallWorks = try await firebaseBackend.loadSmallWorks(organizationId: organizationId)
-                    if !retryLoadedSmallWorks.isEmpty {
-                        let currentProjects = projects.filter { $0.jobType != .smallWorks }
-                        self.projects = currentProjects + retryLoadedSmallWorks
-                    }
-                    if retryLoadedSmallWorks.contains(where: { $0.id == smallWork.id }) {
-                        print("🔥🔥🔥 DEBUG: ✅ Small Works saved successfully after retry!")
-                    } else {
-                        print("🔥🔥🔥 DEBUG: ❌❌❌ CRITICAL: Small Works still not found after retry!")
-                        throw NSError(domain: "ProjectStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Small Works could not be verified in Firebase after save"])
-                    }
-                case .failure(let error):
-                    print("🔥🔥🔥 DEBUG: ❌ Retry save failed: \(error.localizedDescription)")
-                    throw error
-                }
-            }
-        } catch {
-            print("🔥🔥🔥 DEBUG: ❌ Could not verify small works save: \(error.localizedDescription)")
-            print("🔥🔥🔥 DEBUG: Error type: \(type(of: error))")
-            let nsError = error as NSError
-            print("🔥🔥🔥 DEBUG: Error domain: \(nsError.domain), code: \(nsError.code)")
-            // Don't throw here - save may have succeeded even if verification failed
-        }
+        // A create writes once. The live small works listener shows the saved job; no sleep, reload or re-save.
         print("🔥🔥🔥 DEBUG: ========== ADD SMALL WORKS END ==========")
     }
     

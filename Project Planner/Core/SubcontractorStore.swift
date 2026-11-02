@@ -82,14 +82,14 @@ class SubcontractorStore: ObservableObject {
         isLoading = false
     }
     
-    func saveSubcontractor(_ subcontractor: Subcontractor) async {
+    func saveSubcontractor(_ subcontractor: Subcontractor, mode: RecordSaveMode) async {
         guard let firebaseBackend,
               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             errorMessage = "Organization is not loaded yet. Please try again."
             return
         }
         do {
-            try await firebaseBackend.saveSubcontractor(subcontractor, organizationId: orgId)
+            try await firebaseBackend.saveSubcontractor(subcontractor, organizationId: orgId, mode: mode)
             if let idx = subcontractors.firstIndex(where: { $0.id == subcontractor.id }) {
                 subcontractors[idx] = subcontractor
             } else {

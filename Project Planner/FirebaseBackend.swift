@@ -2340,10 +2340,17 @@ class FirebaseBackend: ObservableObject {
     /// RULEBOOK 1.7.0 §2: deleting a job removes its bookings from today on (`bookingsToRemoveOnProjectDelete`),
     /// each with its tombstone (`deleteBookingWithTombstone`); past bookings stay for timesheets and reports. A
     /// booking the rules refuse to delete (labour booking deletes are admin only) is logged and left in place.
+    /// Bookings are found under every spelling of the job id (stored, upper-case UUID older builds wrote, lower
+    /// case web wrote), like materials (`JobKeys.queryValues`); the rulebook then matches ids without case.
     private func removeFutureBookingsOfDeletedJob(_ job: Project, organizationId: String) async {
         do {
+            var lookup: [String] = []
+            for value in JobKeys.queryValues(for: job.id) + [job.documentId, job.documentId.uppercased(), job.documentId.lowercased()]
+            where !value.isEmpty && !lookup.contains(value) {
+                lookup.append(value)
+            }
             let snapshot = try await db.collection("organizations").document(organizationId).collection("bookings")
-                .whereField("projectId", isEqualTo: job.documentId)
+                .whereField("projectId", in: lookup)
                 .getDocuments()
             let bookings = bookingsFromFirestoreDocuments(snapshot.documents)
             guard !bookings.isEmpty,
@@ -2990,13 +2997,13 @@ class FirebaseBackend: ObservableObject {
         payload: [String: Any],
         previousPayload: [String: Any]?,
         writeFields: String = "operativeRowWriteFields",
-        mode: RecordSaveMode? = nil
+        mode: RecordSaveMode
     ) async throws {
         let uid = auth.currentUser?.uid
         let snapshot = try await ref.getDocument(source: .server)
         let storedData = snapshot.exists ? snapshot.data() : nil
         // An edit (`mode: .update`) of a document that is gone was deleted on another device: refuse it and never
-        // re-create it with setData. Only a genuine create (`.create`), or the legacy upsert (nil), creates.
+        // re-create it with setData. Only a genuine create (`.create`) creates.
         switch RecordWritePlan.action(mode: mode, documentExists: storedData != nil) {
         case .refuseDeletedElsewhere:
             throw RecordDeletedElsewhereError(collection: ref.parent.collectionID, documentId: ref.documentID)
@@ -7542,6 +7549,21 @@ class FirebaseBackend: ObservableObject {
     @discardableResult
     func saveHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws -> HolidayBooking {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
+        let create = try Self.holidayRequestCreate(booking, organizationId: orgId)
+        let data: [String: Any] = WriteMetadata.stamped(
+            create.fields.mapValues(\.firestoreValue),
+            userId: auth.currentUser?.uid
+        )
+        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(create.documentId).setData(data)
+        return create.stored
+    }
+
+    /// The new leave request document (`holidayRequestWriteFields`, §9) as outbox values, so the online write and an
+    /// offline queued create (RULEBOOK §2) send the same fields. `stored` is the booking as saved.
+    static func holidayRequestCreate(
+        _ booking: HolidayBooking,
+        organizationId orgId: String
+    ) throws -> (documentId: String, fields: [String: OfflineFieldValue], stored: HolidayBooking) {
         guard let fields = CanonicalBusinessEngine.holidayRequestWriteFields(
             id: booking.documentId,
             organizationId: orgId,
@@ -7556,23 +7578,22 @@ class FirebaseBackend: ObservableObject {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "This annual leave request is not complete."])
         }
         let isApproved = fields.status == HolidayStatus.approved.rawValue
-        let data: [String: Any] = WriteMetadata.stamped([
-            "id": fields.id,
-            "organizationId": fields.organizationId,
-            "userId": fields.userId.map { $0 as Any } ?? NSNull(),
-            "operativeId": fields.operativeId.map { $0 as Any } ?? NSNull(),
-            "startDate": Timestamp(date: fields.startDate),
-            "endDate": Timestamp(date: fields.endDate),
-            "status": fields.status,
-            "timeSlot": fields.timeSlot,
-            "approvedByUserId": fields.approvedByUserId.map { $0 as Any } ?? NSNull(),
-            "approvedAt": isApproved ? (FieldValue.serverTimestamp() as Any) : (NSNull() as Any),
-            "cancellationRequestedAt": NSNull(),
-            "cancellationRequestedByUserId": NSNull(),
-            "decisionNote": NSNull(),
-            "createdAt": FieldValue.serverTimestamp(),
-        ], userId: auth.currentUser?.uid)
-        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(fields.id).setData(data)
+        let data: [String: OfflineFieldValue] = [
+            "id": .string(fields.id),
+            "organizationId": .string(fields.organizationId),
+            "userId": fields.userId.map { .string($0) } ?? .null,
+            "operativeId": fields.operativeId.map { .string($0) } ?? .null,
+            "startDate": .date(fields.startDate),
+            "endDate": .date(fields.endDate),
+            "status": .string(fields.status),
+            "timeSlot": .string(fields.timeSlot),
+            "approvedByUserId": fields.approvedByUserId.map { .string($0) } ?? .null,
+            "approvedAt": isApproved ? .serverTimestamp : .null,
+            "cancellationRequestedAt": .null,
+            "cancellationRequestedByUserId": .null,
+            "decisionNote": .null,
+            "createdAt": .serverTimestamp,
+        ]
         var stored = booking
         stored.organizationId = fields.organizationId
         stored.startDate = fields.startDate
@@ -7584,7 +7605,7 @@ class FirebaseBackend: ObservableObject {
         stored.cancellationRequestedAt = nil
         stored.cancellationRequestedByUserId = nil
         stored.decisionNote = nil
-        return stored
+        return (fields.id, data, stored)
     }
 
     /// Partial update of an existing leave document: only `fields` plus `WriteMetadata` (§1).
@@ -8728,7 +8749,7 @@ extension FirebaseBackend {
             createdByUserId: currentUser?.uid ?? material.addedByUserId ?? "unknown",
             createdByName: creatorName
         )
-        try await saveMaterialCatalogueItem(catalogItem, organizationId: organizationId)
+        try await saveMaterialCatalogueItem(catalogItem, organizationId: organizationId, mode: .create)
     }
 
     func backfillMaterialCatalogueFromExistingMaterials(organizationId: String) async throws {
@@ -8763,7 +8784,7 @@ extension FirebaseBackend {
                 createdByUserId: currentUser?.uid ?? material.addedByUserId ?? "unknown",
                 createdByName: creatorName
             )
-            try? await saveMaterialCatalogueItem(entry, organizationId: orgId)
+            try? await saveMaterialCatalogueItem(entry, organizationId: orgId, mode: .create)
             knownKeys.insert(key)
         }
     }
@@ -8889,49 +8910,6 @@ extension FirebaseBackend {
         try await docRef.delete()
     }
     
-    /// Deletes materials for **this project only** whose **needed** `date` is older than `keepDays` before today. Other jobs in the org are untouched.
-    func cleanupOldMaterials(organizationId: String, projectId: UUID, keepDays: Int) async throws {
-        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
-        // RULEBOOK 1.8.0 §1: the needed day is the line's organisation-zone `dayKey` (`parseMaterialLineDocument`).
-        let calendar = OrganizationRulebookContext.calendar
-        let today = Date()
-        let cutoffDayKey = OrganizationRulebookContext.dayKey(
-            calendar.date(byAdding: .day, value: -keepDays, to: today) ?? today
-        )
-        
-        let snapshot = try await db.collection("organizations").document(orgId)
-            .collection("materials")
-            .whereField("projectId", in: JobKeys.queryValues(for: projectId))
-            .getDocuments()
-        
-        let toDelete = snapshot.documents.filter { doc in
-            guard let dayKey = CanonicalBusinessEngine.parseMaterialLineDocument(documentId: doc.documentID, data: doc.data())?
-                .optionalText("dayKey") else { return false }
-            return dayKey < cutoffDayKey
-        }
-        
-        var batch = db.batch()
-        var batchCount = 0
-        let maxBatchSize = 500 // Firestore batch limit
-        
-        for doc in toDelete {
-            batch.deleteDocument(doc.reference)
-            batchCount += 1
-            
-            if batchCount >= maxBatchSize {
-                try await batch.commit()
-                batch = db.batch()
-                batchCount = 0
-            }
-        }
-        
-        if batchCount > 0 {
-            try await batch.commit()
-        }
-        
-        print("🧹 [materials] Project \(projectId): removed \(toDelete.count) rows older than \(keepDays) days (needed date)")
-    }
-
     // MARK: - Site Audits
 
     /// Resolves the org document id for Firestore paths, preferring `users/{uid}.organizationId` from the server
@@ -9240,7 +9218,9 @@ extension FirebaseBackend {
     
     // MARK: - Subcontractors
     
-    func saveSubcontractor(_ subcontractor: Subcontractor, organizationId: String) async throws {
+    /// `mode` says whether this is a new firm (`.create`) or an edit of one already saved (`.update`): an edit of a
+    /// firm deleted on another device is refused (`RecordDeletedElsewhereError`), never re-created.
+    func saveSubcontractor(_ subcontractor: Subcontractor, organizationId: String, mode: RecordSaveMode) async throws {
         let contactsData = subcontractor.contacts.map { contact in
             [
                 "id": WorkDocumentKeys.storedId(for: contact.id),
@@ -9269,7 +9249,7 @@ extension FirebaseBackend {
         let ref = db.collection("organizations").document(organizationId)
             .collection("subcontractors")
             .document(subcontractor.documentId)
-        try await writeChangedRosterRow(ref, payload: data, previousPayload: nil, writeFields: "subcontractorWriteFields")
+        try await writeChangedRosterRow(ref, payload: data, previousPayload: nil, writeFields: "subcontractorWriteFields", mode: mode)
 
         let extraTrades = subcontractor.contacts.map(\.displayTrade) + [subcontractor.subcontractorType]
         try? await mergeOrganizationTradeTypes(extraTrades, organizationId: organizationId)
@@ -9487,8 +9467,9 @@ extension FirebaseBackend {
     }
 
     /// RULEBOOK 1.8.0 §1: one catalogue item saved as a partial update (`materialCatalogueItemWriteFields`; creator
-    /// fields and `createdAt` never rewritten), or created whole when it is new.
-    func saveMaterialCatalogueItem(_ item: MaterialCatalogItem, organizationId: String) async throws {
+    /// fields and `createdAt` never rewritten), or created whole when it is new (`mode: .create`). An edit
+    /// (`mode: .update`) of an item deleted on another device is refused, never re-created.
+    func saveMaterialCatalogueItem(_ item: MaterialCatalogItem, organizationId: String, mode: RecordSaveMode) async throws {
         let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
         guard let payload = Self.materialCatalogueItemPayload(item) else {
             throw CanonicalWriteUnavailableError(function: "materialCatalogueItemFields")
@@ -9496,7 +9477,7 @@ extension FirebaseBackend {
         let ref = db.collection("organizations").document(orgId)
             .collection("materialCatalogue")
             .document(WorkDocumentKeys.storedId(for: item.id))
-        try await writeChangedRosterRow(ref, payload: payload, previousPayload: nil, writeFields: "materialCatalogueItemWriteFields")
+        try await writeChangedRosterRow(ref, payload: payload, previousPayload: nil, writeFields: "materialCatalogueItemWriteFields", mode: mode)
     }
 
     func deleteMaterialCatalogueItem(_ itemId: UUID, organizationId: String) async throws {

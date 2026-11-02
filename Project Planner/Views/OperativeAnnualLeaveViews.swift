@@ -467,8 +467,32 @@ private struct OperativeAnnualLeaveRequestsListView: View {
     }
 
     private func decline(_ request: HolidayBooking) {
-        if request.cancellationRequestedAt != nil { return }
         guard let uid = firebaseBackend.currentUser?.uid, canDecide(request) else { return }
+        if request.cancellationRequestedAt != nil {
+            // Refuse the cancellation (§9): the leave stays approved; the requester is told
+            // (`holidayDecisionRecipients`) and the other line managers (`lineManagerPeerRecipients`).
+            Task {
+                guard await holidayStore.refuseCancellation(request) else { return }
+                let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
+                if let ownerId = request.userId {
+                    await notificationService.notifyAnnualLeaveCancellationRefused(
+                        userId: ownerId,
+                        booking: request,
+                        decidedByName: approverName
+                    )
+                }
+                await notifyAnnualLeavePeerManagers(
+                    request: request,
+                    actorUserId: uid,
+                    actorName: approverName,
+                    actionVerb: "declined",
+                    users: userStore.organizationUsers,
+                    operatives: operativeStore.allOperatives,
+                    notificationService: notificationService
+                )
+            }
+            return
+        }
         Task {
             await holidayStore.rejectBooking(request, rejectedByUserId: uid)
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"

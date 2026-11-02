@@ -84,10 +84,11 @@ final class MaterialCatalogStore: ObservableObject {
         }
     }
 
-    func save(_ item: MaterialCatalogItem) async throws {
+    /// `mode`: `.create` for a new catalogue item, `.update` for an edit (refused if the item was deleted elsewhere).
+    func save(_ item: MaterialCatalogItem, mode: RecordSaveMode) async throws {
         guard let firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        try await firebaseBackend.saveMaterialCatalogueItem(item, organizationId: organizationId)
+        try await firebaseBackend.saveMaterialCatalogueItem(item, organizationId: organizationId, mode: mode)
         if let index = items.firstIndex(where: { $0.id == item.id }) {
             items[index] = item
         } else {
