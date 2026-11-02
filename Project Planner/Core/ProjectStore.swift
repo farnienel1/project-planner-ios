@@ -78,25 +78,10 @@ class ProjectStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ProjectStore ignoring organizationDidLoad reload (bootstrap owns loads)")
             }
         }
-        
-        // Listen for offline sync trigger (when app comes back online)
-        NotificationCenter.default.addObserver(
-            forName: .syncOfflineChanges,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else {
-                    print("🔥🔥🔥 DEBUG: ProjectStore offline sync skipped until org bootstrap finishes")
-                    return
-                }
-                print("🔥🔥🔥 DEBUG: ProjectStore received syncOfflineChanges notification - syncing all data to Firebase")
-                if !self.projects.isEmpty || !self.clients.isEmpty {
-                    _ = await self.saveDataWithRetry(description: "syncing offline changes to Firebase")
-                }
-            }
-        }
+
+        // No `.syncOfflineChanges` observer: projects, small works and clients are online-only edits
+        // (RULEBOOK §2), so there is nothing to replay. Re-saving every in-memory record on foreground
+        // overwrote web edits from a stale copy and re-created jobs and clients deleted on web.
     }
     
     deinit {
@@ -623,7 +608,7 @@ class ProjectStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: Current projects count after adding: \(projects.count)")
         
         // CRITICAL: Save immediately with retry logic and check result
-        let saveResult = await saveDataWithRetry(description: "adding project \(project.siteName)")
+        let saveResult = await saveDataWithRetry(.createWork(project), description: "adding project \(project.siteName)")
         
         // Check if save was successful
         switch saveResult {
@@ -669,7 +654,7 @@ class ProjectStore: ObservableObject {
                     print("🔥🔥🔥 DEBUG: Loaded project IDs: \(loadedProjects.map { $0.id.uuidString }.joined(separator: ", "))")
                     print("🔥🔥🔥 DEBUG: Retrying save...")
                     // Retry save
-                    let retryResult = await saveDataWithRetry(description: "re-saving project \(project.siteName) after verification failure")
+                    let retryResult = await saveDataWithRetry(.createWork(project), description: "re-saving project \(project.siteName) after verification failure")
                     
                     switch retryResult {
                     case .success:
@@ -777,7 +762,7 @@ class ProjectStore: ObservableObject {
         // CRITICAL: Save Small Works directly to Firebase (same pattern as addProject)
         let saveResult = await DataPersistenceManager.shared.saveWithRetry(
             operation: {
-                try await firebaseBackend.saveSmallWorks(smallWork, organizationId: organizationId)
+                try await firebaseBackend.saveSmallWorks(smallWork, organizationId: organizationId, mode: .create)
             },
             description: "saving small works \(smallWork.siteName)",
             onSuccess: { _ in
@@ -834,7 +819,7 @@ class ProjectStore: ObservableObject {
                 // Retry save directly
                 let retryResult = await DataPersistenceManager.shared.saveWithRetry(
                     operation: {
-                        try await firebaseBackend.saveSmallWorks(smallWork, organizationId: organizationId)
+                        try await firebaseBackend.saveSmallWorks(smallWork, organizationId: organizationId, mode: .create)
                     },
                     description: "re-saving small works \(smallWork.siteName) after verification failure",
                     onSuccess: { _ in
@@ -877,11 +862,11 @@ class ProjectStore: ObservableObject {
     
     func updateProject(_ project: Project) async {
         if let index = projects.firstIndex(where: { $0.id == project.id }) {
+            let previous = projects[index]
             projects[index] = project
-            // CRITICAL: Save immediately with retry logic
-            // The saveDataInternal function will automatically route to the correct collection
-            // based on jobType (projects vs smallWorks)
-            _ = await saveDataWithRetry(description: "updating \(project.jobType == .smallWorks ? "small works" : "project") \(project.siteName)")
+            // Saves only this job, and only the fields changed from the copy it was edited from
+            // (routed to projects or smallWorks by jobType).
+            _ = await saveDataWithRetry(.updateWork(project, previous: previous), description: "updating \(project.jobType == .smallWorks ? "small works" : "project") \(project.siteName)")
         }
     }
     
@@ -913,14 +898,15 @@ class ProjectStore: ObservableObject {
         }
         
         // CRITICAL: Save state immediately
-        _ = await saveDataWithRetry(description: "saving state after deleting \(project.jobType == .smallWorks ? "small works" : "project") \(projectName)")
+        _ = await saveDataWithRetry(.localOnly, description: "saving state after deleting \(project.jobType == .smallWorks ? "small works" : "project") \(projectName)")
     }
     
     func toggleProjectStatus(_ project: Project) async {
         if let index = projects.firstIndex(where: { $0.id == project.id }) {
+            let previous = projects[index]
             projects[index].isLive.toggle()
-            // CRITICAL: Save immediately with retry logic
-            _ = await saveDataWithRetry(description: "toggling project status for \(project.siteName)")
+            // Writes only `isLive` (+ metadata) on this job.
+            _ = await saveDataWithRetry(.updateWork(projects[index], previous: previous), description: "toggling project status for \(project.siteName)")
         }
     }
     
@@ -932,7 +918,7 @@ class ProjectStore: ObservableObject {
         clients.append(client)
         print("🔥🔥🔥 DEBUG: Current clients count after adding: \(clients.count)")
         
-        let saveResult = await saveDataWithRetry(description: "adding client \(client.name)")
+        let saveResult = await saveDataWithRetry(.createClient(client), description: "adding client \(client.name)")
         if case .success = saveResult,
            firebaseBackend?.isAuthenticated == true,
            firebaseBackend?.currentOrganization != nil {
@@ -946,9 +932,10 @@ class ProjectStore: ObservableObject {
     
     func updateClient(_ client: Client) async {
         if let index = clients.firstIndex(where: { $0.id == client.id }) {
+            let previous = clients[index]
             clients[index] = client
-            // CRITICAL: Save immediately with retry logic
-            _ = await saveDataWithRetry(description: "updating client \(client.name)")
+            // Only this client, only the fields changed from the copy it was edited from.
+            _ = await saveDataWithRetry(.updateClient(client, previous: previous), description: "updating client \(client.name)")
         }
     }
     
@@ -975,7 +962,7 @@ class ProjectStore: ObservableObject {
         }
         
         // CRITICAL: Save state immediately
-        _ = await saveDataWithRetry(description: "saving state after deleting client \(clientName)")
+        _ = await saveDataWithRetry(.localOnly, description: "saving state after deleting client \(clientName)")
     }
     
     // MARK: - Computed Properties
@@ -1015,10 +1002,10 @@ class ProjectStore: ObservableObject {
     // MARK: - Persistence
     
     /// Save data with retry logic - ensures data is never lost
-    private func saveDataWithRetry(description: String = "saving project data") async -> Result<Void, Error> {
+    private func saveDataWithRetry(_ changes: ProjectStoreChangeSet, description: String = "saving project data") async -> Result<Void, Error> {
         return await DataPersistenceManager.shared.saveWithRetry(
             operation: {
-                try await self.saveDataInternal()
+                try await self.saveDataInternal(changes)
             },
             description: description,
             onSuccess: { _ in
@@ -1032,108 +1019,84 @@ class ProjectStore: ObservableObject {
         )
     }
     
-    /// Internal save implementation
+    /// Local cache only — nothing is written to Firestore.
     private func saveData() async {
-        _ = await saveDataWithRetry(description: "saving project data")
+        _ = await saveDataWithRetry(.localOnly, description: "saving project data locally")
     }
     
-    /// Internal save implementation (actual save logic)
-    private func saveDataInternal() async throws {
-        print("🔥🔥🔥 DEBUG: ProjectStore.saveData() called")
-        print("🔥🔥🔥 DEBUG: Number of projects to save: \(projects.count)")
-        print("🔥🔥🔥 DEBUG: Number of clients to save: \(clients.count)")
-        
+    /// Writes the local cache, then only the records `changes` names (RULEBOOK §1 partial writes). The rest of
+    /// the in-memory list is never re-saved: it may be a stale copy of what web has since edited or deleted.
+    private func saveDataInternal(_ changes: ProjectStoreChangeSet) async throws {
+        print("🔥🔥🔥 DEBUG: ProjectStore.saveData() — \(changes.works.count) job(s), \(changes.clients.count) client(s) changed")
+
         do {
             // Save to local storage
             try await persistenceService.saveProjectData(projects: projects, clients: clients)
-            print("🔥🔥🔥 DEBUG: Projects and clients saved to local storage")
-            
+            guard !changes.isEmpty else { return }
+
             // CRITICAL: Wait for organization to load before saving to Firebase
-            // This ensures we never save locally when Firebase is available but org isn't ready
             let organizationId = await DataPersistenceManager.shared.waitForOrganization(
                 firebaseBackend: firebaseBackend,
                 maxWaitSeconds: 15
             )
-            
-            if let organizationId = organizationId,
-               let firebaseBackend = firebaseBackend {
-                print("🔥🔥🔥 DEBUG: Organization ID: \(organizationId)")
-                
-                // Verify and fix user document organizationId before saving
-                if let userId = firebaseBackend.currentUser?.uid,
-                   let userEmail = firebaseBackend.currentUser?.email {
-                    // Try to ensure user document has organizationId
-                    let recovered = await firebaseBackend.recoverMissingOrganizationLink(userId: userId, userEmail: userEmail)
-                    if recovered {
-                        print("🔥🔥🔥 DEBUG: ✅ Recovered organization link for user")
-                        // Reload organization to ensure it's set
-                        await firebaseBackend.loadUserOrganization(userId: userId)
-                    }
-                }
-                
-                // Before saving, attempt to repair membership/linking so writes are authorized.
-                await firebaseBackend.repairCurrentUserOrganizationAccess(organizationId: organizationId)
 
-                // Save projects to Firebase (excluding small works - they have their own collection)
-                var projectSaveErrors: [String] = []
-                let regularProjects = projects.filter { $0.jobType != .smallWorks }
-                for project in regularProjects {
-                    do {
-                        try await firebaseBackend.saveProject(project, organizationId: organizationId)
-                        print("🔥🔥🔥 DEBUG: Successfully saved project \(project.siteName) to Firebase")
-                    } catch {
-                        let errorMsg = "Error saving project \(project.siteName) to Firebase: \(error.localizedDescription)"
-                        print("🔥🔥🔥 DEBUG: \(errorMsg)")
-                        projectSaveErrors.append(errorMsg)
+            guard let organizationId, let firebaseBackend else {
+                print("🔥🔥🔥 DEBUG: ⚠️ Saved locally only (Firebase not available or organisation not loaded)")
+                return
+            }
+
+            // Verify and fix user document organizationId before saving
+            if let userId = firebaseBackend.currentUser?.uid,
+               let userEmail = firebaseBackend.currentUser?.email {
+                let recovered = await firebaseBackend.recoverMissingOrganizationLink(userId: userId, userEmail: userEmail)
+                if recovered {
+                    await firebaseBackend.loadUserOrganization(userId: userId)
+                }
+            }
+            await firebaseBackend.repairCurrentUserOrganizationAccess(organizationId: organizationId)
+
+            var saveErrors: [String] = []
+            var deletedElsewhere = false
+
+            for item in changes.worksToSave(from: projects) {
+                let work = item.work
+                do {
+                    if work.jobType == .smallWorks {
+                        // Small works have their own collection.
+                        try await firebaseBackend.saveSmallWorks(work, organizationId: organizationId, mode: item.mode, previous: item.previous)
+                    } else {
+                        try await firebaseBackend.saveProject(work, organizationId: organizationId, mode: item.mode, previous: item.previous)
                     }
+                } catch is RecordDeletedElsewhereError {
+                    // Never re-created: drop the local row and say why.
+                    projects.removeAll { $0.id == work.id }
+                    deletedElsewhere = true
+                } catch {
+                    saveErrors.append("Error saving \(work.siteName): \(error.localizedDescription)")
                 }
-                
-                // Save small works to separate collection
-                var smallWorksSaveErrors: [String] = []
-                let smallWorksProjects = projects.filter { $0.jobType == .smallWorks }
-                for smallWork in smallWorksProjects {
-                    do {
-                        try await firebaseBackend.saveSmallWorks(smallWork, organizationId: organizationId)
-                        print("🔥🔥🔥 DEBUG: Successfully saved small works \(smallWork.siteName) to Firebase")
-                    } catch {
-                        let errorMsg = "Error saving small works \(smallWork.siteName) to Firebase: \(error.localizedDescription)"
-                        print("🔥🔥🔥 DEBUG: \(errorMsg)")
-                        smallWorksSaveErrors.append(errorMsg)
-                    }
+            }
+
+            for item in changes.clientsToSave(from: clients) {
+                do {
+                    try await firebaseBackend.saveClient(item.client, organizationId: organizationId, mode: item.mode, previous: item.previous)
+                } catch is RecordDeletedElsewhereError {
+                    clients.removeAll { $0.id == item.client.id }
+                    deletedElsewhere = true
+                } catch {
+                    saveErrors.append("Error saving client \(item.client.name): \(error.localizedDescription)")
                 }
-                
-                // Save clients to Firebase
-                var clientSaveErrors: [String] = []
-                for client in clients {
-                    do {
-                        try await firebaseBackend.saveClient(client, organizationId: organizationId)
-                        print("🔥🔥🔥 DEBUG: Successfully saved client \(client.name) to Firebase")
-                    } catch {
-                        let errorMsg = "Error saving client \(client.name) to Firebase: \(error.localizedDescription)"
-                        print("🔥🔥🔥 DEBUG: \(errorMsg)")
-                        clientSaveErrors.append(errorMsg)
-                    }
-                }
-                
-                // Job types are not written here. `settings/jobTypes` is admins and managers only
-                // (RULEBOOK §16), so a project save by anyone else was refused. They are written only
-                // when Job Types Management edits them (`saveJobTypesCatalogue`).
-                
-                if !projectSaveErrors.isEmpty || !smallWorksSaveErrors.isEmpty || !clientSaveErrors.isEmpty {
-                    let allErrors = projectSaveErrors + smallWorksSaveErrors + clientSaveErrors
-                    let joined = allErrors.joined(separator: "; ")
-                    print("🔥🔥🔥 DEBUG: Some Firebase saves failed: \(joined)")
-                    // Keep local state without forcing retry storms on partial/permission failures.
-                    self.errorMessage = "Some cloud saves failed. Local data is kept."
-                } else {
-                    print("🔥🔥🔥 DEBUG: Successfully saved \(regularProjects.count) projects, \(smallWorksProjects.count) small works, and \(clients.count) clients to Firebase")
-                }
-            } else {
-                print("🔥🔥🔥 DEBUG: Saved \(projects.count) projects and \(clients.count) clients locally (Firebase not available or not authenticated)")
-                print("🔥🔥🔥 DEBUG: Firebase backend: \(firebaseBackend != nil)")
-                print("🔥🔥🔥 DEBUG: Authenticated: \(firebaseBackend?.isAuthenticated ?? false)")
-                print("🔥🔥🔥 DEBUG: Organization: \(firebaseBackend?.currentOrganization?.name ?? "nil")")
-                print("🔥🔥🔥 DEBUG: ⚠️ Local-only save mode active. Data is saved locally and will sync when Firebase org access is restored.")
+            }
+
+            // Job types are not written here. `settings/jobTypes` is admins and managers only
+            // (RULEBOOK §16); they are written only when Job Types Management edits them (`saveJobTypesCatalogue`).
+
+            if deletedElsewhere {
+                errorMessage = RecordDeletedElsewhereError.message
+                try? await persistenceService.saveProjectData(projects: projects, clients: clients)
+            } else if !saveErrors.isEmpty {
+                print("🔥🔥🔥 DEBUG: Some Firebase saves failed: \(saveErrors.joined(separator: "; "))")
+                // Keep local state without forcing retry storms on partial/permission failures.
+                self.errorMessage = "Some cloud saves failed. Local data is kept."
             }
         } catch {
             errorMessage = "Failed to save data: \(error.localizedDescription)"
@@ -1141,7 +1104,7 @@ class ProjectStore: ObservableObject {
             throw error
         }
     }
-    
+
     func clearAllData() async {
         projects.removeAll()
         clients.removeAll()
