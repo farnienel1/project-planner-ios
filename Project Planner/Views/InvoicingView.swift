@@ -510,7 +510,7 @@ struct InvoicingView: View {
                 limit: 200
             ) {
                 for row in rows {
-                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: userId)
+                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: userId, organizationId: orgId)
                 }
             }
         }
@@ -722,8 +722,8 @@ enum TimesheetApprovalPolicy {
 enum TimesheetDraftStore {
     private static let defaults = UserDefaults.standard
 
-    static func load(userId: String, weekStart: Date) -> TimesheetDraft {
-        guard let storageKey = key(userId: userId, weekStart: weekStart),
+    static func load(userId: String, weekStart: Date, organizationId: String? = nil) -> TimesheetDraft {
+        guard let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId),
               let data = defaults.data(forKey: storageKey),
               let decoded = try? JSONDecoder().decode(TimesheetDraft.self, from: data) else {
             return TimesheetDraft()
@@ -731,29 +731,46 @@ enum TimesheetDraftStore {
         return decoded
     }
 
-    static func save(_ draft: TimesheetDraft, userId: String, weekStart: Date, weekEnd: Date? = nil) {
-        guard let storageKey = key(userId: userId, weekStart: weekStart),
+    static func save(_ draft: TimesheetDraft, userId: String, weekStart: Date, weekEnd: Date? = nil, organizationId: String? = nil) {
+        guard let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId),
               let encoded = try? JSONEncoder().encode(draft) else { return }
         defaults.set(encoded, forKey: storageKey)
         if let weekEnd,
            let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart),
            let endKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekEnd),
-           let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart) {
+           let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart, organizationId: organizationId) {
             defaults.set("\(startKey)|\(endKey)", forKey: boundsKey)
         }
     }
 
-    static func storedPeriodEnd(userId: String, weekStart: Date) -> Date? {
-        guard let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart),
+    /// Removes the local copy of one organisation's sheet for this person and period (draft and bounds).
+    /// Used when the server reports no sheet: the device cache never outlives the server copy (§1).
+    static func clear(userId: String, weekStart: Date, organizationId: String? = nil) {
+        if let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId) {
+            defaults.removeObject(forKey: storageKey)
+        }
+        if let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart, organizationId: organizationId) {
+            defaults.removeObject(forKey: boundsKey)
+        }
+    }
+
+    static func storedPeriodEnd(userId: String, weekStart: Date, organizationId: String? = nil) -> Date? {
+        guard let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart, organizationId: organizationId),
               let stored = defaults.string(forKey: boundsKey) else { return nil }
         let parts = stored.split(separator: "|").map(String.init)
         guard parts.count == 2 else { return nil }
         return CanonicalBusinessEngine.date(fromDayKey: parts[1])
     }
 
-    static func rememberPeriodBounds(startDayKey: String, endDayKey: String, userId: String, weekStart: Date) {
+    static func rememberPeriodBounds(
+        startDayKey: String,
+        endDayKey: String,
+        userId: String,
+        weekStart: Date,
+        organizationId: String? = nil
+    ) {
         guard startDayKey.count == 10, endDayKey.count == 10,
-              let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart) else { return }
+              let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart, organizationId: organizationId) else { return }
         defaults.set("\(startDayKey)|\(endDayKey)", forKey: boundsKey)
     }
 
@@ -845,18 +862,23 @@ enum TimesheetDraftStore {
         } catch {
             return nil
         }
-        guard let raw else { return nil }
+        guard let raw else {
+            // The server has no sheet for this organisation, person and period: the local copy is stale
+            // (or another company's) and is never shown or saved back.
+            clear(userId: userId, weekStart: weekStart, organizationId: organizationId)
+            return nil
+        }
         guard let decoded = fromFirestoreMap(raw) else { return nil }
         let endKey = (raw["weekEndKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let startKey = (raw["weekStartKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let startKey, let endKey, !startKey.isEmpty, !endKey.isEmpty {
-            rememberPeriodBounds(startDayKey: startKey, endDayKey: endKey, userId: userId, weekStart: weekStart)
+            rememberPeriodBounds(startDayKey: startKey, endDayKey: endKey, userId: userId, weekStart: weekStart, organizationId: organizationId)
         } else if let weekEnd = firestoreDate(raw["weekEnd"]),
                   let derivedStart = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart),
                   let derivedEnd = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekEnd) {
-            rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: weekStart)
+            rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: weekStart, organizationId: organizationId)
         }
-        save(decoded, userId: userId, weekStart: weekStart)
+        save(decoded, userId: userId, weekStart: weekStart, organizationId: organizationId)
         return decoded
     }
 
@@ -1264,14 +1286,53 @@ enum TimesheetDraftStore {
         )
     }
 
-    static func key(userId: String, weekStart: Date) -> String? {
-        guard let stamp = organizationPeriodStamp(for: weekStart) else { return nil }
-        return "timesheet-draft-\(userId)-\(stamp)"
+    /// `timesheet-draft.v2-{organisationId}-{userId}-{stamp}`. Nil without an open organisation, so a sheet
+    /// is never cached or read outside the company it belongs to. `organizationId` nil means the open one.
+    static func key(userId: String, weekStart: Date, organizationId: String? = nil) -> String? {
+        guard let prefix = draftKeyPrefix(userId: userId, organizationId: organizationId),
+              let stamp = organizationPeriodStamp(for: weekStart) else { return nil }
+        return "\(prefix)\(stamp)"
     }
 
-    private static func periodBoundsKey(userId: String, weekStart: Date) -> String? {
-        guard let stamp = organizationPeriodStamp(for: weekStart) else { return nil }
-        return "timesheet-period-\(userId)-\(stamp)"
+    private static func periodBoundsKey(userId: String, weekStart: Date, organizationId: String? = nil) -> String? {
+        guard let org = cacheOrganizationKey(organizationId),
+              let stamp = organizationPeriodStamp(for: weekStart) else { return nil }
+        return "timesheet-period.v2-\(org)-\(userId)-\(stamp)"
+    }
+
+    private static func draftKeyPrefix(userId: String, organizationId: String?) -> String? {
+        guard let org = cacheOrganizationKey(organizationId) else { return nil }
+        return "timesheet-draft.v2-\(org)-\(userId)-"
+    }
+
+    /// The organisation part of a cache key: the given id, else the open organisation; lower case so a
+    /// stored id in another letter case is the same company. Nil when neither is known.
+    private static func cacheOrganizationKey(_ organizationId: String?) -> String? {
+        purgeLegacyKeysOnce()
+        let raw = (organizationId ?? OrganizationRulebookContext.organizationId ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw.isEmpty ? nil : raw.lowercased()
+    }
+
+    private static var legacyKeysPurged = false
+
+    /// Drafts cached before keys carried the organisation (`timesheet-draft-{userId}-{stamp}`,
+    /// `timesheet-period-{userId}-{stamp}`) cannot be told apart by company, so they are removed.
+    private static func purgeLegacyKeysOnce() {
+        guard !legacyKeysPurged else { return }
+        legacyKeysPurged = true
+        for key in defaults.dictionaryRepresentation().keys
+        where key.hasPrefix("timesheet-draft-") || key.hasPrefix("timesheet-period-") {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    /// Removes every cached sheet (all organisations and people). Called on sign-out.
+    static func clearAll() {
+        for key in defaults.dictionaryRepresentation().keys
+        where key.hasPrefix("timesheet-draft") || key.hasPrefix("timesheet-period") {
+            defaults.removeObject(forKey: key)
+        }
     }
 
     static func organizationDay(_ date: Date) -> Date? {
@@ -1279,17 +1340,17 @@ enum TimesheetDraftStore {
         return CanonicalBusinessEngine.date(fromDayKey: key)
     }
 
-    static func rememberBounds(from row: [String: Any], userId: String, weekStart: Date) {
+    static func rememberBounds(from row: [String: Any], userId: String, weekStart: Date, organizationId: String? = nil) {
         let endKey = (row["weekEndKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let startKey = (row["weekStartKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let startKey, let endKey, startKey.count == 10, endKey.count == 10 {
-            rememberPeriodBounds(startDayKey: startKey, endDayKey: endKey, userId: userId, weekStart: weekStart)
+            rememberPeriodBounds(startDayKey: startKey, endDayKey: endKey, userId: userId, weekStart: weekStart, organizationId: organizationId)
             return
         }
         if let weekEnd = firestoreDate(row["weekEnd"]),
            let derivedStart = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart),
            let derivedEnd = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekEnd) {
-            rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: weekStart)
+            rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: weekStart, organizationId: organizationId)
         }
     }
 
@@ -1324,8 +1385,8 @@ enum TimesheetDraftStore {
     }
 
     /// Local cache keys — used so past pay runs appear before cloud sync finishes.
-    static func discoverStoredWeekStarts(userId: String) -> [Date] {
-        let prefix = "timesheet-draft-\(userId)-"
+    static func discoverStoredWeekStarts(userId: String, organizationId: String? = nil) -> [Date] {
+        guard let prefix = draftKeyPrefix(userId: userId, organizationId: organizationId) else { return [] }
         let stamps = UserDefaults.standard.dictionaryRepresentation().keys.compactMap { key -> Date? in
             guard key.hasPrefix(prefix) else { return nil }
             guard let stamp = Int(key.dropFirst(prefix.count)) else { return nil }
@@ -1334,7 +1395,7 @@ enum TimesheetDraftStore {
         return stamps.sorted(by: >)
     }
 
-    static func ingestCloudRow(_ row: [String: Any], userId: String) -> Date? {
+    static func ingestCloudRow(_ row: [String: Any], userId: String, organizationId: String? = nil) -> Date? {
         guard let weekStart = firestoreDate(row["weekStart"]) else { return nil }
         guard let storedStart = CanonicalBusinessEngine.date(
             fromDayKey: CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart) ?? ""
@@ -1343,13 +1404,13 @@ enum TimesheetDraftStore {
         let endKey = (row["weekEndKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let startKey = (row["weekStartKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let startKey, let endKey, !startKey.isEmpty, !endKey.isEmpty {
-            rememberPeriodBounds(startDayKey: startKey, endDayKey: endKey, userId: userId, weekStart: storedStart)
+            rememberPeriodBounds(startDayKey: startKey, endDayKey: endKey, userId: userId, weekStart: storedStart, organizationId: organizationId)
         } else if let weekEnd = firestoreDate(row["weekEnd"]),
                   let derivedStart = CanonicalBusinessEngine.dayKeyInOrganizationZone(storedStart),
                   let derivedEnd = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekEnd) {
-            rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: storedStart)
+            rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: storedStart, organizationId: organizationId)
         }
-        save(draft, userId: userId, weekStart: storedStart)
+        save(draft, userId: userId, weekStart: storedStart, organizationId: organizationId)
         return storedStart
     }
 
@@ -2628,7 +2689,15 @@ private struct MyTimesheetView: View {
             weekStart: week.start,
             firebaseBackend: firebaseBackend,
             organizationId: orgId
-        ) else { return }
+        ) else {
+            // No server sheet clears the local copy; show what is left (nothing) unless a change is open.
+            await MainActor.run {
+                guard !isEditingTimesheet,
+                      organizationIdsMatch(firebaseBackend.currentOrganization?.firestoreDocumentId, orgId) else { return }
+                draft = TimesheetDraftStore.load(userId: currentUserId, weekStart: week.start, organizationId: orgId)
+            }
+            return
+        }
         await MainActor.run {
             var updated = remote
             if let current = userStore.displayUser {
@@ -2947,8 +3016,8 @@ private struct PreviousTimesheetsView: View {
             for row in rows {
                 guard let weekStart = firestoreDate(row["weekStart"]),
                       let storedStart = TimesheetDraftStore.organizationDay(weekStart) else { continue }
-                TimesheetDraftStore.rememberBounds(from: row, userId: userId, weekStart: storedStart)
-                let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: userId, weekStart: storedStart)
+                TimesheetDraftStore.rememberBounds(from: row, userId: userId, weekStart: storedStart, organizationId: orgId)
+                let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: userId, weekStart: storedStart, organizationId: orgId)
                 let week = TimesheetPayrollPolicy.periodMatchingStoredStart(
                     storedStart,
                     storedEnd: storedEnd,
@@ -2965,7 +3034,7 @@ private struct PreviousTimesheetsView: View {
                     || adjusted.managerSignedAt != nil
                     || !adjusted.managerNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 guard hasAnyContent else { continue }
-                TimesheetDraftStore.save(adjusted, userId: userId, weekStart: storedStart)
+                TimesheetDraftStore.save(adjusted, userId: userId, weekStart: storedStart, organizationId: orgId)
                 output.append(
                     PreviousTimesheetRun(
                         id: "prev-\(Int(week.start.timeIntervalSince1970))",
@@ -3621,7 +3690,7 @@ private struct OperativeTimesheetsView: View {
                 limit: 200
             ) {
                 for row in rows {
-                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: user.id)
+                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: user.id, organizationId: orgId)
                 }
             }
         }
@@ -4594,7 +4663,15 @@ private struct OperativeTimesheetReviewView: View {
             weekStart: week.start,
             firebaseBackend: firebaseBackend,
             organizationId: orgId
-        ) else { return }
+        ) else {
+            // No server sheet clears the local copy; show what is left (nothing) unless a review is open.
+            await MainActor.run {
+                guard !isEditingReview,
+                      organizationIdsMatch(firebaseBackend.currentOrganization?.firestoreDocumentId, orgId) else { return }
+                draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start, organizationId: orgId)
+            }
+            return
+        }
         await MainActor.run { draft = remote }
         var updated = remote
         TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &updated, user: operative)

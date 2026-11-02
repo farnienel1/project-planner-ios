@@ -19,6 +19,9 @@ nonisolated enum OrganizationRulebookContext {
     /// The organisation's `annualLeaveDefaults` (§4.4), which `CanonicalBusinessEngine.parseUserDocument` applies to a user document
     /// with no leave fields. Nil until an organisation is loaded (the rulebook default then applies).
     nonisolated(unsafe) private(set) static var annualLeaveDefaults: OrganizationAnnualLeaveDefaults? = nil
+    /// The open organisation's document id (trimmed), or nil before one is loaded. Device caches that hold one
+    /// company's data (timesheet drafts) put it in their keys so another company never reads them (§1).
+    nonisolated(unsafe) private(set) static var organizationId: String? = nil
 
     @MainActor static func update(from org: Organization?) {
         let country = org?.countryCode ?? "GB"
@@ -29,6 +32,8 @@ nonisolated enum OrganizationRulebookContext {
         currencyCode = CanonicalBusinessEngine.callJSON("resolveOrganizationCurrency", arguments: [doc]) as? String
             ?? "GBP"
         annualLeaveDefaults = org?.settings.annualLeaveDefaults
+        let orgId = org?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        organizationId = orgId.isEmpty ? nil : orgId
     }
 
     static var timeZone: TimeZone {
