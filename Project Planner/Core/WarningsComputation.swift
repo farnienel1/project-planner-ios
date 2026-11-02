@@ -60,6 +60,9 @@ struct WarningsComputationSnapshot: Sendable {
         let qualificationExpiries: [QualificationExpirySnapshot]
         var isPlaceholder: Bool = false
         var profileWeight: Int = 0
+        /// The stored `operatives/{id}` document id (`Operative.documentId`), as web keys qualification rows by
+        /// `operative.id`. Empty for a snapshot with no catalogue row.
+        var documentId: String = ""
     }
 
     struct UserSnapshot: Sendable {
@@ -247,7 +250,8 @@ enum WarningsComputation {
                 isActive: operative.isActive,
                 qualificationExpiries: qualificationExpiries,
                 isPlaceholder: foldedName.contains("placeholder") || foldedEmail.contains("placeholder") || foldedName.contains("initial"),
-                profileWeight: operative.qualifications.count + operative.qualificationCertificateURLs.count + operative.qualificationExpiryDates.count
+                profileWeight: operative.qualifications.count + operative.qualificationCertificateURLs.count + operative.qualificationExpiryDates.count,
+                documentId: operative.documentId
             )
         }
 
@@ -709,8 +713,10 @@ enum WarningsComputation {
                     "expiryIso": CanonicalBusinessEngine.isoString(from: expiry.expiryDate),
                 ]
             }
+            // Row id and dismiss key use the stored document id, matching web (`operative.id`).
+            let storedId = operative.documentId.isEmpty ? Booking.storedOperativeId(for: operative.id) : operative.documentId
             return [
-                "id": Booking.storedOperativeId(for: operative.id),
+                "id": storedId,
                 "isActive": operative.isActive,
                 "email": operative.emailLowercased,
                 "name": operative.name,
