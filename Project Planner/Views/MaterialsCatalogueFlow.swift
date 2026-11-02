@@ -163,6 +163,11 @@ struct MaterialCatalogueRootView: View {
                 await store.load()
                 refreshCategoryGroups()
             }
+            .reloadsOnForeground {
+                guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
+                await store.load()
+                refreshCategoryGroups()
+            }
             .onChange(of: store.searchGeneration) { _, _ in
                 refreshCategoryGroups()
             }

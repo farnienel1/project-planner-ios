@@ -102,6 +102,7 @@ struct ProjectDeadlinesView: View {
         .onReceive(NotificationCenter.default.publisher(for: .offlineSyncDidComplete)) { _ in
             Task { await load(preferRemote: true) }
         }
+        .reloadsOnForeground { await load(preferRemote: true) }
         .onAppear {
             store.restrictToAssigneeUserId = canManage ? nil : userStore.currentUser?.id
             store.now = Date()

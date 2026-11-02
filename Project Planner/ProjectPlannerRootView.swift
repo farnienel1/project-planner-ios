@@ -67,6 +67,34 @@ enum PlannerStoreWiring {
         appSettings.setFirebaseBackend(firebaseBackend)
     }
 
+    /// RULEBOOK §1 live screens: attaches every organisation-scoped collection listener (one per collection;
+    /// `OrgLiveListeners.swift`). Safe to call again — a listener already attached for this organisation is
+    /// kept, and one that failed is attached again — so the foreground calls it as bookings re-attach. All of
+    /// them are removed on an organisation switch and on sign-out (`FirebaseBackend.stopScheduleLiveListeners`).
+    @MainActor
+    static func startOrgLiveListeners(
+        firebaseBackend: FirebaseBackend,
+        projectStore: ProjectStore,
+        operativeStore: OperativeStore,
+        subcontractorStore: SubcontractorStore,
+        taskStore: ProjectTaskStore,
+        holidayStore: HolidayStore
+    ) {
+        #if DEBUG
+        if UITestingMode.shouldSkipNetworkBootstrap { return }
+        #endif
+        guard firebaseBackend.isAuthenticated,
+              firebaseBackend.hasBootstrappedOrgDataLoad,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+              !organizationId.isEmpty else { return }
+        holidayStore.startLiveUpdates(organizationId: organizationId)
+        projectStore.startLiveUpdates(organizationId: organizationId)
+        operativeStore.startLiveUpdates(organizationId: organizationId)
+        subcontractorStore.startLiveUpdates(organizationId: organizationId)
+        taskStore.startLiveUpdates(organizationId: organizationId)
+        firebaseBackend.startDismissedWarningsListener(organizationId: organizationId)
+    }
+
     /// Single-flight org data load from the root shell (ContentView must not repeat this on appear).
     @MainActor
     static func bootstrapOrgDataIfNeeded(
@@ -178,6 +206,16 @@ enum PlannerStoreWiring {
             try? await Task.sleep(nanoseconds: 500_000_000)
             await subcontractorStore.loadData()
             print("🔥🔥🔥 DEBUG: ✅ Deferred secondary org loads finished")
+            // Then keep every shared collection live (a web edit shows without a pull-to-refresh).
+            guard organizationIdsMatch(firebaseBackend.currentOrganization?.firestoreDocumentId, organizationId) else { return }
+            startOrgLiveListeners(
+                firebaseBackend: firebaseBackend,
+                projectStore: projectStore,
+                operativeStore: operativeStore,
+                subcontractorStore: subcontractorStore,
+                taskStore: taskStore,
+                holidayStore: holidayStore
+            )
         }
 
         print("🔥🔥🔥 DEBUG: ✅ Org data bootstrap requests finished")

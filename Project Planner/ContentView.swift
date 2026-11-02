@@ -251,6 +251,10 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("managerScheduleDidChange"))) { _ in
                 scheduleWarningsForBookingChange()
             }
+            // RULEBOOK §5: leave, people and dismissed warnings changed on another device (live listeners).
+            .onReceive(NotificationCenter.default.publisher(for: .liveWarningInputsDidChange)) { _ in
+                scheduleWarningsForBookingChange()
+            }
     }
 
     /// Debounced warning scan for booking changes on every tab. Home only updates its badge.
@@ -400,6 +404,15 @@ struct ContentView: View {
                     if firebaseBackend.hasBootstrappedOrgDataLoad {
                         bookingStore.loadData()
                         managerScheduleStore.loadData(force: true)
+                        // Re-attach any organisation listener that dropped (attached ones are kept).
+                        PlannerStoreWiring.startOrgLiveListeners(
+                            firebaseBackend: firebaseBackend,
+                            projectStore: projectStore,
+                            operativeStore: operativeStore,
+                            subcontractorStore: subcontractorStore,
+                            taskStore: taskStore,
+                            holidayStore: holidayStore
+                        )
                     }
                     notificationService.promoteScheduledDeadlineNotifications()
                     // Do not reload the full notifications inbox on every foreground —

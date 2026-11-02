@@ -815,6 +815,7 @@ struct ProjectHealthSafetyView: View {
                 operativeWeekFilter = availableOperativeWeeks.first
             }
         }
+        .reloadsOnForeground { await vm.load(firebaseBackend: firebaseBackend, userStore: userStore) }
         .alert("Health & Safety", isPresented: Binding<Bool>(
             get: { vm.errorMessage != nil || reminderSuccessMessage != nil },
             set: { _ in

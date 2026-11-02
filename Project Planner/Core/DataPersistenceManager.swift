@@ -37,6 +37,8 @@ class DataPersistenceManager {
             } catch {
                 lastError = error
                 print("🔥🔥🔥 DEBUG: [Persistence] ❌ Attempt \(attempt) failed for \(description): \(error.localizedDescription)")
+                // Final: the edited record was deleted on another device. Retrying cannot succeed.
+                if error is RecordDeletedElsewhereError { break }
                 
                 if attempt < maxRetries {
                     print("🔥🔥🔥 DEBUG: [Persistence] Retrying in \(retryDelay) seconds...")

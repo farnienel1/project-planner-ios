@@ -159,7 +159,9 @@ class SmartCacheService: ObservableObject {
         refreshOutboxCounts()
         guard OfflineOutboxStore.shared.pendingCount > 0 || SiteAuditOfflineStore.shared.pendingCount > 0 else {
             await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)
-            NotificationCenter.default.post(name: .syncOfflineChanges, object: nil)
+            // Nothing was queued, so nothing replayed: no `.syncOfflineChanges`. Foregrounding used to post it
+            // here every time and stores re-saved stale in-memory copies over other devices' edits. Live
+            // listeners (re-attached on foreground) bring the server copy instead.
             return
         }
 

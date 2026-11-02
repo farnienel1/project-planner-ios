@@ -66,7 +66,33 @@ class UserStore: ObservableObject {
     }
 
     init() {
-        // Initialize with empty state
+        // RULEBOOK 1.8.0 `CanonicalBusinessEngine.parseUserDocument` `annualLeaveDefaultsPending`: a user read before the organisation's
+        // `annualLeaveDefaults` were loaded carries the rulebook default figures. Read them again once the
+        // organisation document arrives (or its defaults change on another device).
+        NotificationCenter.default.addObserver(
+            forName: .organizationAnnualLeaveDefaultsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let changed = (note.userInfo?["changed"] as? Bool) ?? false
+            Task { @MainActor [weak self] in
+                self?.rereadUsersAfterLeaveDefaultsArrive(defaultsChanged: changed)
+            }
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    private func rereadUsersAfterLeaveDefaultsArrive(defaultsChanged: Bool) {
+        guard firebaseBackend?.currentOrganization != nil else { return }
+        if defaultsChanged || currentUser?.annualLeaveDefaultsPending == true {
+            Task { await self.loadCurrentUser() }
+        }
+        if defaultsChanged || organizationUsers.contains(where: { $0.annualLeaveDefaultsPending }) {
+            Task { await self.loadOrganizationUsers(forceRefresh: true) }
+        }
     }
     
     /// Last-used organisation is `users/{uid}.organizationId`. `isActive == false` means that organisation deactivated them.

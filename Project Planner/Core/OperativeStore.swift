@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import FirebaseFirestore
 import FirebaseAuth
 
 @MainActor
@@ -52,30 +53,10 @@ class OperativeStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: OperativeStore ignoring organizationDidLoad reload (bootstrap owns loads)")
             }
         }
-        
-        // Listen for offline sync trigger (when app comes back online)
-        NotificationCenter.default.addObserver(
-            forName: .syncOfflineChanges,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard self.firebaseBackend?.hasBootstrappedOrgDataLoad == true else {
-                    print("🔥🔥🔥 DEBUG: OperativeStore offline sync skipped until org bootstrap finishes")
-                    return
-                }
-                print("🔥🔥🔥 DEBUG: OperativeStore received syncOfflineChanges notification - syncing all data to Firebase")
-                if WarningsRefreshHelper.isHomeWarningsWarmInFlight
-                    || self.firebaseBackend?.isBootstrappingOrgDataLoad == true {
-                    print("🔥🔥🔥 DEBUG: OperativeStore offline sync deferred — bootstrap/warm in flight")
-                    return
-                }
-                if !self.operatives.isEmpty || !self.managers.isEmpty {
-                    _ = await self.saveDataWithRetry(description: "syncing offline changes to Firebase")
-                }
-            }
-        }
+
+        // No `.syncOfflineChanges` observer: operatives and managers are Manage Users / online-only edits
+        // (RULEBOOK §2), so nothing is queued to replay. The old whole-roster re-save re-created rows deleted
+        // on another device.
     }
     
     deinit {
@@ -184,6 +165,42 @@ class OperativeStore: ObservableObject {
     }
     
     // MARK: - Data Loading
+
+    /// Live `operatives` and `managers` (one listener each for the organisation), read through
+    /// `operatives(fromDocuments:)` (`parseOperativeDocument`) and `managers(fromDocuments:)`
+    /// (`parseManagerDocument`). A server snapshot replaces the list (a row deleted on web leaves here too); a
+    /// cache snapshot never empties it. The warnings scan and qualification reminders run again on a change.
+    func startLiveUpdates(organizationId: String) {
+        guard let firebaseBackend else { return }
+        firebaseBackend.listenOrganizationQuery(
+            key: "operatives",
+            organizationId: organizationId,
+            query: { $0.collection("operatives") }
+        ) { [weak self] rows, fromCache in
+            guard let self else { return }
+            let incoming = FirebaseBackend.operatives(fromDocuments: rows)
+            guard let next = LiveSnapshotMerge.apply(existing: self.operatives, incoming: incoming, fromCache: fromCache) else { return }
+            // `Operative ==` compares ids only, so a server snapshot always publishes (it fires only on a change).
+            if fromCache && next.count == self.operatives.count && next.map(\.id) == self.operatives.map(\.id) { return }
+            self.operatives = next
+            self.smartCache?.cacheOperatives(next)
+            NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+            NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
+        }
+        firebaseBackend.listenOrganizationQuery(
+            key: "managers",
+            organizationId: organizationId,
+            query: { $0.collection("managers") }
+        ) { [weak self] rows, fromCache in
+            guard let self else { return }
+            let incoming = FirebaseBackend.managers(fromDocuments: rows)
+            guard let next = LiveSnapshotMerge.apply(existing: self.managers, incoming: incoming, fromCache: fromCache),
+                  next != self.managers else { return }
+            self.managers = next
+            self.smartCache?.cacheManagers(next)
+            NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+        }
+    }
 
     func discardInMemoryForOrganizationSwitch() {
         loadGeneration += 1
@@ -424,8 +441,9 @@ class OperativeStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: Operative ID: \(operative.id.uuidString)")
         
         operatives.append(operative)
-        // CRITICAL: Save immediately with retry logic
-        _ = await saveDataWithRetry(description: "adding operative \(operative.name)")
+        // A new row: created whole. Nothing else on the roster is written.
+        _ = await saveSingleOperativeWithRetry(operative, previous: nil, mode: .create, description: "adding operative \(operative.name)")
+        smartCache?.cacheOperatives(operatives)
         
         // Send password setup email to operative
         await sendOperativePasswordSetupEmail(operative: operative)
@@ -472,7 +490,7 @@ class OperativeStore: ObservableObject {
             let previous = operatives[index]
             operatives[index] = operative
             // Save ONLY this operative, and only the fields that changed from the copy it was edited from (RULEBOOK §1).
-            _ = await saveSingleOperativeWithRetry(operative, previous: previous, description: "updating operative \(operative.name)")
+            _ = await saveSingleOperativeWithRetry(operative, previous: previous, mode: .update, description: "updating operative \(operative.name)")
             if let smartCache {
                 smartCache.cacheOperatives(operatives)
             }
@@ -524,8 +542,7 @@ class OperativeStore: ObservableObject {
             )
         }
         
-        // CRITICAL: Save state immediately
-        _ = await saveDataWithRetry(description: "saving state after deleting operative \(operativeName)")
+        // The delete above is the only write; the rest of the roster is not re-saved.
         print("🔥🔥🔥 DEBUG: Deleted operative: \(operativeName)")
     }
     
@@ -534,7 +551,7 @@ class OperativeStore: ObservableObject {
             let previous = operatives[index]
             operatives[index].isActive.toggle()
             // Writes only `isActive` (+ metadata) on this row.
-            _ = await saveSingleOperativeWithRetry(operatives[index], previous: previous, description: "toggling operative status for \(operative.name)")
+            _ = await saveSingleOperativeWithRetry(operatives[index], previous: previous, mode: .update, description: "toggling operative status for \(operative.name)")
             smartCache?.cacheOperatives(operatives)
         }
     }
@@ -543,8 +560,9 @@ class OperativeStore: ObservableObject {
     
     func addManager(_ manager: Manager) async {
         managers.append(manager)
-        // CRITICAL: Save immediately with retry logic
-        _ = await saveDataWithRetry(description: "adding manager \(manager.fullName)")
+        // A new row: created whole. Nothing else on the roster is written.
+        _ = await saveSingleManagerWithRetry(manager, previous: nil, mode: .create, description: "adding manager \(manager.fullName)")
+        smartCache?.cacheManagers(managers)
     }
     
     func updateManager(_ manager: Manager) async {
@@ -552,7 +570,7 @@ class OperativeStore: ObservableObject {
             let previous = managers[index]
             managers[index] = manager
             // Only the fields that changed on this row (RULEBOOK §1).
-            _ = await saveSingleManagerWithRetry(manager, previous: previous, description: "updating manager \(manager.fullName)")
+            _ = await saveSingleManagerWithRetry(manager, previous: previous, mode: .update, description: "updating manager \(manager.fullName)")
             smartCache?.cacheManagers(managers)
         }
     }
@@ -579,15 +597,14 @@ class OperativeStore: ObservableObject {
             )
         }
         
-        // CRITICAL: Save state immediately
-        _ = await saveDataWithRetry(description: "saving state after deleting manager \(managerName)")
+        smartCache?.cacheManagers(managers)
     }
     
     func toggleManagerStatus(_ manager: Manager) async {
         if let index = managers.firstIndex(where: { $0.id == manager.id }) {
             let previous = managers[index]
             managers[index].isActive.toggle()
-            _ = await saveSingleManagerWithRetry(managers[index], previous: previous, description: "toggling manager status for \(manager.fullName)")
+            _ = await saveSingleManagerWithRetry(managers[index], previous: previous, mode: .update, description: "toggling manager status for \(manager.fullName)")
             smartCache?.cacheManagers(managers)
         }
     }
@@ -651,32 +668,18 @@ class OperativeStore: ObservableObject {
     
     // MARK: - Persistence
     
-    /// Save data with retry logic - ensures data is never lost
-    private func saveDataWithRetry(description: String = "saving operative data") async -> Result<Void, Error> {
-        return await DataPersistenceManager.shared.saveWithRetry(
-            operation: {
-                try await self.saveDataInternal()
-            },
-            description: description,
-            onSuccess: { _ in
-                print("🔥🔥🔥 DEBUG: ✅ Data persistence successful: \(description)")
-            },
-            onFailure: { error in
-                print("🔥🔥🔥 DEBUG: ❌❌❌ CRITICAL: Data persistence failed after retries: \(description)")
-                print("🔥🔥🔥 DEBUG: Error: \(error.localizedDescription)")
-            }
-        )
-    }
-
-    private func saveSingleOperativeWithRetry(_ operative: Operative, previous: Operative? = nil, description: String) async -> Result<Void, Error> {
-        return await DataPersistenceManager.shared.saveWithRetry(
+    /// Saves ONE operative row. `mode` says whether the user just made it (`.create`) or edited a stored row
+    /// (`.update`, only the fields changed from `previous`). An edit of a row deleted on another device is never
+    /// re-created: the local row is dropped and the person is told (`RecordDeletedElsewhereError`).
+    private func saveSingleOperativeWithRetry(_ operative: Operative, previous: Operative?, mode: RecordSaveMode, description: String) async -> Result<Void, Error> {
+        let result = await DataPersistenceManager.shared.saveWithRetry(
             operation: {
                 guard let firebaseBackend = self.firebaseBackend,
                       firebaseBackend.isAuthenticated,
                       let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
                     throw NSError(domain: "OperativeStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Firebase not available"])
                 }
-                try await firebaseBackend.saveOperative(operative, organizationId: organizationId, previous: previous)
+                try await firebaseBackend.saveOperative(operative, organizationId: organizationId, mode: mode, previous: previous)
             },
             description: description,
             onSuccess: { _ in
@@ -686,17 +689,23 @@ class OperativeStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ❌ Single operative persistence failed: \(description) — \(error.localizedDescription)")
             }
         )
+        if case .failure(let error) = result, error is RecordDeletedElsewhereError {
+            operatives.removeAll { $0.id == operative.id }
+            smartCache?.cacheOperatives(operatives)
+            errorMessage = RecordDeletedElsewhereError.message
+        }
+        return result
     }
     
-    private func saveSingleManagerWithRetry(_ manager: Manager, previous: Manager?, description: String) async -> Result<Void, Error> {
-        return await DataPersistenceManager.shared.saveWithRetry(
+    private func saveSingleManagerWithRetry(_ manager: Manager, previous: Manager?, mode: RecordSaveMode, description: String) async -> Result<Void, Error> {
+        let result = await DataPersistenceManager.shared.saveWithRetry(
             operation: {
                 guard let firebaseBackend = self.firebaseBackend,
                       firebaseBackend.isAuthenticated,
                       let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
                     throw NSError(domain: "OperativeStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Firebase not available"])
                 }
-                try await firebaseBackend.saveManager(manager, organizationId: organizationId, previous: previous)
+                try await firebaseBackend.saveManager(manager, organizationId: organizationId, mode: mode, previous: previous)
             },
             description: description,
             onSuccess: { _ in
@@ -706,38 +715,14 @@ class OperativeStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ❌ Single manager persistence failed: \(description) — \(error.localizedDescription)")
             }
         )
+        if case .failure(let error) = result, error is RecordDeletedElsewhereError {
+            managers.removeAll { $0.id == manager.id }
+            smartCache?.cacheManagers(managers)
+            errorMessage = RecordDeletedElsewhereError.message
+        }
+        return result
     }
 
-    private func saveDataInternal() async throws {
-        guard let firebaseBackend = firebaseBackend,
-              firebaseBackend.isAuthenticated,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            print("🔥🔥🔥 DEBUG: ⚠️ Cannot save - Firebase not available or not authenticated")
-            throw NSError(domain: "OperativeStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Firebase not available"])
-        }
-        
-        // Creates rows that are not on the server yet. An existing row is never rewritten from this
-        // whole-roster pass (a stale copy would put old values back); edits save through
-        // `updateOperative` / `updateManager`, which write only the changed fields.
-        for operative in operatives {
-            try await firebaseBackend.saveOperative(operative, organizationId: organizationId, previous: operative)
-        }
-        for manager in managers {
-            try await firebaseBackend.saveManager(manager, organizationId: organizationId, previous: manager)
-        }
-        
-        // Skills catalogue is retired — do not rewrite organizations/{orgId}/skills.
-        // Qualifications are saved only from add/update/delete qualification — not from roster saves.
-        
-        // Update cache
-        if let smartCache = smartCache {
-            smartCache.cacheOperatives(operatives)
-            smartCache.cacheManagers(managers)
-            smartCache.cacheOrganizationSkills([])
-            smartCache.cacheQualifications(qualifications)
-        }
-    }
-    
     private func clearAllData() async {
         operatives.removeAll()
         managers.removeAll()

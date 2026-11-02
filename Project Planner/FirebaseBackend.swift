@@ -170,6 +170,21 @@ class FirebaseBackend: ObservableObject {
         didSet {
             OrganizationDocumentAbbreviation.update(from: currentOrganization)
             OrganizationRulebookContext.update(from: currentOrganization)
+            // Users parsed before the organisation's leave defaults were known (`annualLeaveDefaultsPending` from
+            // `CanonicalBusinessEngine.parseUserDocument`) are read again once they arrive or change.
+            if let next = currentOrganization {
+                let sameOrganization = oldValue != nil
+                    && organizationIdsMatch(oldValue?.firestoreDocumentId, next.firestoreDocumentId)
+                let defaultsChanged = sameOrganization
+                    && oldValue?.settings.annualLeaveDefaults != next.settings.annualLeaveDefaults
+                if !sameOrganization || defaultsChanged {
+                    NotificationCenter.default.post(
+                        name: .organizationAnnualLeaveDefaultsDidChange,
+                        object: nil,
+                        userInfo: ["changed": defaultsChanged]
+                    )
+                }
+            }
         }
     }
     @Published var userRole: UserRole = .basic
@@ -241,6 +256,9 @@ class FirebaseBackend: ObservableObject {
     @Published private(set) var lastBookingDecodeReport: BookingDecodeReport?
     private var managerScheduleLiveListener: ListenerRegistration?
     private var managerScheduleLiveListenerTarget: String?
+    /// Every other organisation-scoped live listener (`OrgLiveListeners.swift`). Emptied with the schedule
+    /// listeners on an organisation switch and on sign-out.
+    let liveListeners = OrgListenerRegistry()
     /// Lower bound of the launch booking and manager-site listeners. Nil with `scheduleHistoryIsFull` means every date.
     var scheduleHistoryStart: Date?
     private var scheduleHistoryIsFull = false
@@ -335,6 +353,7 @@ class FirebaseBackend: ObservableObject {
         managerScheduleLiveListener?.remove()
         managerScheduleLiveListener = nil
         managerScheduleLiveListenerTarget = nil
+        liveListeners.removeAll()
     }
 
     private func startOrganizationDocumentListener(organizationId: String) {
@@ -1989,7 +2008,7 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: repairCurrentUserOrganizationAccess skipped Firestore writes for \(orgIdStr)")
     }
 
-    func saveProject(_ project: Project, organizationId: String) async throws {
+    func saveProject(_ project: Project, organizationId: String, mode: RecordSaveMode, previous: Project? = nil) async throws {
         print("🔥🔥🔥 DEBUG: [SAVE] Saving project \(project.siteName) at projects/\(project.documentId)")
         // CRITICAL: Ensure user document is linked before validation
         // This prevents "user is not linked to organization" errors
@@ -2000,21 +2019,29 @@ class FirebaseBackend: ObservableObject {
             // Continue anyway - validation might still pass if user is in organization members
         }
         try await validateDataIntegrity(organizationId: organizationId)
-        try await saveJobDocument(project, collection: "projects", organizationId: organizationId)
+        try await saveJobDocument(project, collection: "projects", organizationId: organizationId, mode: mode, previous: previous)
     }
 
     /// RULEBOOK 1.7.0 §1 "Partial writes only": a job save writes the fields `jobWriteFields` names (the manager
     /// ids, the address and the map pin each as a group; `id`, `createdAt` and `organizationId` on create only). A
     /// new job is created whole. Never a full `setData` over the stored job, which deleted fields this app does
     /// not hold. The path is the stored document id (`Project.documentId`).
-    private func saveJobDocument(_ job: Project, collection: String, organizationId: String) async throws {
+    private func saveJobDocument(
+        _ job: Project,
+        collection: String,
+        organizationId: String,
+        mode: RecordSaveMode,
+        previous: Project?
+    ) async throws {
         let ref = db.collection("organizations").document(organizationId).collection(collection).document(job.documentId)
         do {
+            // The copy the user edited is the baseline, so only the fields they changed are written.
             try await writeChangedRosterRow(
                 ref,
                 payload: Self.jobDocumentPayload(job, organizationId: organizationId),
-                previousPayload: nil,
-                writeFields: "jobWriteFields"
+                previousPayload: previous.map { Self.jobDocumentPayload($0, organizationId: organizationId) },
+                writeFields: "jobWriteFields",
+                mode: mode
             )
         } catch {
             let nsError = error as NSError
@@ -2201,7 +2228,7 @@ class FirebaseBackend: ObservableObject {
         return jobs
     }
     
-    func saveClient(_ client: Client, organizationId: String) async throws {
+    func saveClient(_ client: Client, organizationId: String, mode: RecordSaveMode, previous: Client? = nil) async throws {
         print("🔥🔥🔥 DEBUG: saveClient called with organizationId: \(organizationId)")
         guard currentUser != nil else {
             throw NSError(
@@ -2231,25 +2258,30 @@ class FirebaseBackend: ObservableObject {
         
         // RULEBOOK 1.6.0 §1, §11: a partial update of the fields `clientWriteFields` names (a new client is
         // created whole). `id`, `createdAt` and `organizationId` are written on create only.
-        let data: [String: Any] = [
+        let data = Self.clientDocumentPayload(client, organizationId: orgId)
+        
+        print("🔥🔥🔥 DEBUG: Saving client to organizations/\(orgId)/clients/\(client.documentId)")
+        
+        let ref = db.collection("organizations").document(orgId).collection("clients").document(client.documentId)
+        let previousData = previous.map { Self.clientDocumentPayload($0, organizationId: orgId) }
+        try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData, writeFields: "clientWriteFields", mode: mode)
+        
+        print("🔥🔥🔥 DEBUG: Client saved successfully to Firebase")
+    }
+    
+    static func clientDocumentPayload(_ client: Client, organizationId: String) -> [String: Any] {
+        [
             "id": client.documentId,
             "name": client.name,
             "contactPerson": client.contactPerson ?? "",
             "email": client.email ?? "",
             "phone": client.phone ?? "",
             "address": client.address ?? "",
-            "organizationId": orgId,
+            "organizationId": organizationId,
             "createdAt": Timestamp(date: client.createdAt)
         ]
-        
-        print("🔥🔥🔥 DEBUG: Saving client to organizations/\(orgId)/clients/\(client.documentId)")
-        
-        let ref = db.collection("organizations").document(orgId).collection("clients").document(client.documentId)
-        try await writeChangedRosterRow(ref, payload: data, previousPayload: nil, writeFields: "clientWriteFields")
-        
-        print("🔥🔥🔥 DEBUG: Client saved successfully to Firebase")
     }
-    
+
     func loadClients(organizationId: String) async throws -> [Client] {
         let orgId = try await ensureReadableOrganization(organizationId)
         print("🔥🔥🔥 DEBUG: loadClients called for organization: \(orgId)")
@@ -2334,7 +2366,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - Small Works Management (Separate Collection)
     
-    func saveSmallWorks(_ smallWork: Project, organizationId: String) async throws {
+    func saveSmallWorks(_ smallWork: Project, organizationId: String, mode: RecordSaveMode, previous: Project? = nil) async throws {
         print("🔥🔥🔥 DEBUG: [SAVE SMALL WORKS] Saving small works \(smallWork.siteName) at smallWorks/\(smallWork.documentId)")
         // CRITICAL: Ensure user document is linked before validation
         // This prevents "user is not linked to organization" errors
@@ -2345,7 +2377,7 @@ class FirebaseBackend: ObservableObject {
             // Continue anyway - validation might still pass if user is in organization members
         }
         try await validateDataIntegrity(organizationId: organizationId)
-        try await saveJobDocument(smallWork, collection: "smallWorks", organizationId: organizationId)
+        try await saveJobDocument(smallWork, collection: "smallWorks", organizationId: organizationId, mode: mode, previous: previous)
     }
     
     func loadSmallWorks(organizationId: String) async throws -> [Project] {
@@ -2957,15 +2989,25 @@ class FirebaseBackend: ObservableObject {
         _ ref: DocumentReference,
         payload: [String: Any],
         previousPayload: [String: Any]?,
-        writeFields: String = "operativeRowWriteFields"
+        writeFields: String = "operativeRowWriteFields",
+        mode: RecordSaveMode? = nil
     ) async throws {
         let uid = auth.currentUser?.uid
         let snapshot = try await ref.getDocument(source: .server)
-        guard snapshot.exists, let stored = snapshot.data() else {
+        let storedData = snapshot.exists ? snapshot.data() : nil
+        // An edit (`mode: .update`) of a document that is gone was deleted on another device: refuse it and never
+        // re-create it with setData. Only a genuine create (`.create`), or the legacy upsert (nil), creates.
+        switch RecordWritePlan.action(mode: mode, documentExists: storedData != nil) {
+        case .refuseDeletedElsewhere:
+            throw RecordDeletedElsewhereError(collection: ref.parent.collectionID, documentId: ref.documentID)
+        case .create:
             let createPayload = payload.filter { !($0.value is FieldValue) && !($0.value is NSNull) }
             try await ref.setData(WriteMetadata.stamped(createPayload, userId: uid))
             return
+        case .update:
+            break
         }
+        guard let stored = storedData else { return }
         guard let write = CanonicalBusinessEngine.peopleDocumentWrite(writeFields, before: previousPayload ?? stored, next: payload) else {
             throw CanonicalWriteUnavailableError(function: writeFields)
         }
@@ -3017,7 +3059,7 @@ class FirebaseBackend: ObservableObject {
 
     /// Partial write of `operatives/{id}`: only the fields that changed (against `previous` when the caller
     /// has the copy it edited, else the server document), plus `WriteMetadata`. A new row is created whole.
-    func saveOperative(_ operative: Operative, organizationId: String, previous: Operative? = nil) async throws {
+    func saveOperative(_ operative: Operative, organizationId: String, mode: RecordSaveMode, previous: Operative? = nil) async throws {
         print("🔥🔥🔥 DEBUG: saveOperative called with organizationId: \(organizationId)")
         print("🔥🔥🔥 DEBUG: Operative details - Name: \(operative.name), document: \(operative.documentId)")
         let data = Self.operativeDocumentPayload(operative, organizationId: organizationId)
@@ -3025,7 +3067,7 @@ class FirebaseBackend: ObservableObject {
         // The stored document id (stored case; a non-UUID id is kept), never the in-memory UUID.
         let ref = db.collection("organizations").document(organizationId).collection("operatives").document(operative.documentId)
         do {
-            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData, writeFields: "operativeRowWriteFields")
+            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData, writeFields: "operativeRowWriteFields", mode: mode)
             print("🔥🔥🔥 DEBUG: Operative saved successfully to Firebase")
         } catch {
             print("🔥🔥🔥 DEBUG: ERROR saving operative: \(error.localizedDescription)")
@@ -3237,7 +3279,7 @@ class FirebaseBackend: ObservableObject {
         )
         
         do {
-            try await saveProject(testProject, organizationId: organizationId)
+            try await saveProject(testProject, organizationId: organizationId, mode: .create)
             print("🔥🔥🔥 DEBUG: Test project saved successfully!")
             
             // Try to load it back
@@ -3285,7 +3327,7 @@ class FirebaseBackend: ObservableObject {
         
         do {
             // Save the test project
-            try await saveProject(testProject, organizationId: organizationId)
+            try await saveProject(testProject, organizationId: organizationId, mode: .create)
             print("🔥🔥🔥 DEBUG: Test project saved to Firebase")
             
             // Wait a moment for Firebase to process
@@ -3402,7 +3444,7 @@ class FirebaseBackend: ObservableObject {
 
         /// Partial write of `managers/{id}`: only changed fields plus `WriteMetadata` (a new row is created).
         /// It never replaces the document, so pay fields another platform stored on the row stay.
-        func saveManager(_ manager: Manager, organizationId: String, previous: Manager? = nil) async throws {
+        func saveManager(_ manager: Manager, organizationId: String, mode: RecordSaveMode, previous: Manager? = nil) async throws {
             print("🔥🔥🔥 DEBUG: saveManager called with organizationId: \(organizationId)")
             let data = Self.managerDocumentPayload(manager, organizationId: organizationId)
             let previousData = previous.map { Self.managerDocumentPayload($0, organizationId: organizationId) }
@@ -3410,7 +3452,7 @@ class FirebaseBackend: ObservableObject {
             let storageId = documentId.isEmpty ? manager.id.uuidString : documentId
             print("🔥🔥🔥 DEBUG: Saving manager to organizations/\(organizationId)/managers/\(storageId)")
             let ref = db.collection("organizations").document(organizationId).collection("managers").document(storageId)
-            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData, writeFields: "managerRowWriteFields")
+            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData, writeFields: "managerRowWriteFields", mode: mode)
             print("🔥🔥🔥 DEBUG: Manager saved successfully to Firebase")
         }
 
@@ -3710,7 +3752,7 @@ class FirebaseBackend: ObservableObject {
             qualifications.append(qualification)
         }
         
-        return qualifications.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return qualifications.sorted { $0.name < $1.name }
     }
     
     func loadSkills(organizationId: String) async throws -> [OrganizationSkill] {
@@ -8008,8 +8050,8 @@ class FirebaseBackend: ObservableObject {
             return
         }
         
-        // Save project
-        try await saveProject(project, organizationId: organizationId)
+        // Save project (an edit of a stored project; never re-creates one deleted elsewhere)
+        try await saveProject(project, organizationId: organizationId, mode: .update)
     }
     
     /// Enhanced load with recovery - automatically attempts recovery if organization link is missing
@@ -9264,13 +9306,12 @@ extension FirebaseBackend {
         try await ref.setData(WriteMetadata.stamped(["trades": merged], userId: currentUser?.uid), merge: true)
     }
 
+    /// `organizations/{orgId}/subcontractors`, read through `parseSubcontractorDocument` (`subcontractors(fromDocuments:)`).
     func loadSubcontractors(organizationId: String) async throws -> [Subcontractor] {
         let snapshot = try await db.collection("organizations").document(organizationId)
-            .collection("subcontractors")
-            .getDocuments()
-
-        let loaded = Self.subcontractors(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
-        return loaded.sorted { $0.name < $1.name }
+            .collection("subcontractors").getDocuments()
+        return Self.subcontractors(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+            .sorted { $0.name < $1.name }
     }
 
     static func subcontractors(fromDocuments documents: [(id: String, data: [String: Any])]) -> [Subcontractor] {
@@ -9877,6 +9918,29 @@ extension FirebaseBackend {
             .document(organizationId)
             .collection("settings")
             .document(docId)
+    }
+
+    /// Live `settings/timesheet_{uid}_{unix}` (`timesheetDocumentId`) while a timesheet screen is open, so a sign-off,
+    /// review or export made on web shows without reopening it. `onServerChange` runs for confirmed server copies
+    /// only (this device's own unsent write and cache copies are skipped). `key` names the screen's listener;
+    /// the screen stops it with `stopLiveListener(key:)` when it closes.
+    func listenTimesheetState(
+        key: String,
+        organizationId: String,
+        userId: String,
+        weekStart: Date,
+        onServerChange: @escaping @MainActor () -> Void
+    ) {
+        guard let ref = try? timesheetStateDocumentRef(organizationId: normalizedOrganizationId(organizationId), userId: userId, weekStart: weekStart) else { return }
+        let documentId = ref.documentID
+        listenOrganizationDocument(
+            key: key,
+            organizationId: organizationId,
+            document: { $0.collection("settings").document(documentId) }
+        ) { data, fromCache, pending in
+            guard data != nil, !fromCache, !pending else { return }
+            onServerChange()
+        }
     }
 
     func loadTimesheetState(
