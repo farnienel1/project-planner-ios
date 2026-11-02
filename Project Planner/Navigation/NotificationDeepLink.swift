@@ -21,7 +21,7 @@ enum NotificationDeepLink {
         return userInfo(
             type: notification.type,
             relatedId: notification.relatedId,
-            relatedIdText: paymentDay,
+            relatedIdText: paymentDay ?? notification.relatedKey,
             userId: notification.deepLinkUserId ?? notification.userId,
             weekStart: notification.deepLinkWeekStart,
             dayKey: notification.dayKey,
@@ -213,7 +213,9 @@ enum NotificationDeepLink {
         section: String?
     ) {
         let smallWorks = isSmallWorks ?? (destination.kind == "smallWorksScheduling" || destination.kind == "smallWorksDetail")
-        guard let relatedId = destination.relatedId, let projectId = UUID(uuidString: relatedId) else {
+        // RULEBOOK 1.8.0: a job's related id is its stored document id (any case, UUID or not); `JobKeys` maps it to
+        // the job's in-app id.
+        guard let relatedId = destination.relatedId?.trimmingCharacters(in: .whitespacesAndNewlines), !relatedId.isEmpty else {
             NotificationCenter.default.post(
                 name: NSNotification.Name("selectTab"),
                 object: nil,
@@ -221,6 +223,7 @@ enum NotificationDeepLink {
             )
             return
         }
+        let projectId = JobKeys.inAppId(relatedId)
         var info: [String: Any] = [
             "projectId": projectId,
             "isSmallWorks": smallWorks,

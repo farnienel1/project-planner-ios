@@ -59,10 +59,11 @@ extension FirebaseBackend {
     ) -> ListenerRegistration {
         let orgId = normalizedOrganizationId(organizationId)
         let bag = VariationListenerBag()
+        let parentIds = variationParentIdForms(parentId)
 
         bag.add(
             variationsCollection(organizationId: orgId)
-                .whereField("parentId", isEqualTo: parentId)
+                .whereField("parentId", in: parentIds)
                 .addSnapshotListener { snapshot, error in
                     if let error {
                         print("❌ [Variations] listen error: \(error.localizedDescription)")
@@ -153,7 +154,7 @@ extension FirebaseBackend {
                     }
                     let parsed = (snapshot?.documents ?? []).compactMap { doc -> Variation? in
                         let data = doc.data()
-                        guard (data["parentId"] as? String) == parentId else { return nil }
+                        guard parentIds.contains((data["parentId"] as? String) ?? "") else { return nil }
                         let rawId = (data["id"] as? String)
                             ?? doc.documentID.replacingOccurrences(of: "variationItem_", with: "")
                         return VariationCodec.variation(from: data, documentId: rawId)
@@ -257,9 +258,13 @@ extension FirebaseBackend {
         }
 
         do {
-            try await variationsCollection(organizationId: orgId)
-                .document(payload.id)
-                .setData(map, merge: true)
+            // RULEBOOK 1.8.0 §1: `variationWriteFields` against the stored copy (line lists with their counters, the
+            // status with its history and stamps, the number with its sequence written together; creator, origin and
+            // parent never rewritten). A new variation is created whole.
+            try await writeOperationsDocument(
+                variationsCollection(organizationId: orgId).document(payload.id),
+                writeFields: "variationWriteFields"
+            ) { _ in map }
             wrote = true
         } catch {
             lastError = lastError ?? error
@@ -285,10 +290,15 @@ extension FirebaseBackend {
         if let existing = try? await ref.getDocument(), let data = existing.data() {
             items = fallbackItemMaps(from: data)
         }
-        if let idx = items.firstIndex(where: { ($0["id"] as? String) == variation.id }) {
+        let storedItems = items
+        if let idx = items.firstIndex(where: { ($0["id"] as? String)?.lowercased() == variation.id.lowercased() }) {
             items[idx] = map
         } else {
             items.append(map)
+        }
+        // RULEBOOK 1.8.0 §1: each log entry laid over its stored row (`mergeStoredRows`), so fields web writes stay.
+        if let merged = CanonicalBusinessEngine.mergeStoredRows(stored: storedItems, next: items) {
+            items = merged.map { (ScriptFirestoreValue.native($0) as? [String: Any]) ?? $0 }
         }
         try await ref.setData(
             [
@@ -313,8 +323,11 @@ extension FirebaseBackend {
         data["parentId"] = variation.parentId
         data["parentType"] = variation.parentType.rawValue
         data["organizationId"] = organizationId
-        try await variationItemDocument(organizationId: organizationId, variationId: variation.id)
-            .setData(data, merge: true)
+        // RULEBOOK 1.8.0 §1: the settings copy is saved with `variationWriteFields` too.
+        try await writeOperationsDocument(
+            variationItemDocument(organizationId: organizationId, variationId: variation.id),
+            writeFields: "variationWriteFields"
+        ) { _ in data }
     }
 
     func loadCustomVariationTrades(organizationId: String) async -> [String] {
@@ -338,8 +351,9 @@ extension FirebaseBackend {
 
     func countOpenVariations(organizationId: String, parentId: String) async -> Int {
         let orgId = normalizedOrganizationId(organizationId)
+        let parentIds = variationParentIdForms(parentId)
         async let collectionSnap = variationsCollection(organizationId: orgId)
-            .whereField("parentId", isEqualTo: parentId)
+            .whereField("parentId", in: parentIds)
             .getDocuments()
         async let fallbackSnap = variationsFallbackDocument(organizationId: orgId, parentId: parentId)
             .getDocument()
@@ -352,7 +366,7 @@ extension FirebaseBackend {
         let fallbackItems = variationsFromFallbackDocument((try? await fallbackSnap)?.data())
         let itemDocs = ((try? await itemSnap)?.documents ?? []).compactMap { doc -> Variation? in
             let data = doc.data()
-            guard (data["parentId"] as? String) == parentId else { return nil }
+            guard parentIds.contains((data["parentId"] as? String) ?? "") else { return nil }
             let rawId = (data["id"] as? String)
                 ?? doc.documentID.replacingOccurrences(of: "variationItem_", with: "")
             return VariationCodec.variation(from: data, documentId: rawId)
@@ -482,6 +496,14 @@ extension FirebaseBackend {
     #endif
 }
 
+/// RULEBOOK 1.8.0 §1 "Job keys": variations name the job by its stored document id. iOS builds before 1.8.0 wrote
+/// the in-app UUID text, which differs for a lower-case or non-UUID job id, so both forms are matched on read.
+nonisolated private func variationParentIdForms(_ parentId: String) -> [String] {
+    let stored = parentId.trimmingCharacters(in: .whitespacesAndNewlines)
+    let legacy = Manager.stableId(forFirestoreDocumentId: stored).uuidString
+    return stored == legacy || stored.isEmpty ? [stored] : [stored, legacy]
+}
+
 nonisolated private func fallbackItemMaps(from data: [String: Any]) -> [[String: Any]] {
     if let items = data["items"] as? [[String: Any]] {
         return items
@@ -500,8 +522,9 @@ nonisolated private func fallbackItemMaps(from data: [String: Any]) -> [[String:
 
 nonisolated private func variationsFromFallbackDocument(_ data: [String: Any]?) -> [Variation] {
     guard let data else { return [] }
+    // RULEBOOK 1.8.0: an entry's id is its stored `id` (`parseVariationDocument`); never a random id.
     return fallbackItemMaps(from: data).compactMap { row in
-        VariationCodec.variation(from: row, documentId: (row["id"] as? String) ?? UUID().uuidString)
+        VariationCodec.variation(from: row, documentId: (row["id"] as? String) ?? "")
     }
 }
 

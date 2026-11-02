@@ -24,7 +24,7 @@ struct VariationsListView: View {
     init(project: Project) {
         self.project = project
         let type: VariationParentType = project.jobType == .smallWorks ? .smallWork : .project
-        _store = StateObject(wrappedValue: VariationStore(parentId: project.id.uuidString, parentType: type))
+        _store = StateObject(wrappedValue: VariationStore(parentId: project.documentId, parentType: type))
     }
 
     var body: some View {

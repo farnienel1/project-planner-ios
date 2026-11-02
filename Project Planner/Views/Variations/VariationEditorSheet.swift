@@ -1599,7 +1599,8 @@ struct VariationEditorSheet: View {
                 id: variationId,
                 orgId: orgId,
                 parentType: parentType,
-                parentId: project.id.uuidString,
+                // RULEBOOK 1.8.0 §1 "Job keys": the job's stored document id (what web writes).
+                parentId: project.documentId,
                 parentName: parentName,
                 origin: .app,
                 voNumber: voNumber.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1682,7 +1683,7 @@ struct VariationEditorSheet: View {
                     fileName: item.fileName,
                     contentType: item.contentType,
                     organizationId: orgId,
-                    parentId: project.id.uuidString,
+                    parentId: project.documentId,
                     variationId: variationId,
                     evidenceId: item.id
                 )

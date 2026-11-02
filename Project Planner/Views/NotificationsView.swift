@@ -174,9 +174,12 @@ struct NotificationRowView: View {
         case .timesheetPendingManagerSignoff: return "signature"
         case .timesheetSignedByManager: return "checkmark.seal.fill"
         case .lineManagerPeerUpdate: return "person.2.fill"
-        case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return "plus.rectangle.on.folder"
+        case .variationAdded, .variationFromTracker, .variationNumbersUpdated, .variation, .variationRenumbered: return "plus.rectangle.on.folder"
         case .timesheetSubmissionReminder: return "clock.badge.exclamationmark"
         case .pushTest: return "bell.badge"
+        case .bookedOntoJob: return "calendar.badge.plus"
+        case .materialOrderCreated: return "shippingbox.fill"
+        case .unknown: return "bell"
         }
     }
 
@@ -205,9 +208,12 @@ struct NotificationRowView: View {
         case .timesheetPendingManagerSignoff: return .trade
         case .timesheetSignedByManager: return .sites
         case .lineManagerPeerUpdate: return .people
-        case .variationAdded, .variationFromTracker, .variationNumbersUpdated: return .trade
+        case .variationAdded, .variationFromTracker, .variationNumbersUpdated, .variation, .variationRenumbered: return .trade
         case .timesheetSubmissionReminder: return .trade
         case .pushTest: return .plan
+        case .bookedOntoJob: return .plan
+        case .materialOrderCreated: return .sites
+        case .unknown: return .plan
         }
     }
 }

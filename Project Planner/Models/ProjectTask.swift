@@ -68,6 +68,9 @@ struct ProjectTask: Identifiable, Codable, Hashable {
     var items: [ProjectTaskItem]
     /// For multi-item tasks: which item IDs the assignee has ticked. Only when all are ticked can they mark task completed.
     var completedItemIds: [UUID]
+    /// RULEBOOK 1.8.0 §1: `projectId` exactly as stored (web may store a lower-case or non-UUID job id, or none —
+    /// a task with no job is kept). Nil on a task made in this app; a save then writes the job's stored id.
+    var projectKey: String? = nil
     
     init(
         id: UUID = UUID(),

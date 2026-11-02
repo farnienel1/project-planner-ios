@@ -1476,7 +1476,8 @@ class NotificationService: ObservableObject {
         updatedNotification.isRead = true
         
         do {
-            try await firebaseBackend.saveNotification(updatedNotification, organizationId: organizationId)
+            // RULEBOOK 1.8.0 §13: `notificationReadWriteFields` — `{ isRead: true }` only, never a rewrite of the row.
+            try await firebaseBackend.markNotificationRead(updatedNotification, wasRead: notification.isRead, organizationId: organizationId)
             
             if let index = notifications.firstIndex(where: { $0.id == notification.id }) {
                 notifications[index] = updatedNotification
@@ -1559,7 +1560,7 @@ class NotificationService: ObservableObject {
             }
         }
 
-        return deliveryAllowed(type: notification.type.rawValue)
+        return deliveryAllowed(type: notification.typeText)
     }
 
     /// The signed-in user's toggles for a device push or local banner (`notificationPreferenceAllowsDelivery`).
@@ -1576,7 +1577,7 @@ class NotificationService: ObservableObject {
         let rest = notifications.filter { isSyntheticInboxItem($0) }.sorted { $0.createdAt > $1.createdAt }
         for notification in preferred + rest {
             let target = notification.userId.map(resolvedRecipientUserId) ?? "broadcast"
-            let related = notification.relatedId?.uuidString ?? "none"
+            let related = notification.relatedKey ?? "none"
             let key: String
             switch notification.type {
             case .deadlineReminder, .deadlineDue:
@@ -1617,7 +1618,7 @@ class NotificationService: ObservableObject {
                 actorUserId: stampsActor ? Auth.auth().currentUser?.uid : nil
             )
             print("🔥🔥🔥 DEBUG: [NOTIFY SAVE OK] id=\(notification.id.uuidString) type=\(notification.type.rawValue) target=\(notification.userId ?? "broadcast") related=\(notification.relatedId?.uuidString ?? "none")")
-            if deliverLocalPush, !isFutureScheduledDeadline(notification), !isDevicePush(notification.type.rawValue) {
+            if deliverLocalPush, !isFutureScheduledDeadline(notification), !isDevicePush(notification.typeText) {
                 deliverLocalPushIfNeeded(for: notification)
             }
         } catch {
@@ -1731,39 +1732,13 @@ class NotificationService: ObservableObject {
             }
     }
 
+    /// RULEBOOK 1.8.0 §13: inbox rows through the rulebook's `parseNotificationDocument` (an unknown type, a
+    /// non-UUID document or related id, a missing title / read flag / `createdAt` keep the row).
     private func parseNotificationDocument(_ doc: QueryDocumentSnapshot) -> AppNotification? {
-        let data = doc.data()
-        guard let typeString = data["type"] as? String,
-              let type = AppNotification.NotificationType(rawValue: typeString),
-              let title = data["title"] as? String,
-              let message = data["message"] as? String,
-              let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-              let isRead = data["isRead"] as? Bool,
-              let orgId = data["organizationId"] as? String else {
-            return nil
-        }
-
-        let id = UUID(uuidString: doc.documentID) ?? UUID()
-        let userId = data["userId"] as? String
-        let relatedIdString = data["relatedId"] as? String
-        let relatedId = relatedIdString.flatMap(UUID.init(uuidString:))
-        let requiresPermission = data["requiresPermission"] as? String
-
-        return AppNotification(
-            id: id,
-            organizationId: orgId,
-            type: type,
-            title: title,
-            message: message,
-            userId: userId,
-            relatedId: relatedId,
-            isRead: isRead,
-            createdAt: createdAt,
-            requiresPermission: requiresPermission,
-            deepLinkUserId: data["deepLinkUserId"] as? String,
-            deepLinkWeekStart: (data["deepLinkWeekStart"] as? Timestamp)?.dateValue(),
-            dayKey: AppNotification.inboxDayKey(storedDayKey: data["dayKey"] as? String, relatedId: relatedIdString),
-            catalogue: data["catalogue"] as? String
+        FirebaseBackend.appNotification(
+            documentId: doc.documentID,
+            data: doc.data(),
+            organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId
         )
     }
 
@@ -2047,7 +2022,7 @@ class NotificationService: ObservableObject {
         LocalNotificationBannerPolicy.Event(
             id: notification.id.uuidString,
             type: notification.type,
-            relatedId: notification.relatedId?.uuidString,
+            relatedId: notification.relatedKey,
             targetUserId: notification.userId.map { resolvedRecipientUserId($0) },
             isRead: notification.isRead,
             isSynthetic: isSyntheticInboxItem(notification),
@@ -2082,7 +2057,7 @@ class NotificationService: ObservableObject {
     }
 
     private func triggerLocalAlertIfNeeded(for notification: AppNotification) {
-        guard !isDevicePush(notification.type.rawValue) else { return }
+        guard !isDevicePush(notification.typeText) else { return }
         guard let currentUser = userStore?.currentUser else { return }
         guard shouldShowNotification(notification, for: currentUser) else { return }
         loadPersistedLocalAlertDedupKeysIfNeeded()
@@ -2342,7 +2317,7 @@ class NotificationService: ObservableObject {
         let prefs = appSettingsStore?.settings.notifications.preferenceValues
         var inboxTypeShown: [String: Bool] = [:]
         let items = allItems.filter { item in
-            let type = item.type.rawValue
+            let type = item.typeText
             if let known = inboxTypeShown[type] { return known }
             let shown = CanonicalBusinessEngine.notificationShowsInInbox(prefs: prefs, type: type)
             inboxTypeShown[type] = shown

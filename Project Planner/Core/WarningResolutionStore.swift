@@ -109,20 +109,12 @@ final class WarningResolutionStore: ObservableObject {
         }
     }
 
-    /// Older manager-clash keys carried the day as seconds (`mgr-clash-{user}-{1792623600.0}-{i}`);
-    /// `managerClashGroups` keys it by day (`mgr-clash-{user}-{2026-10-22}-{i}`).
+    /// RULEBOOK 1.8.0 §5: a stored key in its shared form (`sharedWarningResolutionKey`): older iOS manager-clash
+    /// keys carried the day as epoch seconds (`mgr-clash-{user}-{1792623600.0}-{i}` → `mgr-clash-{user}-{2026-10-22}-{i}`)
+    /// and material cut-off keys an epoch (`materials-{job}-{seconds}` → `materials-{job}-{YYYY-MM-DD}`). Any other key
+    /// is returned as stored.
     nonisolated static func migratedResolutionKey(_ key: String) -> String {
-        guard key.hasPrefix("mgr-clash-"),
-              let match = key.range(of: #"-(\d{9,}(?:\.\d+)?)-(\d+)$"#, options: .regularExpression) else {
-            return key
-        }
-        let tail = key[match].dropFirst()
-        let parts = tail.split(separator: "-")
-        guard parts.count == 2, let seconds = Double(parts[0]),
-              let dayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(Date(timeIntervalSince1970: seconds)) else {
-            return key
-        }
-        return String(key[..<match.lowerBound]) + "-\(dayKey)-\(parts[1])"
+        CanonicalBusinessEngine.sharedWarningResolutionKey(key) ?? key
     }
 
     // MARK: - Live listeners
@@ -140,11 +132,18 @@ final class WarningResolutionStore: ObservableObject {
                 return
             }
             guard let snapshot else { return }
-            let rows: [[String: String]] = snapshot.documents.map { doc in
-                let data = doc.data()
-                var row: [String: String] = ["id": doc.documentID]
-                if let key = data["resolutionKey"] as? String { row["resolutionKey"] = key }
-                if let status = data["status"] as? String { row["status"] = status }
+            // RULEBOOK 1.8.0 §5: `parseWarningResolutionDocument` (legacy keys read in their shared form; the stored
+            // key is kept for `warningResolutionMigrationWrites`).
+            let rows: [[String: String]] = snapshot.documents.compactMap { doc in
+                guard let parsed = CanonicalBusinessEngine.parseWarningResolutionDocument(documentId: doc.documentID, data: doc.data()) else {
+                    return nil
+                }
+                var row: [String: String] = [
+                    "id": parsed.id,
+                    "resolutionKey": parsed.text("resolutionKey"),
+                    "storedKey": parsed.text("storedKey"),
+                ]
+                if let status = parsed.optionalText("status") { row["status"] = status }
                 return row
             }
             let fromCache = snapshot.metadata.isFromCache
@@ -178,6 +177,7 @@ final class WarningResolutionStore: ObservableObject {
     /// Firestore replaces this phone's copy: a key removed elsewhere stops hiding its warning here.
     private func applyResolutionRows(_ rows: [[String: String]], fromCache: Bool, organizationId: String) {
         guard self.organizationId == organizationId else { return }
+        storedResolutionRows = rows
         var approved = Set<String>()
         var dismissed = Set<String>()
         for row in rows {
@@ -530,6 +530,8 @@ final class WarningResolutionStore: ObservableObject {
     private var unsyncedDismissedKeys: Set<String> = []
     /// Shared keys this session already wrote for a legacy key.
     private var migratedKeys: Set<String> = []
+    /// The last `warningResolutions` snapshot (`id`, shared `resolutionKey`, `storedKey`, `status`).
+    private var storedResolutionRows: [[String: String]] = []
 
     private func unsyncedApprovedStorageKey(_ organizationId: String) -> String {
         "warning_resolution_unsynced_approved_v2_\(organizationId)"
@@ -594,20 +596,41 @@ final class WarningResolutionStore: ObservableObject {
         migrateLegacyResolutions()
     }
 
-    /// Writes the shared documents once for each row whose old key is resolved and whose shared key is not.
-    /// Staff only; Firestore queues the write when the phone is offline, and the same documents are idempotent.
+    /// RULEBOOK 1.8.0 §5 (D3): the shared-key documents to write come from `warningResolutionMigrationWrites` over the
+    /// stored documents (plus this phone's not-yet-synced legacy keys) and the rows' older key forms. Approved beats
+    /// dismissed; a shared key already resolved is not written; old documents are left in place (readers map them).
+    /// A clash approval also writes its booking pair (`commitClashApproval`). Staff only; idempotent.
     private func migrateLegacyResolutions() {
         guard canWrite, let organizationId, let uid = Auth.auth().currentUser?.uid else { return }
+        var documents: [(id: String, data: [String: Any])] = storedResolutionRows.map { row in
+            let stored = row["storedKey"] ?? row["resolutionKey"] ?? row["id"] ?? ""
+            var data: [String: Any] = ["resolutionKey": stored]
+            if let status = row["status"] { data["status"] = status }
+            return (id: row["id"] ?? stored, data: data)
+        }
+        for key in unsyncedApprovedKeys { documents.append((id: key, data: ["resolutionKey": key, "status": "approved"])) }
+        for key in unsyncedDismissedKeys { documents.append((id: key, data: ["resolutionKey": key, "status": "dismissed"])) }
+        var forms: [String: [String]] = [:]
+        for key in legacyWarnings.keys where !migratedKeys.contains(key) {
+            forms[key] = legacyKeysByResolutionKey[key] ?? []
+        }
+        guard let writes = CanonicalBusinessEngine.warningResolutionMigrationWrites(
+            documents: documents,
+            legacyKeyForms: forms,
+            resolvedByUserId: uid
+        ) else { return }
         let resolved = Set(decisions()["resolvedKeys"] as? [String] ?? [])
-        for (key, warning) in legacyWarnings where !migratedKeys.contains(key) {
-            guard let status = legacyStatus(for: warning) else { continue }
-            let legacy = legacyKeysByResolutionKey[key] ?? []
+        for key in forms.keys where resolved.contains(key) {
             migratedKeys.insert(key)
-            if resolved.contains(key) {
-                forgetLegacyKeys(legacy, organizationId: organizationId)
-                continue
-            }
-            if status == "approved", Self.clashBookingIds(warning) != nil {
+            forgetLegacyKeys(forms[key] ?? [], organizationId: organizationId)
+        }
+        for write in writes {
+            let key = (write.fields["resolutionKey"] as? String) ?? write.documentId
+            let status = (write.fields["status"] as? String) ?? "dismissed"
+            guard !migratedKeys.contains(key), !resolved.contains(key) else { continue }
+            migratedKeys.insert(key)
+            let legacy = legacyKeysByResolutionKey[key] ?? []
+            if status == "approved", let warning = legacyWarnings[key], Self.clashBookingIds(warning) != nil {
                 if commitClashApproval(warning, organizationId: organizationId, uid: uid) {
                     forgetLegacyKeys(legacy, organizationId: organizationId)
                 }

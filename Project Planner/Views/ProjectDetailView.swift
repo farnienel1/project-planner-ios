@@ -409,7 +409,7 @@ struct ProjectDetailView: View {
             await MainActor.run { openVariationCount = 0 }
             return
         }
-        let count = await firebaseBackend.countOpenVariations(organizationId: orgId, parentId: project.id.uuidString)
+        let count = await firebaseBackend.countOpenVariations(organizationId: orgId, parentId: project.documentId)
         await MainActor.run { openVariationCount = count }
     }
 

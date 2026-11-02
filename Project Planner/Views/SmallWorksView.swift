@@ -450,7 +450,7 @@ struct SmallWorksView: View {
             await MainActor.run { deadlineAssignedProjectIds = [] }
             return
         }
-        let ids = await firebaseBackend.loadDeadlineAssignedProjectIds(userId: userId, organizationId: orgId)
+        let ids = await firebaseBackend.loadDeadlineAssignedProjectIds(userId: userId, organizationId: orgId, jobIds: projectStore.projects.map(\.documentId))
         await MainActor.run { deadlineAssignedProjectIds = ids }
     }
 

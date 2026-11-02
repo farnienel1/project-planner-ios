@@ -218,6 +218,10 @@ class FirebaseBackend: ObservableObject {
         let userId: String
         let assignedManagerUserId: String?
         let dayRate: Double?
+        /// `day` / `hourly` from `parseOperativeProfileDocument` (an hourly mirror stays hourly).
+        var payBasis: String? = nil
+        var hourlyRate: Double? = nil
+        var assignedManagerUserIds: [String] = []
     }
     
     /// Breaks recover → loadUserOrganization → org read fails → recover again loops (see firestore org self-read rules).
@@ -718,7 +722,7 @@ class FirebaseBackend: ObservableObject {
             
             // Create organization object (creator = this user)
             let organization = Organization(
-                id: UUID(uuidString: organizationId) ?? UUID(),
+                id: Manager.stableId(forFirestoreDocumentId: organizationId),
                 firestoreDocumentId: organizationId,
                 name: organizationName,
                 settings: OrganizationSettings(),
@@ -1142,7 +1146,7 @@ class FirebaseBackend: ObservableObject {
         }
         let cachedBilling = cachedBillingJSON(matching: trimmed)
         currentOrganization = Organization(
-            id: UUID(uuidString: trimmed) ?? UUID(),
+            id: Manager.stableId(forFirestoreDocumentId: trimmed),
             firestoreDocumentId: trimmed,
             name: cachedOrganizationName(matching: trimmed) ?? "",
             billingJSON: cachedBilling,
@@ -1830,7 +1834,7 @@ class FirebaseBackend: ObservableObject {
                    let organizationId = discoveredOrganizationId {
                     let cachedName = loadOrganizationFromLocalStorage()?.name
                     let fallbackOrganization = Organization(
-                        id: UUID(uuidString: organizationId) ?? UUID(),
+                        id: Manager.stableId(forFirestoreDocumentId: organizationId),
                         firestoreDocumentId: organizationId,
                         name: (cachedName?.isEmpty == false) ? cachedName! : "Recovered Organization",
                         settings: OrganizationSettings(),
@@ -2077,6 +2081,8 @@ class FirebaseBackend: ObservableObject {
     /// One `parseJobDocument` row as a `Project`. `storedManagerName` is the legacy `manager` label (the reader
     /// drops "Custom"; the legacy picker still shows it).
     static func job(fromCanonical row: CanonicalDocumentRow, smallWorks: Bool, storedManagerName: Any? = nil) -> Project {
+        // RULEBOOK 1.8.0: `client.id` is the stored id (`client.id`, else `clientId`), else `jobClientId` when the job
+        // names a client — the same derived id on web; the next job save writes it.
         let clientRow = CanonicalDocumentRow(row.map("client"))
         let clientId = clientRow?.text("id") ?? ""
         let client = Client(
@@ -2390,14 +2396,19 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: Refusing to overwrite job types with an empty list")
             return
         }
-        // RULEBOOK §1 partial write + metadata; §16 settings documents are admins and managers only.
+        // RULEBOOK 1.8.0 §1: `jobTypesWriteFields` (canonical names, de-duplicated, sorted; a field update of
+        // `jobTypes` only; no write when the list is empty or unchanged). §16: admins and managers only.
         let ref = db.collection("organizations").document(orgId).collection("settings").document("jobTypes")
-        let patch = WriteMetadata.stamped(["jobTypes": Array(jobTypes).sorted()], userId: currentUser?.uid)
-        do {
+        let snapshot = try await ref.getDocument(source: .server)
+        let stored = snapshot.exists ? CanonicalBusinessEngine.parseJobTypesDocument(snapshot.data()) : nil
+        guard let answer = CanonicalBusinessEngine.jobTypesWriteFields(stored: stored, next: Array(jobTypes)) else {
+            throw CanonicalWriteUnavailableError(function: "jobTypesWriteFields")
+        }
+        guard let names = answer else { return }
+        let patch = WriteMetadata.stamped(["jobTypes": names], userId: currentUser?.uid)
+        if snapshot.exists {
             try await ref.updateData(patch)
-        } catch {
-            let nsError = error as NSError
-            guard nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 5 else { throw error }
+        } else {
             // First save for this organisation: the document does not exist yet.
             var create = patch
             create["organizationId"] = orgId
@@ -2425,7 +2436,9 @@ class FirebaseBackend: ObservableObject {
             }
         }
         if doc.exists, let data = doc.data() {
-            let parsed = parseJobTypeList(data["jobTypes"])
+            // RULEBOOK 1.8.0 §1: `parseJobTypesDocument` (strings, `{ name }` maps, comma lists; enum spellings read
+            // as the canonical names).
+            let parsed = Set(CanonicalBusinessEngine.parseJobTypesDocument(data) ?? [])
             if !parsed.isEmpty {
                 print("🔥🔥🔥 DEBUG: Loaded \(parsed.count) job types from Firebase")
                 return parsed
@@ -2435,24 +2448,6 @@ class FirebaseBackend: ObservableObject {
         return []
     }
 
-    private func parseJobTypeList(_ raw: Any?) -> Set<String> {
-        var names: [String] = []
-        if let array = raw as? [String] {
-            names = array
-        } else if let array = raw as? [Any] {
-            names = array.compactMap { item in
-                if let s = item as? String { return s }
-                if let map = item as? [String: Any] {
-                    return (map["name"] as? String) ?? (map["rawValue"] as? String)
-                }
-                return nil
-            }
-        } else if let s = raw as? String {
-            names = s.split(separator: ",").map(String.init)
-        }
-        return Set(names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
-    }
-    
     // MARK: - Project Task Management
     
     func loadProjectTasks(organizationId: String) async throws -> [ProjectTask] {
@@ -2462,201 +2457,106 @@ class FirebaseBackend: ObservableObject {
         let snapshot = try await getDocumentsPreferringServer(tasksRef)
         print("🔥🔥🔥 DEBUG: Found \(snapshot.documents.count) task documents in Firebase")
         
-        return snapshot.documents.compactMap { doc in
-            let data = doc.data()
-            guard let projectIdString = data["projectId"] as? String,
-                  let projectId = UUID(uuidString: projectIdString),
-                  let title = data["title"] as? String,
-                  let createdBy = data["createdBy"] as? String,
-                  let statusRaw = data["status"] as? String,
-                  let status = ProjectTask.Status(rawValue: statusRaw),
-                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-                  let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue()
-            else {
-                return nil
-            }
-            
-            let assignedOperativeId: UUID?
-            if let operativeIdString = data["assignedOperativeId"] as? String {
-                assignedOperativeId = UUID(uuidString: operativeIdString)
-            } else {
-                assignedOperativeId = nil
-            }
-            
-            let assignedManagerId: UUID?
-            if let managerIdString = data["assignedManagerId"] as? String {
-                assignedManagerId = UUID(uuidString: managerIdString)
-            } else {
-                assignedManagerId = nil
-            }
-            
-            let dueDate = (data["dueDate"] as? Timestamp)?.dateValue()
-            let details = data["details"] as? String
-            let priorityRaw = data["priority"] as? String
-            let priority = priorityRaw.flatMap { ProjectTask.Priority(rawValue: $0) } ?? .normal
-
-            // Load multiple assignments
-            var assignedOperativeIds: [UUID] = []
-            if let operativeIdsArray = data["assignedOperativeIds"] as? [String] {
-                assignedOperativeIds = operativeIdsArray.compactMap { UUID(uuidString: $0) }
-            }
-            
-            var assignedManagerIds: [UUID] = []
-            if let managerIdsArray = data["assignedManagerIds"] as? [String] {
-                assignedManagerIds = managerIdsArray.compactMap { UUID(uuidString: $0) }
-            }
-            
-            // Load completion info
-            let completedBy = data["completedBy"] as? String
-            let completedAt = (data["completedAt"] as? Timestamp)?.dateValue()
-            let completionImages = data["completionImages"] as? [String] ?? []
-            let completionFiles = data["completionFiles"] as? [String] ?? []
-            let completionNotes = data["completionNotes"] as? String
-            
-            // Load attached files/images
-            let attachedFileURL = data["attachedFileURL"] as? String
-            let attachedFileName = data["attachedFileName"] as? String
-            let attachedImageURLs = data["attachedImageURLs"] as? [String] ?? []
-            let attachedSiteAuditId = (data["attachedSiteAuditId"] as? String).flatMap(UUID.init(uuidString:))
-            let attachedSiteAuditTitle = data["attachedSiteAuditTitle"] as? String
-            
-            // Load items (multi-item tasks)
-            var items: [ProjectTaskItem] = []
-            if let itemsArray = data["items"] as? [[String: Any]] {
-                for itemDict in itemsArray {
-                    guard let idStr = itemDict["id"] as? String,
-                          let itemId = UUID(uuidString: idStr),
-                          let itemTitle = itemDict["title"] as? String else { continue }
-                    let itemDesc = itemDict["description"] as? String
-                    items.append(ProjectTaskItem(id: itemId, title: itemTitle, description: itemDesc))
-                }
-            }
-            let completedItemIds: [UUID] = (data["completedItemIds"] as? [String])?.compactMap { UUID(uuidString: $0) } ?? []
-            
-            return ProjectTask(
-                id: UUID(uuidString: doc.documentID) ?? UUID(),
-                projectId: projectId,
-                title: title,
-                details: details,
-                createdBy: createdBy,
-                assignedOperativeId: assignedOperativeId,
-                assignedManagerId: assignedManagerId,
-                assignedOperativeIds: assignedOperativeIds,
-                assignedManagerIds: assignedManagerIds,
-                dueDate: dueDate,
-                priority: priority,
-                status: status,
-                createdAt: createdAt,
-                updatedAt: updatedAt,
-                attachedFileURL: attachedFileURL,
-                attachedFileName: attachedFileName,
-                attachedImageURLs: attachedImageURLs,
-                attachedSiteAuditId: attachedSiteAuditId,
-                attachedSiteAuditTitle: attachedSiteAuditTitle,
-                completedBy: completedBy,
-                completedAt: completedAt,
-                completionImages: completionImages,
-                completionFiles: completionFiles,
-                completionNotes: completionNotes,
-                items: items,
-                completedItemIds: completedItemIds
-            )
-        }
+        return snapshot.documents.compactMap { Self.projectTask(documentId: $0.documentID, data: $0.data()) }
     }
-    
-    func saveProjectTask(_ task: ProjectTask, organizationId: String) async throws {
-        print("🔥🔥🔥 DEBUG: Saving task '\(task.title)' to Firebase for organization: \(organizationId)")
-        var data: [String: Any] = [
-            "organizationId": organizationId,
-            "projectId": task.projectId.uuidString,
+
+    /// RULEBOOK 1.8.0 §1: one task through `parseTaskDocument` (document id in stored case, never a random id; a task
+    /// with no or a non-UUID job id, an unknown status or items without ids is kept; item ids are derived).
+    static func projectTask(documentId: String, data: [String: Any]) -> ProjectTask? {
+        guard let row = CanonicalBusinessEngine.parseTaskDocument(documentId: documentId, data: data) else { return nil }
+        let projectKey = row.text("projectId")
+        let createdAt = row.date("createdAtMs") ?? Date(timeIntervalSince1970: 0)
+        var task = ProjectTask(
+            id: JobKeys.inAppId(row.id),
+            projectId: projectKey.isEmpty ? Manager.stableId(forFirestoreDocumentId: "") : JobKeys.inAppId(projectKey),
+            title: row.text("title"),
+            details: row.optionalText("details"),
+            createdBy: row.text("createdBy"),
+            assignedOperativeId: row.optionalText("assignedOperativeId").map { JobKeys.inAppId($0) },
+            assignedManagerId: row.optionalText("assignedManagerId").map { JobKeys.inAppId($0) },
+            assignedOperativeIds: row.strings("assignedOperativeIds").map { JobKeys.inAppId($0) },
+            assignedManagerIds: row.strings("assignedManagerIds").map { JobKeys.inAppId($0) },
+            dueDate: row.date("dueDateMs"),
+            priority: ProjectTask.Priority(rawValue: row.text("priority")) ?? .normal,
+            status: ProjectTask.Status(rawValue: row.text("status")) ?? .todo,
+            createdAt: createdAt,
+            updatedAt: row.date("updatedAtMs") ?? createdAt,
+            attachedFileURL: row.optionalText("attachedFileURL"),
+            attachedFileName: row.optionalText("attachedFileName"),
+            attachedImageURLs: row.strings("attachedImageURLs"),
+            attachedSiteAuditId: row.optionalText("attachedSiteAuditId").map { JobKeys.inAppId($0) },
+            attachedSiteAuditTitle: row.optionalText("attachedSiteAuditTitle"),
+            completedBy: row.optionalText("completedBy"),
+            completedAt: row.date("completedAtMs"),
+            completionImages: row.strings("completionImages"),
+            completionFiles: row.strings("completionFiles"),
+            completionNotes: row.optionalText("completionNotes"),
+            items: row.rows("items").map { item in
+                ProjectTaskItem(id: JobKeys.inAppId(item.id), title: item.text("title"), description: item.optionalText("description"))
+            },
+            completedItemIds: row.strings("completedItemIds").map { JobKeys.inAppId($0) }
+        )
+        task.projectKey = projectKey
+        return task
+    }
+
+    /// The `taskFields` input for a task: ids as stored, instants as native Timestamps.
+    static func projectTaskFields(_ task: ProjectTask, organizationId: String) -> [String: Any]? {
+        let projectId: String
+        if let key = task.projectKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+           Manager.stableId(forFirestoreDocumentId: key) == task.projectId {
+            projectId = key
+        } else {
+            projectId = JobKeys.storedJobId(for: task.projectId)
+        }
+        let stored: (UUID) -> String = { WorkDocumentKeys.storedId(for: $0) }
+        let input: [String: Any] = [
+            "id": stored(task.id),
+            "projectId": projectId,
             "title": task.title,
-            "details": task.details ?? "",
+            "details": task.details ?? NSNull(),
             "createdBy": task.createdBy,
             "status": task.status.rawValue,
             "priority": task.priority.rawValue,
+            "assignedOperativeId": task.assignedOperativeId.map { stored($0) as Any } ?? NSNull(),
+            "assignedManagerId": task.assignedManagerId.map { stored($0) as Any } ?? NSNull(),
+            "assignedOperativeIds": task.assignedOperativeIds.map(stored),
+            "assignedManagerIds": task.assignedManagerIds.map(stored),
+            "dueDate": task.dueDate.map { Timestamp(date: $0) as Any } ?? NSNull(),
+            "completedBy": task.completedBy ?? NSNull(),
+            "completedAt": task.completedAt.map { Timestamp(date: $0) as Any } ?? NSNull(),
+            "completionNotes": task.completionNotes ?? NSNull(),
+            "completionImages": task.completionImages,
+            "completionFiles": task.completionFiles,
+            "attachedImageURLs": task.attachedImageURLs,
+            "attachedFileURL": task.attachedFileURL ?? NSNull(),
+            "attachedFileName": task.attachedFileName ?? NSNull(),
+            "attachedSiteAuditId": task.attachedSiteAuditId.map { stored($0) as Any } ?? NSNull(),
+            "attachedSiteAuditTitle": task.attachedSiteAuditTitle ?? NSNull(),
+            "items": task.items.map { ["id": stored($0.id), "title": $0.title, "description": $0.description ?? ""] as [String: Any] },
+            "completedItemIds": task.completedItemIds.map(stored),
             "createdAt": Timestamp(date: task.createdAt),
-            "updatedAt": Timestamp(date: task.updatedAt)
+            "organizationId": organizationId,
         ]
-        
-        if let operativeId = task.assignedOperativeId {
-            data["assignedOperativeId"] = operativeId.uuidString
+        guard let fields = CanonicalBusinessEngine.taskFields(input) else { return nil }
+        return ScriptFirestoreValue.native(fields) as? [String: Any]
+    }
+    
+    /// RULEBOOK 1.8.0 §1: a task saved with `taskWriteFields` (never a whole-task `setData`): assignee id with list,
+    /// completion by with at, and items with completed item ids are each written together; `createdAt`, `createdBy`
+    /// and `organizationId` are never rewritten. The task lives at its stored document id.
+    func saveProjectTask(_ task: ProjectTask, organizationId: String) async throws {
+        guard let data = Self.projectTaskFields(task, organizationId: organizationId) else {
+            throw CanonicalWriteUnavailableError(function: "taskFields")
         }
-        
-        if let managerId = task.assignedManagerId {
-            data["assignedManagerId"] = managerId.uuidString
-        }
-        
-        // Add multiple assignments
-        if !task.assignedOperativeIds.isEmpty {
-            data["assignedOperativeIds"] = task.assignedOperativeIds.map { $0.uuidString }
-        }
-        
-        if !task.assignedManagerIds.isEmpty {
-            data["assignedManagerIds"] = task.assignedManagerIds.map { $0.uuidString }
-        }
-        
-        if let dueDate = task.dueDate {
-            data["dueDate"] = Timestamp(date: dueDate)
-        }
-        
-        // Add completion info
-        if let completedBy = task.completedBy {
-            data["completedBy"] = completedBy
-        }
-        
-        if let completedAt = task.completedAt {
-            data["completedAt"] = Timestamp(date: completedAt)
-        }
-        
-        if !task.completionImages.isEmpty {
-            data["completionImages"] = task.completionImages
-        }
-        
-        if !task.completionFiles.isEmpty {
-            data["completionFiles"] = task.completionFiles
-        }
-        
-        if let notes = task.completionNotes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
-            data["completionNotes"] = notes
-        }
-        
-        // Add attached images
-        if !task.attachedImageURLs.isEmpty {
-            data["attachedImageURLs"] = task.attachedImageURLs
-        }
-        if let fileURL = task.attachedFileURL, !fileURL.isEmpty {
-            data["attachedFileURL"] = fileURL
-        }
-        if let fileName = task.attachedFileName, !fileName.isEmpty {
-            data["attachedFileName"] = fileName
-        }
-        if let auditId = task.attachedSiteAuditId {
-            data["attachedSiteAuditId"] = auditId.uuidString
-        }
-        if let auditTitle = task.attachedSiteAuditTitle, !auditTitle.isEmpty {
-            data["attachedSiteAuditTitle"] = auditTitle
-        }
-        
-        // Add items and completedItemIds (multi-item tasks)
-        if !task.items.isEmpty {
-            data["items"] = task.items.map { item in
-                [
-                    "id": item.id.uuidString,
-                    "title": item.title,
-                    "description": item.description ?? ""
-                ]
-            }
-        }
-        if !task.completedItemIds.isEmpty {
-            data["completedItemIds"] = task.completedItemIds.map { $0.uuidString }
-        }
-        
-        try await db.collection("organizations").document(organizationId).collection("tasks").document(task.id.uuidString).setData(data)
-        print("🔥🔥🔥 DEBUG: Task '\(task.title)' saved successfully to Firebase")
+        let ref = db.collection("organizations").document(organizationId)
+            .collection("tasks")
+            .document(WorkDocumentKeys.storedId(for: task.id))
+        try await writeOperationsDocument(ref, writeFields: "taskWriteFields") { _ in data }
     }
     
     func deleteProjectTask(taskId: UUID, organizationId: String) async throws {
-        try await db.collection("organizations").document(organizationId).collection("tasks").document(taskId.uuidString).delete()
+        try await db.collection("organizations").document(organizationId).collection("tasks").document(WorkDocumentKeys.storedId(for: taskId)).delete()
     }
     
     // MARK: - Firebase Storage
@@ -3053,7 +2953,7 @@ class FirebaseBackend: ObservableObject {
     /// `managerRowWriteFields`, `clientWriteFields`, `subcontractorWriteFields`) names — against `previousPayload`
     /// when the caller has the copy it edited, else the server copy — with `WriteMetadata`. Never rewrites the
     /// whole document and never deletes a field the copy lacks.
-    private func writeChangedRosterRow(
+    func writeChangedRosterRow(
         _ ref: DocumentReference,
         payload: [String: Any],
         previousPayload: [String: Any]?,
@@ -4051,6 +3951,7 @@ class FirebaseBackend: ObservableObject {
         parsed.payBasis = row.optionalText("payBasis")
         parsed.profilePhotoUpdatedAt = row.date("profilePhotoUpdatedAtMs")
         parsed.operativeModeStored = row.bool("operativeModeStored")
+        parsed.annualLeaveDefaultsPending = row.bool("annualLeaveDefaultsPending")
         return parsed
     }
 
@@ -5337,10 +5238,14 @@ class FirebaseBackend: ObservableObject {
             userData["profilePhotoURL"] = FieldValue.delete()
         }
         
-        userData["annualLeaveDaysPerYear"] = AnnualLeavePolicy.clampDaysPerYear(user.annualLeaveDaysPerYear)
-        userData["annualLeaveYearStartMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearStartMonth)
-        userData["annualLeaveYearEndMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearEndMonth)
-        userData["annualLeaveCarriesOver"] = user.annualLeaveCarriesOver
+        // RULEBOOK 1.8.0: figures read before the organisation's leave defaults loaded are not the person's own and
+        // are never saved (`annualLeaveDefaultsPending`).
+        if !user.annualLeaveDefaultsPending {
+            userData["annualLeaveDaysPerYear"] = AnnualLeavePolicy.clampDaysPerYear(user.annualLeaveDaysPerYear)
+            userData["annualLeaveYearStartMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearStartMonth)
+            userData["annualLeaveYearEndMonth"] = AnnualLeavePolicy.clampMonth(user.annualLeaveYearEndMonth)
+            userData["annualLeaveCarriesOver"] = user.annualLeaveCarriesOver
+        }
         userData["annualLeaveEnabled"] = user.annualLeaveEnabled
         if let pot = user.annualLeaveYearAllowance {
             userData["annualLeaveYearAllowance"] = pot
@@ -5828,30 +5733,21 @@ class FirebaseBackend: ObservableObject {
             .collection("operativeProfiles")
             .document(userId)
 
+        // RULEBOOK 1.8.0 §1: `operativeProfileWriteFields` (pay basis with both rates, manager id with the list,
+        // each written together; `userId` / `createdAt` create-only), against the server copy.
         var payload: [String: Any] = ["userId": userId]
         if let managerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !managerId.isEmpty {
             payload["assignedManagerUserId"] = managerId
+            payload["assignedManagerUserIds"] = [managerId]
         } else {
             payload["assignedManagerUserId"] = FieldValue.delete()
+            payload["assignedManagerUserIds"] = FieldValue.delete()
         }
         for (key, value) in Self.exclusivePayFields(payBasis: payBasis, amount: dayRate) {
             payload[key] = value
         }
-        let stamped = WriteMetadata.stamped(payload, userId: auth.currentUser?.uid)
-
-        do {
-            try await ref.updateData(stamped)
-        } catch {
-            let nsError = error as NSError
-            if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 5 {
-                // First write of the mirror: the same fields; deletes are dropped on a create.
-                let createPayload = stamped.filter { !($0.value is FieldValue) || $0.key == "updatedAt" }
-                try await ref.setData(createPayload, merge: true)
-            } else {
-                throw error
-            }
-        }
+        try await writeOperationsDocument(ref, writeFields: "operativeProfileWriteFields") { _ in payload }
     }
 
     func loadOperativeProfileMetadataFallback(organizationId: String) async throws -> [String: OperativeProfileMetadata] {
@@ -5867,13 +5763,17 @@ class FirebaseBackend: ObservableObject {
         }
 
         var mapped: [String: OperativeProfileMetadata] = [:]
+        // RULEBOOK 1.8.0 §1: `parseOperativeProfileDocument` (rates via `readStoredRates`; iOS read `dayRate` only).
         for doc in snapshot.documents {
-            let data = doc.data()
-            let userId = (data["userId"] as? String) ?? doc.documentID
+            guard let row = CanonicalBusinessEngine.parseOperativeProfileDocument(documentId: doc.documentID, data: doc.data()) else { continue }
+            let userId = row.text("userId")
             mapped[userId] = OperativeProfileMetadata(
                 userId: userId,
-                assignedManagerUserId: data["assignedManagerUserId"] as? String,
-                dayRate: data["dayRate"] as? Double
+                assignedManagerUserId: row.optionalText("assignedManagerUserId"),
+                dayRate: row.number("dayRate"),
+                payBasis: row.optionalText("payBasis"),
+                hourlyRate: row.number("hourlyRate"),
+                assignedManagerUserIds: row.strings("assignedManagerUserIds")
             )
         }
         return mapped
@@ -6267,7 +6167,7 @@ class FirebaseBackend: ObservableObject {
         if onlyIfMissing {
             acceptedMissingNotificationIds.insert(idKey)
         }
-        let ref = db.collection("organizations").document(organizationId).collection("notifications").document(notification.id.uuidString)
+        let ref = db.collection("organizations").document(organizationId).collection("notifications").document(WorkDocumentKeys.storedId(for: notification.id))
         var isRead = notification.isRead
         if onlyIfMissing || preserveExistingReadState {
             let existing = try? await ref.getDocument()
@@ -6284,11 +6184,11 @@ class FirebaseBackend: ObservableObject {
            AppNotification.isInboxDayKey(dayKey) {
             relatedIdValue = dayKey
         } else {
-            relatedIdValue = notification.relatedId?.uuidString ?? NSNull()
+            relatedIdValue = notification.relatedKey ?? NSNull()
         }
         var data: [String: Any] = [
             "organizationId": notification.organizationId,
-            "type": notification.type.rawValue,
+            "type": notification.typeText,
             "title": notification.title,
             "message": notification.message,
             "userId": notification.userId ?? NSNull(),
@@ -6352,50 +6252,50 @@ class FirebaseBackend: ObservableObject {
             }
         }
         
-        var notifications: [AppNotification] = []
-        
-        for doc in snapshot.documents {
-            let data = doc.data()
-            
-            guard let typeString = data["type"] as? String,
-                  let type = AppNotification.NotificationType(rawValue: typeString),
-                  let title = data["title"] as? String,
-                  let message = data["message"] as? String,
-                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-                  let isRead = data["isRead"] as? Bool,
-                  let orgId = data["organizationId"] as? String else {
-                continue
-            }
-            
-            let id = UUID(uuidString: doc.documentID) ?? UUID()
-            let userId = data["userId"] as? String
-            let relatedIdString = data["relatedId"] as? String
-            let relatedId = relatedIdString.flatMap(UUID.init(uuidString:))
-            let requiresPermission = data["requiresPermission"] as? String
-            let deepLinkUserId = data["deepLinkUserId"] as? String
-            let deepLinkWeekStart = (data["deepLinkWeekStart"] as? Timestamp)?.dateValue()
-            
-            let notification = AppNotification(
-                id: id,
-                organizationId: orgId,
-                type: type,
-                title: title,
-                message: message,
-                userId: userId,
-                relatedId: relatedId,
-                isRead: isRead,
-                createdAt: createdAt,
-                requiresPermission: requiresPermission,
-                deepLinkUserId: deepLinkUserId,
-                deepLinkWeekStart: deepLinkWeekStart,
-                dayKey: AppNotification.inboxDayKey(storedDayKey: data["dayKey"] as? String, relatedId: relatedIdString),
-                catalogue: data["catalogue"] as? String
-            )
-            
-            notifications.append(notification)
+        // RULEBOOK 1.8.0 §13: `parseNotificationDocument` (never a random id; unknown types kept).
+        return snapshot.documents.compactMap {
+            Self.appNotification(documentId: $0.documentID, data: $0.data(), organizationId: organizationId)
         }
+    }
 
-        return notifications
+    /// One inbox row through `parseNotificationDocument`. Nil only without a document id or a type.
+    static func appNotification(documentId: String, data: [String: Any], organizationId: String?) -> AppNotification? {
+        guard let row = CanonicalBusinessEngine.parseNotificationDocument(
+            documentId: documentId,
+            data: data,
+            organizationId: organizationId
+        ) else { return nil }
+        let storedType = row.text("type")
+        var notification = AppNotification(
+            id: JobKeys.inAppId(row.id),
+            organizationId: row.optionalText("organizationId") ?? organizationId ?? "",
+            type: AppNotification.NotificationType(stored: storedType),
+            title: row.text("title"),
+            message: row.text("message"),
+            userId: row.optionalText("userId"),
+            relatedKey: row.optionalText("relatedId"),
+            isRead: row.bool("isRead"),
+            createdAt: row.date("createdAtMs") ?? Date(timeIntervalSince1970: 0),
+            requiresPermission: row.optionalText("requiresPermission"),
+            deepLinkUserId: row.optionalText("deepLinkUserId"),
+            deepLinkWeekStart: row.date("deepLinkWeekStartMs"),
+            dayKey: row.optionalText("dayKey"),
+            catalogue: row.optionalText("catalogue")
+        )
+        notification.storedType = storedType
+        return notification
+    }
+
+    /// RULEBOOK 1.8.0 §13: marking a row read is `notificationReadWriteFields` — `{ isRead: true }` only.
+    func markNotificationRead(_ notification: AppNotification, wasRead: Bool, organizationId: String) async throws {
+        guard let answer = CanonicalBusinessEngine.callJSON("notificationReadWriteFields", arguments: [["isRead": wasRead]]) else {
+            throw CanonicalWriteUnavailableError(function: "notificationReadWriteFields")
+        }
+        guard let set = (answer as? [String: Any])?["set"] as? [String: Any], !set.isEmpty else { return }
+        try await db.collection("organizations").document(organizationId)
+            .collection("notifications")
+            .document(WorkDocumentKeys.storedId(for: notification.id))
+            .updateData(set)
     }
 
     /// Applies `resolveInviteEmailClaim`. A non-empty `reuseUserId` is the leftover placeholder.
@@ -8509,150 +8409,81 @@ extension FirebaseBackend {
     
     // MARK: - Materials
 
-    /// Firestore often returns numeric fields as `Int64` / `NSNumber`; plain `as? Int` drops valid rows.
-    private func materialQuantityFromFirestore(_ value: Any?) -> Int? {
-        switch value {
-        case let v as Int: return v
-        case let v as Int8: return Int(v)
-        case let v as Int16: return Int(v)
-        case let v as Int32: return Int(v)
-        case let v as Int64: return Int(exactly: v)
-        case let v as UInt: return Int(exactly: v)
-        case let v as Double: return Int(exactly: v)
-        case let v as Float: return Int(v)
-        case let n as NSNumber: return n.intValue
-        default: return nil
-        }
-    }
-
-    /// Parses a materials subcollection document for ownership checks and delete. Returns nil if required fields are missing.
-    private func materialItemFromFirestoreDocumentData(_ data: [String: Any]) -> MaterialItem? {
-        guard let idString = data["id"] as? String,
-              let id = UUID(uuidString: idString),
-              let quantity = materialQuantityFromFirestore(data["quantity"]),
-              let unitString = data["unit"] as? String,
-              let unit = MaterialUnit(rawValue: unitString),
-              let materialName = data["material"] as? String,
-              let addedBy = data["addedBy"] as? String,
-              let addedAt = (data["addedAt"] as? Timestamp)?.dateValue(),
-              let projectIdString = data["projectId"] as? String,
-              let projectId = UUID(uuidString: projectIdString),
-              let date = (data["date"] as? Timestamp)?.dateValue() else {
-            return nil
-        }
-        let status = materialWorkflowStatusFromFirestore(data["status"])
-        let catalogueId = (data["catalogueItemId"] as? String).flatMap(UUID.init(uuidString:))
-        let lastSentTypeRaw = data["lastSentRequestType"] as? String
-        let lastSentType = lastSentTypeRaw.flatMap { MaterialOrderRequest.RequestType(rawValue: $0) }
-
+    /// RULEBOOK 1.8.0 §1: a `materials/{id}` line read through `parseMaterialLineDocument` (non-UUID ids, odd units,
+    /// numeric-string quantities and web lines are kept; the day is the organisation-zone `dayKey`, never device
+    /// midnight). Ids map to stable in-app UUIDs with their stored spelling remembered. Nil without a job or name.
+    static func materialItem(documentId: String, data: [String: Any]) -> MaterialItem? {
+        guard let row = CanonicalBusinessEngine.parseMaterialLineDocument(documentId: documentId, data: data) else { return nil }
+        let day = row.optionalText("dayKey").flatMap { OrganizationRulebookContext.date(fromDayKey: $0) }
+            ?? row.date("dateMs")
+            ?? row.date("addedAtMs")
+            ?? Date()
+        let quantity = row.number("quantity") ?? 1
         return MaterialItem(
-            id: id,
-            quantity: quantity,
-            unit: unit,
-            material: materialName,
-            addedBy: addedBy,
-            addedByUserId: data["addedByUserId"] as? String,
-            addedAt: addedAt,
-            editedBy: data["editedBy"] as? String,
-            editedByUserId: data["editedByUserId"] as? String,
-            editedAt: (data["editedAt"] as? Timestamp)?.dateValue(),
-            projectId: projectId,
-            date: Calendar.current.startOfDay(for: date),
-            status: status,
-            catalogueItemId: catalogueId,
-            brand: data["brand"] as? String,
-            productCode: data["productCode"] as? String,
-            size: data["size"] as? String,
-            length: (data["length"] as? String)
-                ?? (data["sizeOrLength"] as? String)
-                ?? (data["packSize"] as? Int).map(String.init),
-            lengthUnit: (data["lengthUnit"] as? String).flatMap(MaterialLengthUnit.init(rawValue:)),
-            category: data["category"] as? String,
-            websiteURL: data["websiteURL"] as? String,
-            notes: data["notes"] as? String,
-            lastSentAt: (data["lastSentAt"] as? Timestamp)?.dateValue(),
-            lastSentRequestType: lastSentType
+            id: JobKeys.inAppId(row.id),
+            quantity: max(0, Int(quantity.rounded())),
+            unit: MaterialUnit(rawValue: row.text("unit")) ?? .number,
+            material: row.text("material"),
+            addedBy: row.text("addedBy"),
+            addedByUserId: row.optionalText("addedByUserId"),
+            addedAt: row.date("addedAtMs") ?? Date(timeIntervalSince1970: 0),
+            editedBy: row.optionalText("editedBy"),
+            editedByUserId: row.optionalText("editedByUserId"),
+            editedAt: row.date("editedAtMs"),
+            projectId: JobKeys.inAppId(row.text("projectId")),
+            date: day,
+            status: MaterialWorkflowStatus(rawValue: row.text("status")) ?? .draft,
+            catalogueItemId: row.optionalText("catalogueItemId").map { JobKeys.inAppId($0) },
+            brand: row.optionalText("brand"),
+            productCode: row.optionalText("productCode"),
+            size: row.optionalText("size"),
+            length: row.optionalText("length"),
+            lengthUnit: MaterialLengthUnit(rawValue: row.text("lengthUnit")),
+            category: row.optionalText("category"),
+            websiteURL: row.optionalText("websiteURL"),
+            notes: row.optionalText("notes"),
+            lastSentAt: row.date("lastSentAtMs"),
+            lastSentRequestType: MaterialOrderRequest.RequestType(rawValue: row.text("lastSentRequestType"))
         )
     }
 
-    private func materialWorkflowStatusFromFirestore(_ value: Any?) -> MaterialWorkflowStatus {
-        guard let raw = value as? String,
-              let status = MaterialWorkflowStatus(rawValue: raw) else {
-            return .draft
-        }
-        return status
+    private func materialItemFromFirestoreDocument(_ documentId: String, _ data: [String: Any]) -> MaterialItem? {
+        Self.materialItem(documentId: documentId, data: data)
     }
 
-    private func legacyLengthMigrationPayload(_ data: [String: Any]) -> [String: Any]? {
-        let hasLength = (data["length"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty == false
-        guard !hasLength else { return nil }
-        let legacyValue = (data["sizeOrLength"] as? String)
-            ?? (data["packSize"] as? Int).map(String.init)
-        let trimmed = legacyValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
-        return [
-            "length": trimmed,
-            // Keep legacy field in sync while older app builds still read it.
-            "sizeOrLength": trimmed
-        ]
-    }
-
-    private func materialItemFirestorePayload(_ material: MaterialItem, addedByUserId: String?) -> [String: Any] {
-        let calendar = Calendar.current
-        let normalizedDate = calendar.startOfDay(for: material.date)
-        var data: [String: Any] = [
-            "id": material.id.uuidString,
+    /// RULEBOOK 1.8.0 §1: the stored shape of a material line from `materialLineFields` (organisation-zone `dayKey`
+    /// plus `date` at organisation-zone midnight; `material`/`name` and `length`/`sizeOrLength` mirrored; blanks null
+    /// so a partial save removes them). Ids are written as stored. Native Timestamps for the instants.
+    static func materialLinePayload(_ material: MaterialItem, addedByUserId: String?) -> [String: Any]? {
+        let input: [String: Any] = [
+            "id": WorkDocumentKeys.storedId(for: material.id),
+            "projectId": JobKeys.storedJobId(for: material.projectId),
             "quantity": material.quantity,
             "unit": material.unit.rawValue,
             "material": material.material,
+            "dayKey": OrganizationRulebookContext.dayKey(material.date),
+            "status": material.status.rawValue,
             "addedBy": material.addedBy,
-            "addedByUserId": addedByUserId as Any,
-            "addedAt": Timestamp(date: material.addedAt),
-            "editedBy": material.editedBy as Any,
-            "editedByUserId": material.editedByUserId as Any,
-            "editedAt": material.editedAt.map { Timestamp(date: $0) } as Any,
-            "projectId": material.projectId.uuidString,
-            "date": Timestamp(date: normalizedDate),
-            "status": material.status.rawValue
+            "addedByUserId": addedByUserId ?? NSNull(),
+            "editedBy": material.editedBy ?? NSNull(),
+            "editedByUserId": material.editedByUserId ?? NSNull(),
+            "catalogueItemId": material.catalogueItemId.map { WorkDocumentKeys.storedId(for: $0) as Any } ?? NSNull(),
+            "brand": material.brand ?? NSNull(),
+            "productCode": material.productCode ?? NSNull(),
+            "category": material.category ?? NSNull(),
+            "size": material.size ?? NSNull(),
+            "length": material.length ?? NSNull(),
+            "lengthUnit": material.lengthUnit?.rawValue ?? NSNull(),
+            "websiteURL": material.websiteURL ?? NSNull(),
+            "notes": material.notes ?? NSNull(),
         ]
-        if let catalogueItemId = material.catalogueItemId {
-            data["catalogueItemId"] = catalogueItemId.uuidString
-        }
-        if let brand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines), !brand.isEmpty {
-            data["brand"] = brand
-        }
-        if let code = material.productCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
-            data["productCode"] = code
-        }
-        if let size = material.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
-            data["size"] = size
-        }
-        if let length = material.length?.trimmingCharacters(in: .whitespacesAndNewlines), !length.isEmpty {
-            data["length"] = length
-            // Backward compatibility for older app versions.
-            data["sizeOrLength"] = length
-        }
-        if let lengthUnit = material.lengthUnit {
-            data["lengthUnit"] = lengthUnit.rawValue
-        }
-        if let category = material.category?.trimmingCharacters(in: .whitespacesAndNewlines), !category.isEmpty {
-            data["category"] = category
-        }
-        if let websiteURL = material.websiteURL?.trimmingCharacters(in: .whitespacesAndNewlines), !websiteURL.isEmpty {
-            data["websiteURL"] = websiteURL
-        }
-        if let notes = material.notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
-            data["notes"] = notes
-        }
-        if let lastSentAt = material.lastSentAt {
-            data["lastSentAt"] = Timestamp(date: lastSentAt)
-        }
-        if let lastSentRequestType = material.lastSentRequestType {
-            data["lastSentRequestType"] = lastSentRequestType.rawValue
-        }
-        return data
+        guard var fields = CanonicalBusinessEngine.materialLineFields(input) else { return nil }
+        fields["date"] = ScriptFirestoreValue.timestamp(ms: fields["date"]) ?? NSNull()
+        fields["addedAt"] = Timestamp(date: material.addedAt)
+        fields["editedAt"] = material.editedAt.map { Timestamp(date: $0) as Any } ?? NSNull()
+        if let lastSentAt = material.lastSentAt { fields["lastSentAt"] = Timestamp(date: lastSentAt) }
+        if let lastSentRequestType = material.lastSentRequestType { fields["lastSentRequestType"] = lastSentRequestType.rawValue }
+        return fields
     }
     
     private func truthyFirestoreBool(_ value: Any?) -> Bool {
@@ -8753,17 +8584,15 @@ extension FirebaseBackend {
         }
         await repairCurrentUserOrganizationAccess(organizationId: orgId)
 
-        // Ensure date is normalized to start of day
-        let calendar = Calendar.current
-        let normalizedDate = calendar.startOfDay(for: material.date)
+        // RULEBOOK 1.8.0 §1: the line lives at its stored document id; the day is an organisation-zone day key.
         let docRef = db.collection("organizations").document(orgId)
             .collection("materials")
-            .document(material.id.uuidString)
+            .document(WorkDocumentKeys.storedId(for: material.id))
 
         let serverSnapshot = try await docRef.getDocument(source: .server)
         if serverSnapshot.exists,
            let serverData = serverSnapshot.data(),
-           let serverMaterial = materialItemFromFirestoreDocumentData(serverData) {
+           let serverMaterial = materialItemFromFirestoreDocument(serverSnapshot.documentID, serverData) {
             guard await canCurrentUserDeleteMaterial(serverMaterial, organizationId: orgId) else {
                 throw NSError(
                     domain: "FirebaseBackend",
@@ -8796,16 +8625,25 @@ extension FirebaseBackend {
             effectiveAddedByUserId = uid
         }
         
-        let data = materialItemFirestorePayload(material, addedByUserId: effectiveAddedByUserId)
-        
-        print("💾 [FirebaseBackend] Saving material:")
-        print("   ID: \(material.id.uuidString)")
-        print("   Material: \(material.material)")
-        print("   Project ID: \(material.projectId.uuidString)")
-        print("   Date: \(normalizedDate)")
-        print("   Organization ID: \(orgId)")
-        
-        try await docRef.setData(data)
+        guard let data = Self.materialLinePayload(material, addedByUserId: effectiveAddedByUserId) else {
+            throw CanonicalWriteUnavailableError(function: "materialLineFields")
+        }
+        let uid = currentUser?.uid
+        // RULEBOOK 1.8.0 §1 "Partial writes only": a new line is created whole; an edit writes only the fields
+        // `materialLineWriteFields` names against the server copy (never a full `setData`, which deleted fields the
+        // other app writes). `addedAt` / `addedBy` / `addedByUserId` are never rewritten.
+        if serverSnapshot.exists, let stored = serverSnapshot.data() {
+            guard let write = CanonicalBusinessEngine.peopleDocumentWrite("materialLineWriteFields", before: stored, next: data) else {
+                throw CanonicalWriteUnavailableError(function: "materialLineWriteFields")
+            }
+            let changes = write.firestoreFields(from: data)
+            if !changes.isEmpty {
+                try await docRef.updateData(WriteMetadata.stamped(changes, userId: uid))
+            }
+        } else {
+            let createPayload = data.filter { !($0.value is NSNull) }
+            try await docRef.setData(WriteMetadata.stamped(createPayload, userId: uid))
+        }
 
         if material.catalogueItemId == nil {
             // Reads the whole catalogue first. The material line is already saved, so this must not hold the sheet open.
@@ -8864,7 +8702,7 @@ extension FirebaseBackend {
             .getDocuments(source: .server)
 
         for doc in materialsSnapshot.documents {
-            guard let material = materialItemFromFirestoreDocumentData(doc.data()) else { continue }
+            guard let material = materialItemFromFirestoreDocument(doc.documentID, doc.data()) else { continue }
             let normalizedName = material.material.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !normalizedName.isEmpty else { continue }
             let key = materialCatalogueNameKey(name: normalizedName)
@@ -8890,10 +8728,11 @@ extension FirebaseBackend {
     
     func loadMaterialItems(organizationId: String, projectId: UUID) async throws -> [MaterialItem] {
         let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
-        print("🔍 [FirebaseBackend] Loading materials for projectId: \(projectId.uuidString) org: \(orgId)")
+        // RULEBOOK 1.8.0 §1 "Job keys": lines store the job's document id as stored; older iOS lines on a
+        // lower-case job stored the upper-case UUID, so both spellings are matched.
         let materialsQuery = db.collection("organizations").document(orgId)
             .collection("materials")
-            .whereField("projectId", isEqualTo: projectId.uuidString)
+            .whereField("projectId", in: JobKeys.queryValues(for: projectId))
         let snapshot: QuerySnapshot
         do {
             snapshot = try await materialsQuery.getDocuments(source: .server)
@@ -8907,11 +8746,7 @@ extension FirebaseBackend {
         var materials: [MaterialItem] = []
         
         for doc in snapshot.documents {
-            let data = doc.data()
-            if let migration = legacyLengthMigrationPayload(data) {
-                try? await doc.reference.setData(migration, merge: true)
-            }
-            guard let materialItem = materialItemFromFirestoreDocumentData(data) else {
+            guard let materialItem = materialItemFromFirestoreDocument(doc.documentID, doc.data()) else {
                 print("⚠️ [FirebaseBackend] Skipping material document - missing required fields")
                 continue
             }
@@ -8936,11 +8771,7 @@ extension FirebaseBackend {
 
         var materials: [MaterialItem] = []
         for doc in snapshot.documents {
-            let data = doc.data()
-            if let migration = legacyLengthMigrationPayload(data) {
-                try? await doc.reference.setData(migration, merge: true)
-            }
-            guard let item = materialItemFromFirestoreDocumentData(data) else { continue }
+            guard let item = materialItemFromFirestoreDocument(doc.documentID, doc.data()) else { continue }
             materials.append(item)
         }
         return materials
@@ -8954,7 +8785,7 @@ extension FirebaseBackend {
         let orgId = normalizedOrganizationId(organizationId)
         return db.collection("organizations").document(orgId)
             .collection("materials")
-            .whereField("projectId", isEqualTo: projectId.uuidString)
+            .whereField("projectId", in: JobKeys.queryValues(for: projectId))
             .addSnapshotListener { snapshot, error in
                 if let error {
                     print("❌ [FirebaseBackend] observeMaterialItems error: \(error.localizedDescription)")
@@ -8972,13 +8803,7 @@ extension FirebaseBackend {
                 var loaded: [MaterialItem] = []
 
                 for doc in docs {
-                    let data = doc.data()
-                    if let migration = self.legacyLengthMigrationPayload(data) {
-                        Task {
-                            try? await doc.reference.setData(migration, merge: true)
-                        }
-                    }
-                    guard let item = self.materialItemFromFirestoreDocumentData(data) else { continue }
+                    guard let item = self.materialItemFromFirestoreDocument(doc.documentID, doc.data()) else { continue }
                     loaded.append(item)
                 }
 
@@ -8992,10 +8817,10 @@ extension FirebaseBackend {
         let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
         let docRef = db.collection("organizations").document(orgId)
             .collection("materials")
-            .document(materialId.uuidString)
+            .document(WorkDocumentKeys.storedId(for: materialId))
         let snapshot = try await docRef.getDocument(source: .server)
         guard let data = snapshot.data(),
-              let material = materialItemFromFirestoreDocumentData(data) else {
+              let material = materialItemFromFirestoreDocument(snapshot.documentID, data) else {
             throw NSError(domain: "FirebaseBackend", code: 404, userInfo: [NSLocalizedDescriptionKey: "Material could not be found."])
         }
         guard await canCurrentUserDeleteMaterial(material, organizationId: orgId) else {
@@ -9025,21 +8850,22 @@ extension FirebaseBackend {
     /// Deletes materials for **this project only** whose **needed** `date` is older than `keepDays` before today. Other jobs in the org are untouched.
     func cleanupOldMaterials(organizationId: String, projectId: UUID, keepDays: Int) async throws {
         let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
-        let calendar = Calendar.current
+        // RULEBOOK 1.8.0 §1: the needed day is the line's organisation-zone `dayKey` (`parseMaterialLineDocument`).
+        let calendar = OrganizationRulebookContext.calendar
         let today = Date()
-        let cutoffDay = calendar.startOfDay(
-            for: calendar.date(byAdding: .day, value: -keepDays, to: today) ?? today
+        let cutoffDayKey = OrganizationRulebookContext.dayKey(
+            calendar.date(byAdding: .day, value: -keepDays, to: today) ?? today
         )
         
         let snapshot = try await db.collection("organizations").document(orgId)
             .collection("materials")
-            .whereField("projectId", isEqualTo: projectId.uuidString)
+            .whereField("projectId", in: JobKeys.queryValues(for: projectId))
             .getDocuments()
         
         let toDelete = snapshot.documents.filter { doc in
-            guard let ts = doc.data()["date"] as? Timestamp else { return false }
-            let neededDay = calendar.startOfDay(for: ts.dateValue())
-            return neededDay < cutoffDay
+            guard let dayKey = CanonicalBusinessEngine.parseMaterialLineDocument(documentId: doc.documentID, data: doc.data())?
+                .optionalText("dayKey") else { return false }
+            return dayKey < cutoffDayKey
         }
         
         var batch = db.batch()
@@ -9129,43 +8955,49 @@ extension FirebaseBackend {
         }
         await repairCurrentUserOrganizationAccess(organizationId: orgId)
 
-        let data: [String: Any] = [
-            "id": audit.id.uuidString,
-            "organizationId": orgId,
-            "projectId": audit.projectId.uuidString,
+        // RULEBOOK 1.8.0 §1: `siteAuditWriteFields` against the server copy (`createdAt`, `createdByUserId` and
+        // `organizationId` never rewritten); each item laid over its stored row (`mergeStoredRows`) so fields the
+        // other app writes are kept. The audit lives at its stored id and names the job by its stored id.
+        let ref = db.collection("organizations").document(orgId)
+            .collection("siteAudits")
+            .document(WorkDocumentKeys.storedId(for: audit.id))
+        try await writeOperationsDocument(ref, writeFields: "siteAuditWriteFields") { stored in
+            try Self.siteAuditPayload(audit, organizationId: orgId, storedItems: stored?["items"])
+        }
+    }
+
+    static func siteAuditPayload(_ audit: SiteAudit, organizationId: String, storedItems: Any?) throws -> [String: Any] {
+        let itemRows: [[String: Any]] = audit.items.map { item in
+            [
+                "id": WorkDocumentKeys.storedId(for: item.id),
+                "title": item.title,
+                "location": item.location,
+                "assignee": item.assignee,
+                "comments": item.comments,
+                "annotations": item.annotations,
+                "createdAt": Timestamp(date: item.createdAt),
+                "imageURL": item.imageURL ?? NSNull(),
+                "imageCapturedAt": item.imageCapturedAt.map { Timestamp(date: $0) as Any } ?? NSNull(),
+            ]
+        }
+        guard let merged = CanonicalBusinessEngine.mergeStoredRows(stored: storedItems, next: itemRows) else {
+            throw CanonicalWriteUnavailableError(function: "mergeStoredRows")
+        }
+        return [
+            "id": WorkDocumentKeys.storedId(for: audit.id),
+            "organizationId": organizationId,
+            "projectId": JobKeys.storedJobId(for: audit.projectId),
             "projectJobNumber": audit.projectJobNumber,
             "projectName": audit.projectName,
-            "type": audit.type.rawValue,
+            "type": audit.storedTypeText,
             "customTitle": audit.customTitle,
             "authorName": audit.authorName,
             "date": Timestamp(date: audit.date),
             "createdAt": Timestamp(date: audit.createdAt),
             "createdByUserId": audit.createdByUserId,
             "visibleToOperatives": audit.visibleToOperatives,
-            "items": audit.items.map { item in
-                var row: [String: Any] = [
-                    "id": item.id.uuidString,
-                    "title": item.title,
-                    "location": item.location,
-                    "assignee": item.assignee,
-                    "comments": item.comments,
-                    "annotations": item.annotations,
-                    "createdAt": Timestamp(date: item.createdAt)
-                ]
-                if let imageURL = item.imageURL {
-                    row["imageURL"] = imageURL
-                }
-                if let capturedAt = item.imageCapturedAt {
-                    row["imageCapturedAt"] = Timestamp(date: capturedAt)
-                }
-                return row
-            }
+            "items": merged.map { (ScriptFirestoreValue.native($0) as? [String: Any]) ?? $0 },
         ]
-
-        try await db.collection("organizations").document(orgId)
-            .collection("siteAudits")
-            .document(audit.id.uuidString)
-            .setData(data)
     }
 
     func loadSiteAudits(organizationId: String, projectId: UUID? = nil, createdByUserId: String? = nil) async throws -> [SiteAudit] {
@@ -9173,235 +9005,195 @@ extension FirebaseBackend {
             .collection("siteAudits")
 
         if let projectId {
-            query = query.whereField("projectId", isEqualTo: projectId.uuidString)
+            query = query.whereField("projectId", in: JobKeys.queryValues(for: projectId))
         }
         if let createdByUserId {
             query = query.whereField("createdByUserId", isEqualTo: createdByUserId)
         }
 
         let snapshot = try await query.getDocuments()
-        var audits: [SiteAudit] = []
-
-        for doc in snapshot.documents {
-            let data = doc.data()
-            guard let idString = data["id"] as? String,
-                  let id = UUID(uuidString: idString),
-                  let projectIdString = data["projectId"] as? String,
-                  let parsedProjectId = UUID(uuidString: projectIdString),
-                  let projectJobNumber = data["projectJobNumber"] as? String,
-                  let projectName = data["projectName"] as? String,
-                  let typeRaw = data["type"] as? String,
-                  let type = SiteAuditType(rawValue: typeRaw),
-                  let authorName = data["authorName"] as? String,
-                  let date = (data["date"] as? Timestamp)?.dateValue(),
-                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-                  let createdByUserId = data["createdByUserId"] as? String else {
-                continue
-            }
-            let customTitle = (data["customTitle"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let visibleToOperatives = data["visibleToOperatives"] as? Bool ?? true
-
-            let itemRows = data["items"] as? [[String: Any]] ?? []
-            let items: [SiteAuditItem] = itemRows.compactMap { row in
-                guard let itemIdString = row["id"] as? String,
-                      let itemId = UUID(uuidString: itemIdString),
-                      let title = row["title"] as? String,
-                      let location = row["location"] as? String,
-                      let assignee = row["assignee"] as? String,
-                      let comments = row["comments"] as? String,
-                      let createdAt = (row["createdAt"] as? Timestamp)?.dateValue() else {
-                    return nil
-                }
-                return SiteAuditItem(
-                    id: itemId,
-                    title: title,
-                    location: location,
-                    assignee: assignee,
-                    comments: comments,
-                    annotations: row["annotations"] as? String ?? "",
-                    imageURL: row["imageURL"] as? String,
-                    imageCapturedAt: (row["imageCapturedAt"] as? Timestamp)?.dateValue(),
-                    createdAt: createdAt
-                )
-            }
-
-            audits.append(SiteAudit(
-                id: id,
-                projectId: parsedProjectId,
-                projectJobNumber: projectJobNumber,
-                projectName: projectName,
-                type: type,
-                customTitle: customTitle,
-                authorName: authorName,
-                date: date,
-                items: items,
-                createdAt: createdAt,
-                createdByUserId: createdByUserId,
-                visibleToOperatives: visibleToOperatives
-            ))
-        }
-
+        let audits = snapshot.documents.compactMap { Self.siteAudit(documentId: $0.documentID, data: $0.data()) }
         return audits.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// RULEBOOK 1.8.0 §1: one audit through `parseSiteAuditDocument` (non-UUID ids, unknown types and items
+    /// without an id are kept; an item without an id gets a derived id).
+    static func siteAudit(documentId: String, data: [String: Any]) -> SiteAudit? {
+        guard let row = CanonicalBusinessEngine.parseSiteAuditDocument(documentId: documentId, data: data) else { return nil }
+        let items = row.rows("items").map { item in
+            SiteAuditItem(
+                id: JobKeys.inAppId(item.id),
+                title: item.text("title"),
+                location: item.text("location"),
+                assignee: item.text("assignee"),
+                comments: item.text("comments"),
+                annotations: item.text("annotations"),
+                imageURL: item.optionalText("imageURL"),
+                imageCapturedAt: item.date("imageCapturedAtMs"),
+                createdAt: item.date("createdAtMs") ?? Date(timeIntervalSince1970: 0)
+            )
+        }
+        let storedType = row.text("type")
+        let date = row.optionalText("dayKey").flatMap { OrganizationRulebookContext.date(fromDayKey: $0) }
+            ?? row.date("dateMs") ?? Date(timeIntervalSince1970: 0)
+        var audit = SiteAudit(
+            id: JobKeys.inAppId(row.id),
+            projectId: JobKeys.inAppId(row.text("projectId")),
+            projectJobNumber: row.text("projectJobNumber"),
+            projectName: row.text("projectName"),
+            type: SiteAuditType(rawValue: storedType) ?? .general,
+            customTitle: row.text("customTitle"),
+            authorName: row.text("authorName"),
+            date: row.date("dateMs") ?? date,
+            items: items,
+            createdAt: row.date("createdAtMs") ?? date,
+            createdByUserId: row.text("createdByUserId"),
+            visibleToOperatives: row.bool("visibleToOperatives", default: true)
+        )
+        audit.storedType = storedType
+        return audit
     }
     
     // MARK: - Wholesalers
     
-    func saveWholesaler(_ wholesaler: Wholesaler, organizationId: String) async throws {
-        let contactsData = wholesaler.contacts.map { contact in
-            wholesalerContactFirestoreRow(contact)
+    /// RULEBOOK 1.8.0 §1 "Partial writes only": an operations document saved as a partial update. `makePayload`
+    /// gets the server copy (nil when the document is missing) and returns the native fields the save would write
+    /// (`NSNull` / `FieldValue.delete()` for "no value"). A missing document is created whole; otherwise only the
+    /// fields `writeFields` names are written, with `WriteMetadata`. Never a whole-document overwrite.
+    func writeOperationsDocument(
+        _ ref: DocumentReference,
+        writeFields: String,
+        makePayload: ([String: Any]?) throws -> [String: Any]
+    ) async throws {
+        let uid = auth.currentUser?.uid
+        let snapshot = try await ref.getDocument(source: .server)
+        let stored = snapshot.exists ? snapshot.data() : nil
+        let payload = try makePayload(stored)
+        guard let stored else {
+            let createPayload = payload.filter { !($0.value is FieldValue) && !($0.value is NSNull) }
+            try await ref.setData(WriteMetadata.stamped(createPayload, userId: uid))
+            return
         }
-        
-        var data: [String: Any] = [
-            "id": wholesaler.id.uuidString,
-            "name": wholesaler.name,
-            "contacts": contactsData,
-            "createdAt": Timestamp(date: wholesaler.createdAt),
-            "updatedAt": Timestamp(date: wholesaler.updatedAt)
-        ]
-        if let address = wholesaler.address?.trimmingCharacters(in: .whitespacesAndNewlines), !address.isEmpty {
-            data["address"] = address
+        guard let write = CanonicalBusinessEngine.peopleDocumentWrite(writeFields, before: stored, next: payload) else {
+            throw CanonicalWriteUnavailableError(function: writeFields)
         }
-        if let trade = wholesaler.trade?.trimmingCharacters(in: .whitespacesAndNewlines), !trade.isEmpty {
-            data["trade"] = trade
-        }
-        if let accountNumber = wholesaler.accountNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !accountNumber.isEmpty {
-            data["accountNumber"] = accountNumber
-        }
-        if let primaryContactId = wholesaler.primaryContactId {
-            data["primaryContactId"] = primaryContactId.uuidString
-        }
-        
-        try await db.collection("organizations").document(organizationId)
-            .collection("wholesalers")
-            .document(wholesaler.id.uuidString)
-            .setData(data, merge: true)
+        var changes = write.firestoreFields(from: payload)
+        changes.removeValue(forKey: "updatedAt")
+        guard !changes.isEmpty else { return }
+        try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
     }
 
-    /// One `contacts[]` row, the shape web `wholesalerPayload` writes. `phone` is null when no mobile is saved.
-    private func wholesalerContactFirestoreRow(_ contact: WholesalerContact) -> [String: Any] {
-        let phone = contact.phone?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    /// RULEBOOK 1.8.0 §1: a wholesaler saved with `wholesalerWriteFields` (contacts with the primary contact written
+    /// together; each contact laid over its stored row with `mergeStoredRows`, so fields web writes are kept).
+    func saveWholesaler(_ wholesaler: Wholesaler, organizationId: String) async throws {
+        let ref = db.collection("organizations").document(organizationId)
+            .collection("wholesalers")
+            .document(WorkDocumentKeys.storedId(for: wholesaler.id))
+        try await writeOperationsDocument(ref, writeFields: "wholesalerWriteFields") { stored in
+            try Self.wholesalerPayload(wholesaler, storedContacts: stored?["contacts"])
+        }
+    }
+
+    static func wholesalerPayload(_ wholesaler: Wholesaler, storedContacts: Any?, keepStoredPhone: Bool = false) throws -> [String: Any] {
+        func blank(_ value: String?) -> Any {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? NSNull() : trimmed
+        }
+        let contactRows: [[String: Any]] = wholesaler.contacts.map { contact -> [String: Any] in
+            let phone = contact.phone?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // A cleared mobile is written '' (a null would keep the stored one through `mergeStoredRows`).
+            let phoneValue: Any
+            if !phone.isEmpty {
+                phoneValue = phone
+            } else if keepStoredPhone && contact.phone == nil {
+                phoneValue = NSNull()
+            } else {
+                phoneValue = ""
+            }
+            return [
+                "id": WorkDocumentKeys.storedId(for: contact.id),
+                "name": contact.name,
+                "email": contact.email,
+                "createdAt": Timestamp(date: contact.createdAt),
+                "isPrimary": contact.isPrimary,
+                "phone": phoneValue,
+            ]
+        }
+        guard let merged = CanonicalBusinessEngine.mergeStoredRows(stored: storedContacts, next: contactRows) else {
+            throw CanonicalWriteUnavailableError(function: "mergeStoredRows")
+        }
+        let primary = wholesaler.primaryContact.map { WorkDocumentKeys.storedId(for: $0.id) as Any } ?? NSNull()
         return [
-            "id": contact.id.uuidString,
-            "name": contact.name,
-            "email": contact.email,
-            "createdAt": Timestamp(date: contact.createdAt),
-            "isPrimary": contact.isPrimary,
-            "phone": phone.isEmpty ? NSNull() : phone
+            "id": WorkDocumentKeys.storedId(for: wholesaler.id),
+            "name": wholesaler.name,
+            "contacts": merged.map { (ScriptFirestoreValue.native($0) as? [String: Any]) ?? $0 },
+            "primaryContactId": primary,
+            "address": blank(wholesaler.address),
+            "trade": blank(wholesaler.trade),
+            "accountNumber": blank(wholesaler.accountNumber),
+            "createdAt": Timestamp(date: wholesaler.createdAt),
         ]
     }
 
     func deleteWholesaler(wholesalerId: UUID, organizationId: String) async throws {
         try await db.collection("organizations").document(organizationId)
             .collection("wholesalers")
-            .document(wholesalerId.uuidString)
+            .document(WorkDocumentKeys.storedId(for: wholesalerId))
             .delete()
     }
     
+    /// RULEBOOK 1.8.0 §1: wholesalers through `parseWholesalerDocument` (a firm with no `updatedAt`, a contact with a
+    /// non-UUID id or without one is kept; exactly one primary contact).
     func loadWholesalers(organizationId: String) async throws -> [Wholesaler] {
         let snapshot = try await db.collection("organizations").document(organizationId)
             .collection("wholesalers")
             .getDocuments()
-        
-        var wholesalers: [Wholesaler] = []
-        
-        for doc in snapshot.documents {
-            let data = doc.data()
-            
-            guard let idString = data["id"] as? String,
-                  let id = UUID(uuidString: idString),
-                  let name = data["name"] as? String,
-                  let createdAt = (data["createdAt"] as? Timestamp)?.dateValue(),
-                  let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue(),
-                  let contactsArray = data["contacts"] as? [[String: Any]] else {
-                continue
-            }
-            
-            var contacts: [WholesalerContact] = []
-            for contactData in contactsArray {
-                if let contactIdString = contactData["id"] as? String,
-                   let contactId = UUID(uuidString: contactIdString),
-                   let contactName = contactData["name"] as? String,
-                   let contactEmail = contactData["email"] as? String,
-                   let contactCreatedAt = (contactData["createdAt"] as? Timestamp)?.dateValue() {
-                    let phone = (contactData["phone"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let contact = WholesalerContact(
-                        id: contactId,
-                        name: contactName,
-                        email: contactEmail,
-                        isPrimary: contactData["isPrimary"] as? Bool ?? false,
-                        createdAt: contactCreatedAt,
-                        phone: phone?.isEmpty == false ? phone : nil
-                    )
-                    contacts.append(contact)
-                }
-            }
-            let primaryId = (data["primaryContactId"] as? String).flatMap(UUID.init(uuidString:))
-            var normalizedContacts = contacts
-            if let primaryId,
-               let idx = normalizedContacts.firstIndex(where: { $0.id == primaryId }) {
-                for i in normalizedContacts.indices {
-                    normalizedContacts[i].isPrimary = i == idx
-                }
-            } else if !normalizedContacts.isEmpty, !normalizedContacts.contains(where: \.isPrimary) {
-                normalizedContacts[0].isPrimary = true
-            }
-            
-            let wholesaler = Wholesaler(
-                id: id,
-                name: name,
-                address: data["address"] as? String,
-                trade: data["trade"] as? String,
-                accountNumber: data["accountNumber"] as? String,
-                primaryContactId: primaryId ?? normalizedContacts.first(where: \.isPrimary)?.id,
-                contacts: normalizedContacts,
-                createdAt: createdAt,
-                updatedAt: updatedAt
+        return snapshot.documents.compactMap { Self.wholesaler(documentId: $0.documentID, data: $0.data()) }
+    }
+
+    static func wholesaler(documentId: String, data: [String: Any]) -> Wholesaler? {
+        guard let row = CanonicalBusinessEngine.parseWholesalerDocument(documentId: documentId, data: data) else { return nil }
+        let contacts = row.rows("contacts").map { contact in
+            WholesalerContact(
+                id: JobKeys.inAppId(contact.id),
+                name: contact.text("name"),
+                email: contact.text("email"),
+                isPrimary: contact.bool("isPrimary"),
+                createdAt: contact.date("createdAtMs") ?? Date(timeIntervalSince1970: 0),
+                phone: contact.optionalText("phone")
             )
-            
-            wholesalers.append(wholesaler)
         }
-        
-        return wholesalers
+        let createdAt = row.date("createdAtMs") ?? Date(timeIntervalSince1970: 0)
+        return Wholesaler(
+            id: JobKeys.inAppId(row.id),
+            name: row.text("name"),
+            address: row.optionalText("address"),
+            trade: row.optionalText("trade"),
+            accountNumber: row.optionalText("accountNumber"),
+            primaryContactId: row.optionalText("primaryContactId").map { JobKeys.inAppId($0) },
+            contacts: contacts,
+            createdAt: createdAt,
+            updatedAt: row.date("updatedAtMs") ?? createdAt
+        )
     }
     
+    /// Adds or updates one contact: the firm is read through `parseWholesalerDocument` and saved with
+    /// `wholesalerWriteFields` (a mobile saved on web is kept when this edit carried none).
     func addContactToWholesaler(_ contact: WholesalerContact, wholesalerId: UUID, organizationId: String) async throws {
         let wholesalerRef = db.collection("organizations").document(organizationId)
             .collection("wholesalers")
-            .document(wholesalerId.uuidString)
-        
-        // First, get the current wholesaler to ensure it exists and get current contacts
-        let doc = try await wholesalerRef.getDocument()
-        
-        guard doc.exists else {
-            throw NSError(domain: "WholesalerNotFound", code: 404, userInfo: [NSLocalizedDescriptionKey: "Wholesaler not found"])
-        }
-        
-        let data = doc.data() ?? [:]
-        var contactsArray = data["contacts"] as? [[String: Any]] ?? []
-        
-        // Check if contact already exists (by ID)
-        let contactIdString = contact.id.uuidString
-        if contactsArray.contains(where: { ($0["id"] as? String) == contactIdString }) {
-            // Contact already exists, update it instead
-            if let index = contactsArray.firstIndex(where: { ($0["id"] as? String) == contactIdString }) {
-                var row = wholesalerContactFirestoreRow(contact)
-                // Keep a mobile saved on web when this edit did not carry one.
-                if contact.phone == nil, let stored = contactsArray[index]["phone"] {
-                    row["phone"] = stored
-                }
-                contactsArray[index] = row
+            .document(WorkDocumentKeys.storedId(for: wholesalerId))
+        try await writeOperationsDocument(wholesalerRef, writeFields: "wholesalerWriteFields") { stored in
+            guard let stored, var firm = Self.wholesaler(documentId: wholesalerRef.documentID, data: stored) else {
+                throw NSError(domain: "WholesalerNotFound", code: 404, userInfo: [NSLocalizedDescriptionKey: "Wholesaler not found"])
             }
-        } else {
-            // Add new contact
-            contactsArray.append(wholesalerContactFirestoreRow(contact))
+            if let index = firm.contacts.firstIndex(where: { $0.id == contact.id }) {
+                firm.contacts[index] = contact
+            } else {
+                firm.contacts.append(contact)
+            }
+            return try Self.wholesalerPayload(firm, storedContacts: stored["contacts"], keepStoredPhone: true)
         }
-        
-        // Update the wholesaler with the new contacts array
-        try await wholesalerRef.updateData([
-            "contacts": contactsArray,
-            "updatedAt": Timestamp(date: Date())
-        ])
     }
     
     // MARK: - Subcontractors
@@ -9409,7 +9201,7 @@ extension FirebaseBackend {
     func saveSubcontractor(_ subcontractor: Subcontractor, organizationId: String) async throws {
         let contactsData = subcontractor.contacts.map { contact in
             [
-                "id": contact.id.uuidString,
+                "id": WorkDocumentKeys.storedId(for: contact.id),
                 "name": contact.name,
                 "email": contact.email,
                 "contactNumber": contact.contactNumber,
@@ -9441,6 +9233,7 @@ extension FirebaseBackend {
         try? await mergeOrganizationTradeTypes(extraTrades, organizationId: organizationId)
     }
 
+    /// RULEBOOK 1.8.0 §1: `settings/tradeTypeInventory` through `parseTradeTypeInventory`.
     func loadOrganizationTradeTypes(organizationId: String) async -> [String] {
         let orgId = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !orgId.isEmpty else { return [] }
@@ -9449,53 +9242,45 @@ extension FirebaseBackend {
                 .collection("settings")
                 .document("tradeTypeInventory")
                 .getDocument()
-            return (snap.data()?["trades"] as? [String] ?? [])
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+            return CanonicalBusinessEngine.parseTradeTypeInventory(snap.data()) ?? []
         } catch {
             return []
         }
     }
 
+    /// RULEBOOK 1.8.0 §1: `tradeTypeInventoryWriteFields` (the stored list plus new trades, never removing one; no
+    /// write when nothing is new), written as a merge of `trades`.
     func mergeOrganizationTradeTypes(_ trades: [String], organizationId: String) async throws {
         let orgId = try await ensureReadableOrganization(organizationId)
-        let incoming = trades
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard !incoming.isEmpty else { return }
+        guard !trades.isEmpty else { return }
         let ref = db.collection("organizations").document(orgId)
             .collection("settings")
             .document("tradeTypeInventory")
-        let existing = await loadOrganizationTradeTypes(organizationId: orgId)
-        var seen = Set(existing.map { $0.lowercased() })
-        var merged = existing
-        for trade in incoming where seen.insert(trade.lowercased()).inserted {
-            merged.append(trade)
+        let stored = try await ref.getDocument().data()
+        guard let answer = CanonicalBusinessEngine.tradeTypeInventoryWriteFields(stored: stored, incoming: trades) else {
+            throw CanonicalWriteUnavailableError(function: "tradeTypeInventoryWriteFields")
         }
-        try await ref.setData([
-            "trades": merged,
-            "updatedAt": Timestamp(date: Date())
-        ], merge: true)
+        guard let merged = answer else { return }
+        try await ref.setData(WriteMetadata.stamped(["trades": merged], userId: currentUser?.uid), merge: true)
     }
-    
+
     func loadSubcontractors(organizationId: String) async throws -> [Subcontractor] {
         let snapshot = try await db.collection("organizations").document(organizationId)
             .collection("subcontractors")
             .getDocuments()
-        
+
         let loaded = Self.subcontractors(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
         return loaded.sorted { $0.name < $1.name }
     }
-    
-    /// RULEBOOK 1.6.0 §1 "Document readers": `subcontractors/{id}` are read only through the rulebook's
-    /// `parseSubcontractorDocument`. The record id is the document id in stored case (a stored `id` field never
-    /// replaces it; a non-UUID id is kept). A contact without a readable id gets a stable in-app id.
+
     static func subcontractors(fromDocuments documents: [(id: String, data: [String: Any])]) -> [Subcontractor] {
         documents.compactMap { doc -> Subcontractor? in
             guard let row = CanonicalBusinessEngine.parseSubcontractorDocument(documentId: doc.id, data: doc.data) else { return nil }
             let createdAt = row.date("createdAtMs") ?? Date(timeIntervalSince1970: 0)
-            let contacts: [SubcontractorContact] = row.rows("contacts").enumerated().map { index, contact in
-                let contactId = contact.id.isEmpty ? "\(row.id)#contact-\(index)" : contact.id
+            let contacts: [SubcontractorContact] = row.rows("contacts").map { contact in
+                // RULEBOOK 1.8.0 §1: a contact stored without an id carries the reader's `subcontractorContactId`
+                // (the same on web), so `bookedContactIds` match it on both platforms.
+                let contactId = contact.id
                 let positionRaw = contact.text("position")
                 return SubcontractorContact(
                     // RULEBOOK 1.7.0: remembered so a subcontractor booking writes the stored contact id back.
@@ -9654,90 +9439,88 @@ extension FirebaseBackend {
                 .collection("materialCatalogue")
                 .getDocuments()
         }
-        var loaded: [MaterialCatalogItem] = []
-        for doc in snapshot.documents {
-            let data = doc.data()
-            if let migration = legacyLengthMigrationPayload(data) {
-                try? await doc.reference.setData(migration, merge: true)
-            }
-            if let item = materialCatalogItemFromFirestore(data, documentId: doc.documentID) {
-                loaded.append(item)
-            }
-        }
+        // RULEBOOK 1.8.0 §1: `parseMaterialCatalogueDocument` (document id in stored case, `sizeOrLength` / `packSize`
+        // read as the length, missing brand "Custom"). No write on read.
+        let loaded = snapshot.documents.compactMap { Self.materialCatalogItem(documentId: $0.documentID, data: $0.data()) }
         return loaded.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    /// RULEBOOK 1.8.0 §1: one catalogue item saved as a partial update (`materialCatalogueItemWriteFields`; creator
+    /// fields and `createdAt` never rewritten), or created whole when it is new.
     func saveMaterialCatalogueItem(_ item: MaterialCatalogItem, organizationId: String) async throws {
         let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
-        try await db.collection("organizations").document(orgId)
+        guard let payload = Self.materialCatalogueItemPayload(item) else {
+            throw CanonicalWriteUnavailableError(function: "materialCatalogueItemFields")
+        }
+        let ref = db.collection("organizations").document(orgId)
             .collection("materialCatalogue")
-            .document(item.id.uuidString)
-            .setData(materialCatalogueFirestorePayload(item))
+            .document(WorkDocumentKeys.storedId(for: item.id))
+        try await writeChangedRosterRow(ref, payload: payload, previousPayload: nil, writeFields: "materialCatalogueItemWriteFields")
     }
 
     func deleteMaterialCatalogueItem(_ itemId: UUID, organizationId: String) async throws {
         let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
         try await db.collection("organizations").document(orgId)
             .collection("materialCatalogue")
-            .document(itemId.uuidString)
+            .document(WorkDocumentKeys.storedId(for: itemId))
             .delete()
     }
 
-    /// Batched catalogue writes. `onProgress` reports how many items in this call have been committed.
-    func saveMaterialCatalogueItems(
-        _ items: [MaterialCatalogItem],
+    /// RULEBOOK 1.8.0 §1: saving the catalogue as a list (CSV import) with `materialCatalogueWrites` — never
+    /// delete-all and rewrite. Each changed item is a partial write; an unchanged item is not written; a stored item
+    /// missing from `next` is deleted only when `loaded` (the list on screen came from a successful catalogue load),
+    /// the server copy was read now, and `next` is not empty. `onProgress` reports committed writes plus deletes.
+    @discardableResult
+    func writeMaterialCatalogue(
+        _ next: [MaterialCatalogItem],
+        loaded: Bool,
         organizationId: String,
         onProgress: ((Int) -> Void)? = nil
-    ) async throws {
-        guard !items.isEmpty else { return }
+    ) async throws -> (written: Int, removed: Int) {
         let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
         let collection = db.collection("organizations").document(orgId).collection("materialCatalogue")
-        var index = 0
+        let storedSnapshot = try await collection.getDocuments(source: .server)
+        let stored = storedSnapshot.documents.map { (id: $0.documentID, data: $0.data()) }
+        let nextRows = next.compactMap { Self.materialCatalogueItemInput($0) }
+        guard let plan = CanonicalBusinessEngine.materialCatalogueWrites(stored: stored, next: nextRows, loaded: loaded) else {
+            throw CanonicalWriteUnavailableError(function: "materialCatalogueWrites")
+        }
+        let uid = currentUser?.uid
         var completed = 0
-        while index < items.count {
+        var index = 0
+        while index < plan.write.count {
             let batch = db.batch()
-            let end = min(index + Self.materialCatalogueBatchSize, items.count)
-            for item in items[index..<end] {
-                batch.setData(
-                    materialCatalogueFirestorePayload(item),
-                    forDocument: collection.document(item.id.uuidString)
-                )
+            let end = min(index + Self.materialCatalogueBatchSize, plan.write.count)
+            for row in plan.write[index..<end] {
+                let set = (ScriptFirestoreValue.native(row.set) as? [String: Any]) ?? [:]
+                let ref = collection.document(row.id)
+                if row.create {
+                    batch.setData(WriteMetadata.stamped(set.filter { !($0.value is NSNull) }, userId: uid), forDocument: ref)
+                } else {
+                    var changes = set
+                    for key in row.remove { changes[key] = FieldValue.delete() }
+                    batch.updateData(WriteMetadata.stamped(changes, userId: uid), forDocument: ref)
+                }
             }
             try await batch.commit()
             completed = end
             index = end
             let progressValue = completed
-            await MainActor.run {
-                onProgress?(progressValue)
-            }
+            await MainActor.run { onProgress?(progressValue) }
         }
-    }
-
-    /// Batched catalogue deletes. `onProgress` reports how many IDs in this call have been committed.
-    func deleteMaterialCatalogueItems(
-        _ itemIds: [UUID],
-        organizationId: String,
-        onProgress: ((Int) -> Void)? = nil
-    ) async throws {
-        guard !itemIds.isEmpty else { return }
-        let orgId = try await resolvedOrganizationIdForMaterialCatalogueWrite(organizationId)
-        let collection = db.collection("organizations").document(orgId).collection("materialCatalogue")
-        var index = 0
-        var completed = 0
-        while index < itemIds.count {
+        index = 0
+        while index < plan.remove.count {
             let batch = db.batch()
-            let end = min(index + Self.materialCatalogueBatchSize, itemIds.count)
-            for itemId in itemIds[index..<end] {
-                batch.deleteDocument(collection.document(itemId.uuidString))
+            let end = min(index + Self.materialCatalogueBatchSize, plan.remove.count)
+            for id in plan.remove[index..<end] {
+                batch.deleteDocument(collection.document(id))
             }
             try await batch.commit()
-            completed = end
             index = end
-            let progressValue = completed
-            await MainActor.run {
-                onProgress?(progressValue)
-            }
+            let progressValue = plan.write.count + end
+            await MainActor.run { onProgress?(progressValue) }
         }
+        return (plan.write.count, plan.remove.count)
     }
 
     private static let materialCatalogueBatchSize = 100
@@ -9780,77 +9563,73 @@ extension FirebaseBackend {
         for id in materialIds {
             let docRef = db.collection("organizations").document(orgId)
                 .collection("materials")
-                .document(id.uuidString)
+                .document(WorkDocumentKeys.storedId(for: id))
             let snap = try await docRef.getDocument(source: .server)
             guard snap.exists,
                   let data = snap.data(),
-                  let item = materialItemFromFirestoreDocumentData(data) else { continue }
-            // Never downgrade an already ordered item back to quote-requested.
-            let nextStatus: MaterialWorkflowStatus = (item.status == .ordered && status == .sentForQuote)
-                ? .ordered
-                : status
+                  let row = CanonicalBusinessEngine.parseMaterialLineDocument(documentId: snap.documentID, data: data) else { continue }
+            // RULEBOOK 1.8.0 §1: `materialSendStatusWriteFields` (Order → ordered; Quote → sentForQuote, an ordered
+            // line is never downgraded). The security rules allow staff exactly these keys plus `updatedAt`.
+            guard let next = CanonicalBusinessEngine.materialSendStatusWriteFields(
+                currentStatus: row.text("status"),
+                requestType: requestType.rawValue
+            ) else {
+                throw CanonicalWriteUnavailableError(function: "materialSendStatusWriteFields")
+            }
             try await docRef.updateData([
-                "status": nextStatus.rawValue,
+                "status": next.status,
                 "lastSentAt": Timestamp(date: now),
-                "lastSentRequestType": requestType.rawValue,
+                "lastSentRequestType": next.lastSentRequestType,
                 "updatedAt": Timestamp(date: now)
             ])
         }
     }
 
-    private func materialCatalogueFirestorePayload(_ item: MaterialCatalogItem) -> [String: Any] {
-        var data: [String: Any] = [
-            "id": item.id.uuidString,
-            "name": item.name,
+    /// The `MaterialCatalogueItemInput` for an item: stored ids, native `createdAt`.
+    static func materialCatalogueItemInput(_ item: MaterialCatalogItem) -> [String: Any]? {
+        let name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        return [
+            "id": WorkDocumentKeys.storedId(for: item.id),
+            "name": name,
             "brand": item.brand,
+            "productCode": item.productCode ?? NSNull(),
             "defaultUnit": item.defaultUnit.rawValue,
+            "size": item.size ?? NSNull(),
+            "length": item.length ?? NSNull(),
+            "lengthUnit": item.lengthUnit?.rawValue ?? NSNull(),
+            "category": item.category ?? NSNull(),
             "createdAt": Timestamp(date: item.createdAt),
             "createdByUserId": item.createdByUserId,
-            "createdByName": item.createdByName
+            "createdByName": item.createdByName,
         ]
-        if let code = item.productCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
-            data["productCode"] = code
-        }
-        if let size = item.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
-            data["size"] = size
-        }
-        if let length = item.length?.trimmingCharacters(in: .whitespacesAndNewlines), !length.isEmpty {
-            data["length"] = length
-            // Backward compatibility for older app versions.
-            data["sizeOrLength"] = length
-        }
-        if let lengthUnit = item.lengthUnit {
-            data["lengthUnit"] = lengthUnit.rawValue
-        }
-        data["category"] = normalizedMaterialCategory(item.category)
-        return data
     }
 
-    private func materialCatalogItemFromFirestore(_ data: [String: Any], documentId: String) -> MaterialCatalogItem? {
-        let name = (data["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !name.isEmpty else { return nil }
-        let id = UUID(uuidString: (data["id"] as? String) ?? "") ?? UUID(uuidString: documentId)
-        guard let id else { return nil }
-        let brand = (data["brand"] as? String) ?? ""
-        let unit = MaterialUnit(rawValue: (data["defaultUnit"] as? String) ?? "") ?? .number
-        let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
-        let createdByUserId = (data["createdByUserId"] as? String) ?? ""
-        let createdByName = (data["createdByName"] as? String) ?? ""
+    /// `materialCatalogueItemFields` with native values (Timestamps), ready for `writeChangedRosterRow`.
+    static func materialCatalogueItemPayload(_ item: MaterialCatalogItem) -> [String: Any]? {
+        guard let input = materialCatalogueItemInput(item),
+              let fields = CanonicalBusinessEngine.materialCatalogueItemFields(input) else { return nil }
+        var payload = (ScriptFirestoreValue.native(fields) as? [String: Any]) ?? [:]
+        payload["createdAt"] = Timestamp(date: item.createdAt)
+        return payload
+    }
+
+    /// RULEBOOK 1.8.0 §1: one `materialCatalogue/{id}` item through `parseMaterialCatalogueDocument`.
+    static func materialCatalogItem(documentId: String, data: [String: Any]) -> MaterialCatalogItem? {
+        guard let row = CanonicalBusinessEngine.parseMaterialCatalogueDocument(documentId: documentId, data: data) else { return nil }
         return MaterialCatalogItem(
-            id: id,
-            name: name,
-            brand: brand,
-            productCode: data["productCode"] as? String,
-            defaultUnit: unit,
-            size: data["size"] as? String,
-            length: (data["length"] as? String)
-                ?? (data["sizeOrLength"] as? String)
-                ?? (data["packSize"] as? Int).map(String.init),
-            lengthUnit: (data["lengthUnit"] as? String).flatMap(MaterialLengthUnit.init(rawValue:)),
-            category: normalizedMaterialCategory(data["category"] as? String),
-            createdAt: createdAt,
-            createdByUserId: createdByUserId,
-            createdByName: createdByName
+            id: JobKeys.inAppId(row.id),
+            name: row.text("name"),
+            brand: row.text("brand"),
+            productCode: row.optionalText("productCode"),
+            defaultUnit: MaterialUnit(rawValue: row.text("defaultUnit")) ?? .number,
+            size: row.optionalText("size"),
+            length: row.optionalText("length"),
+            lengthUnit: MaterialLengthUnit(rawValue: row.text("lengthUnit")),
+            category: row.optionalText("category"),
+            createdAt: row.date("createdAtMs") ?? Date(timeIntervalSince1970: 0),
+            createdByUserId: row.text("createdByUserId"),
+            createdByName: row.text("createdByName")
         )
     }
 
@@ -9974,47 +9753,50 @@ extension FirebaseBackend {
 
     func saveMaterialSendRecord(_ record: MaterialSendRecord, organizationId: String) async throws {
         let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
-        var data: [String: Any] = [
-            "id": record.id.uuidString,
-            "projectId": record.projectId.uuidString,
-            "requestType": record.requestType.rawValue,
-            "sentAt": Timestamp(date: record.sentAt),
-            "sentBy": record.sentBy,
-            "recipients": record.recipients.map {
-                var row: [String: Any] = [
-                    "name": $0.name,
-                    "email": $0.email
-                ]
-                if let wholesalerName = $0.wholesalerName?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !wholesalerName.isEmpty {
-                    row["wholesalerName"] = wholesalerName
-                }
-                return row
-            },
-            "lines": record.lines.map { line in
-                var row: [String: Any] = [
-                    "materialId": line.materialId.uuidString,
-                    "name": line.name,
-                    "quantity": line.quantity,
-                    "unit": line.unit.rawValue
-                ]
-                if let brand = line.brand { row["brand"] = brand }
-                if let code = line.productCode { row["productCode"] = code }
-                if let lengthDisplay = line.lengthDisplay { row["lengthDisplay"] = lengthDisplay }
-                return row
-            }
-        ]
-        if let materialsDate = record.materialsDate {
-            data["materialsDate"] = Timestamp(date: materialsDate)
+        // RULEBOOK 1.8.0 §1: `materialSendRecordCreateFields` (records are written once; `requestType` Quote / Order;
+        // `deliveryRequiredAt` only on an order). Ids are the stored ids of the record, the job and each line.
+        guard var data = Self.materialSendRecordPayload(record) else {
+            throw CanonicalWriteUnavailableError(function: "materialSendRecordCreateFields")
         }
-        if let deliveryRequiredAt = record.deliveryRequiredAt,
-           CanonicalBusinessEngine.materialOrderIncludesDeliveryRequired(record.requestType.rawValue) == true {
-            data["deliveryRequiredAt"] = Timestamp(date: deliveryRequiredAt)
-        }
+        data = WriteMetadata.stamped(data, userId: currentUser?.uid)
         try await db.collection("organizations").document(orgId)
             .collection("materialSendRecords")
-            .document(record.id.uuidString)
+            .document(WorkDocumentKeys.storedId(for: record.id))
             .setData(data)
+    }
+
+    /// The stored shape of a new send record from `materialSendRecordCreateFields`, instants as Timestamps.
+    static func materialSendRecordPayload(_ record: MaterialSendRecord) -> [String: Any]? {
+        var input: [String: Any] = [
+            "id": WorkDocumentKeys.storedId(for: record.id),
+            "projectId": JobKeys.storedJobId(for: record.projectId),
+            "requestType": record.requestType.rawValue,
+            "sentAt": record.sentAt.timeIntervalSince1970 * 1000,
+            "sentBy": record.sentBy,
+            "recipients": record.recipients.map { recipient -> [String: Any] in
+                ["name": recipient.name, "email": recipient.email, "wholesalerName": recipient.wholesalerName ?? NSNull()]
+            },
+            "lines": record.lines.map { line -> [String: Any] in
+                [
+                    "materialId": WorkDocumentKeys.storedId(for: line.materialId),
+                    "name": line.name,
+                    "quantity": line.quantity,
+                    "unit": line.unit.rawValue,
+                    "brand": line.brand ?? NSNull(),
+                    "productCode": line.productCode ?? NSNull(),
+                    "lengthDisplay": line.lengthDisplay ?? NSNull(),
+                ]
+            },
+        ]
+        if let materialsDate = record.materialsDate { input["materialsDate"] = materialsDate.timeIntervalSince1970 * 1000 }
+        if let deliveryRequiredAt = record.deliveryRequiredAt {
+            input["deliveryRequiredAt"] = deliveryRequiredAt.timeIntervalSince1970 * 1000
+        }
+        guard var fields = CanonicalBusinessEngine.materialSendRecordCreateFields(input) else { return nil }
+        for key in ["sentAt", "materialsDate", "deliveryRequiredAt"] {
+            if fields[key] != nil { fields[key] = ScriptFirestoreValue.timestamp(ms: fields[key]) ?? NSNull() }
+        }
+        return fields.filter { !($0.value is NSNull) }
     }
 
     func loadAllMaterialSendRecords(organizationId: String) async throws -> [MaterialSendRecord] {
@@ -10022,7 +9804,7 @@ extension FirebaseBackend {
         let snapshot = try await db.collection("organizations").document(orgId)
             .collection("materialSendRecords")
             .getDocuments(source: .server)
-        return snapshot.documents.compactMap { materialSendRecordFromFirestore($0.data()) }
+        return snapshot.documents.compactMap { Self.materialSendRecord(documentId: $0.documentID, data: $0.data()) }
             .sorted { $0.sentAt > $1.sentAt }
     }
 
@@ -10030,66 +9812,47 @@ extension FirebaseBackend {
         let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
         let snapshot = try await db.collection("organizations").document(orgId)
             .collection("materialSendRecords")
-            .whereField("projectId", isEqualTo: projectId.uuidString)
+            .whereField("projectId", in: JobKeys.queryValues(for: projectId))
             .getDocuments(source: .server)
-        return snapshot.documents.compactMap { materialSendRecordFromFirestore($0.data()) }
+        return snapshot.documents.compactMap { Self.materialSendRecord(documentId: $0.documentID, data: $0.data()) }
             .sorted { $0.sentAt > $1.sentAt }
     }
 
-    private func materialSendRecordFromFirestore(_ data: [String: Any]) -> MaterialSendRecord? {
-        guard let idString = data["id"] as? String,
-              let id = UUID(uuidString: idString),
-              let projectIdString = data["projectId"] as? String,
-              let projectId = UUID(uuidString: projectIdString),
-              let requestTypeRaw = data["requestType"] as? String,
-              let requestType = MaterialOrderRequest.RequestType(rawValue: requestTypeRaw),
-              let sentAt = (data["sentAt"] as? Timestamp)?.dateValue(),
-              let sentBy = data["sentBy"] as? String else {
-            return nil
-        }
-        let materialsDate = (data["materialsDate"] as? Timestamp)?.dateValue()
-        let deliveryRequiredAt = (data["deliveryRequiredAt"] as? Timestamp)?.dateValue()
-        let recipientsRaw = data["recipients"] as? [[String: Any]] ?? []
-        let recipients = recipientsRaw.compactMap { row -> MaterialSendRecipientSnapshot? in
-            guard let name = row["name"] as? String,
-                  let email = row["email"] as? String else { return nil }
-            return MaterialSendRecipientSnapshot(
-                name: name,
-                email: email,
-                wholesalerName: row["wholesalerName"] as? String
+    /// RULEBOOK 1.8.0 §1: one send record through `parseMaterialSendRecordDocument` (non-UUID ids, lower-case request
+    /// types and unknown units kept; `deliveryRequiredAt` only on an order).
+    static func materialSendRecord(documentId: String, data: [String: Any]) -> MaterialSendRecord? {
+        guard let row = CanonicalBusinessEngine.parseMaterialSendRecordDocument(documentId: documentId, data: data),
+              let sentAt = row.date("sentAtMs") else { return nil }
+        let recipients = row.rows("recipients").map { recipient in
+            MaterialSendRecipientSnapshot(
+                name: recipient.text("name"),
+                email: recipient.text("email"),
+                wholesalerName: recipient.optionalText("wholesalerName")
             )
         }
-        let linesRaw = data["lines"] as? [[String: Any]] ?? []
-        let lines = linesRaw.compactMap { row -> MaterialSendLineSnapshot? in
-            guard let materialIdString = row["materialId"] as? String,
-                  let materialId = UUID(uuidString: materialIdString),
-                  let name = row["name"] as? String,
-                  let quantity = materialQuantityFromFirestore(row["quantity"]),
-                  let unitRaw = row["unit"] as? String,
-                  let unit = MaterialUnit(rawValue: unitRaw) else { return nil }
-            return MaterialSendLineSnapshot(
-                materialId: materialId,
-                name: name,
-                quantity: quantity,
-                unit: unit,
-                brand: row["brand"] as? String,
-                productCode: row["productCode"] as? String,
-                lengthDisplay: row["lengthDisplay"] as? String
+        let lines = row.rows("lines").map { line in
+            MaterialSendLineSnapshot(
+                materialId: JobKeys.inAppId(line.text("materialId")),
+                name: line.text("name"),
+                quantity: max(0, Int((line.number("quantity") ?? 1).rounded())),
+                unit: MaterialUnit(rawValue: line.text("unit")) ?? .number,
+                brand: line.optionalText("brand"),
+                productCode: line.optionalText("productCode"),
+                lengthDisplay: line.optionalText("lengthDisplay")
             )
         }
-        let storedDelivery = CanonicalBusinessEngine.materialOrderIncludesDeliveryRequired(requestType.rawValue) == true
-            ? deliveryRequiredAt
-            : nil
+        let materialsDate = row.optionalText("materialsDayKey").flatMap { OrganizationRulebookContext.date(fromDayKey: $0) }
+            ?? row.date("materialsDateMs")
         return MaterialSendRecord(
-            id: id,
-            projectId: projectId,
-            requestType: requestType,
+            id: JobKeys.inAppId(row.id),
+            projectId: JobKeys.inAppId(row.text("projectId")),
+            requestType: row.text("requestType") == "order" ? .order : .quote,
             sentAt: sentAt,
             materialsDate: materialsDate,
-            deliveryRequiredAt: storedDelivery,
-            sentBy: sentBy,
+            deliveryRequiredAt: row.date("deliveryRequiredAtMs"),
+            sentBy: row.text("sentBy"),
             recipients: recipients,
-            lines: lines.isEmpty ? [] : lines
+            lines: lines
         )
     }
     
@@ -10240,18 +10003,34 @@ extension FirebaseBackend {
         project.jobType == .smallWorks ? "smallWorks" : "projects"
     }
 
+    /// RULEBOOK 1.8.0 §1 "Job keys": `settings/healthSafetyDocumentId(job, isSmallWorks)` —
+    /// `healthSafety_{projects|smallWorks}_{KEY}`, KEY the job's stored document id upper-cased (what iOS has always
+    /// written for a UUID job); never built from the in-app UUID, so a non-UUID job id works.
     private func hsStateDocumentRef(organizationId: String, project: Project) -> DocumentReference {
-        // Use org settings document path so H&S works even before dedicated rules are deployed.
-        // Key includes work type + project id to keep project/small works data isolated.
-        let docId = "healthSafety_\(hsCollectionName(for: project))_\(project.id.uuidString)"
+        let isSmallWorks = project.jobType == .smallWorks
+        let docId = CanonicalBusinessEngine.healthSafetyDocumentId(jobId: project.documentId, isSmallWorks: isSmallWorks)
+            ?? "healthSafety_\(hsCollectionName(for: project))_\(project.documentId.uppercased())"
         return db.collection("organizations")
             .document(organizationId)
             .collection("settings")
             .document(docId)
     }
 
+    /// Every settings document to read for the job (`healthSafetyDocumentIds`: the shared id, then an older
+    /// stored-case id web wrote).
+    private func hsStateDocumentRefs(organizationId: String, project: Project) -> [DocumentReference] {
+        let ids = CanonicalBusinessEngine.healthSafetyDocumentIds(
+            jobId: project.documentId,
+            isSmallWorks: project.jobType == .smallWorks
+        ) ?? []
+        let settings = db.collection("organizations").document(organizationId).collection("settings")
+        let refs = ids.map { settings.document($0) }
+        return refs.isEmpty ? [hsStateDocumentRef(organizationId: organizationId, project: project)] : refs
+    }
+
+    // Row maps a save sends. Nil optionals are left out, so `healthSafetyDocumentWriteFields` keeps the stored value.
     private func hsTalkMap(_ talk: HSToolboxTalk) -> [String: Any] {
-        [
+        var map: [String: Any] = [
             "id": talk.id,
             "title": talk.title,
             "category": talk.category.rawValue,
@@ -10264,159 +10043,181 @@ extension FirebaseBackend {
             "status": talk.status.rawValue,
             "version": talk.version,
             "updatedAt": Timestamp(date: talk.updatedAt),
-            "fileURL": talk.fileURL ?? ""
         ]
+        if let fileURL = talk.fileURL { map["fileURL"] = fileURL }
+        return map
     }
 
-    private func hsIssueMap(_ issue: HSToolboxIssue) -> [String: Any] {
-        [
+    private func hsIssueMap(_ issue: HSToolboxIssue, jobId: String) -> [String: Any] {
+        var map: [String: Any] = [
             "id": issue.id,
-            "projectId": issue.projectId.uuidString,
+            "projectId": jobId,
             "talkId": issue.talkId,
             "weekCommencing": Timestamp(date: issue.weekCommencing),
             "issuedByUserId": issue.issuedByUserId,
             "issuedAt": Timestamp(date: issue.issuedAt),
-            "publishAt": issue.publishAt.map(Timestamp.init(date:)) as Any,
             "recipientUserIds": issue.recipientUserIds,
             "status": issue.status.rawValue,
-            "ramsDocumentId": issue.ramsDocumentId ?? ""
         ]
+        if let publishAt = issue.publishAt { map["publishAt"] = Timestamp(date: publishAt) }
+        if let ramsDocumentId = issue.ramsDocumentId { map["ramsDocumentId"] = ramsDocumentId }
+        return map
     }
 
     private func hsSignatureMap(_ signature: HSToolboxSignature) -> [String: Any] {
-        [
+        var map: [String: Any] = [
             "id": signature.id,
             "issueId": signature.issueId,
             "userId": signature.userId,
             "status": signature.status.rawValue,
             "readConfirmed": signature.readConfirmed,
-            "signatureImageBase64": signature.signatureImageBase64 ?? "",
-            "signedAt": signature.signedAt.map(Timestamp.init(date:)) as Any,
-            "reminderSentAt": signature.reminderSentAt.map(Timestamp.init(date:)) as Any
         ]
+        if let image = signature.signatureImageBase64 { map["signatureImageBase64"] = image }
+        if let signedAt = signature.signedAt { map["signedAt"] = Timestamp(date: signedAt) }
+        if let reminderSentAt = signature.reminderSentAt { map["reminderSentAt"] = Timestamp(date: reminderSentAt) }
+        return map
     }
 
     private func hsRamsMap(_ doc: HSRamsDocument) -> [String: Any] {
-        [
+        var map: [String: Any] = [
             "id": doc.id,
             "title": doc.title,
             "trade": doc.trade,
             "version": doc.version,
             "status": doc.status,
             "uploadedAt": Timestamp(date: doc.uploadedAt),
-            "fileURL": doc.fileURL ?? "",
-            "fileName": doc.fileName ?? "",
-            "reviewDate": doc.reviewDate.map(Timestamp.init(date:)) as Any,
-            "attachedDocTitles": doc.attachedDocTitles
+            "attachedDocTitles": doc.attachedDocTitles,
         ]
+        if let fileURL = doc.fileURL { map["fileURL"] = fileURL }
+        if let fileName = doc.fileName { map["fileName"] = fileName }
+        if let reviewDate = doc.reviewDate { map["reviewDate"] = Timestamp(date: reviewDate) }
+        return map
     }
 
     private func hsOtherDocMap(_ doc: HSOtherDocument) -> [String: Any] {
-        [
+        var map: [String: Any] = [
             "id": doc.id,
             "title": doc.title,
-            "trade": doc.trade ?? "",
             "category": doc.category,
             "uploadedAt": Timestamp(date: doc.uploadedAt),
-            "fileURL": doc.fileURL ?? "",
-            "fileName": doc.fileName ?? "",
-            "issuableToClient": doc.issuableToClient
+            "issuableToClient": doc.issuableToClient,
         ]
+        if let trade = doc.trade { map["trade"] = trade }
+        if let fileURL = doc.fileURL { map["fileURL"] = fileURL }
+        if let fileName = doc.fileName { map["fileName"] = fileName }
+        return map
     }
 
-    private func parseHSTalk(_ map: [String: Any]) -> HSToolboxTalk? {
-        guard let id = map["id"] as? String, !id.isEmpty else { return nil }
-        let categoryRaw = (map["category"] as? String) ?? HSToolboxTalkCategory.general.rawValue
-        let sourceRaw = (map["source"] as? String) ?? HSToolboxTalkSource.library.rawValue
-        let statusRaw = (map["status"] as? String) ?? HSToolboxTalkStatus.approved.rawValue
-        let updatedAt = (map["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-        let ownerId = (map["ownerOrganizationId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return HSToolboxTalk(
-            id: id,
-            title: (map["title"] as? String) ?? "",
-            category: HSToolboxTalkCategory(rawValue: categoryRaw) ?? .general,
-            isGeneral: map["isGeneral"] as? Bool ?? false,
-            trades: map["trades"] as? [String] ?? [],
-            purpose: (map["purpose"] as? String) ?? "",
-            keyPoints: map["keyPoints"] as? [String] ?? [],
-            source: HSToolboxTalkSource(rawValue: sourceRaw) ?? .library,
-            ownerOrganizationId: ownerId?.isEmpty == false ? ownerId : nil,
-            status: HSToolboxTalkStatus(rawValue: statusRaw) ?? .approved,
-            version: map["version"] as? Int ?? 1,
-            updatedAt: updatedAt,
-            fileURL: fileURL?.isEmpty == false ? fileURL : nil
+    /// One `parseHealthSafetyDocument` talk row.
+    static func hsTalk(_ row: CanonicalDocumentRow) -> HSToolboxTalk {
+        HSToolboxTalk(
+            id: row.id,
+            title: row.text("title"),
+            category: HSToolboxTalkCategory(rawValue: row.text("category")) ?? .general,
+            isGeneral: row.bool("isGeneral"),
+            trades: row.strings("trades"),
+            purpose: row.text("purpose"),
+            keyPoints: row.strings("keyPoints"),
+            source: HSToolboxTalkSource(rawValue: row.text("source")) ?? .library,
+            ownerOrganizationId: row.optionalText("ownerOrganizationId"),
+            status: HSToolboxTalkStatus(rawValue: row.text("status")) ?? .approved,
+            version: Int(row.number("version") ?? 1),
+            updatedAt: row.date("updatedAtMs") ?? Date(timeIntervalSince1970: 0),
+            fileURL: row.optionalText("fileURL")
         )
     }
 
-    private func parseHSIssue(_ map: [String: Any], fallbackProjectId: UUID) -> HSToolboxIssue? {
-        guard let id = map["id"] as? String, !id.isEmpty else { return nil }
-        let projectId = ((map["projectId"] as? String).flatMap(UUID.init(uuidString:))) ?? fallbackProjectId
-        let statusRaw = (map["status"] as? String) ?? HSToolboxIssueStatus.awaiting.rawValue
-        let ramsId = (map["ramsDocumentId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return HSToolboxIssue(
-            id: id,
-            projectId: projectId,
-            talkId: (map["talkId"] as? String) ?? "",
-            weekCommencing: (map["weekCommencing"] as? Timestamp)?.dateValue() ?? Date(),
-            issuedByUserId: (map["issuedByUserId"] as? String) ?? "",
-            issuedAt: (map["issuedAt"] as? Timestamp)?.dateValue() ?? Date(),
-            publishAt: (map["publishAt"] as? Timestamp)?.dateValue(),
-            recipientUserIds: map["recipientUserIds"] as? [String] ?? [],
-            status: HSToolboxIssueStatus(rawValue: statusRaw) ?? .awaiting,
-            ramsDocumentId: (ramsId?.isEmpty == false) ? ramsId : nil
+    /// RULEBOOK 1.8.0 §1: a job's health & safety data through `parseHealthSafetyDocument` (issue status `complete`
+    /// / `completed` / `scheduled` understood; signatures from the `signatures` array and the per-signer
+    /// `signatureRecords` map, folded to one per issue and person, a signed copy winning).
+    static func healthSafetyData(fromStored data: [String: Any], jobId: String, fallbackProjectId: UUID) -> HSProjectSafetyData? {
+        guard let parsed = CanonicalBusinessEngine.parseHealthSafetyDocument(data, projectId: jobId) else { return nil }
+        let issues = parsed.rows("issues").map { row in
+            HSToolboxIssue(
+                id: row.id,
+                projectId: row.optionalText("projectId").map { JobKeys.inAppId($0) } ?? fallbackProjectId,
+                talkId: row.text("talkId"),
+                weekCommencing: row.optionalText("weekCommencingDayKey").flatMap { OrganizationRulebookContext.date(fromDayKey: $0) }
+                    ?? row.date("weekCommencingMs") ?? Date(timeIntervalSince1970: 0),
+                issuedByUserId: row.text("issuedByUserId"),
+                issuedAt: row.date("issuedAtMs") ?? Date(timeIntervalSince1970: 0),
+                publishAt: row.date("publishAtMs"),
+                recipientUserIds: row.strings("recipientUserIds"),
+                status: HSToolboxIssueStatus.fromRulebook(row.text("status")),
+                ramsDocumentId: row.optionalText("ramsDocumentId")
+            )
+        }
+        let signatures = parsed.rows("signatures").map { row in
+            HSToolboxSignature(
+                id: row.id,
+                issueId: row.text("issueId"),
+                userId: row.text("userId"),
+                status: HSToolboxSignatureStatus(rawValue: row.text("status")) ?? .pending,
+                readConfirmed: row.bool("readConfirmed"),
+                signatureImageBase64: row.optionalText("signatureImageBase64"),
+                signedAt: row.date("signedAtMs"),
+                reminderSentAt: row.date("reminderSentAtMs")
+            )
+        }
+        let rams = parsed.rows("ramsDocuments").map { row in
+            HSRamsDocument(
+                id: row.id,
+                title: row.text("title"),
+                trade: row.text("trade"),
+                version: Int(row.number("version") ?? 1),
+                status: row.text("status"),
+                uploadedAt: row.date("uploadedAtMs") ?? Date(timeIntervalSince1970: 0),
+                fileURL: row.optionalText("fileURL"),
+                fileName: row.optionalText("fileName"),
+                reviewDate: row.date("reviewDateMs"),
+                attachedDocTitles: row.strings("attachedDocTitles")
+            )
+        }
+        let others = parsed.rows("otherDocuments").map { row in
+            HSOtherDocument(
+                id: row.id,
+                title: row.text("title"),
+                trade: row.optionalText("trade"),
+                category: row.text("category"),
+                uploadedAt: row.date("uploadedAtMs") ?? Date(timeIntervalSince1970: 0),
+                fileURL: row.optionalText("fileURL"),
+                fileName: row.optionalText("fileName"),
+                issuableToClient: row.bool("issuableToClient")
+            )
+        }
+        return HSProjectSafetyData(
+            talks: parsed.rows("talks").map(hsTalk),
+            issues: issues,
+            signatures: signatures,
+            ramsDocuments: rams,
+            otherDocuments: others,
+            updatedAt: parsed.date("updatedAtMs") ?? Date()
         )
     }
 
-    private func parseHSSignature(_ map: [String: Any]) -> HSToolboxSignature? {
-        guard let id = map["id"] as? String, !id.isEmpty else { return nil }
-        let statusRaw = (map["status"] as? String) ?? HSToolboxSignatureStatus.pending.rawValue
-        let signatureBase64 = (map["signatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return HSToolboxSignature(
-            id: id,
-            issueId: (map["issueId"] as? String) ?? "",
-            userId: (map["userId"] as? String) ?? "",
-            status: HSToolboxSignatureStatus(rawValue: statusRaw) ?? .pending,
-            readConfirmed: map["readConfirmed"] as? Bool ?? false,
-            signatureImageBase64: signatureBase64?.isEmpty == false ? signatureBase64 : nil,
-            signedAt: (map["signedAt"] as? Timestamp)?.dateValue(),
-            reminderSentAt: (map["reminderSentAt"] as? Timestamp)?.dateValue()
-        )
-    }
-
-    private func parseHSRams(_ map: [String: Any]) -> HSRamsDocument? {
-        guard let id = map["id"] as? String, !id.isEmpty else { return nil }
-        let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fileName = (map["fileName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return HSRamsDocument(
-            id: id,
-            title: (map["title"] as? String) ?? "Untitled RAMS",
-            trade: (map["trade"] as? String) ?? "General",
-            version: map["version"] as? Int ?? 1,
-            status: (map["status"] as? String) ?? "live",
-            uploadedAt: (map["uploadedAt"] as? Timestamp)?.dateValue() ?? Date(),
-            fileURL: fileURL?.isEmpty == false ? fileURL : nil,
-            fileName: fileName?.isEmpty == false ? fileName : nil,
-            reviewDate: (map["reviewDate"] as? Timestamp)?.dateValue(),
-            attachedDocTitles: map["attachedDocTitles"] as? [String] ?? []
-        )
-    }
-
-    private func parseHSOtherDoc(_ map: [String: Any]) -> HSOtherDocument? {
-        guard let id = map["id"] as? String, !id.isEmpty else { return nil }
-        let trade = (map["trade"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fileURL = (map["fileURL"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fileName = (map["fileName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return HSOtherDocument(
-            id: id,
-            title: (map["title"] as? String) ?? "Untitled H&S doc",
-            trade: trade?.isEmpty == false ? trade : nil,
-            category: (map["category"] as? String) ?? "trade",
-            uploadedAt: (map["uploadedAt"] as? Timestamp)?.dateValue() ?? Date(),
-            fileURL: fileURL?.isEmpty == false ? fileURL : nil,
-            fileName: fileName?.isEmpty == false ? fileName : nil,
-            issuableToClient: map["issuableToClient"] as? Bool ?? false
-        )
+    /// Two copies of a job's settings document (the shared id and an older web id) as one stored map for the reader:
+    /// the first copy's rows, then rows of the second whose id the first lacks; every signature row and
+    /// `signatureRecords` entry of both (the reader folds them).
+    nonisolated static func mergedHealthSafetyDocuments(_ documents: [[String: Any]]) -> [String: Any] {
+        guard var merged = documents.first else { return [:] }
+        for other in documents.dropFirst() {
+            for field in ["talks", "issues", "ramsDocuments", "otherDocuments"] {
+                var rows = merged[field] as? [Any] ?? []
+                let ids = Set(rows.compactMap { (($0 as? [String: Any])?["id"] as? String)?.lowercased() })
+                for row in other[field] as? [Any] ?? [] {
+                    let id = ((row as? [String: Any])?["id"] as? String)?.lowercased() ?? ""
+                    if !id.isEmpty, !ids.contains(id) { rows.append(row) }
+                }
+                merged[field] = rows
+            }
+            merged["signatures"] = (merged["signatures"] as? [Any] ?? []) + (other["signatures"] as? [Any] ?? [])
+            var records = merged["signatureRecords"] as? [String: Any] ?? [:]
+            for (key, value) in other["signatureRecords"] as? [String: Any] ?? [:] where records[key] == nil {
+                records[key] = value
+            }
+            merged["signatureRecords"] = records
+        }
+        return merged
     }
 
     func loadHealthSafetyData(project: Project, organizationId: String) async throws -> HSProjectSafetyData {
@@ -10425,39 +10226,30 @@ extension FirebaseBackend {
         guard !resolved.isEmpty else { return .empty }
         let orgId = try await ensureReadableOrganization(resolved)
 
-        let ref = hsStateDocumentRef(organizationId: orgId, project: project)
-        let doc: DocumentSnapshot
-        do {
-            doc = try await ref.getDocument(source: .server)
-        } catch {
+        var stored: [[String: Any]] = []
+        for (index, ref) in hsStateDocumentRefs(organizationId: orgId, project: project).enumerated() {
+            let doc: DocumentSnapshot
             do {
-                doc = try await ref.getDocument(source: .cache)
+                doc = try await ref.getDocument(source: .server)
             } catch {
-                throw error
+                do {
+                    doc = try await ref.getDocument(source: .cache)
+                } catch {
+                    // The shared document must be readable; an older copy that cannot be read is skipped.
+                    if index == 0 { throw error }
+                    continue
+                }
             }
+            if let data = doc.data() { stored.append(data) }
         }
-
-        guard let data = doc.data() else { return .empty }
-
-        let talksRaw = data["talks"] as? [[String: Any]] ?? []
-        let issuesRaw = data["issues"] as? [[String: Any]] ?? []
-        let signaturesRaw = data["signatures"] as? [[String: Any]] ?? []
-        let ramsRaw = data["ramsDocuments"] as? [[String: Any]] ?? []
-        let otherRaw = data["otherDocuments"] as? [[String: Any]] ?? []
-        let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-
-        var output = HSProjectSafetyData(
-            talks: talksRaw.compactMap(parseHSTalk),
-            issues: issuesRaw.compactMap { parseHSIssue($0, fallbackProjectId: project.id) },
-            signatures: signaturesRaw.compactMap(parseHSSignature),
-            ramsDocuments: ramsRaw.compactMap(parseHSRams),
-            otherDocuments: otherRaw.compactMap(parseHSOtherDoc),
-            updatedAt: updatedAt
-        )
-        output.issues.sort { $0.issuedAt > $1.issuedAt }
-        output.signatures.sort { ($0.signedAt ?? .distantPast) > ($1.signedAt ?? .distantPast) }
-        output.ramsDocuments.sort { $0.uploadedAt > $1.uploadedAt }
-        output.otherDocuments.sort { $0.uploadedAt > $1.uploadedAt }
+        guard !stored.isEmpty else { return .empty }
+        guard let output = Self.healthSafetyData(
+            fromStored: Self.mergedHealthSafetyDocuments(stored),
+            jobId: project.documentId,
+            fallbackProjectId: project.id
+        ) else {
+            throw CanonicalWriteUnavailableError(function: "parseHealthSafetyDocument")
+        }
         return output
     }
 
@@ -10479,7 +10271,9 @@ extension FirebaseBackend {
                 ?? (data["toolboxTalks"] as? [[String: Any]])
                 ?? (data["items"] as? [[String: Any]])
                 ?? []
-            let talks = raw.compactMap(parseHSTalk)
+            // RULEBOOK 1.8.0: library talks read with the same reader (`parseHealthSafetyDocument` talks).
+            let talks = CanonicalBusinessEngine.parseHealthSafetyDocument(["talks": raw], projectId: "")?
+                .rows("talks").map(Self.hsTalk) ?? []
             if !talks.isEmpty {
                 return talks
             }
@@ -10487,7 +10281,12 @@ extension FirebaseBackend {
         return []
     }
 
-    func saveHealthSafetyData(_ safetyData: HSProjectSafetyData, project: Project, organizationId: String) async throws {
+    func saveHealthSafetyData(
+        _ safetyData: HSProjectSafetyData,
+        project: Project,
+        organizationId: String,
+        fields: Set<String> = ["talks", "issues", "signatures", "ramsDocuments", "otherDocuments"]
+    ) async throws {
         guard currentUser != nil else {
             throw NSError(
                 domain: "FirebaseBackend",
@@ -10513,31 +10312,87 @@ extension FirebaseBackend {
         await repairCurrentUserOrganizationAccess(organizationId: orgId)
         try await validateDataIntegrity(organizationId: orgId)
 
-        let existing: HSProjectSafetyData
-        do {
-            existing = try await loadHealthSafetyData(project: project, organizationId: orgId)
-        } catch {
-            existing = .empty
-        }
-
-        // Never clobber a populated catalogue with an empty in-memory snapshot.
-        // An empty talks seed or a failed load used to wipe issued TBTs from Tracking.
-        let talks = safetyData.talks.isEmpty && !existing.talks.isEmpty ? existing.talks : safetyData.talks
-        let issues = safetyData.issues.isEmpty && !existing.issues.isEmpty ? existing.issues : safetyData.issues
-        let signatures = safetyData.signatures.isEmpty && !existing.signatures.isEmpty ? existing.signatures : safetyData.signatures
-        let ramsDocuments = safetyData.ramsDocuments.isEmpty && !existing.ramsDocuments.isEmpty ? existing.ramsDocuments : safetyData.ramsDocuments
-        let otherDocuments = safetyData.otherDocuments.isEmpty && !existing.otherDocuments.isEmpty ? existing.otherDocuments : safetyData.otherDocuments
-
-        let payload: [String: Any] = [
-            "talks": talks.map(hsTalkMap),
-            "issues": issues.map(hsIssueMap),
-            "signatures": signatures.map(hsSignatureMap),
-            "ramsDocuments": ramsDocuments.map(hsRamsMap),
-            "otherDocuments": otherDocuments.map(hsOtherDocMap),
-            "updatedAt": Timestamp(date: Date())
-        ]
+        // RULEBOOK 1.8.0 §1: `healthSafetyDocumentWriteFields` — only the arrays named in `fields`, each row laid over
+        // its stored row by id (the other app's fields kept), issue status written `completed`, an empty list never
+        // replacing a stored one, unchanged arrays not written, `signatureRecords` never touched (signing is
+        // `saveHealthSafetySignature`).
         let ref = hsStateDocumentRef(organizationId: orgId, project: project)
-        try await ref.setData(payload, merge: true)
+        let snapshot = try await ref.getDocument(source: .server)
+        let stored = snapshot.exists ? snapshot.data() : nil
+        let jobId = project.documentId
+        var next: [String: [[String: Any]]] = [:]
+        if fields.contains("talks") { next["talks"] = safetyData.talks.map(hsTalkMap) }
+        if fields.contains("issues") { next["issues"] = safetyData.issues.map { hsIssueMap($0, jobId: jobId) } }
+        if fields.contains("signatures") { next["signatures"] = safetyData.signatures.map(hsSignatureMap) }
+        if fields.contains("ramsDocuments") { next["ramsDocuments"] = safetyData.ramsDocuments.map(hsRamsMap) }
+        if fields.contains("otherDocuments") { next["otherDocuments"] = safetyData.otherDocuments.map(hsOtherDocMap) }
+        guard let write = CanonicalBusinessEngine.healthSafetyDocumentWriteFields(stored: stored, next: next) else {
+            throw CanonicalWriteUnavailableError(function: "healthSafetyDocumentWriteFields")
+        }
+        var changes: [String: Any] = [:]
+        for (key, value) in write.set { changes[key] = ScriptFirestoreValue.native(value) }
+        for key in write.remove { changes[key] = FieldValue.delete() }
+        guard !changes.isEmpty else { return }
+        let stamped = WriteMetadata.stamped(changes, userId: currentUser?.uid)
+        if snapshot.exists {
+            try await ref.updateData(stamped)
+        } else {
+            try await ref.setData(stamped.filter { !($0.value is FieldValue) || $0.key == "updatedAt" }, merge: true)
+        }
+    }
+
+    /// RULEBOOK 1.8.0 §1: one person signing (or being reminded on) one issue — `healthSafetySignatureWriteFields`, a
+    /// field-path update of `signatureRecords.{key}` plus an `arrayUnion` of the row onto `signatures` (older builds
+    /// read the array), in one `update`. Two signers write different keys, so neither signature is lost.
+    func saveHealthSafetySignature(_ signature: HSToolboxSignature, project: Project, organizationId: String) async throws {
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
+            ?? normalizedOrganizationId(organizationId)
+        let orgId = try await ensureReadableOrganization(resolved)
+        guard let write = CanonicalBusinessEngine.healthSafetySignatureWriteFields(
+            issueId: signature.issueId,
+            userId: signature.userId,
+            signatureId: signature.id,
+            status: signature.status.rawValue,
+            readConfirmed: signature.readConfirmed,
+            signatureImageBase64: signature.signatureImageBase64,
+            signedAt: signature.signedAt,
+            reminderSentAt: signature.reminderSentAt
+        ) else {
+            throw CanonicalWriteUnavailableError(function: "healthSafetySignatureWriteFields")
+        }
+        let update = Self.healthSafetySignatureUpdate(write, userId: currentUser?.uid)
+        let ref = hsStateDocumentRef(organizationId: orgId, project: project)
+        do {
+            try await ref.updateData(update)
+        } catch {
+            let nsError = error as NSError
+            guard nsError.domain == "FIRFirestoreErrorDomain", nsError.code == 5 else { throw error }
+            // Missing document: create it with the signer's entry as a nested map (never a dotted key).
+            let row = (ScriptFirestoreValue.native(write.value) as? [String: Any]) ?? write.value
+            let arrayRow = (ScriptFirestoreValue.native(write.arrayRow) as? [String: Any]) ?? write.arrayRow
+            try await ref.setData(WriteMetadata.stamped([
+                write.fieldPath[0]: [write.fieldPath[1]: row],
+                "signatures": FieldValue.arrayUnion([arrayRow]),
+            ], userId: currentUser?.uid), merge: true)
+        }
+    }
+
+    /// The `updateData` map for a signature write: the entry at its field path, the array row unioned, metadata.
+    /// Instants the script passed through as epoch ms are written as Timestamps.
+    nonisolated static func healthSafetySignatureUpdate(_ write: CanonicalHealthSafetySignatureWrite, userId: String?) -> [AnyHashable: Any] {
+        func native(_ row: [String: Any]) -> [String: Any] {
+            var out = row
+            for key in ["signedAt", "reminderSentAt"] {
+                if let stamp = ScriptFirestoreValue.timestamp(ms: row[key]) { out[key] = stamp }
+            }
+            return out
+        }
+        var update: [AnyHashable: Any] = [
+            FieldPath(write.fieldPath): native(write.value),
+            "signatures": FieldValue.arrayUnion([native(write.arrayRow)]),
+        ]
+        for (key, value) in WriteMetadata.fields(userId: userId) { update[key] = value }
+        return update
     }
 
     // MARK: - Deadlines (Project / Small Works)
@@ -10659,7 +10514,7 @@ extension FirebaseBackend {
             "createdByUserId": item.createdByUserId,
             "fileURL": item.fileURL ?? "",
             "fileName": item.fileName ?? "",
-            "siteAuditId": item.siteAuditId?.uuidString ?? "",
+            "siteAuditId": item.siteAuditId.map { WorkDocumentKeys.storedId(for: $0) } ?? "",
             "siteAuditTitle": item.siteAuditTitle ?? ""
         ]
     }
@@ -10701,7 +10556,7 @@ extension FirebaseBackend {
             createdByUserId: row.text("createdByUserId"),
             fileURL: row.optionalText("fileURL"),
             fileName: row.optionalText("fileName"),
-            siteAuditId: row.optionalText("siteAuditId").flatMap { UUID(uuidString: $0) },
+            siteAuditId: row.optionalText("siteAuditId").map { WorkDocumentKeys.inAppId(for: $0) },
             siteAuditTitle: row.optionalText("siteAuditTitle")
         )
     }
@@ -10855,7 +10710,9 @@ extension FirebaseBackend {
         return byId.values.sorted { $0.due < $1.due }
     }
 
-    func loadDeadlineAssignedProjectIds(userId: String, organizationId: String) async -> Set<UUID> {
+    /// `jobIds`: the job list's stored document ids. With them each assignment key is mapped back to the job's stored
+    /// id (`deadlineAssignedProjectIds` with `jobIds`, `storedJobIdForKey`, 1.8.0) and keys naming no job are left out.
+    func loadDeadlineAssignedProjectIds(userId: String, organizationId: String, jobIds: [String]? = nil) async -> Set<UUID> {
         let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
@@ -10867,6 +10724,10 @@ extension FirebaseBackend {
             guard let data = snap.data() else { return [] }
             // `deadlineAssignedProjectIds`: the nested map and older literal `projects.{KEY}` fields, ids compared
             // without case. Keys are upper case (`deadlineProjectKey`); a UUID key is the job's in-app id.
+            if let jobIds, !jobIds.isEmpty {
+                let stored = CanonicalBusinessEngine.deadlineAssignedProjectIds(data, personIds: [trimmed], jobIds: jobIds) ?? []
+                return Set(stored.map { WorkDocumentKeys.inAppId(for: $0) })
+            }
             let keys = CanonicalBusinessEngine.deadlineAssignedProjectIds(data, personIds: [trimmed]) ?? []
             return Set(keys.map { UUID(uuidString: $0) ?? WorkDocumentKeys.inAppId(for: $0) })
         } catch {

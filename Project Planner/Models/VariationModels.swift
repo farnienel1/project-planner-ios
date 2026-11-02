@@ -196,39 +196,63 @@ nonisolated enum VariationNumbering {
 }
 
 nonisolated enum VariationCodec {
+    /// RULEBOOK 1.8.0 §1: one variation through `parseVariationDocument` (`variations/{id}`, a
+    /// `settings/variationItem_{id}` document or a settings-log entry). Lines with any content are kept; a line stored
+    /// without an id gets `variationLineId` (the same on web and every read, never random). Counters come from the
+    /// lines. Nil without an id.
     nonisolated static func variation(from data: [String: Any], documentId: String) -> Variation? {
-        let parentType = VariationParentType(rawValue: data["parentType"] as? String ?? "") ?? .project
-        let origin = VariationOrigin(rawValue: data["origin"] as? String ?? "") ?? .app
-        let status = VariationStatus(rawValue: data["status"] as? String ?? "") ?? .open
+        guard let row = CanonicalBusinessEngine.parseVariationDocument(documentId: documentId, data: data) else { return nil }
+        func at(_ value: Date?) -> Date { value ?? Date(timeIntervalSince1970: 0) }
         return Variation(
-            id: documentId,
-            orgId: data["orgId"] as? String ?? "",
-            parentType: parentType,
-            parentId: data["parentId"] as? String ?? "",
-            parentName: data["parentName"] as? String ?? "",
-            origin: origin,
-            voNumber: data["voNumber"] as? String ?? "",
-            sequence: firestoreInt(data["sequence"]),
-            voNumberLocked: data["voNumberLocked"] as? Bool ?? false,
-            numberHistory: numberHistory(from: data["numberHistory"]),
-            heading: data["heading"] as? String ?? "",
-            description: data["description"] as? String ?? "",
-            status: status,
-            labour: labour(from: data["labour"]),
-            materials: materials(from: data["materials"]),
-            evidence: evidence(from: data["evidence"]),
-            totalLabourHours: firestoreDouble(data["totalLabourHours"]),
-            materialLineCount: firestoreInt(data["materialLineCount"]),
-            evidenceCount: firestoreInt(data["evidenceCount"]),
-            createdByUid: data["createdByUid"] as? String ?? "",
-            createdByName: data["createdByName"] as? String ?? "",
-            createdAt: date(from: data["createdAt"]) ?? Date(),
-            updatedByUid: data["updatedByUid"] as? String ?? "",
-            updatedAt: date(from: data["updatedAt"]) ?? Date(),
-            statusHistory: statusHistory(from: data["statusHistory"]),
-            submittedAt: date(from: data["submittedAt"]),
-            closedAt: date(from: data["closedAt"]),
-            isDeleted: data["isDeleted"] as? Bool ?? false
+            id: row.id,
+            orgId: row.text("orgId"),
+            parentType: VariationParentType(rawValue: row.text("parentType")) ?? .project,
+            parentId: row.text("parentId"),
+            parentName: row.text("parentName"),
+            origin: VariationOrigin(rawValue: row.text("origin")) ?? .app,
+            voNumber: row.text("voNumber"),
+            sequence: Int(row.number("sequence") ?? 0),
+            voNumberLocked: row.bool("voNumberLocked"),
+            numberHistory: row.rows("numberHistory").map { entry in
+                VariationNumberHistoryEntry(from: entry.text("from"), to: entry.text("to"), at: at(entry.date("atMs")), byUid: entry.text("byUid"))
+            },
+            heading: row.text("heading"),
+            // Description keeps its stored spacing (the reader returns it untrimmed).
+            description: row.raw["description"] as? String ?? "",
+            status: VariationStatus(rawValue: row.text("status")) ?? .open,
+            labour: row.rows("labour").map { line in
+                VariationLabourLine(id: line.id, trade: line.text("trade"), hours: line.number("hours") ?? 0)
+            },
+            materials: row.rows("materials").map { line in
+                VariationMaterialLine(id: line.id, name: line.text("name"), quantity: line.text("quantity"))
+            },
+            evidence: row.rows("evidence").map { item in
+                VariationEvidenceItem(
+                    id: item.id,
+                    fileName: item.text("fileName"),
+                    contentType: item.text("contentType"),
+                    sizeBytes: Int(item.number("sizeBytes") ?? 0),
+                    storagePath: item.text("storagePath"),
+                    downloadURL: item.text("downloadURL"),
+                    uploadedByUid: item.text("uploadedByUid"),
+                    uploadedAt: at(item.date("uploadedAtMs")),
+                    isPending: false
+                )
+            },
+            totalLabourHours: row.number("totalLabourHours") ?? 0,
+            materialLineCount: Int(row.number("materialLineCount") ?? 0),
+            evidenceCount: Int(row.number("evidenceCount") ?? 0),
+            createdByUid: row.text("createdByUid"),
+            createdByName: row.text("createdByName"),
+            createdAt: at(row.date("createdAtMs")),
+            updatedByUid: row.text("updatedByUid"),
+            updatedAt: at(row.date("updatedAtMs")),
+            statusHistory: row.rows("statusHistory").map { entry in
+                VariationStatusHistoryEntry(status: entry.text("status"), byUid: entry.text("byUid"), byName: entry.text("byName"), at: at(entry.date("atMs")))
+            },
+            submittedAt: row.date("submittedAtMs"),
+            closedAt: row.date("closedAtMs"),
+            isDeleted: row.bool("isDeleted")
         )
     }
 
@@ -307,26 +331,24 @@ nonisolated enum VariationCodec {
         return map
     }
 
+    /// RULEBOOK 1.8.0: `variationTrackers/{parentId}` through `parseVariationTrackerDocument`.
     static func tracker(from data: [String: Any], parentId: String) -> VariationTracker {
-        VariationTracker(
-            parentId: parentId,
-            parentType: VariationParentType(rawValue: data["parentType"] as? String ?? "") ?? .project,
-            enabled: data["enabled"] as? Bool ?? false,
-            enabledAt: date(from: data["enabledAt"]),
-            enabledByUid: data["enabledByUid"] as? String,
-            numberingMode: VariationNumberingMode(rawValue: data["numberingMode"] as? String ?? "") ?? .lockSubmitted,
-            prefix: {
-                let raw = (data["prefix"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return raw.isEmpty ? VariationNumbering.defaultPrefix : raw
-            }(),
-            padding: {
-                let parsed = firestoreInt(data["padding"])
-                return parsed > 0 ? parsed : VariationNumbering.defaultPadding
-            }(),
-            version: firestoreInt(data["version"]),
-            lockedByUid: data["lockedByUid"] as? String,
-            lockedByName: data["lockedByName"] as? String,
-            lockedAt: date(from: data["lockedAt"])
+        guard let row = CanonicalBusinessEngine.parseVariationTrackerDocument(parentId: parentId, data: data) else {
+            return .disabled(parentId: parentId, parentType: .project)
+        }
+        return VariationTracker(
+            parentId: row.text("parentId").isEmpty ? parentId : row.text("parentId"),
+            parentType: VariationParentType(rawValue: row.text("parentType")) ?? .project,
+            enabled: row.bool("enabled"),
+            enabledAt: row.date("enabledAtMs"),
+            enabledByUid: row.optionalText("enabledByUid"),
+            numberingMode: VariationNumberingMode(rawValue: row.text("numberingMode")) ?? .lockSubmitted,
+            prefix: row.optionalText("prefix") ?? VariationNumbering.defaultPrefix,
+            padding: Int(row.number("padding") ?? Double(VariationNumbering.defaultPadding)),
+            version: Int(row.number("version") ?? 0),
+            lockedByUid: row.optionalText("lockedByUid"),
+            lockedByName: row.optionalText("lockedByName"),
+            lockedAt: row.date("lockedAtMs")
         )
     }
 
@@ -346,105 +368,5 @@ nonisolated enum VariationCodec {
         if let lockedByName = tracker.lockedByName { map["lockedByName"] = lockedByName }
         if let lockedAt = tracker.lockedAt { map["lockedAt"] = Timestamp(date: lockedAt) }
         return map
-    }
-
-    private static func firestoreInt(_ value: Any?) -> Int {
-        if let i = value as? Int { return i }
-        if let n = value as? Int64 { return Int(n) }
-        if let n = value as? NSNumber { return n.intValue }
-        if let d = value as? Double { return Int(d) }
-        if let s = value as? String { return Int(s) ?? 0 }
-        return 0
-    }
-
-    private static func firestoreDouble(_ value: Any?) -> Double {
-        if let d = value as? Double { return d }
-        if let i = value as? Int { return Double(i) }
-        if let n = value as? NSNumber { return n.doubleValue }
-        if let s = value as? String { return Double(s) ?? 0 }
-        return 0
-    }
-
-    private static func date(from value: Any?) -> Date? {
-        if let ts = value as? Timestamp { return ts.dateValue() }
-        if let date = value as? Date { return date }
-        return nil
-    }
-
-    private static func labour(from value: Any?) -> [VariationLabourLine] {
-        mapRows(from: value).compactMap { row in
-            let id = row["id"] as? String ?? UUID().uuidString
-            return VariationLabourLine(
-                id: id,
-                trade: row["trade"] as? String ?? "",
-                hours: firestoreDouble(row["hours"])
-            )
-        }
-    }
-
-    private static func materials(from value: Any?) -> [VariationMaterialLine] {
-        mapRows(from: value).compactMap { row in
-            let id = row["id"] as? String ?? UUID().uuidString
-            return VariationMaterialLine(
-                id: id,
-                name: row["name"] as? String ?? "",
-                quantity: row["quantity"] as? String ?? ""
-            )
-        }
-    }
-
-    private static func mapRows(from value: Any?) -> [[String: Any]] {
-        if let rows = value as? [[String: Any]] { return rows }
-        guard let rows = value as? [Any] else { return [] }
-        return rows.compactMap { item in
-            if let row = item as? [String: Any] { return row }
-            if let row = item as? NSDictionary {
-                var mapped: [String: Any] = [:]
-                for (key, value) in row {
-                    if let key = key as? String { mapped[key] = value }
-                }
-                return mapped
-            }
-            return nil
-        }
-    }
-
-    private static func evidence(from value: Any?) -> [VariationEvidenceItem] {
-        mapRows(from: value).compactMap { row in
-            let id = row["id"] as? String ?? UUID().uuidString
-            return VariationEvidenceItem(
-                id: id,
-                fileName: row["fileName"] as? String ?? "",
-                contentType: row["contentType"] as? String ?? "",
-                sizeBytes: firestoreInt(row["sizeBytes"]),
-                storagePath: row["storagePath"] as? String ?? "",
-                downloadURL: row["downloadURL"] as? String ?? "",
-                uploadedByUid: row["uploadedByUid"] as? String ?? "",
-                uploadedAt: date(from: row["uploadedAt"]) ?? Date(),
-                isPending: false
-            )
-        }
-    }
-
-    private static func numberHistory(from value: Any?) -> [VariationNumberHistoryEntry] {
-        ((value as? [[String: Any]]) ?? []).compactMap { row in
-            VariationNumberHistoryEntry(
-                from: row["from"] as? String ?? "",
-                to: row["to"] as? String ?? "",
-                at: date(from: row["at"]) ?? Date(),
-                byUid: row["byUid"] as? String ?? ""
-            )
-        }
-    }
-
-    private static func statusHistory(from value: Any?) -> [VariationStatusHistoryEntry] {
-        ((value as? [[String: Any]]) ?? []).compactMap { row in
-            VariationStatusHistoryEntry(
-                status: row["status"] as? String ?? "",
-                byUid: row["byUid"] as? String ?? "",
-                byName: row["byName"] as? String ?? "",
-                at: date(from: row["at"]) ?? Date()
-            )
-        }
     }
 }

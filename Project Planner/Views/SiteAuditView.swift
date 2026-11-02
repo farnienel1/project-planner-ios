@@ -46,6 +46,15 @@ struct SiteAudit: Identifiable, Codable, Hashable {
     var createdByUserId: String
     /// When false, operative-mode users do not see this audit in lists (managers/admins always see all).
     var visibleToOperatives: Bool
+    /// RULEBOOK 1.8.0 §1: the stored `type` text when it is not one of `SiteAuditType` (web may write other types).
+    /// The audit shows as General and a save writes the stored text back unchanged.
+    var storedType: String? = nil
+
+    /// The `type` text a save writes.
+    var storedTypeText: String {
+        if let storedType, SiteAuditType(rawValue: storedType) == nil, type == .general { return storedType }
+        return type.rawValue
+    }
 }
 
 struct SiteAuditDraftItem: Identifiable {
@@ -515,7 +524,7 @@ struct SiteAuditProjectsBrowserView: View {
         )
         if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
            let uid = userStore.currentUser?.id {
-            extras.formUnion(await firebaseBackend.loadDeadlineAssignedProjectIds(userId: uid, organizationId: orgId))
+            extras.formUnion(await firebaseBackend.loadDeadlineAssignedProjectIds(userId: uid, organizationId: orgId, jobIds: projectStore.projects.map(\.documentId)))
             do {
                 let audits = try await firebaseBackend.loadSiteAudits(organizationId: orgId, createdByUserId: uid)
                 await MainActor.run {
@@ -879,7 +888,7 @@ struct SiteAuditCreateFlowView: View {
                        let uid = userStore.currentUser?.id,
                        userStore.isOperativeMode() {
                         extraVisibleProjectIds.formUnion(
-                            await firebaseBackend.loadDeadlineAssignedProjectIds(userId: uid, organizationId: orgId)
+                            await firebaseBackend.loadDeadlineAssignedProjectIds(userId: uid, organizationId: orgId, jobIds: projectStore.projects.map(\.documentId))
                         )
                     }
                 }

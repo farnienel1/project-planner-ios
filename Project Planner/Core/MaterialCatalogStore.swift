@@ -10,7 +10,8 @@ import FirebaseAuth
 enum MaterialCatalogueCSVImportMode: Equatable {
     /// Add new rows, update matching rows, and remove catalogue items missing from the sheet.
     case updateExisting
-    /// Erase the current catalogue, then import every row as a new item (new Catalogue IDs).
+    /// Make the catalogue exactly the sheet. RULEBOOK 1.8.0 §1 (`materialCatalogueWrites`): never delete-all and
+    /// rewrite — a row matching a current item keeps its Catalogue ID, items missing from the sheet are removed.
     case replaceAll
 }
 
@@ -47,6 +48,9 @@ final class MaterialCatalogStore: ObservableObject {
     private var searchRecords: [CanonicalBusinessEngine.CanonicalMaterialRecord] = []
     private var searchMemoKey: String?
     private var searchMemo: [MaterialCatalogItem] = []
+    /// True when `items` came from a successful catalogue read (not the material-line fallback). A list save may
+    /// delete stored items only then (`materialCatalogueWrites` `loaded`).
+    private var catalogueLoaded = false
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         firebaseBackend = backend
@@ -61,6 +65,7 @@ final class MaterialCatalogStore: ObservableObject {
         do {
             let catalog = try await firebaseBackend.loadMaterialCatalogue(organizationId: organizationId)
             let normalized = catalog.map(normalizeCategory)
+            catalogueLoaded = true
             if !normalized.isEmpty {
                 replaceItems(normalized)
                 return
@@ -70,6 +75,7 @@ final class MaterialCatalogStore: ObservableObject {
             let refreshed = try await firebaseBackend.loadMaterialCatalogue(organizationId: organizationId)
             replaceItems(refreshed.map(normalizeCategory))
         } catch {
+            catalogueLoaded = false
             // Fallback: if catalogue read fails or returns nothing, synthesize from existing materials so users can still see items.
             replaceItems((try? await fallbackItemsFromMaterialLines(firebaseBackend: firebaseBackend, organizationId: organizationId)) ?? [])
             if items.isEmpty {
@@ -145,25 +151,19 @@ final class MaterialCatalogStore: ObservableObject {
             )
         }
 
-        switch mode {
-        case .updateExisting:
-            reportProgress(0, "Saving materials…")
-            try await firebaseBackend.saveMaterialCatalogueItems(plan.itemsToSave, organizationId: organizationId) { saved in
-                reportProgress(saved, "Saving materials…")
-            }
-            reportProgress(plan.itemsToSave.count, "Removing materials…")
-            try await firebaseBackend.deleteMaterialCatalogueItems(plan.idsToDelete, organizationId: organizationId) { deleted in
-                reportProgress(plan.itemsToSave.count + deleted, "Removing materials…")
-            }
-        case .replaceAll:
-            reportProgress(0, "Removing current catalogue…")
-            try await firebaseBackend.deleteMaterialCatalogueItems(plan.idsToDelete, organizationId: organizationId) { deleted in
-                reportProgress(deleted, "Removing current catalogue…")
-            }
-            reportProgress(plan.idsToDelete.count, "Uploading materials…")
-            try await firebaseBackend.saveMaterialCatalogueItems(plan.itemsToSave, organizationId: organizationId) { saved in
-                reportProgress(plan.idsToDelete.count + saved, "Uploading materials…")
-            }
+        // RULEBOOK 1.8.0 §1: the catalogue after the import, saved with `materialCatalogueWrites` (partial writes of
+        // changed items; removals only after a successful load and never to an empty catalogue).
+        var finalById = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+        for id in plan.idsToDelete { finalById.removeValue(forKey: id) }
+        for item in plan.itemsToSave { finalById[item.id] = item }
+        let finalItems = Array(finalById.values)
+        reportProgress(0, mode == .replaceAll ? "Uploading materials…" : "Saving materials…")
+        try await firebaseBackend.writeMaterialCatalogue(
+            finalItems,
+            loaded: catalogueLoaded,
+            organizationId: organizationId
+        ) { done in
+            reportProgress(min(done, writeTotal), "Saving materials…")
         }
 
         applyPlanLocally(plan)
@@ -253,18 +253,26 @@ final class MaterialCatalogStore: ObservableObject {
         switch mode {
         case .replaceAll:
             let now = Date()
-            let itemsToSave = uniqueRows.map { row in
-                item(
+            var existingByIdentity: [String: MaterialCatalogItem] = [:]
+            for item in existing {
+                let key = duplicateKey(name: item.name, code: item.productCode)
+                if existingByIdentity[key] == nil { existingByIdentity[key] = item }
+            }
+            let itemsToSave = uniqueRows.map { row -> MaterialCatalogItem in
+                // A row naming a current item keeps its Catalogue ID (lines keep pointing at it); the rest are new.
+                let match = existingByIdentity.removeValue(forKey: duplicateKey(name: row.name, code: row.productCode))
+                return item(
                     from: row,
-                    id: UUID(),
-                    createdAt: now,
-                    createdByUserId: createdByUserId,
-                    createdByName: createdByName
+                    id: match?.id ?? UUID(),
+                    createdAt: match?.createdAt ?? now,
+                    createdByUserId: match?.createdByUserId ?? createdByUserId,
+                    createdByName: match?.createdByName ?? createdByName
                 )
             }
+            let keptIds = Set(itemsToSave.map(\.id))
             return ImportPlan(
                 itemsToSave: itemsToSave,
-                idsToDelete: existing.map(\.id),
+                idsToDelete: existing.map(\.id).filter { !keptIds.contains($0) },
                 added: itemsToSave.count,
                 updated: 0,
                 skippedDuplicates: skippedDuplicates

@@ -369,7 +369,15 @@ class ProjectStore: ObservableObject {
                                 try await firebaseBackend.loadJobTypes(organizationId: organizationId)
                             }
                             let recovered = jobTypesRecoveredFromWorks(merged)
-                            if firebaseJobTypes.isEmpty {
+                            // RULEBOOK 1.8.0 §1: `mergeJobTypeCatalogues` (stored list + names on live jobs + the
+                            // restored defaults, canonical names). Fallback below only when the script did not answer.
+                            let storedTypes = firebaseJobTypes.isEmpty ? existingJobTypesBeforeLoad : firebaseJobTypes
+                            if let mergedTypes = CanonicalBusinessEngine.mergeJobTypeCatalogues(
+                                stored: Array(storedTypes),
+                                recovered: Array(recovered)
+                            ), !mergedTypes.isEmpty {
+                                self.jobTypes = Set(mergedTypes)
+                            } else if firebaseJobTypes.isEmpty {
                                 if !existingJobTypesBeforeLoad.isEmpty {
                                     self.jobTypes = existingJobTypesBeforeLoad.union(recovered)
                                     print("🔥🔥🔥 DEBUG: Firebase returned 0 job types, preserving \(self.jobTypes.count) in-memory/recovered types")
