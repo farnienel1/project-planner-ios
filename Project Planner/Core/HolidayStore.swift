@@ -105,7 +105,7 @@ class HolidayStore: ObservableObject {
         let orgId = try await resolveOrganizationId()
         if let previous = bookings.first(where: { $0.id == booking.id }) {
             let fields = Self.changedFields(from: previous, to: booking)
-            try await fb.updateHolidayBookingFields(bookingId: booking.id, fields: fields, organizationId: orgId)
+            try await fb.updateHolidayBookingFields(documentId: booking.documentId, fields: fields, organizationId: orgId)
             if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
                 bookings[index] = booking
             }
@@ -293,11 +293,12 @@ class HolidayStore: ObservableObject {
         }
     }
 
-    /// Approved records whose leave days (`leaveRecordDayKeys`) include the organisation day of `date`.
+    /// Approved records whose leave days (`leaveRecordDayKeys` over the reader's `startDayKey` / `endDayKey`)
+    /// include the organisation day of `date`.
     func approvedBookings(covering date: Date) -> [HolidayBooking] {
         let dayKey = OrganizationRulebookContext.dayKey(date)
         return bookings.filter { b in
-            b.status == .approved && LeaveRecordDays.covers(b, dayKey: dayKey)
+            b.isApproved && LeaveRecordDays.covers(b, dayKey: dayKey)
         }
     }
 

@@ -413,10 +413,11 @@ enum WarningsRefreshHelper {
             let day = cal.startOfDay(for: $0.date)
             return day >= coverageStart && day <= dataEnd
         }
+        // The reader's organisation-zone day keys (`parseHolidayDocument`), compared as `YYYY-MM-DD` text.
+        let holidayWindowStartKey = OrganizationRulebookContext.dayKey(coverageStart)
+        let holidayWindowEndKey = OrganizationRulebookContext.dayKey(dataEnd)
         let liveHolidays = holidayStore.bookings.filter { holiday in
-            let start = cal.startOfDay(for: holiday.startDate)
-            let end = cal.startOfDay(for: holiday.endDate)
-            return end >= coverageStart && start <= dataEnd
+            holiday.endDayKey >= holidayWindowStartKey && holiday.startDayKey <= holidayWindowEndKey
         }
         let dismissedQualificationKeys = await firebaseBackend.loadDismissedQualificationKeys(
             organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""

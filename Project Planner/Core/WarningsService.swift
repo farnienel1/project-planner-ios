@@ -559,10 +559,11 @@ class WarningsService: ObservableObject {
             let day = cal.startOfDay(for: $0.date)
             return day >= coverageStart && day <= dataEnd
         }
+        // The reader's organisation-zone day keys (`parseHolidayDocument`), compared as `YYYY-MM-DD` text.
+        let windowStartKey = OrganizationRulebookContext.dayKey(coverageStart)
+        let windowEndKey = OrganizationRulebookContext.dayKey(dataEnd)
         let windowedHolidays = holidayBookings.filter { holiday in
-            let start = cal.startOfDay(for: holiday.startDate)
-            let end = cal.startOfDay(for: holiday.endDate)
-            return end >= coverageStart && start <= dataEnd
+            holiday.endDayKey >= windowStartKey && holiday.startDayKey <= windowEndKey
         }
         print("🔥🔥🔥 DEBUG: WarningsService live=\(isLiveScan) window bookings=\(windowedBookings.count)/\(bookings.count) mgr=\(windowedManager.count) \(coverageStart)…\(coverageEnd)")
         let referencedProjectIds = Set(windowedBookings.map(\.projectId))

@@ -312,9 +312,9 @@ final class WarningsLogicTests: XCTestCase {
                 .init(
                     id: "leave-1",
                     userId: "u1",
-                    operativeId: operativeId,
-                    startDay: day,
-                    endDay: day,
+                    operativeId: operativeId.uuidString,
+                    startDayKey: OrganizationRulebookContext.dayKey(day),
+                    endDayKey: OrganizationRulebookContext.dayKey(day),
                     isApproved: true,
                     timeSlot: "PM"
                 )

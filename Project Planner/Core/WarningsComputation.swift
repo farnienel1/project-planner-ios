@@ -133,12 +133,14 @@ struct WarningsComputationSnapshot: Sendable {
         let workEnd: String?
     }
 
+    /// One leave record as the rulebook reader returned it (`parseHolidayDocument`): the document id, the
+    /// stored `userId` / `operativeId` strings and the organisation-zone day keys, never recomputed here.
     struct HolidaySnapshot: Sendable {
         let id: String
         let userId: String?
-        let operativeId: UUID?
-        let startDay: Date
-        let endDay: Date
+        let operativeId: String?
+        let startDayKey: String
+        let endDayKey: String
         let isApproved: Bool
         /// `FULL DAY`, `AM`, or `PM`. The script decides whether that is a clash or an open half.
         let timeSlot: String
@@ -335,26 +337,16 @@ enum WarningsComputation {
             )
         }
 
+        // RULEBOOK 1.5.0 §9: the reader's record goes to the rules unchanged (`labourHolidayInput`); the
+        // scripts match ids without case (`normalizeDocumentId`), so no id is rewritten here.
         let holidayBookings: [WarningsComputationSnapshot.HolidaySnapshot] = input.holidayBookings.map { booking in
-            let rawUserId = booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedUserId: String? = {
-                guard let rawUserId, !rawUserId.isEmpty else { return nil }
-                if let user = input.users.first(where: { $0.id.caseInsensitiveCompare(rawUserId) == .orderedSame }) {
-                    return user.id
-                }
-                if rawUserId.contains("@"),
-                   let user = input.users.first(where: { $0.email.caseInsensitiveCompare(rawUserId) == .orderedSame }) {
-                    return user.id
-                }
-                return rawUserId
-            }()
-            return WarningsComputationSnapshot.HolidaySnapshot(
-                id: booking.id.uuidString,
-                userId: resolvedUserId,
-                operativeId: booking.operativeId,
-                startDay: cal.startOfDay(for: booking.startDate),
-                endDay: cal.startOfDay(for: booking.endDate),
-                isApproved: booking.status == .approved,
+            WarningsComputationSnapshot.HolidaySnapshot(
+                id: booking.documentId,
+                userId: booking.userId,
+                operativeId: booking.operativeIdRaw,
+                startDayKey: booking.startDayKey,
+                endDayKey: booking.endDayKey,
+                isApproved: booking.isApproved,
                 timeSlot: booking.timeSlot.rawValue
             )
         }
@@ -1058,25 +1050,14 @@ enum WarningsComputation {
                 "workEnd": booking.workEndTime ?? "",
             ])
         }
+        // RULEBOOK 1.5.0 §9: the reader's stored ids and day keys (`labourHolidayInput`), unchanged.
         let holidayRows: [[String: Any]] = holidays.map { holiday in
-            let rawUserId = holiday.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedUserId: String? = {
-                guard let rawUserId, !rawUserId.isEmpty else { return nil }
-                if let user = users.first(where: { $0.id.caseInsensitiveCompare(rawUserId) == .orderedSame }) {
-                    return user.id
-                }
-                if rawUserId.contains("@"),
-                   let user = users.first(where: { $0.email.caseInsensitiveCompare(rawUserId) == .orderedSame }) {
-                    return user.id
-                }
-                return rawUserId
-            }()
-            return [
-                "userId": resolvedUserId ?? "",
-                "operativeId": holiday.operativeId?.uuidString ?? "",
-                "startDayKey": CanonicalBusinessEngine.dayKey(for: holiday.startDate, calendar: calendar),
-                "endDayKey": CanonicalBusinessEngine.dayKey(for: holiday.endDate, calendar: calendar),
-                "approved": holiday.status == .approved,
+            [
+                "userId": holiday.userId ?? "",
+                "operativeId": holiday.operativeIdRaw ?? "",
+                "startDayKey": holiday.startDayKey,
+                "endDayKey": holiday.endDayKey,
+                "approved": holiday.isApproved,
             ]
         }
         let shared = shareCoverageAcrossEmail(
@@ -1247,9 +1228,9 @@ enum WarningsComputation {
         let holidays: [[String: Any]] = input.holidayBookings.map { holiday in
             [
                 "userId": holiday.userId ?? "",
-                "operativeId": holiday.operativeId?.uuidString ?? "",
-                "startDayKey": dayKeyString(holiday.startDay, calendar: calendar),
-                "endDayKey": dayKeyString(holiday.endDay, calendar: calendar),
+                "operativeId": holiday.operativeId ?? "",
+                "startDayKey": holiday.startDayKey,
+                "endDayKey": holiday.endDayKey,
                 "approved": holiday.isApproved,
             ]
         }
@@ -1392,9 +1373,9 @@ enum WarningsComputation {
             CanonicalLeaveRecord(
                 id: holiday.id,
                 userId: holiday.userId,
-                operativeId: holiday.operativeId?.uuidString,
-                startDayKey: dayKeyString(holiday.startDay, calendar: calendar),
-                endDayKey: dayKeyString(holiday.endDay, calendar: calendar),
+                operativeId: holiday.operativeId,
+                startDayKey: holiday.startDayKey,
+                endDayKey: holiday.endDayKey,
                 timeSlot: holiday.timeSlot,
                 approved: holiday.isApproved
             )
