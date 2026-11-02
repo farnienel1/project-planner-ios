@@ -887,8 +887,11 @@ class NotificationService: ObservableObject {
             actor: actorPerson,
             roster: recipientRoster
         ) ?? []
+        let storedDeadlineId = WorkDocumentKeys.storedId(for: deadlineId)
         for canonicalUserId in recipients {
-            let dedupeId = syntheticNotificationId(from: "deadlineAssigned|\(deadlineId.uuidString)|\(canonicalUserId)")
+            // Same key as web (`deadlineAssigned|{stored deadline id}|{userId}`): the deadline id in its stored case
+            // (`WorkDocumentKeys.storedId`), so a web-created lower-case deadline gives both apps one row id.
+            let dedupeId = syntheticNotificationId(from: "deadlineAssigned|\(storedDeadlineId)|\(canonicalUserId)")
             let notification = AppNotification(
                 id: dedupeId,
                 organizationId: organizationId,
