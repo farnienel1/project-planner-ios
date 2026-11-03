@@ -26,3 +26,19 @@ nonisolated enum AddUserPermissionSeeding {
         return (UserPermissions().applying(defaults), level)
     }
 }
+
+/// Add User line-manager picks across steps. The picks are app state, not a rule: they are kept on every step change
+/// and cleared only when the account type actually changes (the candidates depend on the level,
+/// `LineManagerRulebook.candidates`). Whether the picks are enough is `lineManagerRequiredError`, checked before the
+/// details step continues and again by Manage Users rules.
+nonisolated enum AddUserLineManagerSelection {
+    static func afterAccountTypeSelection(
+        previous: RulebookPermissionLevel,
+        next: RulebookPermissionLevel,
+        lineManagerIds: Set<String>,
+        hasNoLineManager: Bool
+    ) -> (lineManagerIds: Set<String>, hasNoLineManager: Bool) {
+        guard previous != next else { return (lineManagerIds, hasNoLineManager) }
+        return ([], false)
+    }
+}
