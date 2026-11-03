@@ -925,9 +925,35 @@ class FirebaseBackend: ObservableObject {
         }
     }
     
-    func signOut() throws {
-        try auth.signOut()
-        clearDeviceQueuesOnSignOut()
+    /// RULEBOOK §13: the one sign-out path. Every sign-out — the Settings button (`AppSignOut`) and every forced one
+    /// (expired session, blocked trial) — removes this device's push token from every `users` document it was written
+    /// to, then signs out of Firebase Auth. The clean-up wait is bounded (`SignOutSequence`); a failed or slow clean-up
+    /// never stops the sign-out. Device queues are cleared only when Firebase Auth actually signed out.
+    func signOutRemovingPushToken(reason: SignOutReason) async {
+        if reason != .userRequested {
+            let pending = OfflineOutboxStore.shared.pendingCount + SiteAuditOfflineStore.shared.pendingCount
+            if pending > 0 {
+                // A forced sign-out cannot ask; the queued changes are discarded with the session (logged).
+                NSLog("FORCED_SIGN_OUT_DISCARDS_PENDING reason=%@ count=%d", reason.rawValue as NSString, pending)
+            }
+        }
+        // Captured before sign-out: the token, the account and the open company (same-email copies are found there).
+        let target = pushTokenRemovalTarget()
+        await SignOutSequence.run(
+            cleanup: { [weak self] in
+                guard let self, let target else { return }
+                await self.removePushToken(target.token, uid: target.uid, email: target.email, organizationId: target.organizationId)
+            },
+            signOut: {
+                registeredPushToken = nil
+                do {
+                    try auth.signOut()
+                    clearDeviceQueuesOnSignOut()
+                } catch {
+                    print("🔥🔥🔥 DEBUG: Sign out error (\(reason.rawValue)): \(error.localizedDescription)")
+                }
+            }
+        )
     }
 
     /// Sign-out leaves nothing this account queued or cached on the device: the offline outbox (it would
@@ -941,19 +967,6 @@ class FirebaseBackend: ObservableObject {
         NotificationCenter.default.post(name: .appDidSignOut, object: nil)
     }
 
-    /// RULEBOOK §13: a forced sign-out (expired session, blocked trial) removes this device's push token from every
-    /// `users` document it was written to before Firebase Auth signs out, exactly as `AppSignOut` does. The wait is
-    /// bounded (`removeThisDevicePushTokenBeforeSignOut`); sign-out goes ahead either way.
-    func forcedSignOutRemovingPushToken() async {
-        let pending = OfflineOutboxStore.shared.pendingCount + SiteAuditOfflineStore.shared.pendingCount
-        if pending > 0 {
-            // A forced sign-out cannot ask; the queued changes are discarded with the session (logged).
-            NSLog("FORCED_SIGN_OUT_DISCARDS_PENDING count=%d", pending)
-        }
-        await removeThisDevicePushTokenBeforeSignOut()
-        try? auth.signOut()
-        clearDeviceQueuesOnSignOut()
-    }
     
     /// Sends a new verification code (invitation token) so the user can set or reset their password on the Project Planner page.
     /// Creates a fresh invitation document and emails the user with "Verification code" wording.
@@ -1095,7 +1108,7 @@ class FirebaseBackend: ObservableObject {
             try await user.updatePassword(to: newPassword)
         } catch {
             if isSessionExpiredOrInvalidCredential(error) {
-                await forcedSignOutRemovingPushToken()
+                await signOutRemovingPushToken(reason: .sessionExpired)
                 errorMessage = FirebaseBackend.sessionExpiredMessage
             } else {
                 errorMessage = error.localizedDescription
@@ -1936,7 +1949,7 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: ✅✅✅ Organization loaded successfully - Name: \(organizationName), ID: \(organizationId)")
         } catch {
             if isSessionExpiredOrInvalidCredential(error) {
-                await forcedSignOutRemovingPushToken()
+                await signOutRemovingPushToken(reason: .sessionExpired)
                 errorMessage = FirebaseBackend.sessionExpiredMessage
                 print("🔥🔥🔥 DEBUG: Session/credential expired – signed out so user can sign in again")
                 return
@@ -6614,33 +6627,21 @@ class FirebaseBackend: ObservableObject {
         }
     }
 
-    /// RULEBOOK §13: signing out removes this device's token from every `users` document it was written to —
-    /// the signed-in account and, because older builds copied it there, every same-email `users` document in the
-    /// open company (`pushTokens` arrayRemove, a partial update). Call before `signOut()`. Waits at most
-    /// `timeoutSeconds` for the server; sign-out goes ahead either way.
-    func removeThisDevicePushTokenBeforeSignOut(timeoutSeconds: Double = 5) async {
-        guard let authUser = auth.currentUser else { return }
+    /// RULEBOOK §13: what sign-out removes — this device's token, the signed-in account, and the open company (same-email
+    /// `users` documents older builds copied the token to). Nil when nobody is signed in or the device has no token.
+    private func pushTokenRemovalTarget() -> (token: String, uid: String, email: String, organizationId: String)? {
+        guard let authUser = auth.currentUser else { return nil }
         var token = registeredPushToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 #if canImport(FirebaseMessaging)
         if token.isEmpty {
             token = Messaging.messaging().fcmToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         }
 #endif
-        guard !token.isEmpty else { return }
-        let uid = authUser.uid
+        guard !token.isEmpty else { return nil }
         let email = authUser.email?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let orgId = currentOrganization?.firestoreDocumentId ?? ""
-        let progress = PushTokenRemovalProgress()
-        Task {
-            await self.removePushToken(token, uid: uid, email: email, organizationId: orgId)
-            progress.finished = true
-        }
-        var waited = 0.0
-        while !progress.finished && waited < timeoutSeconds {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            waited += 0.1
-        }
-        registeredPushToken = nil
+        let openOrg = currentOrganization?.firestoreDocumentId ?? ""
+        let orgId = openOrg.isEmpty ? sessionOrganizationId : openOrg
+        return (token, authUser.uid, email, orgId)
     }
 
     private func removePushToken(_ token: String, uid: String, email: String, organizationId: String) async {

@@ -44,6 +44,8 @@ struct AddUserView: View {
     @State private var mobileNumber = ""
     @State private var employmentType: EmploymentType = .selfEmployed
     @State private var permissions = UserPermissions()
+    /// The level `permissions` was last seeded for (`AddUserPermissionSeeding`); nil before the first seed.
+    @State private var permissionsSeededLevel: RulebookPermissionLevel?
     @State private var selectedLineManagerUserIds: Set<String> = []
     @State private var hasNoLineManager = false
     @State private var showingLineManagerPicker = false
@@ -332,7 +334,7 @@ struct AddUserView: View {
         let selected = invitedAccountType == type
         let lockedToOperative = mode == .managerAddingOperative
         return Button {
-            guard !lockedToOperative else { return }
+            guard !lockedToOperative, invitedAccountType != type else { return }
             invitedAccountType = type
             applyPermissionsForInvitedType()
             resetAnnualLeaveInviteDefaults()
@@ -610,50 +612,6 @@ struct AddUserView: View {
         LineManagerRulebook.candidates(for: inviteDraftUserForValidation, roster: userStore.organizationUsers)
     }
     
-    private var stepManagerOperativeSummary: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("This person will be invited as an operative with a limited app view.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Image(systemName: "person.fill")
-                        .foregroundColor(.indigo)
-                    Text("Operative mode")
-                        .font(.headline)
-                }
-                Text("Operative mode provides very limited access to the platform. It allows access to their schedule, request annual leave and maintain their qualifications.")
-                    .font(.subheadline)
-                    .foregroundColor(.primary)
-                Text("The below features are additional options, which need to be selected to provide access.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-            .background(Color.indigo.opacity(0.08))
-            .cornerRadius(12)
-
-            lineManagerPickerSection
-            .onAppear {
-                permissions.operativeMode = true
-                permissions.adminAccess = false
-                permissions.manager = false
-                permissions.operatives = false
-                permissions.skills = false
-                permissions.qualifications = false
-                permissions.materials = false
-                permissions.projects = true
-                permissions.smallWorks = true
-                if selectedLineManagerUserIds.isEmpty, let me = userStore.currentUser?.id {
-                    selectedLineManagerUserIds = [me]
-                }
-            }
-
-            annualLeaveInvitationSection
-        }
-    }
-    
     private var invitePermissionDivider: some View {
         Rectangle()
             .fill(Color(.separator).opacity(0.35))
@@ -794,9 +752,6 @@ struct AddUserView: View {
                 }
                 annualLeaveInvitationSection
             }
-        }
-        .onAppear {
-            applyPermissionsForInvitedType()
         }
     }
     
@@ -955,11 +910,14 @@ struct AddUserView: View {
     
     // MARK: - Validation & permissions
     
-    /// RULEBOOK 1.11.0 §11: Add User starts each level with `addUserPermissionDefaults(level)`.
+    /// RULEBOOK 1.11.0 §11: Add User starts each level with `addUserPermissionDefaults(level)`, applied only when the
+    /// level is first chosen or changes (`AddUserPermissionSeeding`), so a step change or a step re-appearing never
+    /// replaces the toggles the admin picked.
     private func applyPermissionsForInvitedType() {
         let level = RulebookPermissionLevel(rawValue: invitedAccountType.rawValue) ?? .manager
-        guard let defaults = CanonicalBusinessEngine.addUserPermissionDefaults(level) else { return }
-        permissions = UserPermissions().applying(defaults)
+        let seeded = AddUserPermissionSeeding.select(level: level, current: permissions, seededLevel: permissionsSeededLevel)
+        permissions = seeded.permissions
+        permissionsSeededLevel = seeded.seededLevel
     }
 
     /// The Add User draft as the permission rules read it (the chosen level's role).
