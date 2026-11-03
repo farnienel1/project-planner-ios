@@ -1614,7 +1614,8 @@ struct WeeklyReportView: View {
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
             let paye = isPaye(linkedUser, on: booking.date)
-            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(paye ? "paye" : "")"
+            // RULEBOOK 1.19.0 §7: days under different working hours (standard day, overtime rate) are separate rows.
+            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(String(format: "%.3f", standardDayHours))|\(paye ? "paye" : "")"
             var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
             acc.normalHours += normalHours
             acc.otHours += otHours
@@ -1651,7 +1652,8 @@ struct WeeklyReportView: View {
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
             let paye = isPaye(manager, on: booking.date)
-            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(paye ? "paye" : "")"
+            // RULEBOOK 1.19.0 §7: days under different working hours (standard day, overtime rate) are separate rows.
+            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(String(format: "%.3f", standardDayHours))|\(paye ? "paye" : "")"
             var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
             acc.normalHours += normalHours
             acc.otHours += otHours

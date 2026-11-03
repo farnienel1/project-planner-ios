@@ -1018,9 +1018,9 @@ struct BookLabourFlowView: View {
                         }
                     ))
                     .accessibilityIdentifier("bookLabourFlow.noBreakOnThisBooking")
-                    }
                     .font(.system(size: 12, weight: .medium))
                     .tint(ProjectWorksRevampColors.blue)
+                    }
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Breakdown")
