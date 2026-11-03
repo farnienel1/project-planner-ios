@@ -75,13 +75,19 @@ extension CanonicalBusinessEngine {
         timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> (rows: [CanonicalPayRateHistoryWrite], refusal: String?)? {
         let input: [String: Any] = [
-            "userId": userId ?? NSNull(),
-            "operativeId": operativeId ?? NSNull(),
-            "previousProfile": ["rate": previous.rate ?? NSNull(), "payBasis": previous.payBasis ?? NSNull()],
-            "nextProfile": ["rate": next.rate ?? NSNull(), "payBasis": next.payBasis ?? NSNull()],
-            "history": historyRowIds.map { ids in ids.map { ["id": $0] } } ?? NSNull(),
+            "userId": userId.map { $0 as Any } ?? NSNull(),
+            "operativeId": operativeId.map { $0 as Any } ?? NSNull(),
+            "previousProfile": [
+                "rate": previous.rate.map { $0 as Any } ?? NSNull(),
+                "payBasis": previous.payBasis.map { $0 as Any } ?? NSNull(),
+            ] as [String: Any],
+            "nextProfile": [
+                "rate": next.rate.map { $0 as Any } ?? NSNull(),
+                "payBasis": next.payBasis.map { $0 as Any } ?? NSNull(),
+            ] as [String: Any],
+            "history": historyRowIds.map { ids in ids.map { ["id": $0] } as Any } ?? NSNull(),
             "effectiveDayKey": effective.timeIntervalSince1970 * 1000,
-            "seedEffective": seedEffective.map { $0.timeIntervalSince1970 * 1000 } ?? NSNull(),
+            "seedEffective": seedEffective.map { $0.timeIntervalSince1970 * 1000 as Any } ?? NSNull(),
             "timeZone": timeZone,
         ]
         guard let result = callJSON("payRateChangeWrites", arguments: [input]) as? [String: Any] else { return nil }
