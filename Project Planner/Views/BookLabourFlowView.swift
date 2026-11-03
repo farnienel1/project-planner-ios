@@ -75,6 +75,13 @@ struct BookLabourFlowView: View {
     @State private var isMultiSelectMode = false
     @State private var selectedPersonIds: Set<String> = []
     @State private var bookingParty: [BookLabourCandidate] = []
+    /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): the confirm step before saving custom hours over the unpaid break.
+    @State private var breakWarningPrompt: BreakWarningPrompt?
+
+    private struct BreakWarningPrompt {
+        let message: String
+        let onConfirm: () -> Void
+    }
 
     /// RULEBOOK §1: one business time zone. Booking days are organisation-zone midnights (the day keys every
     /// reader uses), never the phone's midnight (launch data audit #1).
@@ -94,6 +101,33 @@ struct BookLabourFlowView: View {
     }
 
     private var day: Date { calendar.startOfDay(for: bookDate) }
+
+    /// RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: FULL DAY / AM / PM on weekdays only; Saturday and Sunday are custom.
+    private var offeredSlots: [RulebookBookingSlot] { CanonicalBusinessEngine.allowedTimeSlots(on: day) }
+
+    private func managerSlotOffered(_ slot: ManagerTimeSlot) -> Bool {
+        switch slot {
+        case .fullDay: return offeredSlots.contains(.fullDay)
+        case .morning: return offeredSlots.contains(.am)
+        case .afternoon: return offeredSlots.contains(.pm)
+        case .customHours: return offeredSlots.contains(.custom)
+        }
+    }
+
+    /// Runs `save` after the `customHoursBreakWarning` confirm when the hours cover the unpaid break with it on.
+    private func confirmingBreakWarning(start: String, end: String, breakRemoved: Bool, _ save: @escaping () -> Void) {
+        if let message = CanonicalBusinessEngine.customHoursBreakWarning(
+            on: day,
+            policy: dayPayrollPolicy,
+            workStartTime: start,
+            workEndTime: end,
+            isBreakRemoved: breakRemoved
+        ) {
+            breakWarningPrompt = BreakWarningPrompt(message: message, onConfirm: save)
+        } else {
+            save()
+        }
+    }
 
     private var scheduleOptions: MyScheduleOptions { appSettings.settings.myScheduleOptions }
 
@@ -226,6 +260,21 @@ struct BookLabourFlowView: View {
                     .accessibilityIdentifier("bookLabourFlow.ok")
             } message: {
                 Text(errorBanner ?? "")
+            }
+            .alert("Unpaid break", isPresented: Binding(
+                get: { breakWarningPrompt != nil },
+                set: { if !$0 { breakWarningPrompt = nil } }
+            )) {
+                Button("Go back", role: .cancel) { breakWarningPrompt = nil }
+                    .accessibilityIdentifier("bookLabourFlow.breakWarning.back")
+                Button("Save anyway") {
+                    let run = breakWarningPrompt?.onConfirm
+                    breakWarningPrompt = nil
+                    run?()
+                }
+                    .accessibilityIdentifier("bookLabourFlow.breakWarning.save")
+            } message: {
+                Text(breakWarningPrompt?.message ?? "")
             }
             .overlay {
                 if let pending = pendingOperativeOverlap {
@@ -716,9 +765,10 @@ struct BookLabourFlowView: View {
                 Text(bookFlowDayLine)
                     .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
+                WeekendBookingNoteView(day: day, policy: dayPayrollPolicy)
                 bookLabourSectionLabel("Select slot")
                 HStack(spacing: 10) {
-                    ForEach([ManagerTimeSlot.fullDay, .morning, .afternoon], id: \.self) { slot in
+                    ForEach([ManagerTimeSlot.fullDay, .morning, .afternoon].filter(managerSlotOffered), id: \.self) { slot in
                         Button {
                             savePartyBookings(
                                 fallbackPerson: person,
@@ -800,8 +850,9 @@ struct BookLabourFlowView: View {
             embedsNavigation: false,
             initialChoice: OperativeDayBookingChoice(
                 timeSlot: .customHours,
-                workStartTime: dayPayrollPolicy.standardDayStart,
-                workEndTime: dayPayrollPolicy.standardDayEnd,
+                // RULEBOOK 1.13.1 `weekendCustomHoursDefault`: a weekend day opens on that day's window.
+                workStartTime: CanonicalBusinessEngine.customHoursPrefill(on: day, policy: dayPayrollPolicy).start,
+                workEndTime: CanonicalBusinessEngine.customHoursPrefill(on: day, policy: dayPayrollPolicy).end,
                 isBreakRemoved: false
             ),
             onSave: { start, end, breakRemoved, _ in
@@ -884,27 +935,36 @@ struct BookLabourFlowView: View {
                     Text(bookFlowDayLine)
                         .font(.system(size: 11))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
+                    WeekendBookingNoteView(day: day, policy: dayPayrollPolicy)
 
-                    bookLabourSectionLabel("Quick options")
-                    HStack(spacing: 10) {
-                        Button {
-                            applyQuickTimeSlot(.fullDay, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
-                        } label: {
-                            quickDraftButtonLabel("FULL DAY")
+                    if offeredSlots.contains(.fullDay) || offeredSlots.contains(.am) || offeredSlots.contains(.pm) {
+                        bookLabourSectionLabel("Quick options")
+                        HStack(spacing: 10) {
+                            if offeredSlots.contains(.fullDay) {
+                                Button {
+                                    applyQuickTimeSlot(.fullDay, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                                } label: {
+                                    quickDraftButtonLabel("FULL DAY")
+                                }
+                                    .accessibilityIdentifier("bookLabourFlow.fullDAY")
+                            }
+                            if offeredSlots.contains(.am) {
+                                Button {
+                                    applyQuickTimeSlot(.morning, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                                } label: {
+                                    quickDraftButtonLabel("AM")
+                                }
+                                    .accessibilityIdentifier("bookLabourFlow.am")
+                            }
+                            if offeredSlots.contains(.pm) {
+                                Button {
+                                    applyQuickTimeSlot(.afternoon, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
+                                } label: {
+                                    quickDraftButtonLabel("PM")
+                                }
+                                    .accessibilityIdentifier("bookLabourFlow.pm")
+                            }
                         }
-                            .accessibilityIdentifier("bookLabourFlow.fullDAY")
-                        Button {
-                            applyQuickTimeSlot(.morning, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
-                        } label: {
-                            quickDraftButtonLabel("AM")
-                        }
-                            .accessibilityIdentifier("bookLabourFlow.am")
-                        Button {
-                            applyQuickTimeSlot(.afternoon, projectId: project.id, currentBreakRemoved: draft.breakRemoved)
-                        } label: {
-                            quickDraftButtonLabel("PM")
-                        }
-                            .accessibilityIdentifier("bookLabourFlow.pm")
                     }
 
                     bookLabourSectionLabel("Custom hours")
@@ -971,14 +1031,18 @@ struct BookLabourFlowView: View {
                     )
 
                     Button {
-                        saveOperativeBooking(
-                            operative: op,
-                            project: project,
-                            slot: .customHours,
-                            workStart: timeText(from: draft.startMinutes),
-                            workEnd: timeText(from: draft.endMinutes),
-                            breakRemoved: draft.breakRemoved
-                        )
+                        let start = timeText(from: draft.startMinutes)
+                        let end = timeText(from: draft.endMinutes)
+                        confirmingBreakWarning(start: start, end: end, breakRemoved: draft.breakRemoved) {
+                            saveOperativeBooking(
+                                operative: op,
+                                project: project,
+                                slot: .customHours,
+                                workStart: start,
+                                workEnd: end,
+                                breakRemoved: draft.breakRemoved
+                            )
+                        }
                     } label: {
                         Text("Save booking")
                             .font(.system(size: 13, weight: .semibold))
@@ -1078,8 +1142,15 @@ struct BookLabourFlowView: View {
     private func defaultOperativeDraft(operativeId: UUID) -> OperativeRectifyDraft {
         let policy = dayPayrollPolicy
         let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
-        let defaultStart = timeline.standardWindowStartMinutes ?? 450
-        let defaultEnd = timeline.standardWindowEndMinutes ?? 960
+        // RULEBOOK 1.13.1 `weekendCustomHoursDefault`: a set-window weekend day opens on that day's window.
+        let weekend = CanonicalBusinessEngine.weekendCustomHoursDefault(
+            policy: policy,
+            dayKey: CanonicalBusinessEngine.bookingDayKey(day)
+        )
+        let defaultStart = weekend.flatMap { ManagerScheduleInterval.parseMinutes($0.start) }
+            ?? timeline.standardWindowStartMinutes ?? 450
+        let defaultEnd = weekend.flatMap { ManagerScheduleInterval.parseMinutes($0.end) }
+            ?? timeline.standardWindowEndMinutes ?? 960
         let intervals = existingIntervalsForOperative(operativeId)
         let latestEnd = intervals.map(\.1).max() ?? defaultStart
         let start = max(defaultStart, latestEnd)

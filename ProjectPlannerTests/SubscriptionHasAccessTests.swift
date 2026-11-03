@@ -39,22 +39,28 @@ final class SubscriptionHasAccessTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(CanonicalBusinessEngine.hasAccess(billing: payload)))
     }
 
-    func testVisibleCopySaysTheSubscriptionIsNotActive() {
-        let superAdmin = SubscriptionLapsedCopy.visibleText(isSuperAdmin: true)
-        let otherRole = SubscriptionLapsedCopy.visibleText(isSuperAdmin: false)
-        // App Store 3.1.1 / 3.1.3: no price, renewal or web billing route.
-        XCTAssertEqual(superAdmin, "Your organisation's subscription is not active.\nContact your organisation's administrator.")
-        XCTAssertEqual(otherRole, superAdmin)
-        for text in [superAdmin, otherRole] {
-            XCTAssertFalse(text.lowercased().contains("renew"))
+    func testVisibleCopyIsTheRulebookLapsedMessage() {
+        let admin = SubscriptionLapsedCopy.visibleText(isAdmin: true)
+        let otherRole = SubscriptionLapsedCopy.visibleText(isAdmin: false)
+        // RULEBOOK §19: `SUBSCRIPTION_LAPSED_MESSAGE` for everyone; on iOS admins see the same text (no web billing note).
+        XCTAssertEqual(otherRole, "The organisation's Project Planner subscription has lapsed. Please contact your system administrator and ask them to renew.")
+        XCTAssertEqual(admin, otherRole)
+        XCTAssertFalse(admin.contains("Billing"))
+        for text in [admin, otherRole] {
             XCTAssertFalse(text.lowercased().contains("web app"))
             XCTAssertFalse(text.contains("£"))
+            XCTAssertFalse(text.lowercased().contains("transfer"))
+            XCTAssertFalse(text.lowercased().contains("stripe"))
+            XCTAssertFalse(text.contains("http"))
         }
-        XCTAssertFalse(superAdmin.lowercased().contains("transfer"))
-        XCTAssertFalse(otherRole.lowercased().contains("transfer"))
-        XCTAssertFalse(superAdmin.lowercased().contains("stripe"))
-        XCTAssertFalse(otherRole.lowercased().contains("stripe"))
-        XCTAssertFalse(superAdmin.contains("http"))
-        XCTAssertFalse(otherRole.contains("http"))
+    }
+
+    func testSubscriptionAccessBlocksEveryoneButTheOwner() {
+        let lapsed: [String: Any] = ["status": "canceled"]
+        XCTAssertEqual(CanonicalBusinessEngine.subscriptionAccess(billing: lapsed, viewerIsAdmin: false, viewerIsPlatformOwner: false), .blocked)
+        XCTAssertEqual(CanonicalBusinessEngine.subscriptionAccess(billing: lapsed, viewerIsAdmin: true, viewerIsPlatformOwner: false), .adminBillingOnly)
+        XCTAssertEqual(CanonicalBusinessEngine.subscriptionAccess(billing: lapsed, viewerIsAdmin: false, viewerIsPlatformOwner: true), .open)
+        XCTAssertEqual(CanonicalBusinessEngine.subscriptionAccess(billing: nil, viewerIsAdmin: false, viewerIsPlatformOwner: false), .open)
+        XCTAssertEqual(CanonicalBusinessEngine.subscriptionAccess(billing: ["status": "active"], viewerIsAdmin: false, viewerIsPlatformOwner: false), .open)
     }
 }

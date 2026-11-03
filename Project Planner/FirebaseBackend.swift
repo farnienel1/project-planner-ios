@@ -189,6 +189,10 @@ class FirebaseBackend: ObservableObject {
         }
     }
     @Published var userRole: UserRole = .basic
+    /// RULEBOOK 1.12.2 §11: the open organisation's `members` map (uid → role) from the live `organizations/{orgId}`
+    /// listener, keyed by that organisation id so another company's map is never read after a switch. Input to
+    /// `accountTypeSyncState` in Manage Users and Edit User.
+    @Published var organizationMembersSnapshot: (organizationId: String, members: [String: String])?
     /// True when the session chooser answered that the signed-in account belongs to no organisation and recovery did
     /// not find one. The root shows "You're not a member of an organisation yet" instead of an empty Home.
     @Published var sessionHasNoOrganization = false
@@ -315,7 +319,7 @@ class FirebaseBackend: ObservableObject {
         return trimmedOrgId
     }
 
-    private func isFirestorePermissionDenied(_ error: Error) -> Bool {
+    func isFirestorePermissionDenied(_ error: Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7
     }
@@ -352,6 +356,7 @@ class FirebaseBackend: ObservableObject {
         organizationDocumentListener?.remove()
         organizationDocumentListener = nil
         organizationDocumentListenerTarget = nil
+        organizationMembersSnapshot = nil
         stopScheduleLiveListeners()
     }
 
@@ -402,6 +407,8 @@ class FirebaseBackend: ObservableObject {
                     guard organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
                     self.applyOrganizationDocumentSettings(from: data, organizationId: orgId)
                     self.applyOrganizationDocumentBilling(from: data, organizationId: orgId)
+                    let members = (data["members"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
+                    self.organizationMembersSnapshot = (organizationId: orgId, members: members)
                 }
             }
     }
@@ -1452,7 +1459,9 @@ class FirebaseBackend: ObservableObject {
             daysPerYear: daysPerYear,
             startMonth: startMonth,
             endMonth: endMonth,
-            carriesOver: carriesOver
+            carriesOver: carriesOver,
+            // RULEBOOK 1.13.0 §4.4 `parseMaxCarryOverDays`: null / blank / negative = no cap.
+            maxCarryOverDays: CanonicalBusinessEngine.parseMaxCarryOverDays(data["maxCarryOverDays"])
         )
     }
 
@@ -3146,7 +3155,8 @@ class FirebaseBackend: ObservableObject {
         payload: [String: Any],
         previousPayload: [String: Any]?,
         writeFields: String = "operativeRowWriteFields",
-        mode: RecordSaveMode
+        mode: RecordSaveMode,
+        payProfileSubjectId: String? = nil
     ) async throws {
         let uid = auth.currentUser?.uid
         let snapshot = try await ref.getDocument(source: .server)
@@ -3170,7 +3180,15 @@ class FirebaseBackend: ObservableObject {
         var changes = write.firestoreFields(from: payload)
         changes.removeValue(forKey: "updatedAt")
         guard !changes.isEmpty else { return }
-        try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+        guard let payProfileSubjectId else {
+            try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+            return
+        }
+        // RULEBOOK 1.13.0 §8 (Q1 step B): a catalogue row's changed pay goes to `payProfiles/{rowId}` in the same batch.
+        let batch = db.batch()
+        batch.updateData(WriteMetadata.stamped(changes, userId: uid), forDocument: ref)
+        addPayProfileWrite(to: batch, subjectId: payProfileSubjectId, profileWrite: changes)
+        try await batch.commit()
     }
 
     private static func operativeDocumentPayload(_ operative: Operative, organizationId: String) -> [String: Any] {
@@ -3223,7 +3241,14 @@ class FirebaseBackend: ObservableObject {
         // The stored document id (stored case; a non-UUID id is kept), never the in-memory UUID.
         let ref = db.collection("organizations").document(organizationId).collection("operatives").document(operative.documentId)
         do {
-            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData, writeFields: "operativeRowWriteFields", mode: mode)
+            try await writeChangedRosterRow(
+                ref,
+                payload: data,
+                previousPayload: previousData,
+                writeFields: "operativeRowWriteFields",
+                mode: mode,
+                payProfileSubjectId: operative.documentId
+            )
             print("🔥🔥🔥 DEBUG: Operative saved successfully to Firebase")
         } catch {
             print("🔥🔥🔥 DEBUG: ERROR saving operative: \(error.localizedDescription)")
@@ -4162,6 +4187,7 @@ class FirebaseBackend: ObservableObject {
         parsed.documentUpdatedAt = row.date("updatedAtMs")
         parsed.status = row.optionalText("status")
         parsed.payBasis = row.optionalText("payBasis")
+        parsed.employmentStartDate = row.optionalText("employmentStartDayKey")
         parsed.profilePhotoUpdatedAt = row.date("profilePhotoUpdatedAtMs")
         parsed.operativeModeStored = row.bool("operativeModeStored")
         parsed.annualLeaveDefaultsPending = row.bool("annualLeaveDefaultsPending")
@@ -5074,12 +5100,7 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
             )
         }
-        let payload: [String: Any] = [
-            "daysPerYear": defaults.daysPerYear,
-            "startMonth": defaults.startMonth,
-            "endMonth": defaults.endMonth,
-            "carriesOver": defaults.carriesOver,
-        ]
+        let payload = defaults.firestoreMap
         try await db.collection("organizations").document(orgId).updateData(
             WriteMetadata.stamped(["annualLeaveDefaults": payload], userId: auth.currentUser?.uid)
         )
@@ -5136,12 +5157,8 @@ class FirebaseBackend: ObservableObject {
         let trimmed = bankHolidayRegionId.trimmingCharacters(in: .whitespacesAndNewlines)
         // Rulebook 1.4.0 §4.4: a country with no listed region (`bankHolidayRegionsForCountry` empty) has nothing
         // to choose, so the leave defaults still save and the stored region is left alone.
-        let payload: [String: Any] = [
-            "daysPerYear": defaults.daysPerYear,
-            "startMonth": defaults.startMonth,
-            "endMonth": defaults.endMonth,
-            "carriesOver": defaults.carriesOver,
-        ]
+        // RULEBOOK 1.13.0 §4.4: the whole map, `maxCarryOverDays` included, so the cap is never dropped.
+        let payload = defaults.firestoreMap
         var fields: [String: Any] = ["annualLeaveDefaults": payload]
         if !trimmed.isEmpty {
             // Dotted `settings.bankHolidayRegionId` is a path only in updateData (never setData(merge:)).
@@ -5592,7 +5609,8 @@ class FirebaseBackend: ObservableObject {
             changes.removeValue(forKey: "profilePhotoURL")
         }
         guard !changes.isEmpty else { return }
-        try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+        // RULEBOOK 1.13.0 §8 (Q1 step B): changed pay / employment fields go to the pay profile in the same batch.
+        try await updateUserDocumentWithPayProfile(userId: user.id, payload: WriteMetadata.stamped(changes, userId: uid))
     }
 
     /// Deactivate / reactivate: only `isActive` plus `WriteMetadata` on `users/{uid}` (RULEBOOK §11).
@@ -5840,6 +5858,13 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Patch-only: show or hide annual leave in the app. Does not write organizationId.
+    /// RULEBOOK 1.13.0 §4.4: `users/{uid}.employmentStartDate` (`YYYY-MM-DD`), or deleted when blank.
+    func updateEmploymentStartDate(userId: String, dayKey: String?) async throws {
+        let value: Any = dayKey.map { $0 as Any } ?? FieldValue.delete()
+        try await db.collection("users").document(userId)
+            .updateData(WriteMetadata.stamped(["employmentStartDate": value], userId: auth.currentUser?.uid))
+    }
+
     func updateAnnualLeaveEnabled(userId: String, enabled: Bool) async throws {
         let payload: [String: Any] = [
             "annualLeaveEnabled": enabled,
@@ -5874,7 +5899,8 @@ class FirebaseBackend: ObservableObject {
         if let timesheetsEnabled {
             payload["timesheetsEnabled"] = timesheetsEnabled
         }
-        try await db.collection("users").document(userId).updateData(payload)
+        // RULEBOOK 1.13.0 §8 (Q1 step B): employment type goes to the pay profile in the same batch.
+        try await updateUserDocumentWithPayProfile(userId: userId, payload: payload)
     }
 
     /// Keeps `organizations/{orgId}/userEmails/{email}` aligned when a member’s profile email changes.
@@ -5925,17 +5951,25 @@ class FirebaseBackend: ObservableObject {
             UserDefaults.standard.removeObject(forKey: key)
             return
         }
+        // RULEBOOK 1.13.0 §14 `signInEmailSyncWrites`: the users email follows the verified token email, and the
+        // organisation `userEmails` claim moves with it (the rules let the person delete their own old claim).
+        let orgId = organizationIdFromFirestore(storedData["organizationId"])
+        guard let plan = CanonicalBusinessEngine.signInEmailSyncWrites(
+            userId: userId,
+            organizationId: orgId,
+            tokenEmail: authEmail,
+            tokenEmailVerified: authUser.isEmailVerified,
+            storedEmail: stored
+        ) else { return }
         do {
             try await db.collection("users").document(userId)
-                .updateData(WriteMetadata.stamped(["email": authEmail], userId: userId))
+                .updateData(WriteMetadata.stamped(["email": plan.email], userId: userId))
             UserDefaults.standard.removeObject(forKey: key)
-            if let orgId = organizationIdFromFirestore(storedData["organizationId"]), !orgId.isEmpty {
-                try? await reconcileUserEmailIndex(
-                    organizationId: orgId,
-                    userId: userId,
-                    oldEmailNormalized: stored,
-                    newEmail: authEmail
-                )
+            if let path = plan.claimSetPath, let claimUser = plan.claimSetUserId {
+                try? await db.document(path).setData(["userId": claimUser], merge: true)
+            }
+            if let path = plan.claimDeletePath, path != plan.claimSetPath {
+                try? await db.document(path).delete()
             }
         } catch {
             NSLog("SIGN_IN_EMAIL_SYNC_SKIPPED %@", error.localizedDescription)
@@ -6054,12 +6088,15 @@ class FirebaseBackend: ObservableObject {
     ) async throws {
         let uid = auth.currentUser?.uid
         let userRef = db.collection("users").document(userId)
-        guard !historyRows.isEmpty, let orgId = currentOrganization?.firestoreDocumentId else {
-            try await userRef.updateData(WriteMetadata.stamped(payload, userId: uid))
-            return
-        }
         let batch = db.batch()
         batch.updateData(WriteMetadata.stamped(payload, userId: uid), forDocument: userRef)
+        // RULEBOOK 1.13.0 §8 (Q1 step B): the pay fields go to `payProfiles/{uid}` in the same batch
+        // (`payProfileWriteFieldsFromProfileWrite`).
+        addPayProfileWrite(to: batch, subjectId: userId, profileWrite: payload)
+        guard !historyRows.isEmpty, let orgId = currentOrganization?.firestoreDocumentId else {
+            try await batch.commit()
+            return
+        }
         for row in historyRows {
             let fields: [String: Any] = [
                 "dayRate": row.dayRate.map { $0 as Any } ?? NSNull(),

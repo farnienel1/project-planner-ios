@@ -309,7 +309,7 @@ struct ScheduleSubcontractorView: View {
             selectedDates = dates
             dateTimeSlots.removeAll()
             for d in dates.sorted() {
-                dateTimeSlots[slotKey(for: d)] = .fullDay
+                dateTimeSlots[slotKey(for: d)] = .defaultPickerSlot(on: d)
             }
         }) {
             Text(label)
@@ -342,13 +342,15 @@ struct ScheduleSubcontractorView: View {
                         }
                             .accessibilityIdentifier("scheduleSubcontractor.row.\(date).clear")
                     }
+                    // RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: Saturday and Sunday are custom hours only.
+                    let offered = CanonicalBusinessEngine.allowedTimeSlots(on: date)
                     Picker("Time", selection: Binding(
-                        get: { dateTimeSlots[slotKey(for: date)] ?? .fullDay },
+                        get: { dateTimeSlots[slotKey(for: date)] ?? .defaultPickerSlot(on: date) },
                         set: { dateTimeSlots[slotKey(for: date)] = $0 }
                     )) {
-                        Text("AM").tag(TimeSlot.morning)
-                        Text("PM").tag(TimeSlot.afternoon)
-                        Text("FULL DAY").tag(TimeSlot.fullDay)
+                        if offered.contains(.am) { Text("AM").tag(TimeSlot.morning) }
+                        if offered.contains(.pm) { Text("PM").tag(TimeSlot.afternoon) }
+                        if offered.contains(.fullDay) { Text("FULL DAY").tag(TimeSlot.fullDay) }
                         Text("Custom").tag(TimeSlot.customHours)
                     }
                     .accessibilityIdentifier("scheduleSubcontractor.row.\(date).time")
@@ -443,7 +445,7 @@ struct ScheduleSubcontractorView: View {
     private var summaryLine: String {
         let who = selectedSubcontractor?.name ?? "No sub contractor selected"
         if selectedDates.isEmpty { return who }
-        let slots = Set(selectedDates.map { dateTimeSlots[slotKey(for: $0)] ?? .fullDay })
+        let slots = Set(selectedDates.map { dateTimeSlots[slotKey(for: $0)] ?? .defaultPickerSlot(on: $0) })
         let slotLabel: String
         if slots.count == 1, let only = slots.first {
             switch only {
@@ -480,7 +482,7 @@ struct ScheduleSubcontractorView: View {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         selectedDates = [today]
-        dateTimeSlots = [slotKey(for: today): .fullDay]
+        dateTimeSlots = [slotKey(for: today): .defaultPickerSlot(on: today)]
         quickSelectDays = nil
         currentMonth = today
     }
@@ -557,7 +559,7 @@ struct ScheduleSubcontractorView: View {
                 }
                 selectedDates = next
                 if dateTimeSlots[slotKey(for: normalized)] == nil {
-                    dateTimeSlots[slotKey(for: normalized)] = .fullDay
+                    dateTimeSlots[slotKey(for: normalized)] = .defaultPickerSlot(on: normalized)
                 }
             }
             quickSelectDays = nil
@@ -591,7 +593,7 @@ struct ScheduleSubcontractorView: View {
         Task {
             for date in selectedDates {
                 let key = slotKey(for: date)
-                let slot = dateTimeSlots[key] ?? .fullDay
+                let slot = dateTimeSlots[key] ?? .defaultPickerSlot(on: date)
                 let contactIds: [UUID] = useGeneralAttendance ? [] : Array(selectedContactIds)
                 let booking = SubcontractorBooking(
                     subcontractorId: selectedSubcontractorId,

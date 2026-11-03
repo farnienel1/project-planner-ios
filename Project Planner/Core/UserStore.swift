@@ -36,8 +36,10 @@ class UserStore: ObservableObject {
     @Published var organizationUserEmailClaims: Set<String>?
     @Published var isLoading = false
     @Published var errorMessage: String?
+    /// RULEBOOK 1.13.0 §14 `selfEmailChangeSentMessage`: shown after a person asked to change their own sign-in email.
+    @Published var selfEmailChangeNotice: String?
     
-    private var firebaseBackend: FirebaseBackend?
+    private(set) var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
     @Published var isOffline: Bool = false
     /// Throttle `lastSeenAt` writes (foreground heartbeats).
@@ -2004,6 +2006,11 @@ class UserStore: ObservableObject {
         let isSelf = Auth.auth().currentUser?.uid == userId
         var pendingSelfEmail: String?
         if requestedEmailChange && isSelf {
+            // RULEBOOK 1.13.0 §14 `selfEmailChangeAction`: only a well-formed new address asks Auth to verify it.
+            if CanonicalBusinessEngine.selfEmailChangeAction(storedEmail: oldEmailNorm, nextEmail: trimmedEmail) == .invalid {
+                errorMessage = "Please enter a valid email address."
+                return false
+            }
             do {
                 try await firebaseBackend.sendVerifyBeforeUpdateEmail(to: trimmedEmail)
                 pendingSelfEmail = trimmedEmail
@@ -2123,7 +2130,7 @@ class UserStore: ObservableObject {
 
             if let pendingSelfEmail {
                 // Not an error: Firebase Auth emailed the confirmation link; the profile email moves after it.
-                print("🔥🔥🔥 DEBUG: sign-in email change to \(pendingSelfEmail) waits for confirmation")
+                selfEmailChangeNotice = CanonicalBusinessEngine.selfEmailChangeSentMessage(pendingSelfEmail)
             }
 
             return true
@@ -2462,6 +2469,26 @@ class UserStore: ObservableObject {
     }
 
     /// Persists `annualLeaveEnabled` on `users/{userId}` as a field-limited patch. The write does not include organizationId.
+    /// RULEBOOK 1.13.0 §4.4: an admin sets or clears `users/{uid}.employmentStartDate` (`YYYY-MM-DD`); the leave year
+    /// joined is pro rata from it (`annualLeaveBalance` `employmentStartDayKey`).
+    func updateUserEmploymentStartDate(userId: String, dayKey: String?) async -> Bool {
+        guard let firebaseBackend, hasAdminAccess() else { return false }
+        do {
+            try await firebaseBackend.updateEmploymentStartDate(userId: userId, dayKey: dayKey)
+            if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
+                organizationUsers[index].employmentStartDate = dayKey
+            }
+            if var me = currentUser, me.id == userId {
+                me.employmentStartDate = dayKey
+                currentUser = me
+            }
+            return true
+        } catch {
+            errorMessage = "Could not save the start date: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     func updateUserAnnualLeaveEnabled(userId: String, enabled: Bool) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }

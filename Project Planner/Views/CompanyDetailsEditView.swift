@@ -98,8 +98,9 @@ struct CompanyDetailsEditView: View {
                             .padding(.vertical, 11)
                         SettingsHubChrome.divider()
                         Picker("Country", selection: $countryCode) {
-                            ForEach(CountryCapitalDirectory.supported, id: \.code) { country in
-                                Text(country.name).tag(country.code)
+                            // RULEBOOK 1.13.0 §4.1 `launchCountryOptions`: GB and IE, plus a stored other country.
+                            ForEach(countryOptions, id: \.code) { country in
+                                Text(country.title).tag(country.code)
                             }
                         }
                         .accessibilityIdentifier("companyDetailsEdit.country")
@@ -355,6 +356,13 @@ struct CompanyDetailsEditView: View {
             org.officeCounty ?? "", org.officePostcode ?? "", org.companyLogoURL ?? "",
             org.settings.bankHolidayRegionId ?? "",
         ].joined(separator: "\u{1F}")
+    }
+
+    /// `launchCountryOptions(storedCountryCode)` for the saved country (the picker never loses it).
+    private var countryOptions: [RulebookCountryOption] {
+        let stored = firebaseBackend.currentOrganization?.countryCode
+        return CanonicalBusinessEngine.launchCountryOptions(storedCountryCode: stored)
+            ?? CountryCapitalDirectory.supported.map { RulebookCountryOption(code: $0.code, title: $0.name) }
     }
 
     /// `bankHolidayRegionsForCountry(countryCode)`: only the chosen country's regions.

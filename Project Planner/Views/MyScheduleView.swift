@@ -504,6 +504,8 @@ fileprivate struct ManagerCustomHoursSheet: View {
     @State private var endText: String
     @State private var breakRemoved = false
     @State private var errorMessage: String?
+    /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): the confirm step before saving hours over the unpaid break.
+    @State private var breakWarningMessage: String?
 
     init(context: CustomHoursEditorContext, policy: OrgPayrollTimePolicy, onSave: @escaping (String, String, Bool) -> Void, onCancel: @escaping () -> Void) {
         self.context = context
@@ -512,8 +514,10 @@ fileprivate struct ManagerCustomHoursSheet: View {
         self.onCancel = onCancel
         let seedS = context.seedStart?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let seedE = context.seedEnd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        _startText = State(initialValue: seedS.isEmpty ? policy.standardDayStart : seedS)
-        _endText = State(initialValue: seedE.isEmpty ? policy.standardDayEnd : seedE)
+        // RULEBOOK 1.13.1 `weekendCustomHoursDefault`: a set-window weekend day opens on that day's window.
+        let prefill = CanonicalBusinessEngine.customHoursPrefill(on: context.days.first ?? Date(), policy: policy)
+        _startText = State(initialValue: seedS.isEmpty ? prefill.start : seedS)
+        _endText = State(initialValue: seedE.isEmpty ? prefill.end : seedE)
         _breakRemoved = State(initialValue: context.seedBreakRemoved ?? false)
     }
 
@@ -529,6 +533,9 @@ fileprivate struct ManagerCustomHoursSheet: View {
                         .keyboardType(.numbersAndPunctuation)
                     Toggle("No break (on this booking)", isOn: $breakRemoved)
                         .accessibilityIdentifier("managerCustomHours.noBreakOnThisBooking")
+                    if let day = context.days.first {
+                        WeekendBookingNoteView(day: day, policy: policy)
+                    }
                 } footer: {
                     Text("Uses your organisation standard day (\(policy.standardDayStart)–\(policy.standardDayEnd)) as the default. Touching times (e.g. one job ends when the next starts) are allowed.")
                 }
@@ -551,10 +558,24 @@ fileprivate struct ManagerCustomHoursSheet: View {
                         .accessibilityIdentifier("managerCustomHours.save")
                 }
             }
+            .alert("Unpaid break", isPresented: Binding(
+                get: { breakWarningMessage != nil },
+                set: { if !$0 { breakWarningMessage = nil } }
+            )) {
+                Button("Go back", role: .cancel) { breakWarningMessage = nil }
+                    .accessibilityIdentifier("managerCustomHours.breakWarning.back")
+                Button("Save anyway") {
+                    breakWarningMessage = nil
+                    validateAndSave(breakWarningConfirmed: true)
+                }
+                    .accessibilityIdentifier("managerCustomHours.breakWarning.save")
+            } message: {
+                Text(breakWarningMessage ?? "")
+            }
         }
     }
 
-    private func validateAndSave() {
+    private func validateAndSave(breakWarningConfirmed: Bool = false) {
         errorMessage = nil
         let s = startText.trimmingCharacters(in: .whitespacesAndNewlines)
         let e = endText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -562,6 +583,16 @@ fileprivate struct ManagerCustomHoursSheet: View {
               let em = ManagerScheduleInterval.parseMinutes(e),
               em > sm else {
             errorMessage = "Enter valid times (HH:mm) with end after start."
+            return
+        }
+        // RULEBOOK 1.13.0 §8 `customHoursBreakWarning`, on any of the days being booked.
+        if !breakWarningConfirmed,
+           let warning = context.days.lazy.compactMap({ day in
+               CanonicalBusinessEngine.customHoursBreakWarning(
+                   on: day, policy: policy, workStartTime: s, workEndTime: e, isBreakRemoved: breakRemoved
+               )
+           }).first {
+            breakWarningMessage = warning
             return
         }
         onSave(s, e, breakRemoved)
@@ -688,6 +719,8 @@ struct ManagerScheduleContentView: View {
     @State private var expandedSearchItemId: String?
     @State private var showAddBookingSheet = false
     @State private var addToCalendarMessage: String?
+    /// `WEEKEND_WEEKDAY_MIX_MESSAGE` when a multi-day pick would mix weekdays and weekend days (RULEBOOK 1.13.1).
+    @State private var weekendMixMessage: String?
     @State private var showingCalendarDestinationPicker = false
     @State private var showingDayPicker = false
 
@@ -1049,6 +1082,15 @@ struct ManagerScheduleContentView: View {
         } message: {
             if let msg = addToCalendarMessage { Text(msg) }
         }
+        .alert("Choose days", isPresented: Binding(
+            get: { weekendMixMessage != nil },
+            set: { if !$0 { weekendMixMessage = nil } }
+        )) {
+            Button("OK") { weekendMixMessage = nil }
+                .accessibilityIdentifier("managerScheduleContent.weekendMix.ok")
+        } message: {
+            Text(weekendMixMessage ?? "")
+        }
         .sheet(isPresented: $showingCalendarDestinationPicker) {
             ScheduleCalendarDestinationPicker(
                 events: weekExportEvents,
@@ -1224,6 +1266,15 @@ struct ManagerScheduleContentView: View {
     ) {
         guard let uid = firebaseBackend.currentUser?.uid else { return }
         let normalizedDays = days.map { calendar.startOfDay(for: $0) }
+        // RULEBOOK 1.13.1 §4.3: one request never mixes weekdays and weekend days, and a new Saturday or Sunday
+        // booking is custom hours (`bookingDaysMixWeekdayAndWeekend`, `allowedTimeSlotsOnDay`).
+        if let message = CanonicalBusinessEngine.weekendWeekdayMixRefusal(for: normalizedDays, calendar: calendar) {
+            weekendMixMessage = message
+            return
+        }
+        if replaceBookingId == nil, !ManagerTimeSlot.offered(on: normalizedDays).contains(timeSlot) {
+            return
+        }
         if !allowOverlap {
             for day in normalizedDays {
                 var detailLines: [String] = []
@@ -1510,6 +1561,9 @@ struct ManagerScheduleContentView: View {
             let key = calendar.startOfDay(for: date)
             if selectedDates.contains(key) {
                 selectedDates.remove(key)
+            } else if let message = CanonicalBusinessEngine.weekendWeekdayMixRefusal(for: Array(selectedDates) + [key], calendar: calendar) {
+                // RULEBOOK 1.13.1 `bookingDaysMixWeekdayAndWeekend`: weekdays and weekend days are booked separately.
+                weekendMixMessage = message
             } else {
                 selectedDates.insert(key)
             }
@@ -1839,9 +1893,14 @@ struct ManagerScheduleContentView: View {
             }
             return [calendar.startOfDay(for: day)]
         }()
+        // RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: Saturday and Sunday are custom hours only.
+        let offered = ManagerTimeSlot.offered(on: daysToBook)
         return VStack(alignment: .leading, spacing: 10) {
+            if let first = daysToBook.first {
+                WeekendBookingNoteView(day: first, policy: payrollPolicy(for: first))
+            }
             HStack(spacing: 14) {
-                ForEach([ManagerTimeSlot.fullDay, ManagerTimeSlot.morning, ManagerTimeSlot.afternoon], id: \.self) { slot in
+                ForEach([ManagerTimeSlot.fullDay, ManagerTimeSlot.morning, ManagerTimeSlot.afternoon].filter { offered.contains($0) }, id: \.self) { slot in
                     Button(slot.displayName) {
                         runBookingFlow(
                             days: daysToBook,
@@ -2263,10 +2322,25 @@ fileprivate struct ManagerSelfBookingEntryView: View {
         self.policy = policy
         self.target = target
         self.onSave = onSave
-        let (start, end) = Self.defaultTimes(for: .fullDay, day: day, policy: policy)
-        _startTime = State(initialValue: start)
-        _endTime = State(initialValue: end)
+        // RULEBOOK 1.13.1 §4.3: Saturday and Sunday are custom hours only, opened on `weekendCustomHoursDefault`.
+        if ManagerTimeSlot.offered(on: [day]).contains(.fullDay) {
+            let (start, end) = Self.defaultTimes(for: .fullDay, day: day, policy: policy)
+            _startTime = State(initialValue: start)
+            _endTime = State(initialValue: end)
+        } else {
+            let prefill = CanonicalBusinessEngine.customHoursPrefill(on: day, policy: policy)
+            let base = Calendar.current.startOfDay(for: day)
+            let startMinutes = ManagerScheduleInterval.parseMinutes(prefill.start) ?? 7 * 60 + 30
+            let endMinutes = ManagerScheduleInterval.parseMinutes(prefill.end) ?? 16 * 60
+            let start = Calendar.current.date(byAdding: .minute, value: startMinutes, to: base) ?? base
+            _selectedSlot = State(initialValue: .customHours)
+            _startTime = State(initialValue: start)
+            _endTime = State(initialValue: Calendar.current.date(byAdding: .minute, value: endMinutes, to: base) ?? start.addingTimeInterval(3600))
+        }
     }
+
+    /// `allowedTimeSlotsOnDay` for this day.
+    private var offeredSlots: [ManagerTimeSlot] { ManagerTimeSlot.offered(on: [day]) }
 
     var body: some View {
         ScrollView {
@@ -2282,11 +2356,14 @@ fileprivate struct ManagerSelfBookingEntryView: View {
 
                 timelineCard
 
-                HStack(spacing: 8) {
-                    presetButton("FULL DAY", slot: .fullDay)
-                    presetButton("AM", slot: .morning)
-                    presetButton("PM", slot: .afternoon)
+                if offeredSlots.contains(.fullDay) || offeredSlots.contains(.morning) || offeredSlots.contains(.afternoon) {
+                    HStack(spacing: 8) {
+                        if offeredSlots.contains(.fullDay) { presetButton("FULL DAY", slot: .fullDay) }
+                        if offeredSlots.contains(.morning) { presetButton("AM", slot: .morning) }
+                        if offeredSlots.contains(.afternoon) { presetButton("PM", slot: .afternoon) }
+                    }
                 }
+                WeekendBookingNoteView(day: day, policy: policy)
 
                 VStack(spacing: 10) {
                     DatePicker("Start time", selection: $startTime, displayedComponents: .hourAndMinute)

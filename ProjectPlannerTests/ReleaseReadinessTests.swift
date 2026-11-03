@@ -65,10 +65,12 @@ final class ReleaseReadinessTests: XCTestCase {
     // MARK: App Store billing copy
 
     func testNoPriceRenewalOrWebLinkIsShown() {
-        for text in [SubscriptionLapsedCopy.headline, SubscriptionLapsedCopy.detail(isSuperAdmin: true), SubscriptionLapsedCopy.detail(isSuperAdmin: false)] {
-            XCTAssertFalse(text.lowercased().contains("renew"))
+        // RULEBOOK 1.13.0 §19: the rulebook's own words (they ask for renewal); still never a price or a link.
+        for text in [SubscriptionLapsedCopy.headline, SubscriptionLapsedCopy.detail(isAdmin: true) ?? ""] {
+            XCTAssertFalse(text.lowercased().contains("http"))
             XCTAssertFalse(text.lowercased().contains("web"))
             XCTAssertFalse(text.contains("£"))
         }
+        XCTAssertNil(SubscriptionLapsedCopy.detail(isAdmin: false))
     }
 }

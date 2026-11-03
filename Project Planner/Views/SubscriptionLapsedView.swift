@@ -2,8 +2,9 @@
 //  SubscriptionLapsedView.swift
 //  Project Planner
 //
-//  Replaces the main experience while the current organisation's canonical hasAccess is false.
-//  The signed-in session stays. Renewal is not a link, and this screen does not transfer super admin.
+//  Replaces the main experience while `subscriptionAccess` (RULEBOOK 1.13.0 §19) is not `open`: everyone sees
+//  `SUBSCRIPTION_LAPSED_MESSAGE`, admins also `SUBSCRIPTION_LAPSED_ADMIN_NOTE`. The signed-in session stays; Sign out,
+//  Switch organisation and Delete my account remain. Never a link or a price; nothing is deleted.
 //
 
 import SwiftUI
@@ -14,8 +15,8 @@ struct SubscriptionLapsedView: View {
 
     @State private var showingSwitchOrganisation = false
 
-    private var isSuperAdmin: Bool {
-        userStore.currentUser?.isSuperAdmin == true
+    private var isAdmin: Bool {
+        userStore.currentUser?.isRosterAdmin == true
     }
 
     var body: some View {
@@ -32,12 +33,14 @@ struct SubscriptionLapsedView: View {
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("subscriptionLapsed.headline")
-                    Text(SubscriptionLapsedCopy.detail(isSuperAdmin: isSuperAdmin))
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("subscriptionLapsed.detail")
+                    if let detail = SubscriptionLapsedCopy.detail(isAdmin: isAdmin) {
+                        Text(detail)
+                            .font(.system(size: 15, weight: .regular))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("subscriptionLapsed.detail")
+                    }
                     Button("Switch organisation") {
                         showingSwitchOrganisation = true
                     }

@@ -130,7 +130,9 @@ nonisolated enum AnnualLeavePolicy {
         orgEndMonth: Int? = nil,
         yearAllowance: Double? = nil,
         yearAllowanceKey: String? = nil,
-        nonWorkingDayKeys: [String]? = nil
+        nonWorkingDayKeys: [String]? = nil,
+        employmentStartDayKey: String? = nil,
+        maxCarryOverDays: Double? = OrganizationRulebookContext.annualLeaveDefaults?.maxCarryOverDays
     ) -> AnnualLeaveUsageSummary {
         _ = calendar
         let records: [CanonicalBusinessEngine.CanonicalLeaveBooking] = bookings.compactMap { booking in
@@ -145,7 +147,8 @@ nonisolated enum AnnualLeavePolicy {
             )
         }
         // Bank holidays inside a multi-day record are not taken from the allowance (§9).
-        let balance = CanonicalBusinessEngine.annualLeaveBalance(
+        // RULEBOOK 1.13.0 §4.4: pro rata in the year joined (`employmentStartDayKey`) and the carry-over cap.
+        let detail = CanonicalBusinessEngine.annualLeaveBalanceDetail(
             annualLeaveEnabled: annualLeaveEnabled,
             daysPerYear: daysPerYear,
             startMonth: startMonth,
@@ -158,9 +161,11 @@ nonisolated enum AnnualLeavePolicy {
             yearAllowanceKey: yearAllowanceKey,
             bookings: records,
             onDayKey: CanonicalBusinessEngine.dayKey(for: referenceDate),
-            nonWorkingDayKeys: nonWorkingDayKeys ?? OrganizationBankHolidays.dayKeys
+            nonWorkingDayKeys: nonWorkingDayKeys ?? OrganizationBankHolidays.dayKeys,
+            employmentStartDayKey: employmentStartDayKey,
+            maxCarryOverDays: maxCarryOverDays
         )
-        guard let balance else {
+        guard let detail else {
             return AnnualLeaveUsageSummary(
                 leaveYearLabel: "—",
                 entitlementDays: 0,
@@ -173,8 +178,9 @@ nonisolated enum AnnualLeavePolicy {
                 yearKey: ""
             )
         }
+        let balance = detail.balance
         let label = formattedLeaveYearLabel(startDayKey: balance.startDayKey, endDayKey: balance.endDayKey)
-        let entitlement = balance.yearAllowance ?? (balance.daysPerYear + balance.carriedForward)
+        let entitlement = balance.yearAllowance ?? (detail.yearEntitlement + balance.carriedForward)
         return AnnualLeaveUsageSummary(
             leaveYearLabel: label,
             entitlementDays: entitlement,
@@ -238,6 +244,7 @@ nonisolated enum AnnualLeavePolicy {
         startMonth: Int,
         endMonth: Int,
         carriesOver: Bool,
+        employmentStartDayKey: String? = nil,
         calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> String? {
         let sod = selectedStartOfDays.map { calendar.startOfDay(for: $0) }
@@ -260,7 +267,8 @@ nonisolated enum AnnualLeavePolicy {
                 endMonth: endMonth,
                 carriesOver: carriesOver,
                 referenceDate: ref,
-                calendar: calendar
+                calendar: calendar,
+                employmentStartDayKey: employmentStartDayKey
             )
             let requested = Double(days.count) * timeSlot.dayValue
             guard summary.hasAllowance, let remaining = summary.remainingDays else { continue }
@@ -283,6 +291,7 @@ nonisolated enum AnnualLeavePolicy {
         startMonth: Int,
         endMonth: Int,
         carriesOver: Bool,
+        employmentStartDayKey: String? = nil,
         calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> String? {
         let normalized = Dictionary(daySlots.map { (calendar.startOfDay(for: $0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
@@ -302,7 +311,8 @@ nonisolated enum AnnualLeavePolicy {
                 endMonth: endMonth,
                 carriesOver: carriesOver,
                 referenceDate: ref,
-                calendar: calendar
+                calendar: calendar,
+                employmentStartDayKey: employmentStartDayKey
             )
             let requested = days.reduce(0.0) { $0 + (normalized[$1] ?? .fullDay).dayValue }
             guard summary.hasAllowance, let remaining = summary.remainingDays else { continue }
@@ -326,6 +336,7 @@ nonisolated enum AnnualLeavePolicy {
         startMonth: Int,
         endMonth: Int,
         carriesOver: Bool,
+        employmentStartDayKey: String? = nil,
         calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> String? {
         let deltaPerDay = newTimeSlot.dayValue - booking.timeSlot.dayValue
@@ -359,7 +370,8 @@ nonisolated enum AnnualLeavePolicy {
                 endMonth: endMonth,
                 carriesOver: carriesOver,
                 referenceDate: yearStart,
-                calendar: calendar
+                calendar: calendar,
+                employmentStartDayKey: employmentStartDayKey
             )
             guard summary.hasAllowance, let remaining = summary.remainingDays else { continue }
             if extra > remaining + allowanceEpsilon {

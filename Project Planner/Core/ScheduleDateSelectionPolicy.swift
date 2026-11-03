@@ -8,8 +8,8 @@
 import Foundation
 
 enum ScheduleDateSelectionPolicy {
-    static let weekdayWeekendMixMessage =
-        "Weekends cannot be booked alongside Weekdays. Make your weekday booking first then weekend separately."
+    /// `WEEKEND_WEEKDAY_MIX_MESSAGE` (RULEBOOK 1.13.1 §4.3).
+    static var weekdayWeekendMixMessage: String { CanonicalBusinessEngine.weekendWeekdayMixMessage }
 
     static let saturdaySundayMismatchMessage =
         "Book Saturday and Sunday separately, or align them in Organisation settings → Working hours."
@@ -28,16 +28,11 @@ enum ScheduleDateSelectionPolicy {
             return nil
         }
 
+        // RULEBOOK 1.13.1 §4.3 `bookingDaysMixWeekdayAndWeekend`: one request never mixes weekdays and weekend days.
+        if let message = CanonicalBusinessEngine.weekendWeekdayMixRefusal(for: Array(selected) + [normalized], calendar: calendar) {
+            return message
+        }
         let addingWeekend = PayrollTimePolicyCatalog.isWeekend(normalized, calendar: calendar)
-        let hasWeekday = selected.contains { PayrollTimePolicyCatalog.isWeekday($0, calendar: calendar) }
-        let hasWeekend = selected.contains { PayrollTimePolicyCatalog.isWeekend($0, calendar: calendar) }
-
-        if addingWeekend && hasWeekday {
-            return weekdayWeekendMixMessage
-        }
-        if !addingWeekend && hasWeekend {
-            return weekdayWeekendMixMessage
-        }
         if addingWeekend && !canAddWeekendDay(normalized, to: selected, policy: policy, calendar: calendar) {
             return saturdaySundayMismatchMessage
         }

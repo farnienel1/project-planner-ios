@@ -209,6 +209,8 @@ final class TimesheetLogicTests: XCTestCase {
             4,
             "22:00–02:00 is 4 hours, not the standard day window"
         )
-        XCTAssertClose(booking.paidBookedHours(policy: LogicFixtures.policy), 4)
+        // RULEBOOK 1.13.0 Q5 (web canonical.test.ts): paid at the start day's rules — 4 hours outside the weekday
+        // standard day at 1.5x, so 6 paid hours.
+        XCTAssertClose(booking.paidBookedHours(policy: LogicFixtures.policy), 6)
     }
 }

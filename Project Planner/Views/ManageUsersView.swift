@@ -224,6 +224,15 @@ struct ManageUsersView: View {
         .refreshable {
             await userStore.loadOrganizationUsers()
         }
+        .alert("Check your email", isPresented: Binding(
+            get: { userStore.selfEmailChangeNotice != nil },
+            set: { if !$0 { userStore.selfEmailChangeNotice = nil } }
+        )) {
+            Button("OK") { userStore.selfEmailChangeNotice = nil }
+                .accessibilityIdentifier("manageUsers.selfEmailChange.ok")
+        } message: {
+            Text(userStore.selfEmailChangeNotice ?? "")
+        }
     }
 
     // MARK: - Revamped list (matches manage-users-iphone.html / ManageUsers.tsx)
@@ -244,6 +253,9 @@ struct ManageUsersView: View {
                 if userStore.hasAdminAccess() && !usersMissingLineManager.isEmpty {
                     usersMissingLineManagerNotice
                 }
+                if userStore.hasAdminAccess() && !usersWithAccountTypeOutOfSync.isEmpty {
+                    accountTypeOutOfSyncNotice
+                }
                 manageUsersListHeader
                 manageUsersCardList
             }
@@ -257,6 +269,38 @@ struct ManageUsersView: View {
     /// requirement (RULEBOOK §8, §11). Their timesheets and requests reach every active admin meanwhile.
     private var usersMissingLineManager: [AppUser] {
         AnnualLeaveApproval.usersMissingLineManager(userStore.organizationUsers)
+    }
+
+    /// RULEBOOK 1.12.2 §11 `accountTypeSyncState`: active people whose user type was only partly saved (users
+    /// document vs the live `members.{uid}`). Opening the person and pressing Save finishes it on every record.
+    private var usersWithAccountTypeOutOfSync: [AppUser] {
+        rosterListed(userStore.organizationUsers, segment: .active).filter { person in
+            person.accountTypeSyncState(in: firebaseBackend)?.inSync == false
+        }
+    }
+
+    private var accountTypeOutOfSyncNotice: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(CanonicalBusinessEngine.accountTypeOutOfSyncMessage, systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+            ForEach(usersWithAccountTypeOutOfSync, id: \.id) { person in
+                Button {
+                    selectedUser = person
+                } label: {
+                    Text(person.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? person.email : person.fullName)
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 4)
+        .accessibilityIdentifier("manageUsers.accountTypeOutOfSync")
     }
 
     private var usersMissingLineManagerNotice: some View {
@@ -1435,6 +1479,8 @@ struct EditUserView: View {
     @State private var annualLeaveStartMonth: Int
     @State private var annualLeaveEndMonth: Int
     @State private var annualLeaveCarriesOver: Bool
+    /// `users/{uid}.employmentStartDate` draft (`YYYY-MM-DD`, empty = none). RULEBOOK 1.13.0 §4.4, admins only.
+    @State private var employmentStartDateDraft: String
     @State private var annualLeaveEnabledDraft: Bool
     @State private var remainingLeaveText = ""
     @State private var baselineRemainingText = ""
@@ -1470,6 +1516,7 @@ struct EditUserView: View {
         self._annualLeaveStartMonth = State(initialValue: user.annualLeaveYearStartMonth)
         self._annualLeaveEndMonth = State(initialValue: user.annualLeaveYearEndMonth)
         self._annualLeaveCarriesOver = State(initialValue: user.annualLeaveCarriesOver)
+        self._employmentStartDateDraft = State(initialValue: user.employmentStartDate ?? "")
         self._annualLeaveEnabledDraft = State(initialValue: user.annualLeaveEnabled)
         self._employmentTypeDraft = State(initialValue: user.employmentType)
     }
@@ -1663,7 +1710,8 @@ struct EditUserView: View {
             orgStartMonth: org.startMonth,
             orgEndMonth: org.endMonth,
             yearAllowance: subject.annualLeaveYearAllowance,
-            yearAllowanceKey: subject.annualLeaveYearAllowanceKey
+            yearAllowanceKey: subject.annualLeaveYearAllowanceKey,
+            employmentStartDayKey: subject.employmentStartDate
         )
         return summary.remainingDays ?? 0
     }
@@ -1691,6 +1739,51 @@ struct EditUserView: View {
             || remainingLeaveText != baselineRemainingText
     }
 
+    /// RULEBOOK 1.13.0 §4.4: an admin changed the start date the leave year joined is pro rata from.
+    private var employmentStartDateDirty: Bool {
+        guard canUseAdminAccountTools else { return false }
+        let stored = (userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user).employmentStartDate ?? ""
+        return employmentStartDateDraft != stored
+    }
+
+    private var employmentStartDateBinding: Binding<Date> {
+        Binding(
+            get: { OrganizationRulebookContext.date(fromDayKey: employmentStartDateDraft) ?? OrganizationRulebookContext.calendar.startOfDay(for: Date()) },
+            set: { employmentStartDateDraft = OrganizationRulebookContext.dayKey($0) }
+        )
+    }
+
+    @ViewBuilder
+    private var employmentStartDateRow: some View {
+        if canUseAdminAccountTools {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Start date")
+                    .font(.subheadline.weight(.semibold))
+                if employmentStartDateDraft.isEmpty {
+                    Button("Set start date") {
+                        employmentStartDateDraft = OrganizationRulebookContext.dayKey(Date())
+                    }
+                    .accessibilityIdentifier("editUser.employmentStartDate.set")
+                } else {
+                    HStack {
+                        DatePicker("Start date", selection: employmentStartDateBinding, displayedComponents: .date)
+                            .labelsHidden()
+                            .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                            .accessibilityIdentifier("editUser.employmentStartDate")
+                        Spacer()
+                        Button("Clear") { employmentStartDateDraft = "" }
+                            .accessibilityIdentifier("editUser.employmentStartDate.clear")
+                    }
+                }
+                Text("The day this person started. Their allowance for that leave year is pro rata from it. Leave blank for a full allowance.")
+                    .font(.caption)
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 14)
+        }
+    }
+
     private var annualLeaveEntitlementSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             ManageUserSectionTitle(text: "Annual leave")
@@ -1716,6 +1809,7 @@ struct EditUserView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
+                employmentStartDateRow
             }
         }
     }
@@ -1889,7 +1983,16 @@ struct EditUserView: View {
     }
     
     // Check if any changes have been made
+    /// RULEBOOK 1.12.2 §11 `accountTypeSyncState(...).repair`: the level to finish on every record, nil when the user
+    /// type is the same on the users document and `members.{uid}`.
+    private var accountTypeRepair: RulebookPermissionLevel? {
+        let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        return stored.accountTypeSyncState(in: firebaseBackend)?.repair
+    }
+
     private var hasChanges: Bool {
+        if canUseAdminAccountTools && !isViewingSuperAdminProfile && accountTypeRepair != nil { return true }
+        if employmentStartDateDirty { return true }
         let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
         let trimmedTradeP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTradeC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2094,11 +2197,25 @@ struct EditUserView: View {
                         .padding(.top, 12)
                         .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
                 }
+                if canUseAdminAccountTools && accountTypeRepair != nil && !showingChangeUserType {
+                    // RULEBOOK 1.12.2 §11 `accountTypeSyncState`: Save finishes the partly saved user type.
+                    Label(CanonicalBusinessEngine.accountTypeOutOfSyncMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.orange)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .padding(.horizontal, PPMetrics.screenGutter)
+                        .padding(.top, 12)
+                        .accessibilityIdentifier("editUser.accountTypeOutOfSync")
+                }
                 editUserFormSections
             }
         }
         .onAppear(perform: syncEditUserDraftsFromStore)
         .onAppear(perform: followStoredPermissionsIfDraftUnchanged)
+        .task(id: user.id) { await refreshPayFromPayProfile() }
         .onChange(of: displayedUser.permissions) { _, _ in
             followStoredPermissionsIfDraftUnchanged()
         }
@@ -2783,8 +2900,11 @@ struct EditUserView: View {
                         value: lastSeenDisplay(for: displayedUser)
                     )
                     ManageUserCardDivider()
-                    // RULEBOOK §8: employment type is pay (`canChangePersonPay`).
-                    if canEditPermissionsMatrix && userStore.canChangePay(of: displayedUser) {
+                    // RULEBOOK §8: employment type is pay (`canChangePersonPay`); 1.13.0 `canViewPersonPay` decides
+                    // whether it is shown at all.
+                    if !userStore.canViewPay(of: displayedUser) {
+                        EmptyView()
+                    } else if canEditPermissionsMatrix && userStore.canChangePay(of: displayedUser) {
                         Menu {
                             ForEach(EmploymentType.allCases) { type in
                                 Button(type.title) {
@@ -2833,6 +2953,7 @@ struct EditUserView: View {
                     lineManagerPickRow
                     ManageUserCardDivider()
                 }
+                if userStore.canViewPay(of: displayedUser) {
                 ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
                     .onChange(of: dayRateText) { _, newValue in
                         guard employmentTypeDraft == .paye else { return }
@@ -2847,8 +2968,9 @@ struct EditUserView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 6)
                 ManageUserCardDivider()
+                }
                 tradeTypePickSection
-                if (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {
+                if userStore.canViewPay(of: displayedUser), (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {
                     ManageUserCardDivider()
                     dayRateHistoryChromeBlock
                 }
@@ -3074,6 +3196,18 @@ struct EditUserView: View {
     /// Single edit field shows day or hourly — dirty must compare against whichever is currently displayed.
     private func displayedPayrollRate(for user: AppUser) -> Double? {
         UserStore.storedPay(of: user).amount
+    }
+
+    /// RULEBOOK 1.13.0 §8 (Q1 step C): pay is read pay profile first (`overlayPayProfile`), users document second.
+    /// Drafts the editor has not touched follow the pay profile's values.
+    private func refreshPayFromPayProfile() async {
+        let before = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let untouchedRate = dayRateText == Self.formatPayrollRateText(user: before)
+        let untouchedType = employmentTypeDraft == before.employmentType
+        let after = await userStore.refreshPayFromPayProfile(of: before)
+        guard after != before else { return }
+        if untouchedRate { dayRateText = Self.formatPayrollRateText(user: after) }
+        if untouchedType { employmentTypeDraft = after.employmentType }
     }
 
     private func isPayrollRateDirty(versus user: AppUser) -> Bool {
@@ -3664,6 +3798,21 @@ struct EditUserView: View {
             }
         }
 
+        // RULEBOOK 1.12.2 §11 `accountTypeSyncState`: a user type only partly saved (older build, interrupted save) is
+        // finished on every record from the profile's level, through the same `accountTypeChangeWrites` plan.
+        if canUseAdminAccountTools && !isViewingSuperAdminProfile && permissionsSuccess,
+           let repair = subjectUser.accountTypeSyncState(in: firebaseBackend)?.repair {
+            let current = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? subjectUser
+            let repaired = await userStore.changeAccountType(
+                userId: user.id,
+                kind: repair,
+                screenPermissions: current.permissions,
+                holidayStore: holidayStore,
+                linkedOperativeUUID: linkedOpId
+            )
+            if !repaired.ok { permissionsSuccess = false }
+        }
+
         var activeSuccess = true
         if canUseAdminAccountTools && !isViewingSuperAdminProfile && isActive != subjectUser.isActive {
             activeSuccess = await userStore.updateUserActiveStatus(for: subjectUser, isActive: isActive)
@@ -3743,6 +3892,14 @@ struct EditUserView: View {
             )
         }
 
+        var employmentStartSuccess = true
+        if employmentStartDateDirty {
+            employmentStartSuccess = await userStore.updateUserEmploymentStartDate(
+                userId: user.id,
+                dayKey: employmentStartDateDraft.isEmpty ? nil : employmentStartDateDraft
+            )
+        }
+
         var annualLeaveEnabledSuccess = true
         if canEditPermissionsMatrix && annualLeaveAccessDirty {
             annualLeaveEnabledSuccess = await userStore.updateUserAnnualLeaveEnabled(userId: user.id, enabled: annualLeaveEnabledDraft)
@@ -3782,7 +3939,8 @@ struct EditUserView: View {
                     orgStartMonth: (firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default).startMonth,
                     orgEndMonth: (firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default).endMonth,
                     yearAllowance: subjectUser.annualLeaveYearAllowance,
-                    yearAllowanceKey: subjectUser.annualLeaveYearAllowanceKey
+                    yearAllowanceKey: subjectUser.annualLeaveYearAllowanceKey,
+                    employmentStartDayKey: subjectUser.employmentStartDate
                 )
                 guard let override = CanonicalBusinessEngine.applyRemainingOverride(
                     remaining: remaining,
@@ -3870,7 +4028,7 @@ struct EditUserView: View {
             employmentTypeConfirmationAccepted = false
             showingEmploymentTypeEffectiveDatePicker = false
             selfBookOffConfirmationAccepted = false
-            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess && billingSuccess {
+            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && employmentStartSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess && billingSuccess {
                 dismiss()
             } else {
                 if !permissionsSuccess {
