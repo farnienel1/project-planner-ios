@@ -14,12 +14,20 @@ import FirebaseAuth
 class OperativeStore: ObservableObject {
     @Published var operatives: [Operative] = [] {
         // RULEBOOK 1.10.0 §17: the signed-in account's own booking ids (`bookingIdsForAccount`) for `bookingQueryPlan`.
-        didSet { JobAccessContext.updateOperatives(operatives) }
+        didSet {
+            JobAccessContext.updateOperatives(operatives)
+            revision &+= 1
+        }
     }
+    /// Bumped on every change to `operatives` or `managers`, so pickers can memoise what they build from them.
+    private(set) var revision = 0
     
     @Published var managers: [Manager] = [] {
         // RULEBOOK 1.10.0: `canSeeJob` / `jobManagerUserIds` match a job's managers-list ids by this list's emails.
-        didSet { JobAccessContext.updateManagers(allManagers) }
+        didSet {
+            JobAccessContext.updateManagers(allManagers)
+            revision &+= 1
+        }
     }
     /// Organisation skill catalogue is retired. Kept empty so legacy decode/lookups stay safe.
     @Published var organizationSkills: [OrganizationSkill] = []

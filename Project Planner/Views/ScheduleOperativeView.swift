@@ -1450,7 +1450,8 @@ struct ScheduleOperativeView: View {
                 approvedOverlapOperativeIds.removeAll()
             },
             onConfirmBooking: { proceedWithBooking() },
-            canConfirmBooking: !selectedOperatives.isEmpty && !selectedDates.isEmpty && clashReviewOperativeIds.isEmpty && !isBooking
+            canConfirmBooking: !selectedOperatives.isEmpty && !selectedDates.isEmpty && clashReviewOperativeIds.isEmpty && !isBooking,
+            approvedOperativeIds: approvedOverlapOperativeIds
         )
         .environmentObject(projectStore)
         .environmentObject(firebaseBackend)

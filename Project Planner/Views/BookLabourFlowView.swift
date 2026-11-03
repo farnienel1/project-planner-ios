@@ -72,13 +72,14 @@ struct BookLabourFlowView: View {
     @StateObject private var leaveGate = BookingConflictGate()
     @State private var isSaving = false
     @State private var projectListSearchText = ""
-    @State private var pendingOperativeOverlap: PendingOperativeBookLabourOverlap?
     @State private var operativeDraftByProjectId: [UUID: OperativeRectifyDraft] = [:]
     @State private var isMultiSelectMode = false
     @State private var selectedPersonIds: Set<String> = []
     @State private var bookingParty: [BookLabourCandidate] = []
     /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): the confirm step before saving custom hours over the unpaid break.
     @State private var breakWarningPrompt: BreakWarningPrompt?
+    /// Memo for `candidates` (a reference, so filling it never redraws the view).
+    @State private var candidateCache = BookLabourCandidateCache()
 
     private struct BreakWarningPrompt {
         let message: String
@@ -88,12 +89,6 @@ struct BookLabourFlowView: View {
     /// RULEBOOK §1: one business time zone. Booking days are organisation-zone midnights (the day keys every
     /// reader uses), never the phone's midnight (launch data audit #1).
     private let calendar = OrganizationRulebookContext.calendar
-
-    private struct PendingOperativeBookLabourOverlap {
-        let message: String
-        let detailLines: [String]
-        let onConfirm: () -> Void
-    }
 
     private struct OperativeRectifyDraft {
         var startMinutes: Int
@@ -279,24 +274,6 @@ struct BookLabourFlowView: View {
             } message: {
                 Text(breakWarningPrompt?.message ?? "")
             }
-            .overlay {
-                if let pending = pendingOperativeOverlap {
-                    ZStack {
-                        Color.black.opacity(0.28).ignoresSafeArea()
-                        ScheduleOverlapWarningPanel(
-                            message: pending.message,
-                            detailLines: pending.detailLines,
-                            onCancel: { pendingOperativeOverlap = nil },
-                            onConfirm: {
-                                let run = pending.onConfirm
-                                pendingOperativeOverlap = nil
-                                run()
-                            }
-                        )
-                        .padding(18)
-                    }
-                }
-            }
     }
 
     @ViewBuilder
@@ -367,8 +344,29 @@ struct BookLabourFlowView: View {
 
     // MARK: - Step 1: People
 
+    /// The unbooked people for the day (`unbookedLabourRowsOnDay`), built once per data version. The list body reads
+    /// this for every row; rebuilding it on each read ran the packed script once per row on every tap, so selection
+    /// lagged and needed several taps (owner report after 1.16.0).
     private var candidates: [BookLabourCandidate] {
-        buildCandidates()
+        let detection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
+        let key = BookLabourCandidateCache.Key(
+            day: day,
+            policy: dayPayrollPolicy,
+            detection: detection,
+            focusedUserIds: focusedUserIds,
+            users: RulebookRosterSnapshot.revision,
+            usersCount: userStore.organizationUsers.count,
+            operatives: operativeStore.revision,
+            bookings: bookingStore.revision,
+            managerBookings: managerScheduleStore.revision,
+            holidays: holidayStore.revision,
+            timeZone: OrganizationRulebookContext.timeZoneIdentifier
+        )
+        if let cached = candidateCache.value, candidateCache.key == key { return cached }
+        let built = buildCandidates()
+        candidateCache.key = key
+        candidateCache.value = built
+        return built
     }
 
     private var bookFlowDayLine: String {
@@ -1556,75 +1554,6 @@ struct BookLabourFlowView: View {
         let resolvedProject = projectForManagerLocation(locationType: locationType, locationId: locationId)
         let operativeSlot = managerSlotToTimeSlot(slot)
 
-        var managerClashNames: [String] = []
-        for person in people {
-            if personUsesOperativeProjectPath(person, locationType: locationType, project: resolvedProject) { continue }
-            if duplicateManagerBooking(
-                userId: person.user.id,
-                slot: slot,
-                locationType: locationType,
-                locationId: locationId,
-                custom: customLocationName
-            ) { continue }
-            if managerWouldClash(
-                userId: person.user.id,
-                date: day,
-                newSlot: slot,
-                workStart: workStart,
-                workEnd: workEnd
-            ) {
-                managerClashNames.append(person.displayName)
-            }
-        }
-        if !managerClashNames.isEmpty {
-            errorBanner = managerClashNames.count == 1
-                ? "This booking overlaps another in time on that day."
-                : "Overlapping bookings for: \(managerClashNames.joined(separator: ", "))."
-            return
-        }
-
-        if !allowOperativeOverlap {
-            var clashLines: [String] = []
-            for person in people {
-                guard personUsesOperativeProjectPath(person, locationType: locationType, project: resolvedProject),
-                      let project = resolvedProject,
-                      let op = person.linkedOperative else { continue }
-                if let lines = operativeClashDetailLines(
-                    operativeId: op.id,
-                    projectId: project.id,
-                    slot: operativeSlot,
-                    workStart: workStart,
-                    workEnd: workEnd,
-                    breakRemoved: breakRemoved
-                ) {
-                    clashLines.append(contentsOf: lines.map { "\(person.displayName) · \($0)" })
-                }
-            }
-            if !clashLines.isEmpty {
-                pendingOperativeOverlap = PendingOperativeBookLabourOverlap(
-                    message: people.count > 1
-                        ? "One or more bookings overlap another in time on \(bookFlowDayLine)."
-                        : "This booking overlaps another in time on \(bookFlowDayLine).",
-                    detailLines: clashLines,
-                    onConfirm: {
-                        savePartyBookings(
-                            fallbackPerson: fallbackPerson,
-                            slot: slot,
-                            locationType: locationType,
-                            locationId: locationId,
-                            customLocationName: customLocationName,
-                            workStart: workStart,
-                            workEnd: workEnd,
-                            breakRemoved: breakRemoved,
-                            otMultiplierOverride: otMultiplierOverride,
-                            allowOperativeOverlap: true
-                        )
-                    }
-                )
-                return
-            }
-        }
-
         if people.contains(where: { personUsesOperativeProjectPath($0, locationType: locationType, project: resolvedProject) }),
            firebaseBackend.currentUser?.uid == nil {
             errorBanner = "Not signed in."
@@ -1647,6 +1576,56 @@ struct BookLabourFlowView: View {
             return BookingLeaveConflictInputs.person(user: person.user)
         }
         let leavePeople = people.map { (candidate: $0, person: leavePersonKey($0)) }
+        // RULEBOOK 1.16.0: a time overlap is an orange row in the same list as the purple leave rows (web
+        // `BookingConflictRows`); ✓ books anyway, ✕ drops that person.
+        let dayKeyForConflicts = OrganizationRulebookContext.dayKey(day)
+        var clashRows: [BookingConflictItem] = []
+        for entry in leavePeople where !personUsesOperativeProjectPath(entry.candidate, locationType: locationType, project: resolvedProject) {
+            let person = entry.candidate
+            if duplicateManagerBooking(
+                userId: person.user.id,
+                slot: slot,
+                locationType: locationType,
+                locationId: locationId,
+                custom: customLocationName
+            ) { continue }
+            if managerWouldClash(
+                userId: person.user.id,
+                date: day,
+                newSlot: slot,
+                workStart: workStart,
+                workEnd: workEnd
+            ) {
+                clashRows.append(.doubleBooking(
+                    personKey: entry.person.id,
+                    dayKey: dayKeyForConflicts,
+                    personName: person.displayName,
+                    detail: "Already booked · overlaps another booking that day"
+                ))
+            }
+        }
+        if !allowOperativeOverlap {
+            for entry in leavePeople {
+                let person = entry.candidate
+                guard personUsesOperativeProjectPath(person, locationType: locationType, project: resolvedProject),
+                      let project = resolvedProject,
+                      let op = person.linkedOperative,
+                      let lines = operativeClashDetailLines(
+                          operativeId: op.id,
+                          projectId: project.id,
+                          slot: operativeSlot,
+                          workStart: workStart,
+                          workEnd: workEnd,
+                          breakRemoved: breakRemoved
+                      ) else { continue }
+                clashRows.append(.doubleBooking(
+                    personKey: entry.person.id,
+                    dayKey: dayKeyForConflicts,
+                    personName: person.displayName,
+                    detail: (["Already booked"] + lines).joined(separator: " · ")
+                ))
+            }
+        }
         let leaveRows = BookingLeaveConflictItems.items(
             booked: leavePeople.map { .init(person: $0.person, name: $0.candidate.displayName) },
             dates: [day],
@@ -1657,7 +1636,7 @@ struct BookLabourFlowView: View {
             workStartTime: workStart,
             workEndTime: workEnd
         )
-        leaveGate.run(rows: leaveRows) { dropped in
+        leaveGate.run(rows: clashRows + leaveRows) { dropped in
             let dayKey = OrganizationRulebookContext.dayKey(day)
             let kept = leavePeople.filter { !dropped.contains("\($0.person.id)|\(dayKey)") }.map(\.candidate)
             guard !kept.isEmpty else { return }
@@ -1798,33 +1777,6 @@ struct BookLabourFlowView: View {
             errorBanner = "That booking already exists."
             return
         }
-        if !allowOverlap,
-           let clashLines = operativeClashDetailLines(
-                operativeId: operative.id,
-                projectId: project.id,
-                slot: slot,
-                workStart: workStart,
-                workEnd: workEnd,
-                breakRemoved: breakRemoved
-           ) {
-            pendingOperativeOverlap = PendingOperativeBookLabourOverlap(
-                message: "This booking overlaps another in time on \(bookFlowDayLine).",
-                detailLines: clashLines,
-                onConfirm: {
-                    saveOperativeBooking(
-                        operative: operative,
-                        project: project,
-                        slot: slot,
-                        workStart: workStart,
-                        workEnd: workEnd,
-                        breakRemoved: breakRemoved,
-                        otMultiplierOverride: otMultiplierOverride,
-                        allowOverlap: true
-                    )
-                }
-            )
-            return
-        }
         // RULEBOOK 1.16.0 §5, §9 `bookingLeaveConflicts`: leave on the day is ticked or dropped first.
         let leaveRows = BookingLeaveConflictItems.items(
             booked: [.init(
@@ -1843,7 +1795,25 @@ struct BookLabourFlowView: View {
             workStartTime: workStart,
             workEndTime: workEnd
         )
-        leaveGate.runSingle(rows: leaveRows) {
+        // RULEBOOK 1.16.0: a time overlap is an orange row beside the leave rows (web `BookingConflictRows`).
+        var clashRows: [BookingConflictItem] = []
+        if !allowOverlap,
+           let clashLines = operativeClashDetailLines(
+                operativeId: operative.id,
+                projectId: project.id,
+                slot: slot,
+                workStart: workStart,
+                workEnd: workEnd,
+                breakRemoved: breakRemoved
+           ) {
+            clashRows.append(.doubleBooking(
+                personKey: Booking.storedOperativeId(for: operative.id),
+                dayKey: OrganizationRulebookContext.dayKey(day),
+                personName: operative.name,
+                detail: (["Already booked"] + clashLines).joined(separator: " · ")
+            ))
+        }
+        leaveGate.runSingle(rows: clashRows + leaveRows) {
         isSaving = true
         Task {
             await bookingStore.bookOperative(
@@ -2275,4 +2245,24 @@ private struct BookLabourRectifyTimeline: View {
             .frame(width: width, height: 24)
             .offset(x: left)
     }
+}
+
+/// The Book Labour people list for one data version (see `BookLabourFlowView.candidates`).
+final class BookLabourCandidateCache {
+    struct Key: Equatable {
+        let day: Date
+        let policy: OrgPayrollTimePolicy
+        let detection: OrgWarningDetectionSettings
+        let focusedUserIds: [String]
+        let users: Int
+        let usersCount: Int
+        let operatives: Int
+        let bookings: Int
+        let managerBookings: Int
+        let holidays: Int
+        let timeZone: String
+    }
+
+    var key: Key?
+    var value: [BookLabourCandidate]?
 }

@@ -54,6 +54,21 @@ struct BookingConflictItem: Identifiable, Hashable {
         )
     }
 
+    /// An orange double-booking row (web `BookingConflictRows` "Already booked"): the same component and decisions as
+    /// the leave rows.
+    static func doubleBooking(personKey: String, dayKey: String, personName: String, detail: String) -> BookingConflictItem {
+        BookingConflictItem(
+            id: key(personKey: personKey, dayKey: dayKey, kind: .doubleBooking),
+            personKey: personKey,
+            dayKey: dayKey,
+            kind: .doubleBooking,
+            personName: personName,
+            dayLabel: dayLabel(dayKey),
+            detail: detail,
+            pending: false
+        )
+    }
+
     /// "Tue 4 Nov" in the organisation zone.
     static func dayLabel(_ dayKey: String) -> String {
         guard let date = OrganizationRulebookContext.date(fromDayKey: dayKey) else { return dayKey }

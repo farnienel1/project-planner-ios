@@ -12,8 +12,13 @@ import Combine
 class BookingStore: ObservableObject {
     @Published var bookings: [Booking] = [] {
         // RULEBOOK 1.10.0 §17: an operative reads the jobs of their own bookings one by one (`jobQueryPlan`).
-        didSet { JobAccessContext.updateOperativeJobIds(bookings: bookings, managerBookings: []) }
+        didSet {
+            JobAccessContext.updateOperativeJobIds(bookings: bookings, managerBookings: [])
+            revision &+= 1
+        }
     }
+    /// Bumped on every change to `bookings`, so booking-flow conflict checks can be memoised per data version.
+    private(set) var revision = 0
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
     @Published var isOffline: Bool = false
