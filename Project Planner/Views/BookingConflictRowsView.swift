@@ -8,6 +8,7 @@
 //  dropping every day saves nothing. Layout only: the rows come from the rulebook.
 //
 
+import Combine
 import SwiftUI
 
 enum BookingConflictDecision: Equatable {
