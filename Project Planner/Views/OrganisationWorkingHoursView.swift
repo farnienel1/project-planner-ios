@@ -47,8 +47,6 @@ private enum WorkingHoursPalette {
 
 struct OrganisationWorkingHoursView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var bookingStore: BookingStore
-    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
@@ -1073,19 +1071,10 @@ struct OrganisationWorkingHoursView: View {
         isSaving = true
         errorMessage = nil
         saveSucceeded = false
-        let priorPolicy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        // Organisation-zone today (§1), not the device day.
-        let effectiveDay = OrganizationRulebookContext.date(fromDayKey: OrganizationRulebookContext.dayKey(Date()))
-            ?? CanonicalBusinessEngine.businessCalendar.startOfDay(for: Date())
         do {
+            // RULEBOOK §4.3: a working-hours change writes the policy only (`payrollTimePolicyApplyNowWriteFields`).
+            // Stored bookings are never rewritten; each is paid by `payrollHoursResult` at the rules in effect that day.
             try await firebaseBackend.applyOrganizationPayrollTimePolicyImmediately(draft)
-            await PayrollPolicyBookingRecalibrator.apply(
-                effectiveDay: effectiveDay,
-                priorPolicy: priorPolicy,
-                newPolicy: draft,
-                bookingStore: bookingStore,
-                managerScheduleStore: managerScheduleStore
-            )
             await MainActor.run {
                 isSaving = false
                 baselineDraft = draft

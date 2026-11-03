@@ -213,28 +213,6 @@ enum PayrollTimePolicyCatalog {
     static func effectiveMultiplier(for booking: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> Double {
         timelinePolicy(for: booking.date, policy: policy).outsideMultiplier
     }
-
-    static func defaultWeekendBookingChoice(policy: OrgPayrollTimePolicy, day: Date) -> OperativeDayBookingChoice {
-        let weekend = weekendSettings(for: day, policy: policy)
-        if weekend.allHoursAtMultiplierMode {
-            return OperativeDayBookingChoice(
-                timeSlot: .customHours,
-                workStartTime: policy.standardDayStart,
-                workEndTime: policy.standardDayEnd,
-                isBreakRemoved: true,
-                otMultiplierOverride: weekend.allHoursMultiplier
-            )
-        }
-        let start = weekend.customStandardStart ?? "07:30"
-        let end = weekend.customStandardEnd ?? "13:00"
-        return OperativeDayBookingChoice(
-            timeSlot: .customHours,
-            workStartTime: start,
-            workEndTime: end,
-            isBreakRemoved: true,
-            otMultiplierOverride: nil
-        )
-    }
 }
 
 // Timestamp import for Firestore decode in same module as Firebase - use conditional

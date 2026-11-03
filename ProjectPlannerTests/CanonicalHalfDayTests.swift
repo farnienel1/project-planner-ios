@@ -228,15 +228,6 @@ final class CanonicalHalfDayTests: XCTestCase {
         XCTAssertEqual(OperativeBookingInterval.clashInterval(for: sundayBooking, policy: policy)?.1, 960)
     }
 
-    func testRecalibratedHalfDayWritesTheEngineWindow() {
-        let newPolicy = policy(day: "07:00", "17:00", break: "12:30", "13:30")
-        let booking = LogicFixtures.booking(on: monday, slot: .afternoon, start: "12:00", end: "16:00")
-        let choice = PayrollPolicyBookingRecalibrator.recalibratedOperativeChoice(from: booking, newPolicy: newPolicy)
-        XCTAssertEqual(choice.timeSlot, .afternoon)
-        XCTAssertEqual(choice.workStartTime, "13:30")
-        XCTAssertEqual(choice.workEndTime, "17:00")
-    }
-
     // MARK: - leaveCoverageRows
 
     private func leaveInput(bookings: [CanonicalLeaveBooking]) -> CanonicalLeaveCoverageInput {
