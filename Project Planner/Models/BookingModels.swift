@@ -166,7 +166,8 @@ struct OperativeDayBookingChoice: Equatable, Hashable {
     }
 }
 
-enum TimeSlot: String, CaseIterable, Identifiable, Codable {
+/// `nonisolated`: a plain value type the canonical booking readers use off the main actor (`fromStored`, `rawValue`).
+nonisolated enum TimeSlot: String, CaseIterable, Identifiable, Codable {
     case morning = "AM"
     case afternoon = "PM"
     case fullDay = "FULL DAY"
@@ -264,7 +265,8 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-enum BookingStatus: String, CaseIterable, Identifiable, Codable {
+/// `nonisolated`: a plain value type the canonical booking readers use off the main actor (`init(rawValue:)`).
+nonisolated enum BookingStatus: String, CaseIterable, Identifiable, Codable {
     case confirmed = "Confirmed"
     case tentative = "Tentative"
     case cancelled = "Cancelled"

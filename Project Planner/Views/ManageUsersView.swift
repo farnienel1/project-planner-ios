@@ -2274,6 +2274,54 @@ struct EditUserView: View {
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
         .toolbar { editUserToolbarContent }
+        .safeAreaInset(edge: .bottom) { editUserSaveFooter }
+    }
+
+    /// Why Save will not go through, in red directly above a Save button at the foot of the form (the toolbar Save
+    /// stays): a refused save's message, else the rule refusing this save as it stands (`lineManagerRequiredError`,
+    /// LINE_MANAGER_REQUIRED_MESSAGE), else the pay-rate refusal. Web shows the same message above its Save.
+    private var editUserSaveBlockingMessage: String? {
+        if let saveErrorMessage, !saveErrorMessage.isEmpty { return saveErrorMessage }
+        if let lineManagerRequiredMessage { return lineManagerRequiredMessage }
+        if let payRateFieldError, !payRateFieldError.isEmpty { return payRateFieldError }
+        return nil
+    }
+
+    @ViewBuilder
+    private var editUserSaveFooter: some View {
+        if canEditPermissionsMatrix, hasChanges || editUserSaveBlockingMessage != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                if let message = editUserSaveBlockingMessage {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("editUser.saveBlockingMessage")
+                }
+                Button {
+                    saveChanges()
+                } label: {
+                    Text(isUpdating ? "Saving…" : "Save")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(ManageUserProfilePalette.primaryBlue)
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("editUser.saveFooter")
+                .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline)
+                .opacity((isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline) ? 0.55 : 1)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(ProjectWorksRevampColors.surface)
+            .overlay(alignment: .top) { Divider() }
+        }
     }
 
     @ViewBuilder

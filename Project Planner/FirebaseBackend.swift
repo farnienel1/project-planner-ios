@@ -6648,6 +6648,7 @@ class FirebaseBackend: ObservableObject {
             dayKey: notification.dayKey,
             catalogue: notification.catalogue,
             createdAt: Timestamp(date: notification.createdAt),
+            serverTimestamp: FieldValue.serverTimestamp(),
             storedExists: storedExists
         ) else {
             // No `userId` (not an inbox row), no type, or the script did not answer: nothing is written.
@@ -6723,7 +6724,7 @@ class FirebaseBackend: ObservableObject {
         
         // RULEBOOK 1.8.0 §13: `parseNotificationDocument` (never a random id; unknown types kept).
         return snapshot.documents.compactMap {
-            Self.appNotification(documentId: $0.documentID, data: $0.data(), organizationId: organizationId)
+            Self.appNotification(documentId: $0.documentID, data: $0.data(with: .estimate), organizationId: organizationId)
         }
     }
 
