@@ -456,7 +456,11 @@ private struct LoginAutofillField: UIViewRepresentable {
 
     func updateUIView(_ field: UITextField, context: Context) {
         context.coordinator.onSubmit = onSubmit
-        if field.text != text {
+        context.coordinator.text = $text
+        // Never push the binding back into the field while the person is typing in it: keyboard
+        // predictions, autofill and the Simulator keyboard can change the field without an
+        // .editingChanged event, and overwriting it then throws away what was typed.
+        if !field.isFirstResponder, field.text != text {
             field.text = text
         }
         applyChrome(to: field)
@@ -484,7 +488,21 @@ private struct LoginAutofillField: UIViewRepresentable {
         }
 
         @objc func editingChanged(_ sender: UITextField) {
-            text.wrappedValue = sender.text ?? ""
+            sync(sender)
+        }
+
+        // Fires for every change, including predictive-bar and autofill insertions.
+        func textFieldDidChangeSelection(_ textField: UITextField) {
+            sync(textField)
+        }
+
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            sync(textField)
+        }
+
+        private func sync(_ field: UITextField) {
+            let value = field.text ?? ""
+            if text.wrappedValue != value { text.wrappedValue = value }
         }
 
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
