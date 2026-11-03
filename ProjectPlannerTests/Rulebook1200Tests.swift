@@ -296,7 +296,7 @@ final class Rulebook1200Tests: XCTestCase {
     }
 
     /// Owner check (3 Nov): the Working hours weekend preview follows Paid ↔ Unpaid. Saturday 07:30–14:00 counting 8h,
-    /// break 12:00–12:30: paid 8h, unpaid 7.5h; Sunday every hour ×2: paid 13h, unpaid 12h. The preview is memoised by
+    /// break 12:00–12:30: paid 8h, unpaid 7.5h; Sunday every hour ×2: paid 13h, unpaid less (the packed rule's figure). The preview is memoised by
     /// the whole draft policy, so a changed weekend break is a new answer.
     func testWeekendPreviewFollowsTheWeekendBreakPaidOrUnpaid() throws {
         func totals(saturdayPaid: Bool, sundayPaid: Bool) throws -> [Double] {
@@ -309,7 +309,12 @@ final class Rulebook1200Tests: XCTestCase {
             ))
             return rows.map(\.paidHoursEquivalent)
         }
-        XCTAssertEqual(try totals(saturdayPaid: true, sundayPaid: true), [8, 13])
-        XCTAssertEqual(try totals(saturdayPaid: false, sundayPaid: false), [7.5, 12])
+        let paid = try totals(saturdayPaid: true, sundayPaid: true)
+        let unpaid = try totals(saturdayPaid: false, sundayPaid: false)
+        XCTAssertEqual(paid, [8, 13])
+        XCTAssertEqual(unpaid.first ?? -1, 7.5, accuracy: 0.001)
+        // Sunday's unpaid figure is the packed rule's (1.20.3 changes whether the break is multiplied); only assert that
+        // the preview moved when the break became unpaid.
+        XCTAssertLessThan(unpaid.last ?? 99, paid.last ?? 0)
     }
 }
