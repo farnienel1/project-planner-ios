@@ -36,6 +36,11 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     /// the saved "Set number of days" could not be used, so the scan used 7. Never written to Firestore;
     /// cleared when the user picks a mode or a number on the settings screen.
     var clashLookaheadDaysFallback: String? = nil
+    /// RULEBOOK 1.19.0 §4.6: `warningDetection.weekendCoverage` — the Saturday and Sunday toggles and their "Hours to
+    /// cover" windows under include-weekends (`parseWeekendCoverage`). Read on every load, so every warning-settings save
+    /// writes the whole map back as one field (`warningDetection.weekendCoverage`) and never drops it. Nil only before
+    /// a document was read (the factory default); the scan then uses the rulebook default (both days on).
+    var weekendCoverage: OrgWeekendCoverage? = nil
 
     nonisolated static let `default` = OrgWarningDetectionSettings(
         detectClashes: true,
@@ -52,6 +57,7 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         case includeWeekendsForUnbookedLabour
         case excludedUserIdsFromUnbookedWarnings
         case clashLookaheadDaysFallback
+        case weekendCoverage
     }
 
     init?(canonical: CanonicalBusinessEngine.CanonicalWarningDetection, clashLookaheadDaysFallback: String? = nil) {
@@ -72,6 +78,12 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         self.init(
             canonical: parsed,
             clashLookaheadDaysFallback: CanonicalBusinessEngine.warningLookaheadDaysFallback(raw: raw)
+        )
+        // 1.19.0: `parseWarningDetection(raw).weekendCoverage` is `parseWeekendCoverage(raw.weekendCoverage, includeWeekends)`.
+        let stored = raw?["weekendCoverage"].map { FirebaseBackend.firestoreJSON($0) }
+        self.weekendCoverage = CanonicalBusinessEngine.parseWeekendCoverage(
+            stored,
+            includeWeekends: parsed.includeWeekendsForUnbookedLabour
         )
     }
 
@@ -97,6 +109,7 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         includeWeekendsForUnbookedLabour = try c.decodeIfPresent(Bool.self, forKey: .includeWeekendsForUnbookedLabour) ?? false
         excludedUserIdsFromUnbookedWarnings = try c.decodeIfPresent([String].self, forKey: .excludedUserIdsFromUnbookedWarnings) ?? []
         clashLookaheadDaysFallback = try c.decodeIfPresent(String.self, forKey: .clashLookaheadDaysFallback)
+        weekendCoverage = try c.decodeIfPresent(OrgWeekendCoverage.self, forKey: .weekendCoverage)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -107,6 +120,7 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
         try c.encode(includeWeekendsForUnbookedLabour, forKey: .includeWeekendsForUnbookedLabour)
         try c.encode(excludedUserIdsFromUnbookedWarnings, forKey: .excludedUserIdsFromUnbookedWarnings)
         try c.encodeIfPresent(clashLookaheadDaysFallback, forKey: .clashLookaheadDaysFallback)
+        try c.encodeIfPresent(weekendCoverage, forKey: .weekendCoverage)
     }
 
     // The scan window, its Full week days and its summary copy come from the script
@@ -223,13 +237,27 @@ nonisolated struct OrgWarningDetectionSettings: Codable, Hashable, Sendable {
     }
 
     func asFirestoreDictionary() -> [String: Any] {
-        [
+        var out: [String: Any] = [
             "detectClashes": detectClashes,
             "clashLookaheadMode": clashLookaheadMode.rawValue,
             "clashLookaheadDays": clashLookaheadDays,
             "includeWeekendsForUnbookedLabour": includeWeekendsForUnbookedLabour,
             "excludedUserIdsFromUnbookedWarnings": excludedUserIdsFromUnbookedWarnings,
         ]
+        if let weekendCoverage { out["weekendCoverage"] = weekendCoverage.asFirestoreDictionary() }
+        return out
+    }
+
+    /// RULEBOOK 1.19.0 §4.6 `resolveWeekendCoverageDay(weekendCoverage, includeWeekends, policy, weekday)` for this
+    /// organisation's settings: whether that weekend day is scanned and its "Hours to cover" window. `policy` is the
+    /// policy in effect that day.
+    func resolvedWeekendCoverage(_ weekday: RulebookWeekendDay, policy: OrgPayrollTimePolicy?) -> RulebookWeekendCoverageDay? {
+        CanonicalBusinessEngine.resolveWeekendCoverageDay(
+            coverage: weekendCoverage,
+            includeWeekends: includeWeekendsForUnbookedLabour,
+            policy: policy,
+            weekday: weekday
+        )
     }
 }
 

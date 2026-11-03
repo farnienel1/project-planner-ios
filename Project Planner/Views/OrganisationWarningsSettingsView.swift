@@ -528,8 +528,104 @@ struct OrganisationWarningsSettingsView: View {
                 title: "Include weekends in unbooked labour",
                 subtitle: "When on, Saturday and Sunday are checked for unbooked labour inside the detection window (including Full week). Turn off to exclude weekends.",
                 footnote: "Clash warnings still appear if someone has overlapping weekend bookings.",
-                isOn: $draft.includeWeekendsForUnbookedLabour
+                isOn: Binding(
+                    get: { draft.includeWeekendsForUnbookedLabour },
+                    set: { isOn in
+                        draft.includeWeekendsForUnbookedLabour = isOn
+                        // RULEBOOK 1.19.0 §4.6: turning include-weekends on starts with both days on.
+                        if isOn {
+                            setCoverage(.saturday) { $0.enabled = true }
+                            setCoverage(.sunday) { $0.enabled = true }
+                        }
+                    }
+                )
             )
+
+            if draft.includeWeekendsForUnbookedLabour {
+                weekendCoverageRow(.saturday, title: "Saturday")
+                weekendCoverageRow(.sunday, title: "Sunday")
+            }
+        }
+    }
+
+    // MARK: - Weekend hours to cover (RULEBOOK 1.19.0 §4.6)
+
+    /// Today's working hours, for the default "Hours to cover" window (`resolveWeekendCoverageDay`).
+    private var coveragePolicy: OrgPayrollTimePolicy {
+        PayrollTimePolicyCatalog.policy(for: Date(), organization: firebaseBackend.currentOrganization)
+    }
+
+    /// The draft's stored day (`parseWeekendCoverage` defaults when the map was never saved).
+    private func coverageDay(_ day: RulebookWeekendDay) -> OrgWeekendCoverageDay {
+        let coverage = draft.weekendCoverage
+            ?? CanonicalBusinessEngine.parseWeekendCoverage(nil, includeWeekends: draft.includeWeekendsForUnbookedLabour)
+        switch day {
+        case .saturday: return coverage?.saturday ?? OrgWeekendCoverageDay(enabled: draft.includeWeekendsForUnbookedLabour)
+        case .sunday: return coverage?.sunday ?? OrgWeekendCoverageDay(enabled: draft.includeWeekendsForUnbookedLabour)
+        }
+    }
+
+    private func setCoverage(_ day: RulebookWeekendDay, _ change: (inout OrgWeekendCoverageDay) -> Void) {
+        var coverage = draft.weekendCoverage ?? OrgWeekendCoverage(
+            saturday: coverageDay(.saturday),
+            sunday: coverageDay(.sunday)
+        )
+        switch day {
+        case .saturday: change(&coverage.saturday)
+        case .sunday: change(&coverage.sunday)
+        }
+        draft.weekendCoverage = coverage
+        markEdited()
+    }
+
+    /// The window shown: the saved "Hours to cover", else that day's working-hours set window, else the standard day.
+    private func resolvedCoverage(_ day: RulebookWeekendDay) -> RulebookWeekendCoverageDay? {
+        var settings = draft
+        settings.weekendCoverage = OrgWeekendCoverage(saturday: coverageDay(.saturday), sunday: coverageDay(.sunday))
+        return settings.resolvedWeekendCoverage(day, policy: coveragePolicy)
+    }
+
+    private func weekendCoverageRow(_ day: RulebookWeekendDay, title: String) -> some View {
+        let stored = coverageDay(day)
+        let resolved = resolvedCoverage(day)
+        return VStack(alignment: .leading, spacing: 10) {
+            Divider()
+            toggleRow(
+                title: title,
+                subtitle: "Check \(title) for unbooked labour against the hours below. Time inside that day's lunch break never needs covering.",
+                isOn: Binding(
+                    get: { stored.enabled },
+                    set: { value in setCoverage(day) { $0.enabled = value } }
+                )
+            )
+            if stored.enabled {
+                HStack(spacing: 12) {
+                    Text("Hours to cover")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    WarningCoverageTimeField(
+                        text: stored.start ?? resolved?.start ?? "",
+                        accessibilityId: "organisationWarningsSettings.\(day.rawValue).coverStart"
+                    ) { value in
+                        setCoverage(day) { row in
+                            row.start = value
+                            if row.end == nil { row.end = resolved?.end }
+                        }
+                    }
+                    Text("–").foregroundStyle(.secondary)
+                    WarningCoverageTimeField(
+                        text: stored.end ?? resolved?.end ?? "",
+                        accessibilityId: "organisationWarningsSettings.\(day.rawValue).coverEnd"
+                    ) { value in
+                        setCoverage(day) { row in
+                            row.end = value
+                            if row.start == nil { row.start = resolved?.start }
+                        }
+                    }
+                }
+                .padding(.leading, 2)
+            }
         }
     }
 
@@ -729,6 +825,50 @@ struct OrganisationWarningsSettingsView: View {
         }
     }
 
+}
+
+// MARK: - Weekend "Hours to cover" time field
+
+/// An `HH:MM` field that hands back a valid 24h time on commit (and puts the last value back otherwise). The window
+/// itself is read by `parseWeekendCoverage`, which ignores a window whose end is not after its start.
+private struct WarningCoverageTimeField: View {
+    let text: String
+    let accessibilityId: String
+    let onCommit: (String) -> Void
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("07:30", text: $draft)
+            .keyboardType(.numbersAndPunctuation)
+            .multilineTextAlignment(.center)
+            .font(.subheadline.weight(.semibold))
+            .monospacedDigit()
+            .frame(width: 72)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .focused($focused)
+            .onSubmit { commit() }
+            .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+            .onAppear { draft = text }
+            .onChange(of: text) { _, value in if !focused { draft = value } }
+            .accessibilityIdentifier(accessibilityId)
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(separator: ":")
+        guard parts.count == 2, parts[1].count == 2,
+              let hour = Int(parts[0]), let minute = Int(parts[1]),
+              (0..<24).contains(hour), (0..<60).contains(minute) else {
+            draft = text
+            return
+        }
+        let value = String(format: "%02d:%02d", hour, minute)
+        draft = value
+        if value != text { onCommit(value) }
+    }
 }
 
 // MARK: - Excluded users picker

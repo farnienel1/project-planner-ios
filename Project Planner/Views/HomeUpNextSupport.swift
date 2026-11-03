@@ -91,7 +91,11 @@ enum HomeUpNextSupport {
             }
             let today = calendar.startOfDay(for: now)
             for b in mine {
-                let start = sortDate(operativeBooking: b, policy: payrollTimePolicy)
+                // RULEBOOK 1.19.0 §4.3: each booking's start under its own day's working hours (history first).
+                let start = sortDate(
+                    operativeBooking: b,
+                    policy: CanonicalBusinessEngine.payrollPolicyInEffect(on: b.date, fallback: payrollTimePolicy)
+                )
                 guard calendar.startOfDay(for: start) >= today else { continue }
                 let proj = project(forProjectId: b.projectId, allProjects: allProjects)
                 let site = proj?.siteName ?? "Scheduled work"
@@ -129,12 +133,13 @@ enum HomeUpNextSupport {
             let mine = managerBookings.filter { accountIds.contains($0.userId) }
             let today = calendar.startOfDay(for: now)
             for b in mine {
-                let start = sortDate(managerBooking: b, policy: payrollTimePolicy)
+                let dayPolicy = CanonicalBusinessEngine.payrollPolicyInEffect(on: b.date, fallback: payrollTimePolicy)
+                let start = sortDate(managerBooking: b, policy: dayPolicy)
                 guard calendar.startOfDay(for: start) >= today else { continue }
                 let loc = managerLocationTitle(booking: b, allProjects: allProjects)
                 let title = loc
                 let timeStr = timeDotString(from: start)
-                let slot = b.scheduleLabel(policy: payrollTimePolicy)
+                let slot = b.scheduleLabel(policy: dayPolicy)
                 let subtitle = "\(timeStr) · \(slot)"
                 rows.append(HomeUpNextRow(
                     id: b.id,

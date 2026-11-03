@@ -1003,6 +1003,11 @@ struct BookLabourFlowView: View {
                         }
                     }
 
+                    // RULEBOOK 1.19.0 `unpaidBreakAppliesOnDay`: only on a day that takes an unpaid break off.
+                    if CanonicalBusinessEngine.unpaidBreakAppliesOnDay(
+                        policy: dayPayrollPolicy,
+                        dayKey: CanonicalBusinessEngine.bookingDayKey(day)
+                    ) {
                     Toggle("No break on this booking", isOn: Binding(
                         get: { draft.breakRemoved },
                         set: { value in
@@ -1015,6 +1020,7 @@ struct BookLabourFlowView: View {
                     .accessibilityIdentifier("bookLabourFlow.noBreakOnThisBooking")
                     .font(.system(size: 12, weight: .medium))
                     .tint(ProjectWorksRevampColors.blue)
+                    }
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Breakdown")
@@ -1265,13 +1271,18 @@ struct BookLabourFlowView: View {
             .reduce(0.0) { $0 + $1.paidBookedHours(policy: dayPayrollPolicy) }
     }
 
+    /// The new booking's paid hours on `day`, priced only by `payrollHoursResult` under that day's working hours
+    /// (RULEBOOK 1.19.0: the weekday break, or a weekend day's own unpaid break; never a Swift subtraction).
     private func paidHours(startMinutes: Int, endMinutes: Int, breakRemoved: Bool) -> Double {
         guard endMinutes > startMinutes else { return 0 }
-        var wall = Double(endMinutes - startMinutes) / 60.0
-        if !breakRemoved {
-            wall = max(0, wall - payrollTimePolicy.standardUnpaidBreakHours)
-        }
-        return wall
+        let choice = OperativeDayBookingChoice(
+            timeSlot: .customHours,
+            workStartTime: timeText(from: startMinutes),
+            workEndTime: timeText(from: endMinutes),
+            isBreakRemoved: breakRemoved,
+            otMultiplierOverride: nil
+        )
+        return PayrollHoursEngine.compute(choice: choice, day: day, policy: dayPayrollPolicy).totalPaidHours
     }
 
     private func applyQuickTimeSlot(_ slot: TimeSlot, projectId: UUID, currentBreakRemoved: Bool) {
@@ -1978,7 +1989,8 @@ struct BookLabourFlowView: View {
             holidays: holidayStore.bookings,
             policy: dayPayrollPolicy,
             includeWeekends: detection.includeWeekendsForUnbookedLabour,
-            excludedUserIds: detection.excludedUserIdsFromUnbookedWarnings
+            excludedUserIds: detection.excludedUserIdsFromUnbookedWarnings,
+            weekendCoverage: detection.weekendCoverage
         )
         let focused = Set(focusedUserIds)
         var listed: [(candidate: BookLabourCandidate, focused: Bool)] = []

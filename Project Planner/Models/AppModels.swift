@@ -1368,6 +1368,17 @@ nonisolated struct OrgWeekendDayPayrollSettings: Codable, Hashable, Sendable {
     var countsAsHours: Double?
     /// Hours outside the custom standard window (weekend only, when not in all-multiplier mode).
     var outsideStandardWindowMultiplier: Double
+    /// RULEBOOK 1.19.0 §4.3: that day's lunch break is paid. `nil` (never saved) and anything but `false` read as paid
+    /// (`weekendBreakFor`). Written on every save as `breakPaid != false`, as web's `weekendToFirestore` does.
+    var breakPaid: Bool? = nil
+    /// RULEBOOK 1.19.0 §4.3: that day's own break length (0–120 minutes). `nil` = the weekday `unpaidBreakMinutes`.
+    var breakMinutes: Int? = nil
+    /// RULEBOOK 1.19.0 §4.3: that day's own break window. `nil` = the weekday `breakWindowStart` / `breakWindowEnd`.
+    var breakWindowStart: String? = nil
+    var breakWindowEnd: String? = nil
+
+    /// `breakPaid !== false` (missing = paid).
+    var isBreakPaid: Bool { breakPaid != false }
 
     func resolvedCountsAsHours(fallback: Double) -> Double {
         countsAsHours ?? fallback
@@ -1529,7 +1540,7 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
 
 private extension OrgWeekendDayPayrollSettings {
     nonisolated func asFirestoreDictionary() -> [String: Any] {
-        [
+        var out: [String: Any] = [
             "allHoursAtMultiplierMode": allHoursAtMultiplierMode,
             "allHoursMultiplier": allHoursMultiplier,
             "useCustomStandardDayWindow": !allHoursAtMultiplierMode,
@@ -1538,6 +1549,17 @@ private extension OrgWeekendDayPayrollSettings {
             "countsAsHours": countsAsHours ?? 8,
             "outsideStandardWindowMultiplier": outsideStandardWindowMultiplier,
         ]
+        // RULEBOOK 1.19.0 §4.3 (`weekendToFirestore`): `breakPaid` always (missing reads as paid); the day's own length
+        // and window only when set, so a missing field keeps reading as the weekday break.
+        out["breakPaid"] = breakPaid != false
+        if let breakMinutes { out["breakMinutes"] = breakMinutes }
+        if let start = breakWindowStart?.trimmingCharacters(in: .whitespacesAndNewlines), !start.isEmpty {
+            out["breakWindowStart"] = start
+        }
+        if let end = breakWindowEnd?.trimmingCharacters(in: .whitespacesAndNewlines), !end.isEmpty {
+            out["breakWindowEnd"] = end
+        }
+        return out
     }
 
     nonisolated static func fromFirestore(_ data: [String: Any]) -> OrgWeekendDayPayrollSettings {
@@ -1556,8 +1578,21 @@ private extension OrgWeekendDayPayrollSettings {
             outsideStandardWindowMultiplier: OrgPayrollTimePolicy.firstNumber(
                 data,
                 keys: ["outsideStandardWindowMultiplier", "outsideWindowMultiplier"]
-            ) ?? 1.5
+            ) ?? 1.5,
+            breakPaid: Self.storedBreakPaid(data["breakPaid"]),
+            breakMinutes: OrgPayrollTimePolicy.firstNumber(data, keys: ["breakMinutes"])
+                .flatMap { $0.isFinite ? Int(Swift.min(120, Swift.max(0, $0)).rounded()) : nil },
+            breakWindowStart: OrgPayrollTimePolicy.firstText(data, keys: ["breakWindowStart"]),
+            breakWindowEnd: OrgPayrollTimePolicy.firstText(data, keys: ["breakWindowEnd"])
         )
+    }
+
+    /// RULEBOOK 1.19.0 `parsePayrollPolicy`: only a stored `false` is unpaid; a stored `true` stays `true`; anything
+    /// else (missing) stays nil and reads as paid.
+    nonisolated static func storedBreakPaid(_ value: Any?) -> Bool? {
+        // Only a real boolean counts (the script tests `breakPaid !== false`); a stored 0 or "false" text is not `false`.
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
     }
 }
 

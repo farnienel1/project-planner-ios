@@ -61,6 +61,10 @@ nonisolated struct RulebookBookingDayBreakdownRow: Equatable, Hashable, Sendable
     let paidHoursEquivalent: Double
     /// e.g. "Saturday 07:30–14:00 = 8h (counts as a full day)".
     let line: String
+    /// RULEBOOK 1.19.0: the unpaid break taken off (`payrollHoursResult.unpaidBreakHours`), 0 when none.
+    let unpaidBreakHours: Double
+    /// RULEBOOK 1.19.0: the row in the Mon–Fri style (set hours / unpaid break / outside hours × rate / total).
+    let lines: [RulebookBookingDayBreakdownLine]
 
     init?(json: Any?) {
         guard let row = json as? [String: Any],
@@ -79,6 +83,23 @@ nonisolated struct RulebookBookingDayBreakdownRow: Equatable, Hashable, Sendable
         self.multiplier = number("multiplier")
         self.paidHoursEquivalent = number("paidHoursEquivalent")
         self.line = line
+        self.unpaidBreakHours = number("unpaidBreakHours")
+        self.lines = (row["lines"] as? [[String: Any]] ?? []).compactMap(RulebookBookingDayBreakdownLine.init(json:))
+    }
+}
+
+/// One `BookingDayBreakdownLine` (1.19.0): `kind` is `standard`, `break`, `outside` or `total`. Values only.
+nonisolated struct RulebookBookingDayBreakdownLine: Equatable, Hashable, Sendable {
+    let kind: String
+    let label: String
+    let value: String
+
+    init?(json: [String: Any]) {
+        guard let kind = json["kind"] as? String, let label = json["label"] as? String,
+              let value = json["value"] as? String else { return nil }
+        self.kind = kind
+        self.label = label
+        self.value = value
     }
 }
 

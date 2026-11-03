@@ -452,6 +452,7 @@ class FirebaseBackend: ObservableObject {
         org.payrollTimePolicyPrior = parsed.payrollTimePolicyPrior
         org.payrollTimePolicyEffectiveFrom = parsed.payrollTimePolicyEffectiveFrom
         org.payrollTimePolicyScheduled = parsed.payrollTimePolicyScheduled
+        org.payrollPolicyStateJSON = parsed.payrollPolicyStateJSON
         guard org != previous else { return }
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -465,6 +466,7 @@ class FirebaseBackend: ObservableObject {
         if previous.settings != org.settings
             || previous.payrollTimePolicyScheduled != org.payrollTimePolicyScheduled
             || previous.payrollTimePolicyEffectiveFrom != org.payrollTimePolicyEffectiveFrom
+            || previous.payrollPolicyStateJSON != org.payrollPolicyStateJSON
             || previous.countryCode != org.countryCode {
             NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
         }
@@ -1433,6 +1435,9 @@ class FirebaseBackend: ObservableObject {
     /// change counts from its day on). Day keys are in this document's zone, `organizationTimeZone(countryCode)`.
     static func applyPayrollPolicyFields(from data: [String: Any], to organization: inout Organization) {
         let rawDocument = FirebaseBackend.firestoreJSON(data) as? [String: Any] ?? [:]
+        // RULEBOOK 1.19.0: keep the whole stored state (history and revision included) for every pricing call and for
+        // the two-admin save guard; the typed fields below are today's view of it.
+        organization.payrollPolicyStateJSON = PayrollTimePolicyCatalog.payrollStateJSON(fromOrganizationData: data)
         let zone = CanonicalBusinessEngine.organizationTimeZoneIdentifier(countryCode: data["countryCode"] as? String)
         let todayKey = CanonicalBusinessEngine.organizationDayKey(Date(), timeZoneIdentifier: zone)
         guard let state = CanonicalBusinessEngine.payrollTimePolicyTimeline(
@@ -1569,7 +1574,13 @@ class FirebaseBackend: ObservableObject {
             includeWeekendsForUnbookedLabour: settings.includeWeekendsForUnbookedLabour,
             excludedUserIdsFromUnbookedWarnings: settings.excludedUserIdsFromUnbookedWarnings
         )
-        return CanonicalBusinessEngine.warningDetectionToFirestore(canonical) ?? settings.asFirestoreDictionary()
+        guard var map = CanonicalBusinessEngine.warningDetectionToFirestore(canonical) else {
+            return settings.asFirestoreDictionary()
+        }
+        // RULEBOOK 1.19.0 §4.6 (`warningDetectionToFirestore`): the whole `weekendCoverage` map, one field of the partial
+        // update. It is read on every load, so a save of any other warning setting writes it back unchanged.
+        if let coverage = settings.weekendCoverage { map["weekendCoverage"] = coverage.asFirestoreDictionary() }
+        return map
     }
 
     static func invoicingFirestoreMap(_ settings: OrganizationInvoicingSettings) -> [String: Any] {
@@ -4970,106 +4981,178 @@ class FirebaseBackend: ObservableObject {
         PayrollTimePolicyCatalog.policy(for: day, organization: currentOrganization)
     }
 
-    /// Server copy of the organisation document for a working-hours write. Online only: the write
-    /// functions must see the stored prior / scheduled fields, not the in-memory copy.
-    private func organizationDocumentForPayrollWrite(_ orgId: String) async throws -> [String: Any] {
-        let snapshot = try await db.collection("organizations").document(orgId).getDocument(source: .server)
-        guard let data = snapshot.data() else {
-            throw NSError(domain: "FirebaseBackend", code: 404, userInfo: [NSLocalizedDescriptionKey: "Organisation not found."])
-        }
-        return data
+    /// RULEBOOK 1.19.0 §4.3 (two admins): the working-hours document the screen loaded — the base of
+    /// `payrollTimePolicySaveConflict`. `baseStateJSON` is what the screen captured
+    /// (`Organization.payrollPolicyStateJSON`); nil uses the open organisation's state now.
+    private func payrollSaveBaseDocument(_ baseStateJSON: String?) -> [String: Any] {
+        if let base = PayrollTimePolicyCatalog.payrollStateDocument(json: baseStateJSON) { return base }
+        guard let org = currentOrganization else { return [:] }
+        return PayrollTimePolicyCatalog.payrollPolicyDocument(for: org)
     }
 
-    /// Writes `fields` (+ `WriteMetadata`) as a partial update and re-reads the payroll state locally
-    /// through `payrollTimePolicyTimeline`, from the server document with `fields` applied.
-    private func writeOrganizationPayrollFields(_ fields: [String: Any], orgId: String, serverData: [String: Any]) async throws {
-        try await db.collection("organizations").document(orgId)
-            .updateData(WriteMetadata.stamped(fields, userId: auth.currentUser?.uid))
-        guard var org = currentOrganization, organizationIdsMatch(org.firestoreDocumentId, orgId) else { return }
-        var merged = serverData
-        for (key, value) in fields { merged[key] = value }
+    /// RULEBOOK 1.19.0 §4.3: every working-hours save runs in a Firestore transaction that reads the organisation
+    /// document, refuses the save when the working hours changed since the screen loaded them
+    /// (`payrollTimePolicySaveConflict(base, live)` → `PAYROLL_POLICY_STALE_SAVE_MESSAGE`), computes the write fields from
+    /// the FRESH document (`build`: `payrollTimePolicyApplyNowWriteFields` / `…ScheduleWriteFields` /
+    /// `…CancelScheduleWriteFields`, which append to `payrollTimePolicyHistory` and bump `payrollTimePolicyRevision`) and
+    /// writes them as a partial update of the working-hours fields only (+ write metadata). Returns the live document
+    /// with the fields applied. `nonisolated` so the transaction block never runs on the main actor.
+    nonisolated private static func runPayrollPolicyTransaction(
+        db: Firestore,
+        orgId: String,
+        baseDocument: [String: Any],
+        userId: String?,
+        build: @escaping @Sendable (_ liveDocument: [String: Any], _ todayKey: String, _ zone: String) -> Result<[String: Any], Error>
+    ) async throws -> [String: Any] {
+        let ref = db.collection("organizations").document(orgId)
+        let base = RulebookJSONBox(object: baseDocument)
+        let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            guard let data = snapshot.data() else {
+                errorPointer?.pointee = NSError(domain: "FirebaseBackend", code: 404, userInfo: [NSLocalizedDescriptionKey: "Organisation not found."])
+                return nil
+            }
+            let zone = CanonicalBusinessEngine.organizationTimeZoneIdentifier(countryCode: data["countryCode"] as? String)
+            let todayKey = CanonicalBusinessEngine.organizationDayKey(Date(), timeZoneIdentifier: zone)
+            let live = PayrollTimePolicyCatalog.payrollStateDocument(fromOrganizationData: data)
+            if let stale = CanonicalBusinessEngine.payrollTimePolicySaveConflict(
+                baseOrgDocument: base.object,
+                liveOrgDocument: live,
+                timeZone: zone
+            ) {
+                errorPointer?.pointee = NSError(domain: "FirebaseBackend", code: 409, userInfo: [NSLocalizedDescriptionKey: stale])
+                return nil
+            }
+            let raw = FirebaseBackend.firestoreJSON(data) as? [String: Any] ?? [:]
+            switch build(raw, todayKey, zone) {
+            case .failure(let error):
+                errorPointer?.pointee = error as NSError
+                return nil
+            case .success(let fields):
+                transaction.updateData(WriteMetadata.stamped(fields, userId: userId), forDocument: ref)
+                var merged = data
+                for (key, value) in fields { merged[key] = value }
+                return merged as NSDictionary
+            }
+        }
+        return (answer as? [String: Any]) ?? [:]
+    }
+
+    /// Re-reads the payroll state locally (`applyPayrollPolicyFields`) from the document the transaction wrote.
+    private func adoptWrittenPayrollDocument(_ merged: [String: Any], orgId: String) {
+        guard var org = currentOrganization, organizationIdsMatch(org.firestoreDocumentId, orgId), !merged.isEmpty else { return }
         Self.applyPayrollPolicyFields(from: merged, to: &org)
         org.updatedAt = Date()
         currentOrganization = org
         storeOrganizationLocally(org)
     }
 
-    /// Organisation-zone today for the document being written.
-    private static func payrollTodayKey(for data: [String: Any]) -> (todayKey: String, zone: String) {
-        let zone = CanonicalBusinessEngine.organizationTimeZoneIdentifier(countryCode: data["countryCode"] as? String)
-        return (CanonicalBusinessEngine.organizationDayKey(Date(), timeZoneIdentifier: zone), zone)
+    nonisolated private static func payrollWriteError(_ message: String) -> NSError {
+        NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     /// Admin: apply working-hours changes from today (`payrollTimePolicyApplyNowWriteFields`). The prior
     /// policy is the one in force yesterday; a future scheduled change is kept, a due one is consumed.
-    func applyOrganizationPayrollTimePolicyImmediately(_ policy: OrgPayrollTimePolicy) async throws {
+    /// 1.19.0: appends today's entry to `payrollTimePolicyHistory`, bumps `payrollTimePolicyRevision`, and is refused
+    /// with `PAYROLL_POLICY_STALE_SAVE_MESSAGE` when the working hours changed since `baseStateJSON` was loaded.
+    func applyOrganizationPayrollTimePolicyImmediately(_ policy: OrgPayrollTimePolicy, baseStateJSON: String? = nil) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
         }
         if let message = CanonicalBusinessEngine.validatePayrollTimePolicy(policy) {
-            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
+            throw Self.payrollWriteError(message)
         }
-        let serverData = try await organizationDocumentForPayrollWrite(orgId)
-        let today = Self.payrollTodayKey(for: serverData)
-        guard let fields = CanonicalBusinessEngine.payrollTimePolicyApplyNowWriteFields(
-            orgDocument: Self.firestoreJSON(serverData) as? [String: Any] ?? [:],
-            policy: policy,
-            todayKey: today.todayKey,
-            timeZone: today.zone
-        ) else {
-            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Could not save these working hours."])
+        let merged = try await Self.runPayrollPolicyTransaction(
+            db: db,
+            orgId: orgId,
+            baseDocument: payrollSaveBaseDocument(baseStateJSON),
+            userId: auth.currentUser?.uid
+        ) { live, todayKey, zone in
+            guard let fields = CanonicalBusinessEngine.payrollTimePolicyApplyNowWriteFields(
+                orgDocument: live,
+                policy: policy,
+                todayKey: todayKey,
+                timeZone: zone
+            ) else {
+                return .failure(FirebaseBackend.payrollWriteError("Could not save these working hours."))
+            }
+            return .success(fields)
         }
-        try await writeOrganizationPayrollFields(fields, orgId: orgId, serverData: serverData)
+        adoptWrittenPayrollDocument(merged, orgId: orgId)
     }
 
     /// Admin: queue a future working-hours change (`payrollTimePolicyScheduleWriteFields`; replaces any
     /// pending change, promotes a due one first). `effectiveFrom` comes from a date picker, so its day is
     /// read in the picker's (device) calendar and sent as that `YYYY-MM-DD` organisation day.
-    func scheduleOrganizationPayrollTimePolicyChange(_ policy: OrgPayrollTimePolicy, effectiveFrom: Date) async throws {
+    /// 1.19.0: in a transaction with the two-admin guard; history and revision as Apply from today.
+    func scheduleOrganizationPayrollTimePolicyChange(
+        _ policy: OrgPayrollTimePolicy,
+        effectiveFrom: Date,
+        baseStateJSON: String? = nil
+    ) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
         }
         if let message = CanonicalBusinessEngine.validatePayrollTimePolicy(policy) {
-            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
+            throw Self.payrollWriteError(message)
         }
         let picked = Calendar.current.dateComponents([.year, .month, .day], from: effectiveFrom)
         let effectiveKey = String(format: "%04d-%02d-%02d", picked.year ?? 0, picked.month ?? 0, picked.day ?? 0)
-        let serverData = try await organizationDocumentForPayrollWrite(orgId)
-        let today = Self.payrollTodayKey(for: serverData)
-        if let message = CanonicalBusinessEngine.payrollTimePolicyScheduleDateError(
-            effectiveFrom: effectiveKey,
-            todayKey: today.todayKey
-        ) {
-            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
+        let merged = try await Self.runPayrollPolicyTransaction(
+            db: db,
+            orgId: orgId,
+            baseDocument: payrollSaveBaseDocument(baseStateJSON),
+            userId: auth.currentUser?.uid
+        ) { live, todayKey, zone in
+            if let message = CanonicalBusinessEngine.payrollTimePolicyScheduleDateError(
+                effectiveFrom: effectiveKey,
+                todayKey: todayKey
+            ) {
+                return .failure(FirebaseBackend.payrollWriteError(message))
+            }
+            guard let fields = CanonicalBusinessEngine.payrollTimePolicyScheduleWriteFields(
+                orgDocument: live,
+                policy: policy,
+                effectiveFrom: effectiveKey,
+                todayKey: todayKey,
+                timeZone: zone
+            ) else {
+                return .failure(FirebaseBackend.payrollWriteError("Could not schedule these working hours."))
+            }
+            return .success(fields)
         }
-        guard let fields = CanonicalBusinessEngine.payrollTimePolicyScheduleWriteFields(
-            orgDocument: Self.firestoreJSON(serverData) as? [String: Any] ?? [:],
-            policy: policy,
-            effectiveFrom: effectiveKey,
-            todayKey: today.todayKey,
-            timeZone: today.zone
-        ) else {
-            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Could not schedule these working hours."])
-        }
-        try await writeOrganizationPayrollFields(fields, orgId: orgId, serverData: serverData)
+        adoptWrittenPayrollDocument(merged, orgId: orgId)
     }
 
     /// Admin: cancel the pending working-hours change (`payrollTimePolicyCancelScheduleWriteFields`).
-    /// A change that is already due is promoted first, never lost.
-    func cancelScheduledOrganizationPayrollTimePolicyChange() async throws {
+    /// A change that is already due is promoted first, never lost; no history entry is removed (1.19.0). Refused
+    /// when the working hours changed since `baseStateJSON` (the screen that showed the pending change).
+    func cancelScheduledOrganizationPayrollTimePolicyChange(baseStateJSON: String? = nil) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
         }
-        let serverData = try await organizationDocumentForPayrollWrite(orgId)
-        let today = Self.payrollTodayKey(for: serverData)
-        guard let fields = CanonicalBusinessEngine.payrollTimePolicyCancelScheduleWriteFields(
-            orgDocument: Self.firestoreJSON(serverData) as? [String: Any] ?? [:],
-            todayKey: today.todayKey,
-            timeZone: today.zone
-        ) else {
-            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Could not cancel the scheduled change."])
+        let merged = try await Self.runPayrollPolicyTransaction(
+            db: db,
+            orgId: orgId,
+            baseDocument: payrollSaveBaseDocument(baseStateJSON),
+            userId: auth.currentUser?.uid
+        ) { live, todayKey, zone in
+            guard let fields = CanonicalBusinessEngine.payrollTimePolicyCancelScheduleWriteFields(
+                orgDocument: live,
+                todayKey: todayKey,
+                timeZone: zone
+            ) else {
+                return .failure(FirebaseBackend.payrollWriteError("Could not cancel the scheduled change."))
+            }
+            return .success(fields)
         }
-        try await writeOrganizationPayrollFields(fields, orgId: orgId, serverData: serverData)
+        adoptWrittenPayrollDocument(merged, orgId: orgId)
     }
 
     /// Admin: update organisation-wide payroll / working time defaults (`organizations/{orgId}.payrollTimePolicy`).

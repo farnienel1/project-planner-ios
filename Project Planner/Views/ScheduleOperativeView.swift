@@ -606,7 +606,7 @@ struct ScheduleOperativeView: View {
                 timeSlot: .customHours,
                 workStartTime: apply.start,
                 workEndTime: apply.end,
-                isBreakRemoved: true,
+                isBreakRemoved: false,
                 otMultiplierOverride: nil
             )
         case .mixed:
@@ -654,23 +654,19 @@ struct ScheduleOperativeView: View {
         if c.timeSlot == .fullDay {
             return "FULL DAY · \(p.standardDayStart)–\(p.standardDayEnd)"
         }
-        if isStandardChoiceForDay(c, day: refDay, policy: p) {
-            if PayrollTimePolicyCatalog.isWeekend(refDay) {
-                let weekend = PayrollTimePolicyCatalog.weekendSettings(for: refDay, policy: p)
-                if weekend.allHoursAtMultiplierMode {
-                    let m = weekend.allHoursMultiplier
-                    let ms = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
-                    return "Standard · all hours \(ms)×"
-                }
-                let start = weekend.customStandardStart ?? p.standardDayStart
-                let end = weekend.customStandardEnd ?? "13:00"
-                return "Standard · \(start)–\(end)"
-            }
+        // RULEBOOK 1.18/1.19: Saturday and Sunday are custom hours priced per day (`weekendBookingBreakdown`), never a
+        // "Standard" day — the subtitle shows the hours entered.
+        let isWeekendDay = PayrollTimePolicyCatalog.isWeekend(refDay, calendar: OrganizationRulebookContext.calendar)
+        if !isWeekendDay, isStandardChoiceForDay(c, day: refDay, policy: p) {
             return "Standard · \(p.standardDayStart)–\(p.standardDayEnd)"
         }
         if c.timeSlot == .customHours, let s = c.workStartTime, let e = c.workEndTime {
             var line = "\(s)–\(e)"
-            if c.isBreakRemoved { line += " · no break" }
+            // "No unpaid break" means something only on a day that takes an unpaid break off (`unpaidBreakAppliesOnDay`).
+            if c.isBreakRemoved,
+               CanonicalBusinessEngine.unpaidBreakAppliesOnDay(policy: p, dayKey: CanonicalBusinessEngine.bookingDayKey(refDay)) {
+                line += " · no break"
+            }
             if let m = c.otMultiplierOverride {
                 let ms = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
                 line += " · OT \(ms)×"

@@ -36,6 +36,8 @@ struct PayrollHoursResult: Equatable {
     var segments: [PayrollHoursSegment]
     /// Multiplier for hours outside the standard window on this day (`payrollHoursResult.outsideMultiplier`).
     var outsideMultiplier: Double = 1
+    /// RULEBOOK 1.19.0: the unpaid break taken off (`payrollHoursResult.unpaidBreakHours`), 0 when none.
+    var unpaidBreakHours: Double = 0
 
     var breakdownSummary: String {
         guard !segments.isEmpty else { return ScheduleCoverageFormat.hours(totalPaidHours) + "h" }
@@ -59,12 +61,14 @@ struct PayrollHoursResult: Equatable {
 }
 
 enum PayrollHoursEngine {
-    /// Paid hours for a booking on `day` (its London calendar day), from the rulebook's
-    /// `payrollHoursResult`. The web app runs the same function, so Daily Overview, the weekly report,
-    /// timesheets and invoicing show the same hours on both. There is no Swift copy of the rule.
-    /// The script's input for one booking on `day` (organisation-zone day key). A mapping, not a rule.
-    static func canonicalInput(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> CanonicalPayrollHoursInput {
-        CanonicalPayrollHoursInput(
+    /// Paid hours for a booking on `day` (its organisation-zone day), from the rulebook's `payrollHoursResult`. The web
+    /// app runs the same function, so Daily Overview, the weekly report, timesheets and invoicing show the same hours on
+    /// both. There is no Swift copy of the rule. `policy` is the policy in effect on `day`
+    /// (`PayrollTimePolicyCatalog.policy(for:organization:)`, history first, RULEBOOK 1.19.0); the whole policy goes to
+    /// the script, so each weekend day's own lunch break (`breakPaid`, `breakMinutes`, window) is priced as web prices it.
+    /// The script's input for one booking on `day`. A mapping, not a rule.
+    static func canonicalInput(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> RulebookPayrollHoursInput {
+        RulebookPayrollHoursInput(
             booking: CanonicalPayrollBooking(
                 timeSlot: booking.timeSlot.rawValue,
                 workStartTime: booking.workStartTime,
@@ -73,13 +77,18 @@ enum PayrollHoursEngine {
                 otMultiplierOverride: booking.otMultiplierOverride
             ),
             dayKey: CanonicalBusinessEngine.dayKey(for: day),
-            policy: canonicalPolicy(policy)
+            policy: policy
         )
     }
 
     /// `payrollHoursResult` as the script returns it (`standardHours`, `outsideHours`, `outsideMultiplier`).
     /// Timesheet and invoice pay lines read these fields, as web's collector does.
     static func canonicalResult(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> CanonicalPayrollHours? {
+        CanonicalBusinessEngine.payrollHoursResult(canonicalInput(booking: booking, day: day, policy: policy))?.hours
+    }
+
+    /// The whole `payrollHoursResult` answer, with `workedHours` and (1.19.0) `unpaidBreakHours`.
+    static func rulebookResult(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> RulebookPayrollHours? {
         CanonicalBusinessEngine.payrollHoursResult(canonicalInput(booking: booking, day: day, policy: policy))
     }
 
@@ -91,10 +100,11 @@ enum PayrollHoursEngine {
 
     static func compute(booking: Booking, day: Date, policy: OrgPayrollTimePolicy) -> PayrollHoursResult {
         let input = canonicalInput(booking: booking, day: day, policy: policy)
-        guard let result = CanonicalBusinessEngine.payrollHoursResult(input) else {
+        guard let answer = CanonicalBusinessEngine.payrollHoursResult(input) else {
             NSLog("PAYROLL_HOURS_UNAVAILABLE slot=%@ — canonical script did not answer", booking.timeSlot.rawValue)
             return PayrollHoursResult(totalPaidHours: 0, segments: [])
         }
+        let result = answer.hours
         return PayrollHoursResult(
             totalPaidHours: result.totalPaidHours,
             segments: result.segments.map { segment in
@@ -106,7 +116,8 @@ enum PayrollHoursEngine {
                     multiplier: segment.multiplier
                 )
             },
-            outsideMultiplier: result.outsideMultiplier
+            outsideMultiplier: result.outsideMultiplier,
+            unpaidBreakHours: answer.unpaidBreakHours
         )
     }
 
@@ -118,33 +129,6 @@ enum PayrollHoursEngine {
             bookedBy: ""
         )
         return compute(booking: probe, day: day, policy: policy)
-    }
-
-    /// The organisation policy in the script's field names. A mapping, not a rule.
-    static func canonicalPolicy(_ policy: OrgPayrollTimePolicy) -> CanonicalPayrollPolicy {
-        func weekend(_ day: OrgWeekendDayPayrollSettings, sameAsSaturday: Bool? = nil) -> CanonicalWeekendPayroll {
-            CanonicalWeekendPayroll(
-                allHoursAtMultiplierMode: day.allHoursAtMultiplierMode,
-                allHoursMultiplier: day.allHoursMultiplier,
-                definedWindowStart: day.customStandardStart,
-                definedWindowEnd: day.customStandardEnd,
-                countsAsStandardHours: day.countsAsHours,
-                outsideWindowMultiplier: day.outsideStandardWindowMultiplier,
-                sameAsSaturday: sameAsSaturday
-            )
-        }
-        return CanonicalPayrollPolicy(
-            standardDayStart: policy.standardDayStart,
-            standardDayEnd: policy.standardDayEnd,
-            unpaidBreakMinutes: policy.unpaidBreakMinutes,
-            standardPaidHours: policy.standardPaidHours,
-            breakWindowStart: policy.breakWindowStart,
-            breakWindowEnd: policy.breakWindowEnd,
-            weekdayOutsideStandardMultiplier: policy.weekdayOutsideStandardMultiplier,
-            saturday: weekend(policy.saturday),
-            sunday: weekend(policy.sunday, sameAsSaturday: policy.sundaySameAsSaturday),
-            breakPaid: policy.breakPaid
-        )
     }
 
     private static func segmentKind(_ raw: String) -> PayrollHoursSegment.Kind {

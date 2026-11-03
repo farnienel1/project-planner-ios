@@ -114,7 +114,9 @@ extension Booking {
                 return ("\(s)–\(e) · \(ScheduleCoverageFormat.hours(stdShow))h + \(equation)", true)
             }
             var t = "\(s)–\(e)"
-            if isBreakRemoved {
+            // RULEBOOK 1.19.0: "break removed" only on a day that takes an unpaid break off (`unpaidBreakAppliesOnDay`).
+            if isBreakRemoved,
+               CanonicalBusinessEngine.unpaidBreakAppliesOnDay(policy: policy, dayKey: CanonicalBusinessEngine.bookingDayKey(date)) {
                 t += " · break removed"
             }
             return (t, false)
