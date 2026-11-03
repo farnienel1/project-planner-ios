@@ -78,16 +78,17 @@ nonisolated enum OrganizationBillingMap {
 /// Words shown when `CanonicalBusinessEngine.hasAccess` is false. Same words for every role. App Store 3.1.1 /
 /// 3.1.3: no price, no renewal, no link to buy or renew outside the app.
 enum SubscriptionLapsedCopy {
+    /// Short label on the organisation switcher row.
     static let phrase = "subscription is not active"
-    static let headline = "Your organisation's subscription is not active."
-    static let superAdminDetail = "Contact your organisation's administrator."
-    static let otherRoleDetail = "Contact your organisation's administrator."
+    /// RULEBOOK 1.13.0 §19 `SUBSCRIPTION_LAPSED_MESSAGE`, shown to everyone.
+    static var headline: String { CanonicalBusinessEngine.subscriptionLapsedMessage }
 
-    static func detail(isSuperAdmin: Bool) -> String {
-        isSuperAdmin ? superAdminDetail : otherRoleDetail
+    /// `SUBSCRIPTION_LAPSED_ADMIN_NOTE` for admins, nothing for anyone else. Never a link or a price.
+    static func detail(isAdmin: Bool) -> String? {
+        isAdmin ? CanonicalBusinessEngine.subscriptionLapsedAdminNote : nil
     }
 
-    static func visibleText(isSuperAdmin: Bool) -> String {
-        "\(headline)\n\(detail(isSuperAdmin: isSuperAdmin))"
+    static func visibleText(isAdmin: Bool) -> String {
+        [headline, detail(isAdmin: isAdmin)].compactMap { $0 }.joined(separator: "\n")
     }
 }

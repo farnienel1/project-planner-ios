@@ -312,7 +312,10 @@ struct ProjectPlannerRootView: View {
             AccountDeactivatedView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
-        } else if firebaseBackend.currentOrganization?.subscriptionHasAccess == false {
+        } else if let organization = firebaseBackend.currentOrganization,
+                  organization.subscriptionAccess(viewer: userStore.currentUser) != .open {
+            // RULEBOOK 1.13.0 §19 `subscriptionAccess`: blocked for everyone; iOS has no billing screen, so an admin
+            // (`adminBillingOnly`) sees the same block with `SUBSCRIPTION_LAPSED_ADMIN_NOTE`.
             SubscriptionLapsedView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
