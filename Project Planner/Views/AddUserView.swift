@@ -252,11 +252,9 @@ struct AddUserView: View {
                 } else {
                     withAnimation {
                         if mode == .admin && currentStep == 1 {
+                            // Seeds only a new level; the line-manager picks were already reset by the account-type
+                            // card when the type changed (`AddUserLineManagerSelection`), so Next keeps them.
                             applyPermissionsForInvitedType()
-                            if invitedAccountType == .operative {
-                                selectedLineManagerUserIds.removeAll()
-                                hasNoLineManager = false
-                            }
                         }
                         currentStep += 1
                     }
@@ -335,11 +333,18 @@ struct AddUserView: View {
         let lockedToOperative = mode == .managerAddingOperative
         return Button {
             guard !lockedToOperative, invitedAccountType != type else { return }
+            let previousLevel = RulebookPermissionLevel(rawValue: invitedAccountType.rawValue) ?? .manager
             invitedAccountType = type
             applyPermissionsForInvitedType()
             resetAnnualLeaveInviteDefaults()
-            selectedLineManagerUserIds.removeAll()
-            hasNoLineManager = false
+            let lineManagers = AddUserLineManagerSelection.afterAccountTypeSelection(
+                previous: previousLevel,
+                next: RulebookPermissionLevel(rawValue: type.rawValue) ?? .manager,
+                lineManagerIds: selectedLineManagerUserIds,
+                hasNoLineManager: hasNoLineManager
+            )
+            selectedLineManagerUserIds = lineManagers.lineManagerIds
+            hasNoLineManager = lineManagers.hasNoLineManager
         } label: {
             HStack(spacing: 14) {
                 Text(icon)

@@ -152,4 +152,65 @@ final class SignOutAndAddUserPermissionTests: XCTestCase {
         let next = try XCTUnwrap(view.range(of: "private var permissionsDescriptionHeader: String {", range: step.upperBound..<view.endIndex))
         XCTAssertFalse(view[step.upperBound..<next.lowerBound].contains("applyPermissionsForInvitedType()"))
     }
+
+    // MARK: Add User: line managers survive step changes
+
+    private func invitee(_ level: RulebookPermissionLevel, lineManagers: Set<String>, hasNoLineManager: Bool) -> AppUser {
+        let role: UserRole = level == .admin ? .admin : (level == .operative ? .operative : .manager)
+        let seeded = AddUserPermissionSeeding.select(level: level, current: UserPermissions(), seededLevel: nil)
+        var user = AppUser(id: "invite-draft", email: "test-invite@example.test", organizationId: "TEST-org", role: role, permissions: seeded.permissions)
+        user.setLineManagerUserIds(Array(lineManagers).sorted())
+        user.hasNoLineManager = hasNoLineManager
+        return user
+    }
+
+    /// Owner report: Next on step 1 cleared an operative's chosen line managers every time, including after Back.
+    /// The picks now survive any step change and the same type; only a real account-type change clears them.
+    func testLineManagerPicksAreKeptUnlessTheAccountTypeChanges() {
+        for level in RulebookPermissionLevel.allCases {
+            let kept = AddUserLineManagerSelection.afterAccountTypeSelection(
+                previous: level, next: level, lineManagerIds: ["TEST-admin-1"], hasNoLineManager: false
+            )
+            XCTAssertEqual(kept.lineManagerIds, ["TEST-admin-1"], "\(level)")
+            XCTAssertFalse(kept.hasNoLineManager)
+        }
+        let keptNone = AddUserLineManagerSelection.afterAccountTypeSelection(
+            previous: .admin, next: .admin, lineManagerIds: [], hasNoLineManager: true
+        )
+        XCTAssertTrue(keptNone.hasNoLineManager)
+
+        let changed = AddUserLineManagerSelection.afterAccountTypeSelection(
+            previous: .admin, next: .operative, lineManagerIds: ["TEST-admin-1"], hasNoLineManager: true
+        )
+        XCTAssertEqual(changed.lineManagerIds, [])
+        XCTAssertFalse(changed.hasNoLineManager, "No line manager is admin-only; it never carries to another type")
+    }
+
+    /// `lineManagerRequiredError` still decides: a kept pick satisfies it for an operative; an operative or manager
+    /// with none is refused; only an admin may have none.
+    func testKeptLineManagersSatisfyTheRequiredRule() {
+        let admin = AppUser(id: "TEST-admin-1", email: "test-admin@example.test", organizationId: "TEST-org", role: .admin, permissions: UserPermissions(adminAccess: true))
+        let kept = AddUserLineManagerSelection.afterAccountTypeSelection(
+            previous: .operative, next: .operative, lineManagerIds: ["TEST-admin-1"], hasNoLineManager: false
+        )
+        let operative = invitee(.operative, lineManagers: kept.lineManagerIds, hasNoLineManager: kept.hasNoLineManager)
+        XCTAssertNil(AnnualLeaveApproval.lineManagerRequiredError(for: operative, users: [admin]))
+
+        for level in [RulebookPermissionLevel.operative, .manager] {
+            let none = invitee(level, lineManagers: [], hasNoLineManager: false)
+            XCTAssertNotNil(AnnualLeaveApproval.lineManagerRequiredError(for: none, users: [admin]), "\(level)")
+        }
+        let soloAdmin = invitee(.admin, lineManagers: [], hasNoLineManager: true)
+        XCTAssertNil(AnnualLeaveApproval.lineManagerRequiredError(for: soloAdmin, users: [admin]))
+    }
+
+    /// The Next button no longer clears line managers; only the account-type card does, through the helper.
+    func testAddUserNextDoesNotClearLineManagers() throws {
+        let view = try String(
+            contentsOf: repoRoot.appendingPathComponent("Project Planner/Views/AddUserView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(view.contains("selectedLineManagerUserIds.removeAll()"))
+        XCTAssertTrue(view.contains("AddUserLineManagerSelection.afterAccountTypeSelection("))
+    }
 }
