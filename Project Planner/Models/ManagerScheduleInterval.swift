@@ -23,15 +23,15 @@ enum ManagerScheduleInterval {
         a.0 < b.1 && b.0 < a.1
     }
 
-    /// Interval used for clash detection: the canonical script's `slotInterval` with the stored
-    /// slot and stored clock times. Clock times win; the named slot applies only when the script
-    /// rejects the clock pair. The day input is always the weekday standard day and break.
+    /// A manager booking's clock interval (labels, sort order, calendar export): the canonical script's `slotInterval`
+    /// with the stored slot and clock times, the named slot read on the booking's own day (RULEBOOK 1.23.1
+    /// `CanonicalBusinessEngine.bookingStandardDayOn`).
     static func clashInterval(for booking: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> (Int, Int)? {
         CanonicalBusinessEngine.slotInterval(
             timeSlot: booking.timeSlot.rawValue,
             workStartTime: booking.workStartTime,
             workEndTime: booking.workEndTime,
-            day: CanonicalStandardDayInput(policy: policy)
+            day: CanonicalBusinessEngine.bookingStandardDayOn(policy: policy, dayKey: OrganizationRulebookContext.dayKey(booking.date))
         )?.tuple
     }
 

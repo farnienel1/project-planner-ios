@@ -507,3 +507,28 @@ extension RulebookRosterLists {
         }
     }
 }
+
+// MARK: - A named slot on its own day (§5, §8, 1.23.1)
+
+extension CanonicalBusinessEngine {
+    nonisolated private static let standardDayOnMemo = RulebookAnswerMemo<String, CanonicalStandardDayInput>(limit: 512)
+
+    /// RULEBOOK 1.23.1 `bookingStandardDayOn(day, dayKey)`: the standard day a booking's named slot (Full day, AM, PM) is
+    /// measured against on `dayKey` — the working hours in effect that day (`bookingDayInput`: the organisation's
+    /// state, else `policy`), and on a Saturday or Sunday that day's own Full day window and lunch break. Memoised per
+    /// day and policy; the weekday policy only when the script did not answer.
+    nonisolated static func bookingStandardDayOn(policy: OrgPayrollTimePolicy, dayKey: String) -> CanonicalStandardDayInput {
+        let source = OrganizationRulebookContext.payrollPolicyDocumentKey.map { "state:\($0)" } ?? "policy:\(policy.hashValue)"
+        return standardDayOnMemo.value(for: "\(source)|\(dayKey)") {
+            guard let row = callJSON("bookingStandardDayOn", arguments: [bookingDayInput(policy: policy), dayKey]) as? [String: Any] else {
+                return nil
+            }
+            return CanonicalStandardDayInput(
+                standardDayStart: row["standardDayStart"] as? String,
+                standardDayEnd: row["standardDayEnd"] as? String,
+                breakWindowStart: row["breakWindowStart"] as? String,
+                breakWindowEnd: row["breakWindowEnd"] as? String
+            )
+        } ?? CanonicalStandardDayInput(policy: policy)
+    }
+}

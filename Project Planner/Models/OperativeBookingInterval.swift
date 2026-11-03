@@ -8,17 +8,17 @@
 import Foundation
 
 enum OperativeBookingInterval {
-    /// Clock interval for clash detection, in minutes from midnight: the canonical script's
-    /// `slotInterval` with the stored slot and stored clock times. Clock times win; the named slot
-    /// applies only when the script rejects the clock pair. The day input is always the weekday
-    /// standard day and break, on every day of the week. A finish before the start crosses midnight (RULEBOOK 1.13.0
-    /// Q5): the script runs it past 24:00; the clock times are passed unchanged.
+    /// Clock interval of a booking (labels, sort order, calendar export), in minutes from midnight: the canonical
+    /// script's `slotInterval` with the stored slot and stored clock times. Clock times win; the named slot applies
+    /// only when the script rejects the clock pair. RULEBOOK 1.23.1: the named slot is read on the booking's own day
+    /// (`CanonicalBusinessEngine.bookingStandardDayOn`: the hours in effect that day; a Saturday or Sunday its own
+    /// window). A finish before the start crosses midnight (1.13.0 Q5): the script runs it past 24:00.
     static func clashInterval(for booking: Booking, policy: OrgPayrollTimePolicy) -> (Int, Int)? {
         CanonicalBusinessEngine.slotInterval(
             timeSlot: booking.timeSlot.rawValue,
             workStartTime: booking.workStartTime,
             workEndTime: booking.workEndTime,
-            day: CanonicalStandardDayInput(policy: policy)
+            day: CanonicalBusinessEngine.bookingStandardDayOn(policy: policy, dayKey: OrganizationRulebookContext.dayKey(booking.date))
         )?.tuple
     }
 
