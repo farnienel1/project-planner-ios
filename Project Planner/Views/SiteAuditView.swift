@@ -20,6 +20,18 @@ enum SiteAuditProjectFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+extension SiteAuditProjectFilter {
+    /// The job-list chip this filter is (RULEBOOK §21 `worksInTab`; nil = All).
+    var worksChip: ProjectStatus? {
+        switch self {
+        case .all: return nil
+        case .active: return .active
+        case .upcoming: return .upcoming
+        case .completed: return .completed
+        }
+    }
+}
+
 struct SiteAuditItem: Identifiable, Codable, Hashable {
     let id: UUID
     var title: String
@@ -136,7 +148,7 @@ private struct SiteAuditProjectAccess {
             return []
         }
         return WorkAccess.visibleWorks(
-            from: uniqueWorks(projectStore.projects),
+            from: projectStore.projects + projectStore.smallWorks,
             catalogue: .all,
             userStore: userStore,
             operativeStore: operativeStore,
@@ -347,12 +359,9 @@ struct SiteAuditProjectsBrowserView: View {
 
     private var filteredProjects: [Project] {
         let scoped = mergedWorksForSiteAudit.filter { kind.includes($0) }
-        switch selectedFilter {
-        case .all: return scoped.sorted { $0.jobNumber.localizedStandardCompare($1.jobNumber) == .orderedAscending }
-        case .active: return scoped.filter { $0.status == .active }.sorted { $0.jobNumber.localizedStandardCompare($1.jobNumber) == .orderedAscending }
-        case .upcoming: return scoped.filter { $0.status == .upcoming }.sorted { $0.jobNumber.localizedStandardCompare($1.jobNumber) == .orderedAscending }
-        case .completed: return scoped.filter { $0.status == .completed }.sorted { $0.jobNumber.localizedStandardCompare($1.jobNumber) == .orderedAscending }
-        }
+        // RULEBOOK 1.21.0 §21 `worksInTab`: an inactive job is under Completed; All is every job.
+        return WorksListStatusCounts.jobs(scoped, chip: selectedFilter.worksChip)
+            .sorted { $0.jobNumber.localizedStandardCompare($1.jobNumber) == .orderedAscending }
     }
 
     private var emptyTitle: String {
@@ -1507,17 +1516,8 @@ struct SiteAuditProjectPickerView: View {
     }
 
     private var filteredProjects: [Project] {
-        let base: [Project]
-        switch selectedFilter {
-        case .all:
-            base = scopedJobs
-        case .active:
-            base = scopedJobs.filter { $0.status == .active }
-        case .upcoming:
-            base = scopedJobs.filter { $0.status == .upcoming }
-        case .completed:
-            base = scopedJobs.filter { $0.status == .completed }
-        }
+        // RULEBOOK 1.21.0 §21 `worksInTab`: an inactive job is under Completed; All is every job.
+        let base = WorksListStatusCounts.jobs(scopedJobs, chip: selectedFilter.worksChip)
         var seen = Set<UUID>()
         return base
             .filter { seen.insert($0.id).inserted }

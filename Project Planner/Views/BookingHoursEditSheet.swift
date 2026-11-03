@@ -53,6 +53,9 @@ struct BookingEditHoursBreakdown {
     let overtimeMultiplier: Double
     let breakDeductionHours: Double
     let showsBreakLine: Bool
+    /// RULEBOOK 1.20.4 `multipliedHoursText` over `payrollMultipliedHours`: "2h × 1.5 = 3h", or with an unpaid break in
+    /// the multiplied hours "6.5h × 2 − 0.5h break = 12.5h". Empty when no hours are at a multiplier.
+    let overtimeText: String
 
     static func compute(
         booking: Booking,
@@ -83,7 +86,8 @@ struct BookingEditHoursBreakdown {
             overtimeHours: ot,
             overtimeMultiplier: otMult,
             breakDeductionHours: breakH,
-            showsBreakLine: breakH > 0.05
+            showsBreakLine: breakH > 0.05,
+            overtimeText: result.multipliedHours?.text ?? ""
         )
     }
 }
@@ -1147,7 +1151,7 @@ struct OperativeCustomHoursSheet: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                     Spacer()
-                    Text("\(ScheduleCoverageFormat.overtimeEquation(rawHours: bd.overtimeHours, multiplier: bd.overtimeMultiplier))h")
+                    Text(bd.overtimeText)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
                 }

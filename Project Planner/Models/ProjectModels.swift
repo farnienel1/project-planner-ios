@@ -222,17 +222,12 @@ struct Project: Identifiable, Codable, Hashable {
     /// matching web (`completes today` is still live work).
     /// `workStatusOn` today in the organisation's zone (web uses the same function).
     var status: ProjectStatus {
+        // RULEBOOK 1.21.0 §21: `jobWorkStatus` on the organisation-zone day; no device-calendar fallback. When the
+        // script did not answer (it has not loaded), an inactive job is still inactive and any other reads active.
         if let canonical = ProjectStatusRulebook.status(isLive: isLive, start: startDate, end: endDate, on: Date()) {
             return canonical
         }
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let start = cal.startOfDay(for: startDate)
-        let end = cal.startOfDay(for: endDate)
-        if !isLive { return .inactive }
-        if today < start { return .upcoming }
-        if today > end { return .completed }
-        return .active
+        return isLive ? .active : .inactive
     }
     
     enum CodingKeys: String, CodingKey {

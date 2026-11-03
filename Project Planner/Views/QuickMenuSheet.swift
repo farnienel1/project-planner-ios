@@ -142,7 +142,9 @@ struct QuickMenuSheet: View {
 
     @ViewBuilder
     private func catalogRowView(spec: MainMenuRowSpec) -> some View {
-        let subtitle = MainMenuCatalog.subtitle(for: spec.id, projectStore: projectStore, operativeStore: operativeStore)
+        let subtitle = MainMenuCatalog.subtitle(
+            for: spec.id, projectStore: projectStore, operativeStore: operativeStore, viewer: userStore.displayJobAccessViewer
+        )
         let badge = MainMenuCatalog.toolBadge(for: spec.id, operativeStore: operativeStore)
         let rowLabel = PPMenuRowLabel(
             title: MainMenuCatalog.displayTitle(for: spec, userStore: userStore),

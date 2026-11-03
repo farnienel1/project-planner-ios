@@ -986,10 +986,6 @@ class ProjectStore: ObservableObject {
     
     // MARK: - Computed Properties
     
-    var liveProjects: [Project] {
-        projects.filter { $0.isLive && $0.jobType != .smallWorks }
-    }
-    
     /// Every small works job, live or not — what web's Small works list shows (`loadSmallWorks` keeps inactive jobs;
     /// the list files them under Completed). It used to keep `isLive` jobs only, so a small works job switched off
     /// on web vanished from iOS (Projects never had that filter). Rows come from `projects`, plus a small works

@@ -17,9 +17,10 @@ enum WorkAccess {
         }
     }
 
-    /// RULEBOOK 1.10.0 §16 (`canSeeJob`): admins see every job; managers with that kind's Projects / Small works
-    /// toggle see every job of the kind; other managers only the jobs they manage. A job explicitly hidden from a
-    /// manager stays off that manager's list. Operatives still see only jobs they are booked onto.
+    /// RULEBOOK 1.21.0 §21: the jobs of `catalogue` (`worksListMembership`: the collection decides, inactive included,
+    /// once by id) that this viewer sees (`visibleJobs`: admins every job; managers by `canSeeJob` less their hide list;
+    /// operatives the jobs of their bookings, tasks and deadlines less their hide list). The viewer is matched by
+    /// account id and email, never by name. No Swift visibility rule.
     static func visibleWorks(
         from projects: [Project],
         catalogue: JobCatalogue,
@@ -30,36 +31,54 @@ enum WorkAccess {
         taskStore: ProjectTaskStore?,
         deadlineAssignedProjectIds: Set<UUID> = []
     ) -> [Project] {
-        let scoped = projects.filter { catalogue.includes($0) }
-        let user = userStore.displayUser ?? userStore.currentUser
+        let members: [Project]
+        switch catalogue {
+        case .projects: members = CanonicalBusinessEngine.worksListMembership(projects, kind: .projects)
+        case .smallWorks: members = CanonicalBusinessEngine.worksListMembership(projects, kind: .smallWorks)
+        case .all:
+            members = CanonicalBusinessEngine.worksListMembership(projects, kind: .projects)
+                + CanonicalBusinessEngine.worksListMembership(projects, kind: .smallWorks)
+        }
+        let context = WorksListContextBuilder.context(
+            operatives: operativeStore.allOperatives,
+            bookings: bookingStore.bookings,
+            managerSiteBookings: managerBookings,
+            tasks: taskStore?.tasks ?? [],
+            deadlineJobIds: projects.filter { deadlineAssignedProjectIds.contains($0.id) }.map(\.documentId)
+        )
+        return CanonicalBusinessEngine.visibleJobs(members, viewer: userStore.displayJobAccessViewer, context: context)
+    }
 
-        if userStore.isOperativeMode() {
-            guard let user else { return [] }
-            let assignedIds = operativeVisibleProjectIds(
-                currentUser: user,
-                operative: operativeMatching(email: user.email, in: operativeStore.allOperatives),
-                operatives: operativeStore.allOperatives,
-                managers: operativeStore.allManagers,
-                bookingStore: bookingStore,
-                taskStore: taskStore,
-                deadlineAssignedProjectIds: deadlineAssignedProjectIds
-            )
-            return scoped.filter { assignedIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(user.id) }
+    /// RULEBOOK 1.21.0 / 1.21.1 §21 `bookableJobs`: the jobs of `catalogue` this viewer may book onto — visible, not
+    /// inactive, and `canWriteBooking` for `bookingCollection` (`bookings`, or `managerSiteBookings` for My Schedule).
+    /// The job's start and end dates are never checked (owner decision): a job past its end date or with no end date
+    /// stays bookable on any day.
+    static func bookableWorks(
+        from projects: [Project],
+        catalogue: JobCatalogue,
+        userStore: UserStore,
+        operativeStore: OperativeStore,
+        bookingStore: BookingStore,
+        managerBookings: [ManagerSiteBooking],
+        taskStore: ProjectTaskStore?,
+        bookingCollection: String = "bookings"
+    ) -> [Project] {
+        let members: [Project]
+        switch catalogue {
+        case .projects: members = CanonicalBusinessEngine.worksListMembership(projects, kind: .projects)
+        case .smallWorks: members = CanonicalBusinessEngine.worksListMembership(projects, kind: .smallWorks)
+        case .all:
+            members = CanonicalBusinessEngine.worksListMembership(projects, kind: .projects)
+                + CanonicalBusinessEngine.worksListMembership(projects, kind: .smallWorks)
         }
-
-        guard let user else { return [] }
-        // RULEBOOK 1.10.0 §16: `canSeeJob(viewer, job, managers, kind)` — admins every job; a manager with that kind's
-        // Projects / Small works toggle every job of the kind; other managers only the jobs they manage.
-        let viewer = userStore.jobAccessViewer(for: user)
-        let managers = operativeStore.allManagers.map { ["id": $0.firestoreDocumentId, "email": $0.email] as [String: Any] }
-        let visible = scoped.filter {
-            CanonicalBusinessEngine.canSeeJob(viewer, job: $0.jobAccessFields, managers: managers, kind: $0.jobKind)
-        }
-        if user.isExcludedFromManagerVisibilityHiding {
-            return visible
-        }
-        // The per-job "View" hide list still narrows a manager's list (it never widens what `canSeeJob` allows).
-        return visible.filter { !$0.hiddenManagerUserIds.contains(user.id) }
+        let context = WorksListContextBuilder.context(
+            operatives: operativeStore.allOperatives,
+            bookings: bookingStore.bookings,
+            managerSiteBookings: managerBookings,
+            tasks: taskStore?.tasks ?? [],
+            bookingCollection: bookingCollection
+        )
+        return CanonicalBusinessEngine.bookableJobs(members, viewer: userStore.displayJobAccessViewer, context: context)
     }
 
     /// Variations: every admin and every manager, on every job. Assignment does not hide a job.
@@ -122,52 +141,25 @@ enum WorkAccess {
         return false
     }
 
-    /// Home “active projects”: live jobs whose dates include today, including the last day.
-    /// Admins see every such job. Managers see every such job except ones hidden from them.
-    /// Operatives see only jobs they are booked onto.
+    /// Home "active projects" — RULEBOOK 1.21.0 §21 `activeJobsCount(jobs, viewer, context, now, timeZone)`: projects
+    /// and small works together that the viewer sees (`visibleJobs`, hide lists applied) and that are active today in
+    /// the organisation zone — the jobs the lists show under Active. Manager site bookings count only for an account
+    /// with no staff role (before 1.21.0 iOS also counted an operative's manager site bookings).
     static func homeActiveProjectCount(
         projects: [Project],
-        user: AppUser?,
-        isOperativeMode: Bool,
-        seesEveryJob: Bool,
-        isManager: Bool,
+        viewer: JobAccessViewer?,
         operatives: [Operative],
         bookings: [Booking],
         managerBookings: [ManagerSiteBooking],
-        canSee: ((Project) -> Bool)? = nil
+        tasks: [ProjectTask]
     ) -> Int {
-        let active = projects.filter { $0.status == .active }
-        guard let user else { return 0 }
-        if isOperativeMode {
-            let operative = signedInOperative(
-                email: user.email,
-                firstName: user.firstName,
-                surname: user.surname,
-                operatives: operatives
-            )
-            var bookedIds = Set<UUID>()
-            var bookingIds = labourBookingIds(for: user, operatives: operatives)
-            if let operative { bookingIds.insert(operative.id) }
-            for booking in bookings where bookingIds.contains(booking.operativeId) && booking.occupiesDay {
-                bookedIds.insert(booking.projectId)
-            }
-            let accountIds = managerBookingUserIds(for: user)
-            for booking in managerBookings where accountIds.contains(booking.userId) {
-                guard booking.locationType == .project || booking.locationType == .smallWork,
-                      let locationId = booking.locationId else { continue }
-                bookedIds.insert(locationId)
-            }
-            return active.filter {
-                bookedIds.contains($0.id) && !$0.hiddenOperativeUserIds.contains(user.id)
-            }.count
-        }
-        if seesEveryJob {
-            return active.count
-        }
-        _ = isManager
-        // RULEBOOK 1.10.0 §16: `canSeeJob` (the caller passes only the jobs the viewer may see when it has a viewer).
-        let visible = canSee.map { rule in active.filter(rule) } ?? active
-        return visible.filter { !$0.hiddenManagerUserIds.contains(user.id) }.count
+        let context = WorksListContextBuilder.context(
+            operatives: operatives,
+            bookings: bookings,
+            managerSiteBookings: managerBookings,
+            tasks: tasks
+        )
+        return CanonicalBusinessEngine.activeJobsCount(projects, viewer: viewer, context: context)
     }
 
     /// Roster row for the signed-in account, matched by email only (§10: by account, never by name).
@@ -245,34 +237,6 @@ enum WorkAccess {
 
     private static func operativeMatching(email: String, in operatives: [Operative]) -> Operative? {
         signedInOperative(email: email, firstName: nil, surname: nil, operatives: operatives)
-    }
-
-    static func operativeVisibleProjectIds(
-        currentUser: AppUser?,
-        operative: Operative?,
-        operatives: [Operative],
-        managers: [Manager] = [],
-        bookingStore: BookingStore,
-        taskStore: ProjectTaskStore?,
-        deadlineAssignedProjectIds: Set<UUID>
-    ) -> Set<UUID> {
-        var ids = Set<UUID>()
-        // A person with no catalogue row still sees jobs booked under their uid or a former invite id.
-        var bookingIds = currentUser.map { labourBookingIds(for: $0, operatives: operatives) } ?? []
-        if let operative { bookingIds.insert(operative.id) }
-        for booking in bookingStore.bookings where bookingIds.contains(booking.operativeId) && booking.occupiesDay {
-            ids.insert(booking.projectId)
-        }
-        if let taskStore {
-            ids.formUnion(taskAssignedProjectIds(
-                currentUser: currentUser,
-                taskStore: taskStore,
-                operatives: operatives,
-                managers: managers
-            ))
-        }
-        ids.formUnion(deadlineAssignedProjectIds)
-        return ids
     }
 
     static func taskAssignedProjectIds(

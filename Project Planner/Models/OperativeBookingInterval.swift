@@ -195,11 +195,6 @@ enum ScheduleCoverageFormat {
         return String(format: "%.1f", m)
     }
 
-    /// Raw overtime hours × multiplier = paid equivalent, e.g. `2 × 1.5 = 3`.
-    static func overtimeEquation(rawHours: Double, multiplier: Double, paidHours: Double? = nil) -> String {
-        let paid = paidHours ?? (rawHours * multiplier)
-        return "\(hours(rawHours)) × \(Self.multiplier(multiplier)) = \(hours(paid))"
-    }
 }
 
 extension OperativeDayBookingChoice {

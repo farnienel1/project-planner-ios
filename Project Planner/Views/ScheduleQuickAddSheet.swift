@@ -240,7 +240,7 @@ struct ScheduleQuickAddSheet: View {
                     if detail.overtimeHours > 0.05 {
                         breakdownLine(
                             "Overtime",
-                            value: "\(ScheduleCoverageFormat.overtimeEquation(rawHours: detail.overtimeHours, multiplier: detail.overtimeMultiplier))h",
+                            value: detail.overtimeText,
                             color: ProjectWorksRevampColors.upcomingAmber
                         )
                     }

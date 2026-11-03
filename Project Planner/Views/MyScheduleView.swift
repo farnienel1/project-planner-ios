@@ -769,29 +769,33 @@ struct ManagerScheduleContentView: View {
     }
 
     private var liveProjects: [Project] {
-        WorkAccess.visibleWorks(
-            from: projectStore.projects,
+        // RULEBOOK 1.21.1 §21 `bookableJobs` for a manager site booking: visible, not inactive and writable; the
+        // job's dates are never checked (a job past its end date stays bookable).
+        WorkAccess.bookableWorks(
+            from: projectStore.projects + projectStore.smallWorks,
             catalogue: .projects,
             userStore: userStore,
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             managerBookings: managerScheduleStore.managerSiteBookings,
             taskStore: nil,
-            deadlineAssignedProjectIds: []
-        ).filter(\.isLive)
+            bookingCollection: "managerSiteBookings"
+        )
     }
 
     private var liveSmallWorks: [Project] {
-        WorkAccess.visibleWorks(
-            from: projectStore.projects,
+        // RULEBOOK 1.21.1 §21 `bookableJobs` for a manager site booking: visible, not inactive and writable; the
+        // job's dates are never checked (a job past its end date stays bookable).
+        WorkAccess.bookableWorks(
+            from: projectStore.projects + projectStore.smallWorks,
             catalogue: .smallWorks,
             userStore: userStore,
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             managerBookings: managerScheduleStore.managerSiteBookings,
             taskStore: nil,
-            deadlineAssignedProjectIds: []
-        ).filter(\.isLive)
+            bookingCollection: "managerSiteBookings"
+        )
     }
 
     private var myManagerId: UUID? {
