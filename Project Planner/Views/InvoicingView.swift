@@ -1834,34 +1834,20 @@ private struct MyTimesheetView: View {
         invoiceRows.count
     }
 
-    private var hoursTotal: Double {
-        invoiceRows.reduce(0) { $0 + $1.paidHours }
-    }
-
-    private var workAmount: Double {
-        invoiceRows.reduce(0) { $0 + $1.amount }
-    }
-
-    private var grandTotal: Double {
-        TimesheetDraftAdjustments.grandTotal(
-            lines: invoiceRows.map(\.payrollLine),
-            draft: draft,
-            managerHasSigned: managerHasSigned
-        )
-    }
-
     private var managerHasSigned: Bool { draft.managerSignedAt != nil }
 
-    private var effectiveWorkAmount: Double {
-        TimesheetDraftAdjustments.payrollTotal(
-            lines: invoiceRows.map(\.payrollLine),
-            draft: draft,
-            managerHasSigned: managerHasSigned
-        )
+    /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals`: this sheet's totals as the invoice will have them
+    /// — review decisions apply once the line manager has signed (web `draftTimesheetTotals`).
+    private var ownerTotals: RulebookTimesheetTotals? {
+        TimesheetTotalsSource.totals(lines: payrollLines, draft: draft, decided: managerHasSigned, subject: userStore.displayUser, period: week.start...week.end)
     }
 
-    private var effectiveExtrasTotal: Double {
-        draft.effectiveAdditionalTotal(managerHasSigned: managerHasSigned)
+    /// The same sheet at the amounts the person entered (`timesheetTotals` in `raw` mode, no labour reviews), for the
+    /// "before line manager adjustments" figures and the sign sheet.
+    private var submittedTotals: RulebookTimesheetTotals? {
+        var unreviewed = draft
+        unreviewed.payrollLineReviews = [:]
+        return TimesheetTotalsSource.totals(lines: payrollLines, draft: unreviewed, decided: false, subject: userStore.displayUser, period: week.start...week.end)
     }
 
     private var weekInvoicePeriod: InvoicePeriodOption {
@@ -1875,6 +1861,10 @@ private struct MyTimesheetView: View {
     }
 
     private var invoiceRows: [InvoiceLineItem] {
+        payrollLines.map { InvoiceLineItem(payrollLine: $0) }
+    }
+
+    private var payrollLines: [TimesheetPayrollLineItem] {
         guard let currentUser = userStore.displayUser else { return [] }
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
@@ -1892,7 +1882,7 @@ private struct MyTimesheetView: View {
             scheduleOptions: scheduleOptions,
             relatedUsers: userStore.organizationUsers
         )
-        return summary.lineItems.map { InvoiceLineItem(payrollLine: $0) }
+        return summary.lineItems
     }
 
     /// Approved annual leave in this period (`timesheetLeaveLines`): information rows only.
@@ -1996,32 +1986,35 @@ private struct MyTimesheetView: View {
                         if !invoiceRows.isEmpty { Divider().padding(.horizontal, 14) }
                         TimesheetLeaveInfoRows(lines: leaveLines)
                     }
+                    // RULEBOOK 1.22.0 §8: every figure is `CanonicalBusinessEngine.timesheetTotals` (the invoice's rows).
+                    let totals = ownerTotals
+                    let submitted = submittedTotals
                     HStack {
                         Text("Hours subtotal")
                             .font(.headline)
                         Spacer()
-                        Text(OrgMoney.format(effectiveWorkAmount))
+                        Text(totals.map { OrgMoney.format($0.labour) } ?? "—")
                             .font(.headline)
                     }
                     .padding(.horizontal, 14)
                     .padding(.top, 10)
-                    if effectiveExtrasTotal > 0 || draft.additionalTotal > 0 {
+                    if let totals, totals.extras > 0 || totals.submittedExtras > 0 {
                         HStack {
                             Text(managerHasSigned ? "Approved extras" : "Extras (price work & expenses)")
                                 .font(.subheadline)
                             Spacer()
-                            if managerHasSigned && effectiveExtrasTotal != draft.additionalTotal {
+                            if managerHasSigned && abs(totals.extras - totals.submittedExtras) >= 0.005 {
                                 VStack(alignment: .trailing, spacing: 2) {
-                                    Text(OrgMoney.format(draft.additionalTotal))
+                                    Text(OrgMoney.format(totals.submittedExtras))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                         .strikethrough()
-                                    Text(OrgMoney.format(effectiveExtrasTotal))
+                                    Text(OrgMoney.format(totals.extras))
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.green)
                                 }
                             } else {
-                                Text(OrgMoney.format(managerHasSigned ? effectiveExtrasTotal : draft.additionalTotal))
+                                Text(OrgMoney.format(totals.extras))
                                     .font(.subheadline.weight(.semibold))
                             }
                         }
@@ -2033,9 +2026,9 @@ private struct MyTimesheetView: View {
                         Text("Total")
                             .font(.headline)
                         Spacer()
-                        Text(OrgMoney.format(grandTotal))
+                        Text(totals.map { OrgMoney.format($0.total) } ?? "—")
                             .font(.title3.weight(.bold))
-                        if managerHasSigned && grandTotal != (workAmount + draft.additionalTotal) {
+                        if managerHasSigned, let totals, let submitted, abs(totals.total - submitted.total) >= 0.005 {
                             Text("Includes line manager adjustments")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
@@ -2167,9 +2160,10 @@ private struct MyTimesheetView: View {
                     NavigationLink {
                         SignTimesheetView(
                             week: week,
-                            hoursAmount: workAmount,
-                            priceWorkAmount: draft.priceWorkEntries.reduce(0) { $0 + $1.amount },
-                            expensesAmount: draft.expenseEntries.reduce(0) { $0 + $1.amount },
+                            // `CanonicalBusinessEngine.timesheetTotals` at the amounts entered (raw, before review).
+                            hoursAmount: submittedTotals?.labour ?? 0,
+                            priceWorkAmount: submittedTotals?.priceWork ?? 0,
+                            expensesAmount: submittedTotals?.expenses ?? 0,
                             signerName: userStore.displayUser?.fullName.isEmpty == false
                                 ? (userStore.displayUser?.fullName ?? "Operative")
                                 : (userStore.displayUser?.email ?? "Operative"),
@@ -3035,7 +3029,8 @@ private struct PreviousTimesheetsView: View {
 
     @ViewBuilder
     private func summaryCard(_ run: PreviousTimesheetRun) -> some View {
-        let summary = bookingSummary(for: run.week)
+        // RULEBOOK 1.22.0 §8: `CanonicalBusinessEngine.timesheetTotals` — the summary total is the invoice total.
+        let summary = bookingSummary(for: run.week, draft: run.draft)
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(run.isCompleted ? "Completed" : "Sign Off Pending")
@@ -3050,12 +3045,12 @@ private struct PreviousTimesheetsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            row("Hours", "\(formatHours(summary.hours))h")
-            row("Overtime", "\(formatHours(summary.overtimeHours))h")
-            row("Price work", OrgMoney.format(run.draft.priceWorkEntries.reduce(0) { $0 + $1.amount }))
-            row("Expenses", OrgMoney.format(run.draft.expenseEntries.reduce(0) { $0 + $1.amount }))
+            row("Hours", summary.map { "\(formatHours($0.hours))h" } ?? "—")
+            row("Overtime", summary.map { "\(formatHours($0.overtimeHours))h" } ?? "—")
+            row("Price work", summary.map { OrgMoney.format($0.priceWork) } ?? "—")
+            row("Expenses", summary.map { OrgMoney.format($0.expenses) } ?? "—")
             Divider()
-            row("Summary total", OrgMoney.format(summary.baseAmount + summary.overtimeAmount + run.draft.priceWorkEntries.reduce(0) { $0 + $1.amount } + run.draft.expenseEntries.reduce(0) { $0 + $1.amount }))
+            row("Summary total", summary.map { OrgMoney.format($0.total) } ?? "—")
         }
         .padding(14)
         .background(Color(.systemBackground))
@@ -3165,8 +3160,9 @@ private struct PreviousTimesheetsView: View {
         }
     }
 
-    private func bookingSummary(for week: WeekRange) -> (hours: Double, overtimeHours: Double, baseAmount: Double, overtimeAmount: Double) {
-        guard let currentUser = userStore.displayUser else { return (0, 0, 0, 0) }
+    /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals` for one past run: decided, as the export invoice.
+    private func bookingSummary(for week: WeekRange, draft: TimesheetDraft) -> RulebookTimesheetTotals? {
+        guard let currentUser = userStore.displayUser else { return nil }
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
         let summary = TimesheetPayrollCollector.collect(
@@ -3183,7 +3179,7 @@ private struct PreviousTimesheetsView: View {
             scheduleOptions: scheduleOptions,
             relatedUsers: userStore.organizationUsers
         )
-        return (summary.totalHours, summary.overtimeHours, summary.baseAmount, summary.overtimeAmount)
+        return TimesheetTotalsSource.totals(lines: summary.lineItems, draft: draft, decided: true, subject: currentUser, period: week.start...week.end)
     }
 
     private func formatHours(_ value: Double) -> String {
@@ -3448,7 +3444,7 @@ private struct OperativeTimesheetsView: View {
                                         .foregroundStyle(.primary)
                                     let draft = TimesheetDraftStore.load(userId: row.user.id, weekStart: row.week.start)
                                     let summary = operativeSummary(for: row.user, draft: draft, week: row.week)
-                                    Text("\(row.week.title) · Hrs \(formatHours(summary.hours)) · OT \(formatHours(summary.overtimeHours)) · PW \(OrgMoney.format(summary.priceWork)) · Exp \(OrgMoney.format(summary.expenses))")
+                                    Text(summary.map { "\(row.week.title) · Hrs \(formatHours($0.hours)) · OT \(formatHours($0.overtimeHours)) · PW \(OrgMoney.format($0.priceWork)) · Exp \(OrgMoney.format($0.expenses))" } ?? row.week.title)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     if isAdminViewer {
@@ -3497,7 +3493,7 @@ private struct OperativeTimesheetsView: View {
                                         .foregroundStyle(.primary)
                                     let draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start)
                                     let summary = operativeSummary(for: operative, draft: draft, week: week)
-                                    Text("\(week.title) · Hrs \(formatHours(summary.hours)) · OT \(formatHours(summary.overtimeHours)) · PW \(OrgMoney.format(summary.priceWork)) · Exp \(OrgMoney.format(summary.expenses))")
+                                    Text(summary.map { "\(week.title) · Hrs \(formatHours($0.hours)) · OT \(formatHours($0.overtimeHours)) · PW \(OrgMoney.format($0.priceWork)) · Exp \(OrgMoney.format($0.expenses))" } ?? week.title)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     if isAdminViewer {
@@ -4051,7 +4047,9 @@ private struct OperativeTimesheetsView: View {
             .sorted(by: { $0.fullName < $1.fullName })
     }
 
-    private func operativeSummary(for user: AppUser, draft: TimesheetDraft, week reviewWeek: WeekRange? = nil) -> (hours: Double, overtimeHours: Double, priceWork: Double, expenses: Double) {
+    /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals` for a list row: decided, as the export invoice
+    /// (a declined expense never counts). Nil when the script did not answer.
+    private func operativeSummary(for user: AppUser, draft: TimesheetDraft, week reviewWeek: WeekRange? = nil) -> RulebookTimesheetTotals? {
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
         let range = reviewWeek ?? week
@@ -4069,12 +4067,7 @@ private struct OperativeTimesheetsView: View {
             scheduleOptions: scheduleOptions,
             relatedUsers: userStore.organizationUsers
         )
-        return (
-            summary.totalHours,
-            summary.overtimeHours,
-            draft.priceWorkEntries.reduce(0) { $0 + $1.amount },
-            draft.expenseEntries.reduce(0) { $0 + $1.amount }
-        )
+        return TimesheetTotalsSource.totals(lines: summary.lineItems, draft: draft, decided: true, subject: user, period: range.start...range.end)
     }
 
     private func formatHours(_ value: Double) -> String {
@@ -4174,12 +4167,16 @@ private struct OperativeTimesheetReviewView: View {
         TimesheetApprovalPolicy.recordedSignatureDate(draft.managerSignedAt) != nil
     }
 
-    private var effectiveGrandTotal: Double {
-        TimesheetDraftAdjustments.grandTotal(
+    /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals`: decided once signed or while this viewer reviews
+    /// it; a reviewer before signing sees their own labour reviews and entry decisions (web `draftTimesheetTotals`).
+    private var reviewTotals: RulebookTimesheetTotals? {
+        TimesheetTotalsSource.totals(
             lines: payrollSummary.lineItems,
             draft: draft,
-            managerHasSigned: managerHasSigned,
-            applyLiveReview: canManagerReview
+            decided: managerHasSigned || canManagerReview,
+            reviewing: canManagerReview && !managerHasSigned,
+            subject: operative,
+            period: week.start...week.end
         )
     }
 
@@ -4292,29 +4289,16 @@ private struct OperativeTimesheetReviewView: View {
                     .foregroundStyle(.secondary)
             }
             Divider()
+            let totals = reviewTotals
             rowLine(
-                title: "Hours · \(hoursSummary.shifts) shifts (\(formatHours(hoursSummary.hours))h)",
-                amount: normalHoursTotal
+                title: "Hours · \(shiftCount) shifts (\(formatHours(totals?.hours ?? 0))h)",
+                amount: totals?.standardLabour ?? 0
             )
-            rowLine(title: "Overtime", amount: overtimeTotal)
-            rowLine(
-                title: "Price work · \(draft.priceWorkEntries.count)",
-                amount: TimesheetDraftAdjustments.priceWorkTotal(
-                    draft: draft,
-                    managerHasSigned: managerHasSigned,
-                    applyLiveReview: canManagerReview
-                )
-            )
-            rowLine(
-                title: "Expenses · \(draft.expenseEntries.count)",
-                amount: TimesheetDraftAdjustments.expensesTotal(
-                    draft: draft,
-                    managerHasSigned: managerHasSigned,
-                    applyLiveReview: canManagerReview
-                )
-            )
+            rowLine(title: "Overtime", amount: totals?.overtimeLabour ?? 0)
+            rowLine(title: "Price work · \(draft.priceWorkEntries.count)", amount: totals?.priceWork ?? 0)
+            rowLine(title: "Expenses · \(draft.expenseEntries.count)", amount: totals?.expenses ?? 0)
             Divider()
-            rowLine(title: managerHasSigned ? "Approved total" : "Total", amount: effectiveGrandTotal)
+            rowLine(title: managerHasSigned ? "Approved total" : "Total", amount: totals?.total ?? 0)
             if !draft.managerNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Divider()
                 Text("Note to manager")
@@ -4432,24 +4416,6 @@ private struct OperativeTimesheetReviewView: View {
             // RULEBOOK §2: timesheet signing is online only.
             .onlineOnly(isOnline: smartCache.isOnline)
         }
-    }
-
-    private var normalHoursTotal: Double {
-        TimesheetDraftAdjustments.payrollTotal(
-            lines: payrollSummary.lineItems.filter { !$0.isOvertimeLine },
-            draft: draft,
-            managerHasSigned: managerHasSigned,
-            applyLiveReview: canManagerReview
-        )
-    }
-
-    private var overtimeTotal: Double {
-        TimesheetDraftAdjustments.payrollTotal(
-            lines: payrollSummary.lineItems.filter { $0.isOvertimeLine },
-            draft: draft,
-            managerHasSigned: managerHasSigned,
-            applyLiveReview: canManagerReview
-        )
     }
 
     private var needsExtrasReviewMessage: Bool {
@@ -4847,9 +4813,8 @@ private struct OperativeTimesheetReviewView: View {
         )
     }
 
-    private var hoursSummary: (hours: Double, shifts: Int, amount: Double, overtimeAmount: Double) {
-        let summary = payrollSummary
-        return (summary.totalHours, summary.shiftCount, summary.baseAmount, summary.overtimeAmount)
+    private var shiftCount: Int {
+        payrollSummary.shiftCount
     }
 
     private func formatHours(_ value: Double) -> String {
@@ -5699,7 +5664,7 @@ private enum InvoicePDFGenerationSupport {
         )
         // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows` (`raw`, as web's owner invoice): the signed snapshot first, else
         // the live lines; PAYE and leave lines never go on an invoice.
-        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft)
+        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft, period: period.startDate...period.endDate)
         return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
@@ -6141,7 +6106,7 @@ private struct GenerateInvoiceView: View {
         )
         // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows` (`raw`, as web's owner invoice): the signed snapshot first, else
         // the live lines; PAYE and leave lines never go on an invoice.
-        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft)
+        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft, period: period.startDate...period.endDate)
         return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
@@ -6354,14 +6319,21 @@ private enum TimesheetInvoiceRows {
         for user: AppUser,
         summary: TimesheetPayrollSummary,
         draft: TimesheetDraft,
-        extrasMode: ExtrasMode = .raw
+        extrasMode: ExtrasMode = .raw,
+        period: ClosedRange<Date>
     ) -> [InvoiceLineItem] {
-        _ = user
         let sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft))
-        let lines: [[String: Any]] = summary.lineItems.map { ["id": $0.id, "amount": $0.amount, "isPayeDay": $0.isPayeDay] }
+        let lines: [[String: Any]] = summary.lineItems.map(\.rulebookTotalsJSON)
+        var input: [String: Any] = [
+            "sheet": sheet, "payrollLines": lines, "extrasMode": extrasMode.rawValue,
+            "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
+        ]
+        // RULEBOOK 1.11.0 / 1.22.0 §8: `timesheetDays` (`CanonicalBusinessEngine.timesheetDaysForPerson`) leaves out
+        // labour, price work and expenses dated on a PAYE day, as web does (`timesheetDayKeysForPeriod`).
+        if let days = TimesheetTotalsSource.timesheetDays(for: user, period: period) { input["timesheetDays"] = days }
         guard let result = CanonicalBusinessEngine.callJSON(
             "timesheetInvoiceRows",
-            arguments: [["sheet": sheet, "payrollLines": lines, "extrasMode": extrasMode.rawValue]]
+            arguments: [input]
         ) as? [[String: Any]] else {
             // The script did not answer: nothing unchecked is invoiced.
             return []
@@ -7096,7 +7068,7 @@ private enum TimesheetExportHelper {
             relatedUsers: relatedUsers
         )
         // RULEBOOK 1.10.0 §8: an export reads decisions (`extrasMode` `decided`).
-        let rows = TimesheetInvoiceRows.rows(for: user, summary: summary, draft: draft, extrasMode: .decided)
+        let rows = TimesheetInvoiceRows.rows(for: user, summary: summary, draft: draft, extrasMode: .decided, period: week.start...week.end)
         return rows.sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName

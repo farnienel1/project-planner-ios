@@ -376,9 +376,9 @@ extension FirebaseBackend {
                 ?? doc.documentID.replacingOccurrences(of: "variationItem_", with: "")
             return VariationCodec.variation(from: data, documentId: rawId)
         }
-        return mergeVariationSources(collection: collectionItems, fallback: fallbackItems, itemDocs: itemDocs)
-            .filter { !$0.isDeleted && $0.status == .open }
-            .count
+        // RULEBOOK 1.23.0 §22 `CanonicalBusinessEngine.openVariationCount`: not deleted, status `open` (any case).
+        let merged = mergeVariationSources(collection: collectionItems, fallback: fallbackItems, itemDocs: itemDocs)
+        return CanonicalBusinessEngine.openVariationCount(merged.map { ["isDeleted": $0.isDeleted, "status": $0.status.rawValue] }) ?? 0
     }
 
     #if canImport(FirebaseStorage)
@@ -542,20 +542,28 @@ nonisolated private func variationsFromFallbackDocument(_ data: [String: Any]?) 
     }
 }
 
+/// RULEBOOK 1.23.0 §22 `CanonicalBusinessEngine.mergeVariationSources`: one list from the collection and the older
+/// fallbacks, ids without case, the newer `updatedAtMs` winning (the collection on a tie), in first-appearance order.
+/// Rows go in tagged (`_i`) so the answer maps back to these values. With no script answer the collection rows only.
 nonisolated private func mergeVariationSources(
     collection: [Variation],
     fallback: [Variation],
     itemDocs: [Variation] = []
 ) -> [Variation] {
-    var byId: [String: Variation] = [:]
-    for item in fallback + itemDocs + collection {
-        if let existing = byId[item.id] {
-            byId[item.id] = item.updatedAt >= existing.updatedAt ? item : existing
-        } else {
-            byId[item.id] = item
+    func rows(_ items: [Variation], _ source: String) -> [[String: Any]] {
+        items.enumerated().map { index, item in
+            ["id": item.id, "updatedAtMs": (item.updatedAt.timeIntervalSince1970 * 1000).rounded(), "_i": "\(source):\(index)"]
         }
     }
-    return Array(byId.values)
+    guard let kept = CanonicalBusinessEngine.mergeVariationSources(
+        collection: rows(collection, "c"), fallback: rows(fallback, "f"), itemDocs: rows(itemDocs, "d")
+    ) else { return collection }
+    let sources: [String: [Variation]] = ["c": collection, "f": fallback, "d": itemDocs]
+    return kept.compactMap { tag in
+        let parts = tag.split(separator: ":")
+        guard parts.count == 2, let list = sources[String(parts[0])], let index = Int(parts[1]), list.indices.contains(index) else { return nil }
+        return list[index]
+    }
 }
 
 nonisolated private final class VariationListenerBag: NSObject, ListenerRegistration, @unchecked Sendable {

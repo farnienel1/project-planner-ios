@@ -131,11 +131,14 @@ final class TimesheetLogicTests: XCTestCase {
         let first = LogicFixtures.managerBooking(on: monday, start: "08:00", end: "12:00")
         let second = LogicFixtures.managerBooking(on: monday, start: "10:00", end: "14:00")
         let union = LogicFixtures.managerBooking(on: monday, start: "08:00", end: "14:00")
-        let merged = ManagerScheduleInterval.combinedPaidBookedHours(
-            for: [first, second],
+        // RULEBOOK 1.22.0 §6: `CanonicalBusinessEngine.managerCoverageHours` (overlaps count once).
+        let merged = CanonicalBusinessEngine.managerCoverageHours(
+            bookings: [first.rulebookCoverageBooking, second.rulebookCoverageBooking],
+            dayKey: OrganizationRulebookContext.dayKey(monday),
             policy: LogicFixtures.policy
-        )
+        )?.paidHours ?? -1
         XCTAssertClose(merged, union.paidBookedHours(policy: LogicFixtures.policy))
+        XCTAssertClose(merged, 5.5)
         let summed = first.paidBookedHours(policy: LogicFixtures.policy)
             + second.paidBookedHours(policy: LogicFixtures.policy)
         XCTAssertGreaterThan(summed, merged)

@@ -246,7 +246,7 @@ struct OperativesView: View {
 
     /// Operative rows on this list use `listedRosterUsers` and `rosterSegment`.
     private var linkedOperativeRecords: [(user: AppUser, operative: Operative)] {
-        let operativeUsers = userStore.organizationUsers.filter { $0.appearsOnOperativesList }
+        let operativeUsers = userStore.rosterList(.operatives)
         return operativeUsers.compactMap { user in
             guard let op = operativeStore.allOperatives.first(where: {
                 $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
@@ -259,7 +259,7 @@ struct OperativesView: View {
     }
     
     private var allOperativeUsers: [AppUser] {
-        userStore.organizationUsers.filter { $0.appearsOnOperativesList }
+        userStore.rosterList(.operatives)
     }
     
     private var hasAnyOperativesInOrganization: Bool {
@@ -285,7 +285,7 @@ struct OperativesView: View {
 
     private var displayedOperativeUsers: [AppUser] {
         let base = rosterListed(
-            userStore.organizationUsers.filter(\.appearsOnOperativesList),
+            userStore.rosterList(.operatives),
             segment: rosterSegment
         )
         let searched = base.filter { ManageOperativesSearch.matches(user: $0, query: liveSearchText) }
@@ -401,7 +401,7 @@ struct OperativesView: View {
 
     private var pendingOperativeInvitees: [AppUser] {
         let base = rosterListed(
-            userStore.organizationUsers.filter(\.appearsOnOperativesList),
+            userStore.rosterList(.operatives),
             segment: .pending
         )
         let searched = base.filter { ManageOperativesSearch.matches(user: $0, query: liveSearchText) }

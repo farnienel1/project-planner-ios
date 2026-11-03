@@ -246,6 +246,7 @@ struct HomeView: View {
                 .environmentObject(projectStore)
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
+                .environmentObject(managerScheduleStore)
         }
         .sheet(isPresented: $showingMySchedule) {
             MyScheduleView()
@@ -1384,7 +1385,6 @@ struct HomeView: View {
         let userEmail = userStore.currentUser?.email
         let accentBlue = Color(red: 0.094, green: 0.373, blue: 0.647)
         let accentPurple = Color(red: 0.325, green: 0.29, blue: 0.718)
-        let isOperativeMode = userStore.isOperativeMode()
         let tasks = taskStore.tasks
         let managers = operativeStore.allManagers
         let holidays = holidayStore.bookings
@@ -1419,8 +1419,8 @@ struct HomeView: View {
 
         async let metricsTask = HomeOverviewMetrics.compute(
             tasks: tasks,
+            viewerId: signedIn?.id ?? authUserId,
             userEmail: userEmail,
-            isOperativeMode: isOperativeMode,
             operatives: operatives,
             managers: managers,
             bookings: bookings,
@@ -1499,23 +1499,22 @@ struct HomeView: View {
         ).count
     }
     
-    /// Upcoming qualification expiries (next 30 days) — surfaced to operatives under Tasks.
+    /// RULEBOOK 1.23.0 §5 `CanonicalBusinessEngine.qualificationExpiryCount`: the signed-in operative's own rows from
+    /// `qualificationExpiryRows` (organisation day, one calendar month, already expired included) — surfaced under Tasks.
     private var operativeQualificationExpiryReminderCount: Int {
         guard userStore.isOperativeMode(),
               let email = userStore.currentUser?.email else { return 0 }
         let em = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let op = operativeStore.allOperatives.first(where: {
+        let mine = operativeStore.allOperatives.filter {
             $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
-        }) else { return 0 }
-        let today = Calendar.current.startOfDay(for: Date())
-        guard let horizon = Calendar.current.date(byAdding: .day, value: 30, to: today) else { return 0 }
-        var n = 0
-        for (_, exp) in op.qualificationExpiryDates {
-            if exp >= today && exp <= horizon { n += 1 }
         }
-        return n
+        guard !mine.isEmpty else { return 0 }
+        return CanonicalBusinessEngine.qualificationExpiryCount(
+            operatives: operativeStore.allOperatives.map(\.rulebookQualificationRow),
+            operativeIds: mine.map(\.documentId)
+        )?.total ?? 0
     }
-    
+
     private var taskLimitWarningBanner: some View {
         Group {
             // Avoid scanning every project’s task count while `currentUser` is nil — that can freeze the main thread during startup.
@@ -2122,105 +2121,73 @@ private struct HomeOverviewMetrics: Equatable {
     var operativesOnALToday: Int = 0
     var managersOnALToday: Int = 0
 
+    /// RULEBOOK 1.23.0 §23 `CanonicalBusinessEngine.homeOverviewMetrics`: every figure on the organisation day, each
+    /// person once under all their ids (users with former / same-email ids, `operatives` and `managers` rows). Swift
+    /// only maps the stores into plain rows; `liveProjectCount` stays `activeJobsCount` (§21).
     static func compute(
         tasks: [ProjectTask],
+        viewerId: String?,
         userEmail: String?,
-        isOperativeMode: Bool,
         operatives: [Operative],
         managers: [Manager],
         bookings: [Booking],
         managerBookings: [ManagerSiteBooking],
         holidays: [HolidayBooking],
         organizationUsers: [AppUser],
-        liveProjectCount: Int
+        liveProjectCount: Int,
+        now: Date = Date()
     ) -> HomeOverviewMetrics {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let now = Date()
-        let weekEnd = cal.date(byAdding: .day, value: 7, to: cal.startOfDay(for: now))
-
-        var tasksDueToday = 0
-        var tasksDueThisWeek = 0
-        var tasksOverdue = 0
-        var outstandingTasksAllUsers = 0
-
-        for task in tasks {
-            if task.isCompleted { continue }
-            outstandingTasksAllUsers += 1
-            guard let due = task.dueDate else { continue }
-            let d0 = cal.startOfDay(for: due)
-            let assigned = task.isAssignedToUser(
-                userEmail: userEmail,
-                operatives: operatives,
-                managers: managers,
-                isOperativeMode: isOperativeMode
-            )
-            guard assigned else { continue }
-            if cal.isDate(due, inSameDayAs: today) {
-                tasksDueToday += 1
-            }
-            if let weekEnd, d0 >= cal.startOfDay(for: now), d0 < weekEnd {
-                tasksDueThisWeek += 1
-            }
-            if d0 < today {
-                tasksOverdue += 1
-            }
+        func optional(_ value: String?) -> Any { value.map { $0 as Any } ?? NSNull() }
+        let input: [String: Any] = [
+            "nowMs": (now.timeIntervalSince1970 * 1000).rounded(),
+            "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
+            "viewer": ["id": optional(viewerId), "email": optional(userEmail)],
+            "roster": organizationUsers.map(RulebookRosterLists.levelRow),
+            "operatives": operatives.map { operative -> [String: Any] in
+                ["id": Booking.storedOperativeId(for: operative.id), "email": operative.email, "isActive": operative.isActive]
+            },
+            "managers": managers.map { ["id": $0.id.uuidString, "email": $0.email] as [String: Any] },
+            "tasks": tasks.map { task -> [String: Any] in
+                [
+                    "status": task.status.rawValue,
+                    "dueDate": task.dueDate.map { ($0.timeIntervalSince1970 * 1000).rounded() as Any } ?? NSNull(),
+                    "assignedOperativeIds": task.assignedOperativeIds.map { Booking.storedOperativeId(for: $0) },
+                    "assignedOperativeId": task.assignedOperativeId.map { Booking.storedOperativeId(for: $0) as Any } ?? NSNull(),
+                    "assignedManagerIds": task.assignedManagerIds.map(\.uuidString),
+                    "assignedManagerId": task.assignedManagerId.map { $0.uuidString as Any } ?? NSNull(),
+                ]
+            },
+            "bookings": bookings.map { booking -> [String: Any] in
+                [
+                    "operativeId": Booking.storedOperativeId(for: booking.operativeId),
+                    "dayKey": OrganizationRulebookContext.dayKey(booking.date),
+                    "status": booking.status.rawValue,
+                ]
+            },
+            "managerSiteBookings": managerBookings.map { booking -> [String: Any] in
+                [
+                    "userId": booking.userId,
+                    "dayKey": OrganizationRulebookContext.dayKey(booking.date),
+                    "locationType": booking.locationType.rawValue,
+                ]
+            },
+            "holidays": holidays.map(\.rulebookLeaveRecord.json),
+            "nonWorkingDayKeys": OrganizationBankHolidays.dayKeys,
+        ]
+        guard let figures = CanonicalBusinessEngine.homeOverviewMetrics(input) else {
+            return HomeOverviewMetrics(liveProjectCount: liveProjectCount)
         }
-
-        let operativeIds = Set(
-            bookings
-                .filter { cal.isDate($0.date, inSameDayAs: today) && ($0.status.occupiesDay) }
-                .map { $0.operativeId.uuidString }
-        )
-        let managerIds = Set(
-            managerBookings
-                .filter {
-                    cal.isDate($0.date, inSameDayAs: today)
-                        && ($0.locationType == .project || $0.locationType == .smallWork)
-                }
-                .map(\.userId)
-        )
-
-        let approvedHolidays = holidays.filter { holiday in
-            guard holiday.status == .approved else { return false }
-            let start = cal.startOfDay(for: holiday.startDate)
-            let end = cal.startOfDay(for: holiday.endDate)
-            return today >= start && today <= end
-        }
-
-        var operativeALKeys = Set<String>()
-        var managerALSeen = Set<String>()
-        for h in approvedHolidays {
-            if let oid = h.operativeId {
-                operativeALKeys.insert("op:\(oid.uuidString)")
-            }
-            if let uid = h.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty,
-               let u = organizationUsers.first(where: { $0.id == uid }),
-               u.permissions.operativeMode {
-                operativeALKeys.insert("u:\(uid)")
-            }
-            if let uid = h.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty,
-               let u = organizationUsers.first(where: { $0.id == uid }),
-               !u.permissions.operativeMode,
-               !u.isSuperAdmin,
-               !u.permissions.adminAccess,
-               u.permissions.manager,
-               u.isActive {
-                managerALSeen.insert(uid)
-            }
-        }
-
         return HomeOverviewMetrics(
             liveProjectCount: liveProjectCount,
-            tasksDueToday: tasksDueToday,
-            tasksDueThisWeek: tasksDueThisWeek,
-            tasksOverdue: tasksOverdue,
-            outstandingTasksAllUsers: outstandingTasksAllUsers,
-            operativesOnSiteToday: operativeIds.count,
-            managersOnSiteToday: managerIds.count,
-            peopleOnSiteToday: operativeIds.count + managerIds.count,
-            operativesOnALToday: operativeALKeys.count,
-            managersOnALToday: managerALSeen.count
+            tasksDueToday: figures.tasksDueToday,
+            tasksDueThisWeek: figures.tasksDueThisWeek,
+            tasksOverdue: figures.tasksOverdue,
+            outstandingTasksAllUsers: figures.outstandingTasksAllUsers,
+            operativesOnSiteToday: figures.operativesOnSiteToday,
+            managersOnSiteToday: figures.managersOnSiteToday,
+            peopleOnSiteToday: figures.peopleOnSiteToday,
+            operativesOnALToday: figures.operativesOnALToday,
+            managersOnALToday: figures.managersOnALToday
         )
     }
 }

@@ -169,21 +169,21 @@ nonisolated enum VariationNumbering {
     static let defaultPrefix = "VO-"
     static let defaultPadding = 3
 
+    /// RULEBOOK 1.22.0 §22 `CanonicalBusinessEngine.variationNumberValue`: the trailing digits only ("V2-003" → 3).
     static func numericValue(from voNumber: String) -> Int {
-        let digits = voNumber.filter(\.isNumber)
-        return Int(digits) ?? 0
+        CanonicalBusinessEngine.variationNumberValue(voNumber) ?? 0
     }
 
+    /// RULEBOOK 1.22.0 §22 `CanonicalBusinessEngine.formatVariationNumber`.
     static func format(prefix: String, padding: Int, value: Int) -> String {
-        let pad = max(1, padding)
-        let body = String(format: "%0\(pad)d", value)
-        return "\(prefix)\(body)"
+        CanonicalBusinessEngine.formatVariationNumber(value, prefix: prefix, padding: padding) ?? "\(prefix)\(value)"
     }
 
-    /// Next number is always max+1. Closed/deleted numbers are never reused.
-    static func nextFree(existing: [Variation], prefix: String = defaultPrefix, padding: Int = defaultPadding) -> String {
-        let maxVal = existing.map { numericValue(from: $0.voNumber) }.max() ?? 0
-        return format(prefix: prefix, padding: padding, value: maxVal + 1)
+    /// RULEBOOK 1.22.0 §22 `CanonicalBusinessEngine.nextVariationNumber`: highest trailing number + 1 over every
+    /// variation, deleted and closed ones included, so a number is never reused ("V2-003" → "V2-004"). Nil when the
+    /// script did not answer — nothing is numbered from a Swift guess.
+    static func nextFree(existing: [Variation], prefix: String = defaultPrefix, padding: Int = defaultPadding) -> String? {
+        CanonicalBusinessEngine.nextVariationNumber(existingNumbers: existing.map(\.voNumber), prefix: prefix, padding: padding)
     }
 
     static func parentName(jobNumber: String, siteName: String) -> String {

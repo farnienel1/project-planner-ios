@@ -64,18 +64,13 @@ final class MoneyAndValidationTests: XCTestCase {
                 ),
             ]
         )
-        let signed = TimesheetDraftAdjustments.grandTotal(
-            lines: [labour],
-            draft: draft,
-            managerHasSigned: true
-        )
-        XCTAssertClose(signed, 125.35, "100 + 10.10 + 15.25; declined parking is omitted")
-        let unsigned = TimesheetDraftAdjustments.grandTotal(
-            lines: [labour],
-            draft: draft,
-            managerHasSigned: false
-        )
-        XCTAssertClose(unsigned, 134.60)
+        // RULEBOOK 1.22.0 §8: `CanonicalBusinessEngine.timesheetTotals` (`TimesheetTotalsSource`).
+        var signedDraft = draft
+        signedDraft.managerSignedAt = day
+        let signed = TimesheetTotalsSource.totals(lines: [labour], draft: signedDraft, decided: true)?.total
+        XCTAssertClose(signed ?? -1, 125.35, "100 + 10.10 + 15.25; declined parking is omitted")
+        let unsigned = TimesheetTotalsSource.totals(lines: [labour], draft: draft, decided: false)?.total
+        XCTAssertClose(unsigned ?? -1, 134.60)
     }
 
     func testInvoiceTotalDoesNotAddVAT() {
@@ -93,12 +88,8 @@ final class MoneyAndValidationTests: XCTestCase {
             isPayeDay: false,
             isOvertimeLine: false
         )
-        let total = TimesheetDraftAdjustments.grandTotal(
-            lines: [labour],
-            draft: TimesheetDraft(),
-            managerHasSigned: true
-        )
-        XCTAssertClose(total, 100, "invoice totals are the net amount; 20% VAT is not added")
+        let total = TimesheetTotalsSource.totals(lines: [labour], draft: TimesheetDraft(), decided: true)?.total
+        XCTAssertClose(total ?? -1, 100, "invoice totals are the net amount; 20% VAT is not added")
     }
 
     func testPayrollAmountsRoundToPennies() {

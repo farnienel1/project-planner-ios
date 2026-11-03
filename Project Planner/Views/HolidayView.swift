@@ -174,34 +174,27 @@ struct HolidayView: View {
         )
     }
 
+    /// RULEBOOK 1.23.0 §9 `CanonicalBusinessEngine.leaveDayKind`: the signed-in person's leave on the organisation day —
+    /// leave days only, rejected never, approved with a pending cancellation still approved, fixed order.
     private func calendarDayKind(for day: Date) -> CalendarDayKind {
-        let dayStart = calendar.startOfDay(for: day)
         guard let uid = firebaseBackend.currentUser?.uid else { return .none }
         let oid = currentOperative?.id
-        var pendingHalf: HolidayBooking?
-        var approvedHalf: HolidayBooking?
-        for booking in holidayStore.bookings {
-            guard booking.status != .rejected else { continue }
-            let matchesUser = bookingMatchesSignedInUser(booking, uid: uid)
-            let matchesOperative = oid != nil && booking.operativeId == oid
-            guard matchesUser || matchesOperative else { continue }
-            // The record's leave days (`leaveRecordDayKeys`); its slot applies to every one of them (§9).
-            guard LeaveRecordDays.covers(booking, day: dayStart) else { continue }
-            switch booking.status {
-            case .pending:
-                if booking.timeSlot == .fullDay { return .pendingFull }
-                pendingHalf = booking
-            case .approved:
-                guard booking.cancellationRequestedAt == nil else { continue }
-                if booking.timeSlot == .fullDay { return .approvedFull }
-                approvedHalf = booking
-            case .rejected:
-                continue
-            }
+        let mine = holidayStore.bookings.filter { booking in
+            bookingMatchesSignedInUser(booking, uid: uid) || (oid != nil && booking.operativeId == oid)
         }
-        if let b = pendingHalf { return .pendingHalf(b) }
-        if let b = approvedHalf { return .approvedHalf(b) }
-        return .none
+        guard let answer = CanonicalBusinessEngine.leaveDayAnswer(
+            records: mine.map(\.rulebookLeaveRecord),
+            dayKey: OrganizationRulebookContext.dayKey(day),
+            nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
+        ) else { return .none }
+        let record = mine.first { $0.documentId == answer.recordId }
+        switch answer.kind {
+        case .pendingFull: return .pendingFull
+        case .approvedFull: return .approvedFull
+        case .pendingHalf: return record.map { CalendarDayKind.pendingHalf($0) } ?? CalendarDayKind.none
+        case .approvedHalf: return record.map { CalendarDayKind.approvedHalf($0) } ?? CalendarDayKind.none
+        case .none: return .none
+        }
     }
 
     var body: some View {

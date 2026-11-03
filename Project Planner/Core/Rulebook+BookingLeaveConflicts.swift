@@ -146,7 +146,9 @@ enum BookingLeaveConflictInputs {
         if let value = day.standardDayEnd { dayInput["standardDayEnd"] = value }
         if let value = day.breakWindowStart { dayInput["breakWindowStart"] = value }
         if let value = day.breakWindowEnd { dayInput["breakWindowEnd"] = value }
-        input["day"] = dayInput
+        // RULEBOOK 1.23.0 §5: each booked day under its own working hours (`CanonicalBusinessEngine.bookingDayInput`, the
+        // organisation's policy state); the one standard day only before an organisation is loaded.
+        input["day"] = CanonicalBusinessEngine.openOrganizationPayrollPolicyState ?? dayInput
         if let timeSlot { input["timeSlot"] = timeSlot }
         if let workStartTime { input["workStartTime"] = workStartTime }
         if let workEndTime { input["workEndTime"] = workEndTime }

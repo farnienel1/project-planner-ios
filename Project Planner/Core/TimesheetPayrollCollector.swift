@@ -25,6 +25,13 @@ struct TimesheetPayrollLineItem: Identifiable, Hashable {
     /// `overlappingBookingIds`: the booking overlaps another on the same day. Still paid; shown amber
     /// with `OVERLAPPING_BOOKING_NOTE` to the person and their line manager.
     var isOverlapping: Bool = false
+    /// RULEBOOK 1.22.0 `TimesheetTotalsLine` (CanonicalBusinessEngine `timesheetTotals`): on the standard line, the
+    /// booking's weighted paid hours (`payrollHoursResult.totalPaidHours`) and its overtime clock hours
+    /// (`payrollMultipliedHours`); on the overtime line, its multiplier and clock hours.
+    var bookingPaidHours: Double? = nil
+    var bookingOvertimeHours: Double? = nil
+    var otMultiplier: Double? = nil
+    var otClockHours: Double? = nil
 }
 
 struct TimesheetPayrollSummary {
@@ -152,7 +159,9 @@ enum TimesheetPayrollCollector {
                     amount: normalAmount,
                     isPayeDay: isPaye,
                     isOvertimeLine: false,
-                    bookingId: lineBookingId
+                    bookingId: lineBookingId,
+                    bookingPaidHours: paidHours,
+                    bookingOvertimeHours: multiplied?.clockHours ?? otHours
                 )
             )
 
@@ -178,7 +187,9 @@ enum TimesheetPayrollCollector {
                         amount: otAmount,
                         isPayeDay: isPaye,
                         isOvertimeLine: true,
-                        bookingId: lineBookingId
+                        bookingId: lineBookingId,
+                        otMultiplier: otMultiplier,
+                        otClockHours: multiplied?.clockHours ?? otHours
                     )
                 )
             }
@@ -224,7 +235,9 @@ enum TimesheetPayrollCollector {
         // organisation's standard day, as web's collector does. Touching times do not overlap.
         let overlapping = CanonicalBusinessEngine.overlappingBookingIds(
             paidBookings,
-            day: CanonicalStandardDayInput(policy: policy)
+            day: CanonicalStandardDayInput(policy: policy),
+            // RULEBOOK 1.23.0 §8: the organisation's working-hours state (each day's own hours), as pay reads them.
+            dayState: organization == nil ? nil : CanonicalBusinessEngine.openOrganizationPayrollPolicyState
         )
         if !overlapping.isEmpty {
             for index in lineItems.indices {

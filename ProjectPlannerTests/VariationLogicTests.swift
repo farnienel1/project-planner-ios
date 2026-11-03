@@ -69,7 +69,9 @@ final class VariationLogicTests: XCTestCase {
         )
     }
 
-    func testDuplicateCheckIgnoresDeletedAndTheRowBeingEdited() {
+    /// RULEBOOK 1.22.0 §22 (owner decision): a deleted variation still holds its number
+    /// (`CanonicalBusinessEngine.variationNumberTaken`); before 1.22.0 this test expected deleted numbers to be free.
+    func testDuplicateCheckCountsDeletedAndSkipsTheRowBeingEdited() {
         let store = VariationStore(parentId: "project-a", parentType: .project)
         keep(store)
         store.variations = [
@@ -78,7 +80,7 @@ final class VariationLogicTests: XCTestCase {
         ]
         XCTAssertTrue(store.voNumberIsDuplicate("vo-001", excludingId: nil))
         XCTAssertFalse(store.voNumberIsDuplicate("VO-001", excludingId: "1"))
-        XCTAssertFalse(store.voNumberIsDuplicate("VO-002", excludingId: nil))
+        XCTAssertTrue(store.voNumberIsDuplicate("VO-002", excludingId: nil), "a deleted VO-002 is never reused")
         XCTAssertFalse(store.voNumberIsDuplicate("VO-003", excludingId: nil))
     }
 

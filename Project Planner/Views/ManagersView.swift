@@ -33,7 +33,7 @@ struct ManagersView: View {
     
     // Get managers from users — exclude administrators (they appear under Admins / Manage Users).
     private var allManagers: [AppUser] {
-        userStore.organizationUsers.filter { $0.appearsOnManagersList }
+        userStore.rosterList(.managers)
     }
     
     private var filteredManagers: [AppUser] {

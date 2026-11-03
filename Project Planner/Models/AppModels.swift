@@ -474,9 +474,6 @@ struct AppUser: Identifiable, Codable, Hashable {
     var vatNumber: String?
     /// Legacy UTR still on users/{uid} before migration. See `vatNumber`.
     var utrNumber: String?
-    /// In memory only. A `managers` record can place a non-admin who has no role flags on Managers.
-    /// `saveUser` does not write this field.
-    var placedByManagersRecord: Bool = false
     /// Other `users` document ids for this email. The roster shows one row. Bookings stored
     /// on a dropped id still belong to this person.
     var sameEmailUserIds: [String] = []
@@ -502,6 +499,12 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// reader's list value, which ignores a stray flag on an admin; the approval rules and security rules still
     /// read the stored flag (`adminOutsideOperativeMode`, RULEBOOK 1.6.0 §8).
     var operativeModeStored: Bool = false
+    /// RULEBOOK 1.23.1 §11: the level fields as stored on `users/{uid}` (`isSuperAdmin`, `adminAccess`, `manager`,
+    /// `operativeMode` top level, and `permissions.{key}`), only those present, for `userMissingLevel` (a data fault is
+    /// read from the stored document, never a decoded default). Nil when not read from a document.
+    var storedLevelFlags: [String: Bool]? = nil
+    /// The stored `role` text (nil when missing), with `storedLevelFlags`.
+    var storedRoleText: String? = nil
     /// RULEBOOK 1.8.0 (`CanonicalBusinessEngine.parseUserDocument` `annualLeaveDefaultsPending`): some leave fields were missing and the
     /// organisation's `annualLeaveDefaults` were not loaded yet, so the leave figures are the rulebook default.
     /// A save never writes those figures (`FirebaseBackend.userDocumentPayload`).
@@ -552,7 +555,6 @@ struct AppUser: Identifiable, Codable, Hashable {
         timesheetsEnabled: Bool? = nil,
         vatNumber: String? = nil,
         utrNumber: String? = nil,
-        placedByManagersRecord: Bool = false,
         sameEmailUserIds: [String] = [],
         documentName: String = "",
         documentDisplayName: String = ""
@@ -594,7 +596,6 @@ struct AppUser: Identifiable, Codable, Hashable {
         self.timesheetsEnabled = timesheetsEnabled ?? AppUser.defaultTimesheetsEnabled(for: permissions, employmentType: employmentType)
         self.vatNumber = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.utrNumber = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        self.placedByManagersRecord = placedByManagersRecord
         self.sameEmailUserIds = sameEmailUserIds
         self.documentName = documentName
         self.documentDisplayName = documentDisplayName
@@ -637,9 +638,9 @@ extension AppUser {
         case employmentType, employmentTypeTransitionFrom, employmentTypeEffectiveAt
         case annualLeaveEnabled, annualLeaveDaysPerYear, annualLeaveYearStartMonth, annualLeaveYearEndMonth
         case annualLeaveCarriesOver, annualLeaveYearAllowance, annualLeaveYearAllowanceKey
-        case timesheetsEnabled, vatNumber, utrNumber, placedByManagersRecord, sameEmailUserIds
+        case timesheetsEnabled, vatNumber, utrNumber, sameEmailUserIds
         case documentName, documentDisplayName, formerUserIds, documentUpdatedAt
-        case status, payBasis, profilePhotoUpdatedAt, operativeModeStored
+        case status, payBasis, profilePhotoUpdatedAt, operativeModeStored, storedLevelFlags, storedRoleText
     }
 
     init(from decoder: Decoder) throws {
@@ -681,7 +682,6 @@ extension AppUser {
         timesheetsEnabled = try container.decode(Bool.self, forKey: .timesheetsEnabled)
         vatNumber = try container.decodeIfPresent(String.self, forKey: .vatNumber)
         utrNumber = try container.decodeIfPresent(String.self, forKey: .utrNumber)
-        placedByManagersRecord = try container.decodeIfPresent(Bool.self, forKey: .placedByManagersRecord) ?? false
         sameEmailUserIds = try container.decodeIfPresent([String].self, forKey: .sameEmailUserIds) ?? []
         documentUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .documentUpdatedAt)
         documentName = try container.decodeIfPresent(String.self, forKey: .documentName) ?? ""
@@ -691,6 +691,8 @@ extension AppUser {
         payBasis = try container.decodeIfPresent(String.self, forKey: .payBasis)
         profilePhotoUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .profilePhotoUpdatedAt)
         operativeModeStored = try container.decodeIfPresent(Bool.self, forKey: .operativeModeStored) ?? permissions.operativeMode
+        storedLevelFlags = try container.decodeIfPresent([String: Bool].self, forKey: .storedLevelFlags)
+        storedRoleText = try container.decodeIfPresent(String.self, forKey: .storedRoleText)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -731,7 +733,6 @@ extension AppUser {
         try container.encodeIfPresent(annualLeaveYearAllowanceKey, forKey: .annualLeaveYearAllowanceKey)
         try container.encode(timesheetsEnabled, forKey: .timesheetsEnabled)
         // vatNumber / utrNumber are not encoded, so no local cache holds tax identifiers.
-        try container.encode(placedByManagersRecord, forKey: .placedByManagersRecord)
         try container.encode(sameEmailUserIds, forKey: .sameEmailUserIds)
         try container.encodeIfPresent(documentUpdatedAt, forKey: .documentUpdatedAt)
         try container.encode(documentName, forKey: .documentName)
@@ -741,6 +742,8 @@ extension AppUser {
         try container.encodeIfPresent(payBasis, forKey: .payBasis)
         try container.encodeIfPresent(profilePhotoUpdatedAt, forKey: .profilePhotoUpdatedAt)
         try container.encode(operativeModeStored, forKey: .operativeModeStored)
+        try container.encodeIfPresent(storedLevelFlags, forKey: .storedLevelFlags)
+        try container.encodeIfPresent(storedRoleText, forKey: .storedRoleText)
     }
 
     /// Timesheets when `timesheetsEnabled` is not stored: the rulebook's `defaultTimesheetsEnabled` (RULEBOOK 1.6.0 §8).
@@ -785,27 +788,23 @@ extension AppUser {
         return fields
     }
 
-    /// Manage Users, Managers, and Operatives share this order.
-    /// Admin wins, then `operativeMode`, then the manager flag.
-    /// A managers-collection record may place a non-admin with no role flags on Managers. It does not move an admin.
+    /// Admin level: super admin, `adminAccess` or the admin role (`permissionLevelOf`). Used for admin-only gates.
     var isRosterAdmin: Bool {
         isSuperAdmin || permissions.adminAccess || role == .admin
     }
 
-    var appearsOnAdminsList: Bool {
-        isRosterAdmin
+    /// RULEBOOK 1.23.0 §11 `CanonicalBusinessEngine.rosterListKind`: the one people list this person is on, by level
+    /// (admins; operative mode or the operative role; everyone else — a person with no level flag included — managers).
+    /// A `managers` row never moves a person between lists.
+    var rosterListKind: RulebookRosterListKind {
+        RulebookRosterLists.kind(self)
     }
 
-    var appearsOnOperativesList: Bool {
-        if isRosterAdmin { return false }
-        return permissions.operativeMode
-    }
+    var appearsOnAdminsList: Bool { rosterListKind == .admins }
 
-    var appearsOnManagersList: Bool {
-        if isRosterAdmin || permissions.operativeMode { return false }
-        if permissions.manager { return true }
-        return placedByManagersRecord
-    }
+    var appearsOnOperativesList: Bool { rosterListKind == .operatives }
+
+    var appearsOnManagersList: Bool { rosterListKind == .managers }
 
     /// Roster rows are `users/{id}` documents. An operative or manager record is not one of those.
     var isStoredUserDocument: Bool {
