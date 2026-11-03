@@ -141,7 +141,8 @@ struct SmallWorksView: View {
     private func openPendingCatalogueJob() {
         guard WorkCatalogueDeepLink.peek(isSmallWorks: true),
               let projectId = WorkCatalogueDeepLink.pendingProjectId,
-              let project = projectStore.projects.first(where: { $0.id == projectId }) else { return }
+              let project = projectStore.smallWorks.first(where: { $0.id == projectId })
+                ?? projectStore.projects.first(where: { $0.id == projectId }) else { return }
         guard WorkCatalogueDeepLink.take(isSmallWorks: true) != nil else { return }
         navigationPath = NavigationPath()
         navigationPath.append(project)
@@ -482,7 +483,7 @@ struct SmallWorksView: View {
         var works = smallWorksBeforeStatusFilter
         
         if let status = selectedStatus {
-            works = works.filter { $0.status == status }
+            works = works.filter { WorksListStatusCounts.matches($0, chip: status) }
         }
         
         return works

@@ -79,6 +79,15 @@ struct SettingsView: View {
                     settingsHubSignOut
 
                     PPVersionFooter(text: "Project Planner · v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")")
+                    // Job documents this device holds, to compare with web at a glance (web Projects / Small works
+                    // lists, All tab). A difference means a document is being read differently: see
+                    // `JOB_DOCUMENT_REFUSED` / `JOB_DOCUMENT_SHARES_ID` in the device log.
+                    Text(projectStore.jobDocumentCountsLine)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 4)
+                        .accessibilityIdentifier("settings.jobDocumentCounts")
                 }
                 .padding(.bottom, 32)
                 .ppContentSheet()
