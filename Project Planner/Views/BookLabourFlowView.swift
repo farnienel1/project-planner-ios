@@ -146,33 +146,29 @@ struct BookLabourFlowView: View {
     }
 
     private var liveProjects: [Project] {
-        WorkAccess.visibleWorks(
-            from: projectStore.projects,
+        // RULEBOOK 1.21.1 §21 `bookableJobs`: visible, not inactive, `canWriteBooking`; job dates never checked.
+        WorkAccess.bookableWorks(
+            from: projectStore.projects + projectStore.smallWorks,
             catalogue: .projects,
             userStore: userStore,
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             managerBookings: managerScheduleStore.managerSiteBookings,
-            taskStore: nil,
-            deadlineAssignedProjectIds: []
+            taskStore: nil
         )
-        // RULEBOOK 1.10.0 §16: only jobs this account may book onto (`canWriteBooking`).
-        .filter { $0.isLive && userStore.canWriteBooking(on: $0) }
     }
 
     private var liveSmallWorks: [Project] {
-        WorkAccess.visibleWorks(
-            from: projectStore.projects,
+        // RULEBOOK 1.21.1 §21 `bookableJobs`: visible, not inactive, `canWriteBooking`; job dates never checked.
+        WorkAccess.bookableWorks(
+            from: projectStore.projects + projectStore.smallWorks,
             catalogue: .smallWorks,
             userStore: userStore,
             operativeStore: operativeStore,
             bookingStore: bookingStore,
             managerBookings: managerScheduleStore.managerSiteBookings,
-            taskStore: nil,
-            deadlineAssignedProjectIds: []
+            taskStore: nil
         )
-        // RULEBOOK 1.10.0 §16: only jobs this account may book onto (`canWriteBooking`).
-        .filter { $0.isLive && userStore.canWriteBooking(on: $0) }
     }
 
     enum ManagerSlotReturn: Hashable {

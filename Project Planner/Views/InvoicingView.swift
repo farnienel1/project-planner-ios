@@ -2782,7 +2782,12 @@ private struct MyTimesheetView: View {
 
     /// RULEBOOK 1.20.4: an overtime line with a break shows "6.5h × 2 − 0.5h break = 12.5h" (`multipliedHoursText`,
     /// a signed line's stored text read back with `parseMultipliedHoursText`), never the back-calculated 6.25h.
+    /// The row's details line already reads "OT 6.5h × 2 − 0.5h break = 12.5h" then, so the hours are not repeated
+    /// beside the rate (it used to show the multiplied text twice).
     private func timesheetHoursRateLine(for row: InvoiceLineItem) -> String {
+        if row.isOvertimeLine, CanonicalBusinessEngine.parseMultipliedHoursText(row.details) != nil {
+            return row.timesheetRateAnnotation
+        }
         let hours = CanonicalBusinessEngine.payLineHoursText(
             details: row.details, paidHours: row.paidHours, isOvertimeLine: row.isOvertimeLine
         )

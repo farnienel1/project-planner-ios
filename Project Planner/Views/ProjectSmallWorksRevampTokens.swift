@@ -168,35 +168,44 @@ enum ProjectWorksRevampColors {
     )
 }
 
+/// RULEBOOK 1.21.0 §21: the tab counts and chips of every job list come from the script — `worksTabCounts` (All is
+/// every job listed; an inactive job is under Completed) and `worksInTab` / `worksTab`. No Swift tab grouping.
 struct WorksListStatusCounts {
+    let all: Int
     let active: Int
     let upcoming: Int
     let completed: Int
 
-    var all: Int { active + upcoming + completed }
-
-    /// Web `countWorksByTab`: an inactive job (`workStatusOn` → inactive, `isLive` false) is counted under
-    /// Completed, so All is every job on the list. iOS used to drop inactive jobs from every count and every chip
-    /// except All, so a job switched off on web was missing from Completed here.
+    /// `worksTabCounts(jobs, now, timeZone)` in the organisation zone. When the script did not answer, every job is
+    /// counted under All only.
     static func from(_ projects: [Project]) -> WorksListStatusCounts {
-        var a = 0, u = 0, c = 0
-        for p in projects {
-            switch p.status {
-            case .active: a += 1
-            case .upcoming: u += 1
-            case .completed, .inactive: c += 1
-            }
+        guard let counts = CanonicalBusinessEngine.worksTabCounts(projects) else {
+            return WorksListStatusCounts(all: projects.count, active: 0, upcoming: 0, completed: 0)
         }
-        return WorksListStatusCounts(active: a, upcoming: u, completed: c)
+        return WorksListStatusCounts(all: counts.all, active: counts.active, upcoming: counts.upcoming, completed: counts.completed)
     }
 
-    /// Web `filterWorksByTab`: nil (All) keeps every job; Completed keeps completed and inactive jobs; Active and
-    /// Upcoming keep that status. The status itself is the rulebook's (`Project.status`, `workStatusOn`).
+    /// The script's tab name for a chip: nil (All) → `all`; Completed or Inactive → `completed`.
+    static func tab(for chip: ProjectStatus?) -> String {
+        switch chip {
+        case nil: return "all"
+        case .active: return "active"
+        case .upcoming: return "upcoming"
+        case .completed, .inactive: return "completed"
+        }
+    }
+
+    /// `worksInTab(jobs, tab, now, timeZone)`: the jobs under a chip, in order (All keeps every job).
+    static func jobs(_ projects: [Project], chip: ProjectStatus?) -> [Project] {
+        CanonicalBusinessEngine.worksInTab(projects, tab: tab(for: chip))
+    }
+
+    /// Whether one job is under a chip: `worksTab(jobWorkStatus(job))` equals the chip's tab (All keeps every job).
     static func matches(_ project: Project, chip: ProjectStatus?) -> Bool {
-        guard let chip else { return true }
-        let status = project.status
-        if chip == .completed || chip == .inactive { return status == .completed || status == .inactive }
-        return status == chip
+        let wanted = tab(for: chip)
+        guard wanted != "all" else { return true }
+        guard let status = CanonicalBusinessEngine.jobWorkStatus(project) else { return false }
+        return CanonicalBusinessEngine.worksTab(status) == wanted
     }
 }
 

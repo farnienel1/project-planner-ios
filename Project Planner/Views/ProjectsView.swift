@@ -17,6 +17,8 @@ struct ProjectsView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var taskStore: ProjectTaskStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var firebaseBackend: FirebaseBackend
@@ -400,32 +402,26 @@ struct ProjectsView: View {
     }
     
     /// Regular projects (not small works), with operative visibility applied but without status chip filter.
+    /// RULEBOOK 1.21.0 §21: the list is `worksListMembership(jobs, projects)` (every document of
+    /// the kind, inactive included, once by id) and `visibleJobs(..., viewer, context)` (by account id and email,
+    /// never by name; an operative's jobs are their bookings, tasks and deadlines). No Swift visibility rule.
     private var projectsBeforeStatusFilter: [Project] {
-        var projects = projectStore.projects.filter { $0.jobType != .smallWorks }
-        
-        if userStore.isOperativeMode() {
-            guard let currentUser = userStore.currentUser else {
-                return []
-            }
-            let currentUserId = currentUser.id
-            // Bookings under any id this person has had (`bookingIdsForAccount`), not only a catalogue row on their email.
-            var bookingIds = labourBookingIds(for: currentUser, operatives: operativeStore.allOperatives)
-            if let operative = resolvedCurrentOperative { bookingIds.insert(operative.id) }
-            let assignedProjectIds = Set(bookingStore.bookings
-                .filter { bookingIds.contains($0.operativeId) && $0.occupiesDay }
-                .map { $0.projectId })
-            projects = projects.filter {
-                (assignedProjectIds.contains($0.id) || deadlineAssignedProjectIds.contains($0.id))
-                    && !$0.hiddenOperativeUserIds.contains(currentUserId)
-            }
-        } else if let currentUser = userStore.currentUser,
-                  !userStore.hasAdminAccess(),
-                  currentUser.permissions.manager {
-            projects = projects.filter { !$0.hiddenManagerUserIds.contains(currentUser.id) }
-        }
+        let members = CanonicalBusinessEngine.worksListMembership(projectStore.projects + projectStore.smallWorks, kind: .projects)
+        return CanonicalBusinessEngine.visibleJobs(members, viewer: userStore.displayJobAccessViewer, context: worksListContext)
+    }
 
-        var seen = Set<UUID>()
-        return projects.filter { seen.insert($0.id).inserted }
+    /// The §21 context from the loaded stores (deadline jobs by stored id).
+    private var worksListContext: RulebookWorksListContext {
+        let deadlineIds = (projectStore.projects + projectStore.smallWorks)
+            .filter { deadlineAssignedProjectIds.contains($0.id) }
+            .map(\.documentId)
+        return WorksListContextBuilder.context(
+            operatives: operativeStore.allOperatives,
+            bookings: bookingStore.bookings,
+            managerSiteBookings: managerScheduleStore.managerSiteBookings,
+            tasks: taskStore.tasks,
+            deadlineJobIds: deadlineIds
+        )
     }
 
     private func openPendingCatalogueJob() {
@@ -466,22 +462,14 @@ struct ProjectsView: View {
         await MainActor.run { deadlineAssignedProjectIds = ids }
     }
 
+    /// The signed-in person's operatives row, on their email only (§21: never by name).
     private var resolvedCurrentOperative: Operative? {
         let normalizedEmail = userStore.currentUser?.email
             .lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let normalizedEmail, !normalizedEmail.isEmpty,
-           let byEmail = operativeStore.allOperatives.first(where: {
-               $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
-           }) {
-            return byEmail
-        }
-        let first = userStore.currentUser?.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let last = userStore.currentUser?.surname.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !first.isEmpty || !last.isEmpty else { return nil }
+        guard let normalizedEmail, !normalizedEmail.isEmpty else { return nil }
         return operativeStore.allOperatives.first(where: {
-            $0.firstName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == first &&
-            $0.lastName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == last
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
         })
     }
     
@@ -494,7 +482,8 @@ struct ProjectsView: View {
         var projects = projectsBeforeStatusFilter
         
         if let status = selectedStatus {
-            projects = projects.filter { WorksListStatusCounts.matches($0, chip: status) }
+            // RULEBOOK 1.21.0 §21 `worksInTab`: inactive jobs are under Completed; All keeps every job.
+            projects = WorksListStatusCounts.jobs(projects, chip: status)
         }
         
         return projects

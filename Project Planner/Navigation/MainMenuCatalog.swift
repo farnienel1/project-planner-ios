@@ -482,16 +482,35 @@ enum MainMenuCatalog {
 
     // MARK: - Subtitles (Navigate polish)
 
-    static func subtitle(for rowId: String, projectStore: ProjectStore, operativeStore: OperativeStore) -> String? {
+    /// RULEBOOK 1.21.0 §21: `worksTabCounts(visibleJobs(worksListMembership(jobs, kind), viewer)).active` — the number
+    /// the list itself shows under Active for this viewer (the menu has no booking or task context loaded here).
+    private static func activeCount(
+        _ kind: JobKind,
+        projectStore: ProjectStore,
+        operativeStore: OperativeStore,
+        viewer: JobAccessViewer?
+    ) -> Int {
+        let members = CanonicalBusinessEngine.worksListMembership(projectStore.projects + projectStore.smallWorks, kind: kind)
+        let context = WorksListContextBuilder.context(
+            operatives: operativeStore.allOperatives, bookings: [], managerSiteBookings: [], tasks: []
+        )
+        let visible = CanonicalBusinessEngine.visibleJobs(members, viewer: viewer, context: context)
+        return CanonicalBusinessEngine.worksTabCounts(visible)?.active ?? 0
+    }
+
+    static func subtitle(
+        for rowId: String,
+        projectStore: ProjectStore,
+        operativeStore: OperativeStore,
+        viewer: JobAccessViewer?
+    ) -> String? {
         switch rowId {
         case "clients":
             return "\(projectStore.clients.count) on file"
         case "projects":
-            let n = projectStore.projects.filter { $0.jobType != .smallWorks && $0.status == .active }.count
-            return "\(n) in progress"
+            return "\(activeCount(.projects, projectStore: projectStore, operativeStore: operativeStore, viewer: viewer)) in progress"
         case "small_works":
-            let n = projectStore.smallWorks.filter { $0.status == .active || $0.status == .upcoming }.count
-            return "\(n) open"
+            return "\(activeCount(.smallWorks, projectStore: projectStore, operativeStore: operativeStore, viewer: viewer)) open"
         case "operatives":
             let n = operativeStore.allOperatives.filter(\.isActive).count
             return "\(n) team members"

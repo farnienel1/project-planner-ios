@@ -2,7 +2,7 @@
 //  ProjectStatusRulebook.swift
 //  Project Planner
 //
-//  A job's status on a day comes from the rulebook's `workStatusOn` (web uses the same function).
+//  A job's status on a day comes from the rulebook's `jobWorkStatus` in the organisation zone (RULEBOOK §21).
 //  Lists read `Project.status` many times per frame, so each answer is kept for the inputs it was
 //  asked with; a new day or a changed job asks again.
 //
@@ -11,6 +11,7 @@ import Foundation
 
 enum ProjectStatusRulebook {
     private struct Key: Hashable {
+        let zone: String
         let isLive: Bool
         let start: TimeInterval
         let end: TimeInterval
@@ -24,6 +25,7 @@ enum ProjectStatusRulebook {
     static func status(isLive: Bool, start: Date, end: Date, on reference: Date) -> ProjectStatus? {
         let calendar = CanonicalBusinessEngine.businessCalendar
         let key = Key(
+            zone: OrganizationRulebookContext.timeZoneIdentifier,
             isLive: isLive,
             start: calendar.startOfDay(for: start).timeIntervalSince1970,
             end: calendar.startOfDay(for: end).timeIntervalSince1970,
@@ -35,15 +37,18 @@ enum ProjectStatusRulebook {
             return known
         }
         lock.unlock()
-        guard let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(start),
-              let endKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(end),
-              let dayKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(reference),
-              let raw = CanonicalBusinessEngine.workStatusOn(
-                isLive: isLive,
-                startDayKey: startKey,
-                endDayKey: endKey,
-                dayKey: dayKey
-              ),
+        // RULEBOOK 1.21.0 §21 `jobWorkStatus(job, now, timeZone)`: the organisation zone is passed every time; the day
+        // never comes from the device calendar or a London default.
+        let zone = OrganizationRulebookContext.timeZoneIdentifier
+        let job: [String: Any] = [
+            "isLive": isLive,
+            "startDayKey": OrganizationRulebookContext.dayKey(start),
+            "endDayKey": OrganizationRulebookContext.dayKey(end),
+        ]
+        guard let raw = CanonicalBusinessEngine.callJSON(
+                "jobWorkStatus",
+                arguments: [job, OrganizationRulebookContext.dayKey(reference), zone]
+              ) as? String,
               let status = status(fromRulebook: raw) else {
             return nil
         }

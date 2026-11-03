@@ -144,7 +144,9 @@ struct MainMenuMoreSheet: View {
     }
 
     private func moreRow(for spec: MainMenuRowSpec) -> some View {
-        let subtitle = MainMenuCatalog.subtitle(for: spec.id, projectStore: projectStore, operativeStore: operativeStore)
+        let subtitle = MainMenuCatalog.subtitle(
+            for: spec.id, projectStore: projectStore, operativeStore: operativeStore, viewer: userStore.displayJobAccessViewer
+        )
         let badge = MainMenuCatalog.toolBadge(for: spec.id, operativeStore: operativeStore)
         return Button {
             performAfterDismiss(spec.action)

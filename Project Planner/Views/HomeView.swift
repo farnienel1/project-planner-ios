@@ -1389,22 +1389,14 @@ struct HomeView: View {
         let managers = operativeStore.allManagers
         let holidays = holidayStore.bookings
         let signedIn = userStore.displayUser ?? userStore.currentUser
+        // RULEBOOK 1.21.0 §21 `activeJobsCount`: the same jobs Projects and Small works show under Active.
         let activeProjectCount = WorkAccess.homeActiveProjectCount(
-            projects: projects,
-            user: signedIn,
-            isOperativeMode: isOperativeMode,
-            seesEveryJob: userStore.hasAdminAccess(),
-            isManager: signedIn?.permissions.manager == true,
+            projects: projects + projectStore.smallWorks,
+            viewer: signedIn.map { userStore.jobAccessViewer(for: $0) },
             operatives: operatives,
             bookings: bookings,
             managerBookings: managerBookings,
-            canSee: signedIn.map { user -> (Project) -> Bool in
-                let viewer = userStore.jobAccessViewer(for: user)
-                let rows = managers.map { ["id": $0.firestoreDocumentId, "email": $0.email] as [String: Any] }
-                return { (job: Project) -> Bool in
-                    CanonicalBusinessEngine.canSeeJob(viewer, job: job.jobAccessFields, managers: rows, kind: job.jobKind)
-                }
-            }
+            tasks: tasks
         )
 
         async let upNextTask = HomeUpNextSupport.upcomingDaySections(
