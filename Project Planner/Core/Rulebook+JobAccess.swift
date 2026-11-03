@@ -121,20 +121,30 @@ extension CanonicalBusinessEngine {
         return Set(kept.keys)
     }
 
-    /// `jobQueryPlan(viewer, { documentIds })`. Nil when the script did not answer.
-    nonisolated static func jobQueryPlan(_ viewer: JobAccessViewer, documentIds: [String]) -> [String: Any]? {
-        callJSON("jobQueryPlan", arguments: [viewer.json, ["documentIds": documentIds]]) as? [String: Any]
+    /// `jobQueryPlan(viewer, { documentIds, enforced })`. Nil when the script did not answer. `enforced` nil uses the
+    /// rulebook's `ENFORCED_READS_ACTIVE` (1.10.1: off until the backfill); tests pass true to check enforced plans.
+    nonisolated static func jobQueryPlan(_ viewer: JobAccessViewer, documentIds: [String], enforced: Bool? = nil) -> [String: Any]? {
+        var options: [String: Any] = ["documentIds": documentIds]
+        if let enforced { options["enforced"] = enforced }
+        return callJSON("jobQueryPlan", arguments: [viewer.json, options]) as? [String: Any]
     }
 
     /// `bookingQueryPlan(viewer, visibleJobIds, { ownBookingIds })`. Nil when the script did not answer.
-    nonisolated static func bookingQueryPlan(_ viewer: JobAccessViewer, visibleJobIds: [String], ownBookingIds: [String]?) -> [String: Any]? {
-        let options: [String: Any] = ownBookingIds.map { ["ownBookingIds": $0] } ?? [:]
+    nonisolated static func bookingQueryPlan(
+        _ viewer: JobAccessViewer,
+        visibleJobIds: [String],
+        ownBookingIds: [String]?,
+        enforced: Bool? = nil
+    ) -> [String: Any]? {
+        var options: [String: Any] = ownBookingIds.map { ["ownBookingIds": $0] } ?? [:]
+        if let enforced { options["enforced"] = enforced }
         return callJSON("bookingQueryPlan", arguments: [viewer.json, visibleJobIds, options]) as? [String: Any]
     }
 
     /// `readsEveryBooking(viewer)`.
-    nonisolated static func readsEveryBooking(_ viewer: JobAccessViewer) -> Bool {
-        callJSON("readsEveryBooking", arguments: [viewer.json]) as? Bool ?? false
+    nonisolated static func readsEveryBooking(_ viewer: JobAccessViewer, enforced: Bool? = nil) -> Bool {
+        let options: [String: Any] = enforced.map { ["enforced": $0] } ?? [:]
+        return callJSON("readsEveryBooking", arguments: [viewer.json, options]) as? Bool ?? false
     }
 
     /// `warningScopeFor({ viewer, visibleJobIds, bookings, managerBookings, people, operatives })`. `{ kind: 'all' }`
@@ -145,9 +155,10 @@ extension CanonicalBusinessEngine {
         bookings: [[String: Any]],
         managerBookings: [[String: Any]],
         people: [[String: Any]],
-        operatives: [[String: Any]]
+        operatives: [[String: Any]],
+        enforced: Bool? = nil
     ) -> [String: Any] {
-        let input: [String: Any] = [
+        var input: [String: Any] = [
             "viewer": viewer.json,
             "visibleJobIds": visibleJobIds,
             "bookings": bookings,
@@ -155,6 +166,7 @@ extension CanonicalBusinessEngine {
             "people": people,
             "operatives": operatives,
         ]
+        if let enforced { input["enforced"] = enforced }
         return callJSON("warningScopeFor", arguments: [input]) as? [String: Any] ?? ["kind": "all"]
     }
 

@@ -116,32 +116,32 @@ final class Rulebook1100JobAccessTests: XCTestCase {
     }
 
     func testJobQueryPlanPerViewer() {
-        let adminPlan = queries(CanonicalBusinessEngine.jobQueryPlan(admin, documentIds: []))
+        let adminPlan = queries(CanonicalBusinessEngine.jobQueryPlan(admin, documentIds: [], enforced: true))
         XCTAssertEqual(adminPlan.map { $0["kind"] as? String }, ["all", "all"])
-        let togglePlan = queries(CanonicalBusinessEngine.jobQueryPlan(toggleManager, documentIds: []))
+        let togglePlan = queries(CanonicalBusinessEngine.jobQueryPlan(toggleManager, documentIds: [], enforced: true))
         XCTAssertEqual(togglePlan.map { $0["kind"] as? String }, ["all", "managed"])
         XCTAssertEqual(togglePlan.last?["value"] as? String, "t1")
-        let managerPlan = queries(CanonicalBusinessEngine.jobQueryPlan(manager, documentIds: []))
+        let managerPlan = queries(CanonicalBusinessEngine.jobQueryPlan(manager, documentIds: [], enforced: true))
         XCTAssertEqual(managerPlan.map { $0["kind"] as? String }, ["managed", "managed"])
         XCTAssertEqual(managerPlan.first?["field"] as? String, "managerUserIds")
-        let operativePlan = queries(CanonicalBusinessEngine.jobQueryPlan(operative, documentIds: ["a1b2"]))
+        let operativePlan = queries(CanonicalBusinessEngine.jobQueryPlan(operative, documentIds: ["a1b2"], enforced: true))
         XCTAssertEqual(operativePlan.map { $0["kind"] as? String }, ["documents", "documents"])
         XCTAssertEqual(operativePlan.first?["ids"] as? [String], ["a1b2", "A1B2"], "every spelling the rules can trace")
-        XCTAssertTrue(queries(CanonicalBusinessEngine.jobQueryPlan(operative, documentIds: [])).isEmpty,
+        XCTAssertTrue(queries(CanonicalBusinessEngine.jobQueryPlan(operative, documentIds: [], enforced: true)).isEmpty,
                       "an operative never lists a job collection")
     }
 
     func testBookingQueryPlanPerViewer() {
-        let adminPlan = CanonicalBusinessEngine.bookingQueryPlan(admin, visibleJobIds: ["job-1"], ownBookingIds: nil)
+        let adminPlan = CanonicalBusinessEngine.bookingQueryPlan(admin, visibleJobIds: ["job-1"], ownBookingIds: nil, enforced: true)
         XCTAssertEqual(adminPlan?["readsEveryBooking"] as? Bool, true)
         XCTAssertEqual(queries(adminPlan).count, 3)
-        XCTAssertTrue(CanonicalBusinessEngine.readsEveryBooking(toggleManager))
-        let managerPlan = queries(CanonicalBusinessEngine.bookingQueryPlan(manager, visibleJobIds: ["job-1"], ownBookingIds: ["m1", "OP-1"]))
+        XCTAssertTrue(CanonicalBusinessEngine.readsEveryBooking(toggleManager, enforced: true))
+        let managerPlan = queries(CanonicalBusinessEngine.bookingQueryPlan(manager, visibleJobIds: ["job-1"], ownBookingIds: ["m1", "OP-1"], enforced: true))
         XCTAssertEqual(managerPlan.map { $0["collection"] as? String },
                        ["bookings", "subcontractorBookings", "managerSiteBookings", "bookings", "managerSiteBookings"])
         XCTAssertEqual(managerPlan.first?["values"] as? [String], ["job-1", "JOB-1"])
         XCTAssertEqual(managerPlan.last?["op"] as? String, "==")
-        let operativePlan = queries(CanonicalBusinessEngine.bookingQueryPlan(operative, visibleJobIds: ["job-1"], ownBookingIds: ["o1", "OP-1"]))
+        let operativePlan = queries(CanonicalBusinessEngine.bookingQueryPlan(operative, visibleJobIds: ["job-1"], ownBookingIds: ["o1", "OP-1"], enforced: true))
         XCTAssertEqual(operativePlan.count, 1, "an operative reads their own bookings only")
         XCTAssertEqual(operativePlan.first?["field"] as? String, "operativeId")
         XCTAssertEqual(operativePlan.first?["values"] as? [String], ["o1", "OP-1"])
@@ -155,7 +155,8 @@ final class Rulebook1100JobAccessTests: XCTestCase {
                 bookings: [["projectId": "JOB-1", "operativeId": "OP-9"]],
                 managerBookings: [],
                 people: [],
-                operatives: [["id": "OP-9", "email": "p@x.t"]]
+                operatives: [["id": "OP-9", "email": "p@x.t"]],
+                enforced: true
             )
         }
         XCTAssertEqual(input(admin)["kind"] as? String, "all")
@@ -259,5 +260,14 @@ final class Rulebook1100JobAccessTests: XCTestCase {
         XCTAssertEqual(added??.sorted(), ["CAT A", "Fit out"])
         let removed = CanonicalBusinessEngine.jobTypesChangeWriteFields(stored: ["CAT A", "Fit out"], add: [], remove: ["fit out"])
         XCTAssertEqual(removed ?? nil, ["CAT A"])
+    }
+
+    /// Rulebook 1.10.1: enforced reads stay off until the backfill, so a manager without a job toggle reads whole
+    /// collections (as before 1.10.0) and the screens filter with `canSeeJob`.
+    func testEnforcedReadsAreOffByDefaultUntilTheBackfill() {
+        let plan = CanonicalBusinessEngine.jobQueryPlan(manager, documentIds: [])
+        let kinds = (plan?["queries"] as? [[String: Any]] ?? []).map { $0["kind"] as? String }
+        XCTAssertEqual(kinds, ["all", "all"])
+        XCTAssertTrue(CanonicalBusinessEngine.readsEveryBooking(manager))
     }
 }
