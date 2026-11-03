@@ -85,16 +85,14 @@ enum SchedulingV2CellKindBuilder {
         return .empty
     }
 
+    /// RULEBOOK 1.20.0: hours as the pay rule gives them (to the hundredth), never snapped to a half hour — a derived
+    /// weekday day is often a quarter hour (owner example 7.25h).
     private static func roundHalf(_ value: Double) -> Double {
-        (value * 2).rounded() / 2
+        (value * 100).rounded() / 100
     }
 
     static func hoursLabel(_ value: Double) -> String {
-        let rounded = roundHalf(value)
-        if abs(rounded - rounded.rounded(.towardZero)) < 0.01 {
-            return String(format: "%.0fh", rounded)
-        }
-        return String(format: "%.1fh", rounded)
+        ScheduleCoverageFormat.hours(value) + "h"
     }
 }
 

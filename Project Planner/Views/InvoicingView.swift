@@ -1902,7 +1902,8 @@ private struct MyTimesheetView: View {
             for: currentUser,
             in: week.start...week.end,
             holidays: holidayStore.bookings,
-            operatives: operativeStore.allOperatives
+            operatives: operativeStore.allOperatives,
+            organization: firebaseBackend.currentOrganization
         )
     }
 
@@ -4813,7 +4814,8 @@ private struct OperativeTimesheetReviewView: View {
             for: operative,
             in: week.start...week.end,
             holidays: holidayStore.bookings,
-            operatives: operativeStore.allOperatives
+            operatives: operativeStore.allOperatives,
+            organization: firebaseBackend.currentOrganization
         )
     }
 
@@ -6296,7 +6298,7 @@ private struct TimesheetLeaveInfoRows: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(Self.dayText(line.dayKey))
                             .font(.subheadline.weight(.bold))
-                        Text(line.label)
+                        Text(line.displayLabel)
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(Color.blue)
                     }

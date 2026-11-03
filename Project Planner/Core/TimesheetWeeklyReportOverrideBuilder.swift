@@ -253,7 +253,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
         effectiveAmount: Double,
         policy: OrgPayrollTimePolicy
     ) -> Double {
-        let standard = max(policy.standardPaidHours, 0.01)
+        let standard = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
         let baseDays = max(0, line.paidHours) / standard
         guard originalAmount > 0.0001 else { return baseDays }
         return baseDays * (effectiveAmount / originalAmount)

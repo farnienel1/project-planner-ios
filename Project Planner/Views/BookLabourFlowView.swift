@@ -921,7 +921,7 @@ struct BookLabourFlowView: View {
             let existingPaidHours = existingPaidHoursForOperative(op.id)
             let newPaidHours = paidHours(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
             let combinedPaidHours = existingPaidHours + newPaidHours
-            let remainingHours = max(0, max(dayPayrollPolicy.standardPaidHours, 0) - combinedPaidHours)
+            let remainingHours = max(0, max(CanonicalBusinessEngine.weekdayPaidHours(dayPayrollPolicy), 0) - combinedPaidHours)
             // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a Saturday or Sunday shows the new booking as the pay rule
             // prices it that day (memoised by input in the wrapper); empty on a weekday.
             let weekendLines = CanonicalBusinessEngine.collapsedBreakdownLines(

@@ -40,6 +40,22 @@ nonisolated struct CanonicalTimesheetLeaveLine: Identifiable, Hashable, Sendable
     let dayKey: String
     let timeSlot: String
     let label: String
+    /// RULEBOOK 1.20.0 §9 `timeRange`: the leave half's clock range from `leaveHalfDayWindows` under the working day in
+    /// effect that day ("06:30–10:30"; the whole day for full-day leave). Nil when no working day was passed.
+    var timeRange: String? = nil
+
+    /// The line with `timeRange` from `leaveHalfDayWindows(policy)` (RULEBOOK 1.20.0 §9).
+    func withLeaveTimeRange(policy: OrgPayrollTimePolicy) -> CanonicalTimesheetLeaveLine {
+        var line = self
+        line.timeRange = CanonicalBusinessEngine.leaveSlotClockRange(timeSlot: timeSlot, policy: policy)
+        return line
+    }
+
+    /// "Annual leave (AM) · 06:30–10:30" (web timesheet leave line).
+    var displayLabel: String {
+        guard let timeRange, !timeRange.isEmpty else { return label }
+        return "\(label) · \(timeRange)"
+    }
 }
 
 /// One leave record for `timesheetLeaveLines`.
@@ -155,7 +171,9 @@ extension CanonicalBusinessEngine {
     }
 
     /// `timesheetLeaveLines(records, period, timeZone, nonWorkingDayKeys)`: one information row per
-    /// approved leave day inside the period. Empty when the script did not answer.
+    /// approved leave day inside the period. Empty when the script did not answer. 1.20.0: the script's `dayPolicy`
+    /// argument is a function, which cannot cross the bridge; callers set `timeRange` from `leaveHalfDayWindows` of the
+    /// day's policy (`withLeaveTimeRanges`).
     nonisolated static func timesheetLeaveLines(
         _ records: [CanonicalTimesheetLeaveRecord],
         startDayKey: String,
@@ -177,11 +195,12 @@ extension CanonicalBusinessEngine {
         ) as? [[String: Any]] else { return [] }
         return raw.compactMap { row in
             guard let id = row["id"] as? String, let dayKey = row["dayKey"] as? String else { return nil }
+            let slot = row["timeSlot"] as? String ?? "FULL DAY"
             return CanonicalTimesheetLeaveLine(
                 id: id,
                 leaveId: row["leaveId"] as? String ?? "",
                 dayKey: dayKey,
-                timeSlot: row["timeSlot"] as? String ?? "FULL DAY",
+                timeSlot: slot,
                 label: row["label"] as? String ?? timesheetLeaveLabel(row["timeSlot"] as? String)
             )
         }

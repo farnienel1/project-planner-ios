@@ -230,7 +230,8 @@ struct VariationEditorSheet: View {
         !heading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
     }
     private var hourPresets: [(label: String, hours: Double)] {
-        let day = firebaseBackend.currentOrganization?.settings.payrollTimePolicy.standardPaidHours ?? 0
+        // RULEBOOK 1.20.0 §8: today's weekday paid day (`weekdayPaidHours` of the policy in effect today).
+        let day = CanonicalBusinessEngine.weekdayPaidHours(firebaseBackend.payrollPolicy(for: Date()))
         let full = day > 0 ? day : 8
         return [("Half day", full / 2), ("Full day", full), ("Day + 2", full + 2)]
     }

@@ -372,7 +372,7 @@ struct OrganisationSettingsHubView: View {
     private var hoursSubtitle: String {
         let p = policy
         let wk = formatMult(p.weekdayOutsideStandardMultiplier)
-        return "\(p.standardDayStart)–\(p.standardDayEnd) · \(Int(p.standardPaidHours))h · weekday OT \(wk)×"
+        return "\(p.standardDayStart)–\(p.standardDayEnd) · \(ScheduleCoverageFormat.hours(CanonicalBusinessEngine.weekdayPaidHours(p)))h · weekday OT \(wk)×"
     }
 
     private var annualLeaveDefaultsSubtitle: String {

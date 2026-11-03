@@ -735,7 +735,9 @@ struct OperativeCustomHoursSheet: View {
                     if showsBreakdown {
                         breakdownCard
                     }
-                    if showsFooterNote {
+                    // RULEBOOK 1.20.0: the footer talks about the unpaid break, so it shows only on a day that takes one
+                    // off (`unpaidBreakAppliesOnDay`); a paid-break day or a weekend day with a paid break has none.
+                    if showsFooterNote && breakApplies {
                         footerNoteCard
                     }
                     if let errorMessage {

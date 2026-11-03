@@ -109,14 +109,22 @@ struct ScheduleQuickAddSheet: View {
     private var slotPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionLabel("Slot")
-            if offeredSlots.contains(.fullDay) {
+            // RULEBOOK 1.20.0 §4.3 `allowedTimeSlotsOnDay`: Monday–Friday is Full day or Custom; no AM / PM chip is
+            // hard-coded — each chip shows only when the rulebook offers it.
+            if offeredSlots.contains(.fullDay) || offeredSlots.contains(.am) || offeredSlots.contains(.pm) {
                 VStack(spacing: 8) {
                     HStack(spacing: 8) {
-                        slotChip(.fullDay, title: "Full day", range: clocks?.fullDay.label)
-                        slotChip(.morning, title: "AM", range: clocks?.morning.label)
+                        if offeredSlots.contains(.fullDay) {
+                            slotChip(.fullDay, title: "Full day", range: clocks?.fullDay.label)
+                        }
+                        if offeredSlots.contains(.am) {
+                            slotChip(.morning, title: "AM", range: clocks?.morning.label)
+                        }
                     }
                     HStack(spacing: 8) {
-                        slotChip(.afternoon, title: "PM", range: clocks?.afternoon.label)
+                        if offeredSlots.contains(.pm) {
+                            slotChip(.afternoon, title: "PM", range: clocks?.afternoon.label)
+                        }
                         slotChip(.custom, title: "Custom", range: nil)
                     }
                 }
@@ -212,7 +220,7 @@ struct ScheduleQuickAddSheet: View {
             breakIncluded: true
         )
         let total = existingPaidHours + paid
-        let missing = max(0, max(policy.standardPaidHours, 0) - total)
+        let missing = max(0, max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0) - total)
         // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a Saturday or Sunday shows the day as the pay rule prices it in
         // place of the standard / overtime lines (memoised by input in the wrapper). Saved with the break kept.
         let weekendLines = CanonicalBusinessEngine.collapsedBreakdownLines(

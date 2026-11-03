@@ -4903,7 +4903,9 @@ class FirebaseBackend: ObservableObject {
         if let defaultLongitude {
             payload["defaultLongitude"] = defaultLongitude
         }
-        payload["payrollTimePolicy"] = OrgPayrollTimePolicy.default.asFirestoreDictionary()
+        // RULEBOOK 1.20.0 §4.3: a new company's first working hours are a derived policy
+        // (`withDerivedWeekdayPaidHours`: `paidHoursDerived: true`, `standardPaidHours` = finish − start − unpaid break).
+        payload["payrollTimePolicy"] = (CanonicalBusinessEngine.withDerivedWeekdayPaidHours(.default) ?? .default).asFirestoreDictionary()
         payload["invoicing"] = Self.invoicingFirestoreMap(OrganizationInvoicingSettings.default)
         payload["annualLeaveDefaults"] = [
             "daysPerYear": OrganizationAnnualLeaveDefaults.default.daysPerYear,
@@ -5065,7 +5067,9 @@ class FirebaseBackend: ObservableObject {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
         }
-        if let message = CanonicalBusinessEngine.validatePayrollTimePolicy(policy) {
+        // RULEBOOK 1.20.0 §4.3: the policy is checked as it will be saved (`withDerivedWeekdayPaidHours`); the write
+        // fields derive it themselves.
+        if let message = CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(policy) {
             throw Self.payrollWriteError(message)
         }
         let merged = try await Self.runPayrollPolicyTransaction(
@@ -5099,7 +5103,9 @@ class FirebaseBackend: ObservableObject {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
         }
-        if let message = CanonicalBusinessEngine.validatePayrollTimePolicy(policy) {
+        // RULEBOOK 1.20.0 §4.3: the policy is checked as it will be saved (`withDerivedWeekdayPaidHours`); the write
+        // fields derive it themselves.
+        if let message = CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(policy) {
             throw Self.payrollWriteError(message)
         }
         let picked = Calendar.current.dateComponents([.year, .month, .day], from: effectiveFrom)

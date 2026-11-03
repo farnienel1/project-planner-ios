@@ -430,7 +430,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
         } else {
             let ot = segments.otReported
             let paidSum = segments.totalPaidHours
-            let paidStd = policy.standardPaidHours
+            let paidStd = CanonicalBusinessEngine.weekdayPaidHours(policy)
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 13) {
                     PPIconTile(symbol: "clock.fill", family: .plan, size: PPMetrics.menuIcon)
@@ -861,6 +861,19 @@ struct ManagerScheduleContentView: View {
         }
     }
 
+    /// RULEBOOK 1.20.0 §9 (web `myScheduleAnnualLeaveLabel`): "Full Day", or a half with its clock range from
+    /// `leaveHalfDayWindows` (the exact middle of the working day in effect that day), e.g. "AM (06:30–10:30)".
+    static func leaveSlotText(_ timeSlot: HolidayTimeSlot, policy: OrgPayrollTimePolicy) -> String {
+        let half: String
+        switch timeSlot {
+        case .fullDay: return "Full Day"
+        case .morning: half = "AM"
+        case .afternoon: half = "PM"
+        }
+        guard let range = CanonicalBusinessEngine.leaveSlotClockRange(timeSlot: half, policy: policy) else { return half }
+        return "\(half) (\(range))"
+    }
+
     private func payrollPolicy(for day: Date) -> OrgPayrollTimePolicy {
         firebaseBackend.payrollPolicy(for: day)
     }
@@ -921,15 +934,7 @@ struct ManagerScheduleContentView: View {
     private func annualLeaveDisplayLabel(on day: Date) -> String? {
         let bookings = myHolidayBookings(on: day)
         guard let holiday = bookings.first(where: { $0.status == .approved }) ?? bookings.first else { return nil }
-        let slot: String
-        switch holiday.timeSlot {
-        case .fullDay:
-            slot = "Full Day"
-        case .morning:
-            slot = "AM"
-        case .afternoon:
-            slot = "PM"
-        }
+        let slot = Self.leaveSlotText(holiday.timeSlot, policy: payrollPolicy(for: day))
         return holiday.status == .pending ? "Pending Annual Leave - \(slot)" : "Annual Leave - \(slot)"
     }
 
@@ -2724,12 +2729,7 @@ struct OperativeScheduleContentView: View {
 
     private func approvedHolidayLabel(on date: Date) -> String? {
         guard let leave = holiday(on: date) else { return nil }
-        let slot: String
-        switch leave.timeSlot {
-        case .fullDay: slot = "Full Day"
-        case .morning: slot = "AM"
-        case .afternoon: slot = "PM"
-        }
+        let slot = ManagerScheduleContentView.leaveSlotText(leave.timeSlot, policy: payrollPolicy(for: date))
         return leave.status == .pending ? "Pending Annual Leave - \(slot)" : "Annual Leave - \(slot)"
     }
 

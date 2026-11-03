@@ -79,9 +79,17 @@ struct OrganisationWorkingHoursView: View {
         CanonicalBusinessEngine.payrollPolicyLimits
     }
 
-    /// `validatePayrollTimePolicy(draft)`. Nil when the draft can be saved.
+    /// RULEBOOK 1.20.0 §4.3: `validatePayrollTimePolicy(withDerivedWeekdayPaidHours(draft))` — the draft as it will be
+    /// saved. Nil when the draft can be saved.
     private var validationMessage: String? {
-        CanonicalBusinessEngine.validatePayrollTimePolicy(draft)
+        CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(draft)
+    }
+
+    /// RULEBOOK 1.20.0 §4.3 `weekdayPaidDayPreview(draft)` (memoised by the draft): the Monday–Friday paid day worked out
+    /// from start, finish and the lunch break. Nil while the clock times are not valid.
+    private var weekdayPreview: RulebookWeekdayPaidDayPreview? {
+        guard dayTimelineValid else { return nil }
+        return CanonicalBusinessEngine.weekdayPaidDayPreview(draft)
     }
 
     private var scheduledChange: OrgPayrollTimePolicyScheduledChange? {
@@ -321,7 +329,7 @@ struct OrganisationWorkingHoursView: View {
                 glanceRow(
                     label: "Mon–Fri",
                     color: WorkingHoursPalette.indigo,
-                    text: "\(draft.standardDayStart)–\(draft.standardDayEnd)  ·  \(formatHoursDisplay(draft.computedWeekdayPaidHours)) paid  ·  OT \(formatMultiplier(draft.weekdayOutsideStandardMultiplier))x"
+                    text: "\(draft.standardDayStart)–\(draft.standardDayEnd)  ·  \(weekdayPreview.map { formatHoursDisplay($0.paidHours) } ?? "—") paid  ·  OT \(formatMultiplier(draft.weekdayOutsideStandardMultiplier))x"
                 )
                 glanceRow(
                     label: "Saturday",
@@ -396,8 +404,11 @@ struct OrganisationWorkingHoursView: View {
                     timeFieldColumn(label: "Day starts", text: $draft.standardDayStart)
                     timeFieldColumn(label: "Day ends", text: $draft.standardDayEnd)
                 }
-                .onChange(of: draft.standardDayStart) { _, _ in syncBreakWindowPlacement() }
-                .onChange(of: draft.standardDayEnd) { _, _ in syncBreakWindowPlacement() }
+
+                cardDivider
+
+                // RULEBOOK 1.20.0 §4.3: no paid-hours box Monday–Friday — the paid day is start, finish and the lunch break.
+                weekdayPaidDayLine
 
                 cardDivider
 
@@ -426,10 +437,7 @@ struct OrganisationWorkingHoursView: View {
                     label: "Break length",
                     value: Binding(
                         get: { Double(draft.unpaidBreakMinutes) },
-                        set: {
-                            draft.unpaidBreakMinutes = Int($0)
-                            syncBreakWindowPlacement()
-                        }
+                        set: { draft.unpaidBreakMinutes = Int($0) }
                     ),
                     step: 5,
                     min: limits?.breakMinutes.min ?? 0,
@@ -437,20 +445,11 @@ struct OrganisationWorkingHoursView: View {
                     suffix: " min"
                 )
 
-                cardDivider
-
-                gradientSummaryCard(
-                    topColor: WorkingHoursPalette.indigoGradientTop,
-                    bottomColor: WorkingHoursPalette.indigoGradientBottom,
-                    rows: [
-                        ("Span (start to end)", formatHoursDisplay(weekdaySpanHours), false),
-                        (draft.breakPaid ? "Break (paid, no deduction)" : "Less unpaid break",
-                         draft.breakPaid ? "—" : "−\(formatHoursDisplay(Double(draft.unpaidBreakMinutes) / 60))", false),
-                    ],
-                    footerLabel: "Standard paid day",
-                    footerValue: formatHoursDisplay(draft.computedWeekdayPaidHours),
-                    accent: WorkingHoursPalette.indigo
-                )
+                // The firm sets the break window; it is never moved for them (1.20.0).
+                HStack(spacing: 12) {
+                    timeFieldColumn(label: "Break starts", text: $draft.breakWindowStart)
+                    timeFieldColumn(label: "Break ends", text: $draft.breakWindowEnd)
+                }
 
                 cardDivider
 
@@ -462,6 +461,22 @@ struct OrganisationWorkingHoursView: View {
                 )
             }
         }
+    }
+
+    /// RULEBOOK 1.20.0 §4.3 (web `WeekdayPaidDayLine`): "06:30–14:30 = 8h − 45 min unpaid break = 7h15m".
+    private var weekdayPaidDayLine: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Paid hours for a full day")
+                .font(.body.weight(.semibold))
+            Text(weekdayPreview?.line ?? "Enter valid 24h times to see the paid day.")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(WorkingHoursPalette.ink)
+                .accessibilityIdentifier("weekday-paid-day")
+            Text("Worked out from the start, finish and lunch break.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var dayTimelineValid: Bool {
@@ -501,7 +516,7 @@ struct OrganisationWorkingHoursView: View {
                     dayLegendRow(color: WorkingHoursPalette.indigo, text: "Standard day \(draft.standardDayStart)–\(draft.standardDayEnd)")
                     dayLegendRow(
                         color: WorkingHoursPalette.cardBorder,
-                        text: "Unpaid break \(draft.unpaidBreakMinutes) min (\(draft.breakWindowStart)–\(draft.breakWindowEnd))"
+                        text: "\(draft.breakPaid ? "Paid" : "Unpaid") break \(draft.unpaidBreakMinutes) min (\(draft.breakWindowStart)–\(draft.breakWindowEnd))"
                     )
                     dayLegendRow(
                         color: WorkingHoursPalette.amber,
@@ -1110,7 +1125,7 @@ struct OrganisationWorkingHoursView: View {
         draft = loaded
         baselineDraft = loaded
         baseStateJSON = firebaseBackend.currentOrganization?.payrollPolicyStateJSON
-        syncBreakWindowPlacement()
+        // RULEBOOK 1.20.0: the firm's break window is loaded as saved (no auto-centring), so an unchanged draft is clean.
     }
 
     private func sanitizePolicy(_ policy: OrgPayrollTimePolicy) -> OrgPayrollTimePolicy {
@@ -1164,17 +1179,6 @@ struct OrganisationWorkingHoursView: View {
         draft = baselineDraft
         saveSucceeded = false
         errorMessage = nil
-    }
-
-    private func syncBreakWindowPlacement() {
-        guard let ds = ManagerScheduleInterval.parseMinutes(draft.standardDayStart),
-              let de = ManagerScheduleInterval.parseMinutes(draft.standardDayEnd),
-              de > ds else { return }
-        let span = de - ds
-        let breakMins = max(0, draft.unpaidBreakMinutes)
-        let breakStart = ds + max(0, (span - breakMins) / 2)
-        draft.breakWindowStart = ManagerScheduleInterval.formatMinutes(breakStart)
-        draft.breakWindowEnd = ManagerScheduleInterval.formatMinutes(breakStart + breakMins)
     }
 
     private func saveImmediately() async {
@@ -1248,13 +1252,6 @@ struct OrganisationWorkingHoursView: View {
 
     // MARK: - Validation & helpers
 
-    private var weekdaySpanHours: Double {
-        guard let ds = ManagerScheduleInterval.parseMinutes(draft.standardDayStart),
-              let de = ManagerScheduleInterval.parseMinutes(draft.standardDayEnd),
-              de > ds else { return 0 }
-        return Double(de - ds) / 60.0
-    }
-
     private func saturdayWindowSpanHours(_ settings: OrgWeekendDayPayrollSettings) -> Double {
         guard let s = settings.customStandardStart,
               let e = settings.customStandardEnd,
@@ -1294,22 +1291,6 @@ struct OrganisationWorkingHoursView: View {
             return String(format: "%.0f", value)
         }
         return String(format: "%.1f", value)
-    }
-}
-
-// MARK: - Computed weekday paid hours
-
-private extension OrgPayrollTimePolicy {
-    var computedWeekdayPaidHours: Double {
-        guard let ds = ManagerScheduleInterval.parseMinutes(standardDayStart),
-              let de = ManagerScheduleInterval.parseMinutes(standardDayEnd), de > ds else {
-            return standardPaidHours
-        }
-        var hours = Double(de - ds) / 60.0
-        if !breakPaid {
-            hours = max(0, hours - standardUnpaidBreakHours)
-        }
-        return hours
     }
 }
 

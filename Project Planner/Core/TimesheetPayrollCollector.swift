@@ -101,7 +101,7 @@ enum TimesheetPayrollCollector {
             operative: Operative?
         ) {
             let policy = dayPolicy(for: day)
-            let standardDayHours = max(policy.standardPaidHours, 0.01)
+            let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
             shiftCount += 1
             let resolved = PayrollRateResolver.resolveForTimesheetDay(
                 user: user,
@@ -288,7 +288,8 @@ enum TimesheetPayrollCollector {
         for user: AppUser,
         in range: ClosedRange<Date>,
         holidays: [HolidayBooking],
-        operatives: [Operative]
+        operatives: [Operative],
+        organization: Organization? = nil
     ) -> [CanonicalTimesheetLeaveLine] {
         let account = CanonicalBusinessEngine.CanonicalBookingPersonAccount(
             id: user.id, email: user.email, formerIds: user.formerUserIds, aliasIds: user.sameEmailUserIds
@@ -313,12 +314,18 @@ enum TimesheetPayrollCollector {
             )
         }
         guard !records.isEmpty else { return [] }
-        return CanonicalBusinessEngine.timesheetLeaveLines(
+        let lines = CanonicalBusinessEngine.timesheetLeaveLines(
             records,
             startDayKey: OrganizationRulebookContext.dayKey(range.lowerBound),
             endDayKey: OrganizationRulebookContext.dayKey(range.upperBound),
             nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
         )
+        // RULEBOOK 1.20.0 §8/§9 (`timeRange`): each line's clock range under the working day in effect that day.
+        guard let organization else { return lines }
+        return lines.map { line in
+            guard let day = OrganizationRulebookContext.date(fromDayKey: line.dayKey) else { return line }
+            return line.withLeaveTimeRange(policy: PayrollTimePolicyCatalog.policy(for: day, organization: organization))
+        }
     }
 
     static func projectLabel(

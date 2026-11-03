@@ -34,13 +34,18 @@ extension CanonicalBusinessEngine {
         OrganizationRulebookContext.dayKey(date)
     }
 
-    /// `allowedTimeSlotsOnDay(dayKey, policy, timeZone)`: FULL DAY, AM, PM and CUSTOM on a weekday; CUSTOM only on
-    /// Saturday and Sunday. When the script does not answer every slot is offered (the rules still check the save).
+    nonisolated private static let allowedSlotsMemo = RulebookAnswerMemo<String, [RulebookBookingSlot]>(limit: 1024)
+
+    /// `allowedTimeSlotsOnDay(dayKey, policy, timeZone)`: FULL DAY and CUSTOM Monday–Friday (1.20.0 `WEEKDAY_TIME_SLOTS`:
+    /// no new AM / PM); CUSTOM only on Saturday and Sunday. Memoised by day and zone, so a picker body never runs the
+    /// script per redraw. When the script does not answer, FULL DAY and CUSTOM are offered (the rules still check the save).
     nonisolated static func allowedTimeSlotsOnDay(_ dayKey: String, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> [RulebookBookingSlot] {
-        guard let rows = callJSON("allowedTimeSlotsOnDay", arguments: [dayKey, NSNull(), timeZone]) as? [String] else {
-            return RulebookBookingSlot.allCases
-        }
-        return rows.compactMap(RulebookBookingSlot.init(rawValue:))
+        allowedSlotsMemo.value(for: "\(dayKey)|\(timeZone)") {
+            guard let rows = callJSON("allowedTimeSlotsOnDay", arguments: [dayKey, NSNull(), timeZone]) as? [String] else {
+                return nil
+            }
+            return rows.compactMap(RulebookBookingSlot.init(rawValue:))
+        } ?? [.fullDay, .custom]
     }
 
     /// `allowedTimeSlotsOnDay` for a booking date.

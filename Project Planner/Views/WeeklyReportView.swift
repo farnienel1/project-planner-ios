@@ -1437,7 +1437,8 @@ struct WeeklyReportView: View {
     /// Uses day-rate history keyed by user id; compares **calendar days** so a change effective “tomorrow” does not apply to today’s bookings.
     private func resolvedPayrollRate(user: AppUser?, operative: Operative?, on date: Date) -> ResolvedPayrollRate {
         let policy = firebaseBackend.payrollPolicy(for: date)
-        let standardDayHours = max(policy.standardPaidHours, 8)
+        // RULEBOOK 1.20.0 §8: the day a day rate is divided by is `weekdayPaidHours` of that day's policy (no 8h floor).
+        let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
         return PayrollRateResolver.resolveForTimesheetDay(
             user: user,
             operative: StaffEmailIdentity.operativeUsedForPay(user: user, operative: operative),
@@ -1609,7 +1610,7 @@ struct WeeklyReportView: View {
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
             let normalHours = max(0, paid - (otHours * otMultiplier))
-            let standardDayHours = max(policy.standardPaidHours, 0.01)
+            let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
@@ -1647,7 +1648,7 @@ struct WeeklyReportView: View {
             let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
             let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
             let normalHours = max(0, paid - (otHours * otMultiplier))
-            let standardDayHours = max(policy.standardPaidHours, 0.01)
+            let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"

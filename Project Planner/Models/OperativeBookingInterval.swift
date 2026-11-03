@@ -151,7 +151,7 @@ extension Booking {
     func reportDayValue(policy: OrgPayrollTimePolicy = .default) -> Double {
         let paidHrs = paidBookedHours(policy: policy)
         // Nil only when the script did not run; bookings are then unreadable too.
-        return CanonicalBusinessEngine.reportDayValue(totalPaidHours: paidHrs, standardPaidHours: policy.standardPaidHours) ?? 0
+        return CanonicalBusinessEngine.reportDayValue(totalPaidHours: paidHrs, standardPaidHours: CanonicalBusinessEngine.weekdayPaidHours(policy)) ?? 0
     }
 
     func calendarBlock(on day: Date, policy: OrgPayrollTimePolicy = .default) -> (start: Date, end: Date) {
@@ -179,22 +179,25 @@ extension Booking {
             return Double(iv.1 - iv.0) / 60.0
         }
         switch timeSlot {
-        case .fullDay: return max(policy.standardPaidHours, 0)
-        case .morning, .afternoon: return max(policy.standardPaidHours, 0) / 2
+        case .fullDay: return max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0)
+        case .morning, .afternoon: return max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0) / 2
         case .evening: return 4
         case .overtime: return 2
-        case .customHours: return max(policy.standardPaidHours, 0)
+        case .customHours: return max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0)
         }
     }
 }
 
 enum ScheduleCoverageFormat {
+    /// Hours as the pay rule gives them, to the hundredth with trailing zeros dropped (7.25 → "7.25", 3.5 → "3.5",
+    /// 8 → "8"). RULEBOOK 1.20.0: a derived weekday day is often a quarter hour (owner example 7.25h), so the display
+    /// never rounds it to the half hour (it used to show 7.25 as "7.5").
     static func hours(_ h: Double) -> String {
-        let rounded = (h * 2).rounded() / 2
-        if abs(rounded - rounded.rounded(.towardZero)) < 0.01 {
-            return String(format: "%.0f", rounded)
-        }
-        return String(format: "%.1f", rounded)
+        let rounded = (h * 100).rounded() / 100
+        var text = String(format: "%.2f", rounded)
+        while text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        return text == "-0" ? "0" : text
     }
 
     static func multiplier(_ m: Double) -> String {

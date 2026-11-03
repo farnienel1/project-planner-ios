@@ -1,0 +1,211 @@
+import XCTest
+@testable import Project_Planner
+
+/// RULEBOOK 1.20.0 / 1.20.1 behaviour on iOS through `CanonicalBusinessEngine`. Every expected value was checked in node
+/// against the packed `canonical-business.js` (sha256 1301236a…09de811a), fed the same stored shapes these Swift models
+/// write (`OrgPayrollTimePolicy.asFirestoreDictionary`).
+@MainActor
+final class Rulebook1200Tests: XCTestCase {
+    private let zone = "Europe/London"
+    /// Monday 9 Nov 2026, Saturday 7 Nov 2026.
+    private let monday = "2026-11-09"
+    private let saturday = "2026-11-07"
+
+    /// The owner's example: 06:30–14:30, lunch 10:00–10:45 unpaid (45 min), weekday overtime ×1.5. `derived` marks a
+    /// policy saved from 1.20.0 (`paidHoursDerived`); the stored `standardPaidHours` is 8 either way.
+    private func ownerPolicy(derived: Bool) -> OrgPayrollTimePolicy {
+        var policy = OrgPayrollTimePolicy.default
+        policy.standardDayStart = "06:30"
+        policy.standardDayEnd = "14:30"
+        policy.breakWindowStart = "10:00"
+        policy.breakWindowEnd = "10:45"
+        policy.unpaidBreakMinutes = 45
+        policy.breakPaid = false
+        policy.standardPaidHours = 8
+        policy.paidHoursDerived = derived ? true : nil
+        return policy
+    }
+
+    private func paid(_ policy: OrgPayrollTimePolicy, slot: String, _ start: String? = nil, _ end: String? = nil) throws -> RulebookPayrollHours {
+        try XCTUnwrap(CanonicalBusinessEngine.payrollHoursResult(RulebookPayrollHoursInput(
+            booking: CanonicalPayrollBooking(
+                timeSlot: slot, workStartTime: start, workEndTime: end, isBreakRemoved: false, otMultiplierOverride: nil
+            ),
+            dayKey: monday,
+            policy: policy,
+            timeZone: zone
+        )))
+    }
+
+    func testThePackedScriptIsRulebook1201OrLater() throws {
+        let stamp = try XCTUnwrap(CanonicalBusinessEngine.rulebookStamp())
+        let parts = stamp.version.split(separator: ".").compactMap { Int($0) }
+        XCTAssertFalse(parts.lexicographicallyPrecedes([1, 20, 1]), "rulebook \(stamp.version) predates 1.20.1")
+        let names = Set(CanonicalBusinessEngine.exportNames())
+        for name in [
+            "derivedWeekdayPaidHours", "weekdayPaidHours", "withDerivedWeekdayPaidHours", "weekdayPaidDayPreview",
+            "leaveHalfDayWindows", "leaveHalfDayLabel", "leaveComparableInterval", "allowedTimeSlotsOnDay",
+        ] {
+            XCTAssertTrue(names.contains(name), name)
+        }
+    }
+
+    // MARK: Working hours (§4.3)
+
+    func testWeekdayPreviewLineIsTheOwnerExample() throws {
+        let preview = try XCTUnwrap(CanonicalBusinessEngine.weekdayPaidDayPreview(ownerPolicy(derived: false)))
+        XCTAssertEqual(preview.line, "06:30–14:30 = 8h − 45 min unpaid break = 7h15m")
+        XCTAssertEqual(preview.paidHours, 7.25, accuracy: 0.0001)
+        XCTAssertEqual(preview.dayMinutes, 480)
+        XCTAssertEqual(preview.breakMinutes, 45)
+        var paidBreak = ownerPolicy(derived: false)
+        paidBreak.breakPaid = true
+        XCTAssertEqual(
+            CanonicalBusinessEngine.weekdayPaidDayPreview(paidBreak)?.line,
+            "06:30–14:30 = 8h, 45 min break paid = 8h"
+        )
+    }
+
+    func testDerivedPolicyPaysTheDerivedDayAndAnOldPolicyKeepsItsStoredFigure() {
+        XCTAssertEqual(CanonicalBusinessEngine.weekdayPaidHours(ownerPolicy(derived: true)), 7.25, accuracy: 0.0001)
+        XCTAssertEqual(
+            CanonicalBusinessEngine.weekdayPaidHours(ownerPolicy(derived: false)), 8, accuracy: 0.0001,
+            "a policy saved before 1.20.0 (no paidHoursDerived) keeps its stored standardPaidHours"
+        )
+    }
+
+    func testWithDerivedWeekdayPaidHoursMarksThePolicyAndWritesTheDerivedDay() throws {
+        let derived = try XCTUnwrap(CanonicalBusinessEngine.withDerivedWeekdayPaidHours(ownerPolicy(derived: false)))
+        XCTAssertEqual(derived.paidHoursDerived, true)
+        XCTAssertEqual(derived.standardPaidHours, 7.25, accuracy: 0.0001)
+        let stored = derived.asFirestoreDictionary()
+        XCTAssertEqual(stored["paidHoursDerived"] as? Bool, true)
+        XCTAssertEqual((stored["standardPaidHours"] as? NSNumber)?.doubleValue ?? -1, 7.25, accuracy: 0.0001)
+        // Read back from Firestore it stays derived.
+        let read = OrgPayrollTimePolicy.fromFirestore(stored)
+        XCTAssertEqual(read.paidHoursDerived, true)
+        XCTAssertEqual(CanonicalBusinessEngine.weekdayPaidHours(read), 7.25, accuracy: 0.0001)
+    }
+
+    func testAnOldPolicyDoesNotWriteTheFlag() {
+        let stored = ownerPolicy(derived: false).asFirestoreDictionary()
+        XCTAssertNil(stored["paidHoursDerived"])
+        XCTAssertNil(OrgPayrollTimePolicy.fromFirestore(stored).paidHoursDerived)
+    }
+
+    func testTheIOSSaveRoundTripWritesPaidHoursDerivedAndTheDerivedStandardPaidHours() throws {
+        let orgDocument: [String: Any] = ["payrollTimePolicy": ownerPolicy(derived: false).asFirestoreDictionary()]
+        let fields = try XCTUnwrap(CanonicalBusinessEngine.payrollTimePolicyApplyNowWriteFields(
+            orgDocument: orgDocument,
+            policy: ownerPolicy(derived: false),
+            todayKey: monday,
+            timeZone: zone
+        ))
+        let written = try XCTUnwrap(fields["payrollTimePolicy"] as? [String: Any])
+        XCTAssertEqual(written["paidHoursDerived"] as? Bool, true)
+        XCTAssertEqual((written["standardPaidHours"] as? NSNumber)?.doubleValue ?? -1, 7.25, accuracy: 0.0001)
+        XCTAssertNotNil(fields["payrollTimePolicyHistory"], "1.19.0 history is still written")
+        XCTAssertNotNil(fields["payrollTimePolicyRevision"], "1.19.0 revision is still bumped")
+        // The model reads the write back as a derived policy.
+        XCTAssertEqual(OrgPayrollTimePolicy.fromFirestore(written).paidHoursDerived, true)
+    }
+
+    func testValidationChecksTheDerivedDay() {
+        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(ownerPolicy(derived: false)))
+        var tooShort = ownerPolicy(derived: false)
+        tooShort.standardDayStart = "10:00"
+        tooShort.standardDayEnd = "10:50"
+        tooShort.breakWindowStart = "10:00"
+        tooShort.breakWindowEnd = "10:45"
+        XCTAssertEqual(
+            CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(tooShort),
+            "The working day must give between 1 and 12 paid hours (finish − start − unpaid break)."
+        )
+    }
+
+    // MARK: Weekday pay (§8)
+
+    func testOwnerWeekdayPayExamples() throws {
+        let policy = ownerPolicy(derived: true)
+        XCTAssertEqual(try paid(policy, slot: "FULL DAY").hours.totalPaidHours, 7.25, accuracy: 0.001)
+        XCTAssertEqual(try paid(policy, slot: "CUSTOM_HOURS", "06:30", "12:00").hours.totalPaidHours, 4.75, accuracy: 0.001)
+        XCTAssertEqual(
+            try paid(policy, slot: "CUSTOM_HOURS", "11:00", "14:30").hours.totalPaidHours, 3.5, accuracy: 0.001,
+            "under a derived policy custom hours are never snapped to a half day"
+        )
+        let overtime = try paid(policy, slot: "CUSTOM_HOURS", "06:30", "16:30")
+        XCTAssertEqual(overtime.hours.standardHours, 7.25, accuracy: 0.001)
+        XCTAssertEqual(overtime.hours.outsideHours, 2, accuracy: 0.001)
+        XCTAssertEqual(overtime.hours.outsideMultiplier, 1.5, accuracy: 0.001)
+        XCTAssertEqual(overtime.hours.totalPaidHours, 10.25, accuracy: 0.001)
+    }
+
+    func testAnOldPolicyKeepsTheHalfDaySnap() throws {
+        XCTAssertEqual(
+            try paid(ownerPolicy(derived: false), slot: "CUSTOM_HOURS", "11:00", "14:30").hours.totalPaidHours, 4, accuracy: 0.001
+        )
+    }
+
+    // MARK: Booking slots (§4.3)
+
+    func testWeekdaysOfferFullDayAndCustomOnly() {
+        XCTAssertEqual(CanonicalBusinessEngine.allowedTimeSlotsOnDay(monday, timeZone: zone), [.fullDay, .custom])
+        XCTAssertEqual(CanonicalBusinessEngine.allowedTimeSlotsOnDay(saturday, timeZone: zone), [.custom])
+        XCTAssertFalse(CanonicalBusinessEngine.timeSlotAllowedOnDay("AM", dayKey: monday, timeZone: zone))
+        XCTAssertTrue(CanonicalBusinessEngine.timeSlotAllowedOnDay("FULL DAY", dayKey: monday, timeZone: zone))
+    }
+
+    // MARK: Leave halves (§9)
+
+    func testLeaveHalvesSplitTheDayAtItsExactMiddle() throws {
+        let halves = try XCTUnwrap(CanonicalBusinessEngine.leaveHalfDayWindows(policy: ownerPolicy(derived: true)))
+        XCTAssertEqual(halves.am, CanonicalMinuteInterval(start: 390, end: 630))
+        XCTAssertEqual(halves.pm, CanonicalMinuteInterval(start: 630, end: 870))
+        XCTAssertEqual(CanonicalBusinessEngine.leaveHalfDayLabel(timeSlot: "AM", policy: ownerPolicy(derived: true)), "AM 06:30–10:30")
+        XCTAssertEqual(CanonicalBusinessEngine.leaveHalfDayLabel(timeSlot: "PM", policy: ownerPolicy(derived: true)), "PM 10:30–14:30")
+        XCTAssertEqual(CanonicalBusinessEngine.leaveHalfDayLabel(timeSlot: "FULL DAY", policy: ownerPolicy(derived: true)), "Full day")
+        XCTAssertEqual(CanonicalBusinessEngine.leaveSlotClockRange(timeSlot: "AM", policy: ownerPolicy(derived: true)), "06:30–10:30")
+        XCTAssertEqual(CanonicalBusinessEngine.leaveSlotClockRange(timeSlot: "PM", policy: ownerPolicy(derived: true)), "10:30–14:30")
+    }
+
+    func testTimesheetLeaveLineCarriesTheLeaveHalf() {
+        let line = CanonicalTimesheetLeaveLine(id: "l1", leaveId: "L1", dayKey: monday, timeSlot: "AM", label: "Annual leave (AM)")
+            .withLeaveTimeRange(policy: ownerPolicy(derived: true))
+        XCTAssertEqual(line.timeRange, "06:30–10:30")
+        XCTAssertEqual(line.displayLabel, "Annual leave (AM) · 06:30–10:30")
+    }
+
+    private func amLeaveCover(bookingStart: String, bookingEnd: String) -> [CanonicalLeaveCoverageRow]? {
+        CanonicalBusinessEngine.leaveCoverageRows(CanonicalLeaveCoverageInput(
+            timeZone: zone,
+            startDayKey: monday,
+            endDayKey: monday,
+            day: CanonicalStandardDayInput(policy: ownerPolicy(derived: true)),
+            includeWeekends: false,
+            people: [CanonicalLeavePerson(personKey: "U1", name: "Ann Example", userId: "U1", operativeIds: ["OP1"])],
+            leave: [
+                CanonicalLeaveRecord(id: "L1", userId: "U1", startDayKey: monday, endDayKey: monday, timeSlot: "AM", approved: true),
+            ],
+            bookings: [
+                CanonicalLeaveBooking(
+                    id: "B1", personId: "OP1", kind: "operative", dayKey: monday,
+                    timeSlot: "CUSTOM_HOURS", workStartTime: bookingStart, workEndTime: bookingEnd, label: "J1"
+                ),
+            ]
+        ))
+    }
+
+    func testAMLeaveCoveredFromTheMiddleOfTheDay() {
+        XCTAssertEqual(amLeaveCover(bookingStart: "10:30", bookingEnd: "14:30"), [])
+    }
+
+    func testAMLeaveWithAnElevenOClockStartMissesAQuarterHourAndTheLunchNeverNeedsCovering() throws {
+        let rows = try XCTUnwrap(amLeaveCover(bookingStart: "11:00", bookingEnd: "14:30"))
+        XCTAssertEqual(rows.count, 1)
+        let row = try XCTUnwrap(rows.first)
+        XCTAssertEqual(row.kind, "leave_cover")
+        XCTAssertEqual(row.missingHours, 0.25, accuracy: 0.001)
+        XCTAssertEqual(row.missing.map(\.start), [645])
+        XCTAssertEqual(row.missing.map(\.end), [660])
+    }
+}

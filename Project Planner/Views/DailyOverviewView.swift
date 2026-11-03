@@ -738,12 +738,18 @@ struct DailyOverviewView: View {
         )
     }
 
+    /// RULEBOOK 1.20.0 §9: the leave row's slot from `leaveHalfDayLabel` under the working day in effect (memoised in the
+    /// wrapper), e.g. "Annual leave · AM 06:30–10:30".
+    static func leaveRowSlotLabel(_ booking: HolidayBooking, policy: OrgPayrollTimePolicy) -> String? {
+        CanonicalBusinessEngine.leaveHalfDayLabel(timeSlot: booking.timeSlot.rawValue, policy: policy)
+    }
+
     private var annualLeaveRevampBlock: some View {
         VStack(alignment: .leading, spacing: 0) {
             revampSectionHeader(title: "Annual leave", trailing: nil)
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(dayHolidays.enumerated()), id: \.element.id) { idx, booking in
-                    OnHolidayRowView(booking: booking)
+                    OnHolidayRowView(booking: booking, slotLabel: Self.leaveRowSlotLabel(booking, policy: payrollTimePolicy))
                     if idx < dayHolidays.count - 1 {
                         Divider()
                     }
@@ -1311,6 +1317,9 @@ private extension DailyOverviewView {
 
 struct OnHolidayRowView: View {
     let booking: HolidayBooking
+    /// RULEBOOK 1.20.0 §9 `leaveHalfDayLabel`: "Full day", "AM 06:30–10:30", "PM 10:30–14:30". Nil shows only
+    /// "Annual leave".
+    var slotLabel: String? = nil
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var operativeStore: OperativeStore
     
@@ -1355,7 +1364,7 @@ struct OnHolidayRowView: View {
                 Text(displayName)
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
-                Text("Annual leave")
+                Text(slotLabel.map { "Annual leave · \($0)" } ?? "Annual leave")
                     .font(.system(size: 10))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
             }
