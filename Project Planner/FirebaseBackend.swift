@@ -2205,9 +2205,17 @@ class FirebaseBackend: ObservableObject {
         // the field was missing). `jobType` routes the in-app list and the save collection, so a small works
         // document typed "CAT A" was dropped by the small works listener and, before that, shown and saved as a
         // project. The stored `jobType` field is not rewritten: saves diff against this same read copy.
+        //
+        // The same holds the other way: a `projects` document is a project whatever its stored `jobType` says. Web
+        // project forms offer "Small Works" from the job type catalogue, so older web projects are stored in
+        // `projects` typed "Small Works". iOS read those as small works, the projects load and listener then left
+        // them out and the small works listener (another collection) never had them: the job vanished from iOS while
+        // web still showed it. It is listed under Projects as CAT A (web `collectionJobTypeForName`), saved back to
+        // `projects`, and its stored `jobType` is not rewritten (a save diffs against this read copy).
+        let storedJobType = parseJobType(from: row.optionalText("jobType"), defaultValue: .catA)
         let jobType: JobType = smallWorks
             ? .smallWorks
-            : parseJobType(from: row.optionalText("jobType"), defaultValue: .catA)
+            : (storedJobType == .smallWorks ? .catA : storedJobType)
         let manager = parseManagerLegacy(from: row.optionalText("managerName") ?? storedManagerName)
         let storedManagerIds = row.strings("managerIds")
         let storedPrimary = row.optionalText("managerId")

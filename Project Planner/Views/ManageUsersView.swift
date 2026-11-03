@@ -1360,6 +1360,9 @@ struct EditUserView: View {
     /// When `true` (e.g. opened from the Managers roster shortcut), hide **Admin Access** — grant admin only via Change user type in full Manage Users.
     let suppressAdminAccessToggle: Bool
     @State private var permissions: UserPermissions
+    /// The stored permissions the editor's draft started from. A save writes only the flags changed against this,
+    /// and the draft follows the live row while nothing has been changed (RULEBOOK §1 partial writes).
+    @State private var permissionsBaseline: UserPermissions
     @State private var isUpdating = false
     @State private var isActive: Bool
     @State private var showingDeleteConfirmation = false
@@ -1442,6 +1445,7 @@ struct EditUserView: View {
         self.user = user
         self.suppressAdminAccessToggle = suppressAdminAccessToggle
         self._permissions = State(initialValue: user.permissions)
+        self._permissionsBaseline = State(initialValue: user.permissions)
         self._isActive = State(initialValue: user.isActive)
         self._selectedAssignedManagerUserId = State(initialValue: user.assignedManagerUserId)
         self._selectedLineManagerUserIds = State(initialValue: Set(user.lineManagerUserIds))
@@ -1813,6 +1817,31 @@ struct EditUserView: View {
         }
     }
 
+    /// Account kind of the stored row from the rulebook (`accountKindFromFlags`: super admin, then admin flag or
+    /// role, then operative mode), so the Change user type sheet opens on the type the header shows.
+    private func storedAccountKind(of subject: AppUser) -> ManagedAccountKind {
+        switch CanonicalBusinessEngine.accountKindFromFlags(
+            isSuperAdmin: subject.isSuperAdmin,
+            role: subject.role.rawValue,
+            adminAccess: subject.permissions.adminAccess,
+            manager: subject.permissions.manager,
+            operativeMode: subject.permissions.operativeMode
+        ) ?? "" {
+        case "admin": return .administrator
+        case "operative": return .operative
+        case "manager": return .manager
+        default: return UserRoleTransitionPolicy.kind(for: subject.permissions)
+        }
+    }
+
+    /// While nothing has been changed on this screen, the draft follows the stored row (live roster, read-back).
+    private func followStoredPermissionsIfDraftUnchanged() {
+        let stored = displayedUser.permissions
+        guard permissions == permissionsBaseline, stored != permissionsBaseline else { return }
+        permissions = stored
+        permissionsBaseline = stored
+    }
+
     private var displayRoleLabel: String {
         switch accountKind {
         case "operative": return UserRole.operative.displayName
@@ -2068,6 +2097,10 @@ struct EditUserView: View {
             }
         }
         .onAppear(perform: syncEditUserDraftsFromStore)
+        .onAppear(perform: followStoredPermissionsIfDraftUnchanged)
+        .onChange(of: displayedUser.permissions) { _, _ in
+            followStoredPermissionsIfDraftUnchanged()
+        }
         .alert("Admin Access", isPresented: $showingAdminAccessLockedMessage) {
             Button("OK", role: .cancel) { }
                 .accessibilityIdentifier("editUser.ok")
@@ -2521,11 +2554,13 @@ struct EditUserView: View {
         )
         await MainActor.run { isApplyingUserType = false }
         if ok {
-            await userStore.loadOrganizationUsers()
+            // `updateUserPermissions` read the saved document back from the server; this screen shows that copy.
+            await userStore.loadOrganizationUsers(forceRefresh: true)
             await holidayStore.loadData()
             await MainActor.run {
                 if let fresh = userStore.organizationUsers.first(where: { $0.id == user.id }) {
                     permissions = fresh.permissions
+                    permissionsBaseline = fresh.permissions
                     selectedLineManagerUserIds = Set(fresh.lineManagerUserIds)
                     selectedAssignedManagerUserId = fresh.assignedManagerUserId
                     isActive = fresh.isActive
@@ -2539,7 +2574,13 @@ struct EditUserView: View {
             }
         } else {
             await MainActor.run {
-                userTypeChangeMessage = userStore.errorMessage ?? "Could not update account type."
+                // Refused or not stored: show the stored type again, never the one that was asked for.
+                let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+                permissions = stored.permissions
+                permissionsBaseline = stored.permissions
+                changeUserTypeDraft = storedAccountKind(of: stored)
+                applyDraftsForChangeUserTypeSelection()
+                userTypeChangeMessage = userStore.errorMessage ?? "Could not update account type. Nothing was changed."
             }
         }
     }
@@ -3162,7 +3203,8 @@ struct EditUserView: View {
                         title: "Change user type",
                         subtitle: "Switch between operative, manager, or administrator",
                         action: {
-                            changeUserTypeDraft = UserRoleTransitionPolicy.kind(for: permissions)
+                            followStoredPermissionsIfDraftUnchanged()
+                            changeUserTypeDraft = storedAccountKind(of: displayedUser)
                             applyDraftsForChangeUserTypeSelection()
                             userTypeChangeMessage = nil
                             showingPromoteToAdminConfirmation = false
@@ -3606,9 +3648,16 @@ struct EditUserView: View {
         let previousPermissions = subjectUser.permissions
         let previousHasNoLineManager = subjectUser.hasNoLineManager
         if canEditPermissionsMatrix && !isViewingSuperAdminProfile {
-            if canUseAdminAccountTools && permissions != subjectUser.permissions {
+            // Only the flags changed on this screen are sent, laid over the stored copy. A draft opened from an
+            // older row never writes that row's flags back (an older copy turned an admin's adminAccess off).
+            let editedPermissions = UserPermissionsDraftMerge.applyingEdits(
+                from: permissionsBaseline,
+                to: permissions,
+                onto: subjectUser.permissions
+            )
+            if canUseAdminAccountTools && permissions != permissionsBaseline && editedPermissions != subjectUser.permissions {
                 didPersistPermissions = true
-                var outgoing = permissions
+                var outgoing = editedPermissions
                 outgoing.skills = false
                 let staffMaterialsAlwaysOn = subjectUser.isSuperAdmin
                     || outgoing.adminAccess
@@ -3852,6 +3901,12 @@ struct EditUserView: View {
             if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess && billingSuccess {
                 dismiss()
             } else {
+                if !permissionsSuccess {
+                    // A refused permission save shows the stored flags again, never the unsaved ones.
+                    let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+                    permissions = stored.permissions
+                    permissionsBaseline = stored.permissions
+                }
                 saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."
             }
         }

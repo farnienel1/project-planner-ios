@@ -494,6 +494,12 @@ class UserStore: ObservableObject {
                 incoming: users,
                 organizationId: requestedOrganizationId
             )
+            // Healing probes absent people for up to 8 seconds. A save made meanwhile (a role change) ends this
+            // load: its server copy is older than what the save wrote, so it is never published.
+            guard generation == organizationUsersLoadGeneration else {
+                print("🔥🔥🔥 DEBUG: Ignoring organisation user roster for \(requestedOrganizationId) — a save or a newer load replaced it while healing")
+                return
+            }
             guard let listed = CanonicalBusinessEngine.listedRosterUsers(healed, claimedEmails: roster.claimedEmails) else {
                 print("🔥🔥🔥 DEBUG: ROSTER_LIST script did not return a list — keeping the roster already on screen")
                 ReaderDiagnostics.shared.record(
@@ -2064,6 +2070,8 @@ class UserStore: ObservableObject {
                  role: UserRole? = nil
              ) async -> Bool {
                  guard let firebaseBackend = firebaseBackend else { return false }
+                 // A message from an earlier save must not be shown as the reason this one failed.
+                 errorMessage = nil
 
                  do {
                      if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
@@ -2072,6 +2080,7 @@ class UserStore: ObservableObject {
 
                          if updatedUser.isSuperAdmin || isOrganizationCreator(userId: updatedUser.id) {
                              print("🔥🔥🔥 DEBUG: Cannot update permissions for the Super Admin")
+                             errorMessage = "The Super Admin's account type cannot be changed here."
                              return false
                          }
 
@@ -2108,16 +2117,70 @@ class UserStore: ObservableObject {
                             previousRole: previousRole,
                             nextRole: isSelfSave ? nil : role
                         )
-                         organizationUsers[index] = updatedUser
+                         // A roster load that read the server before this write landed must not publish its
+                         // older copy over the saved one (the person went back to their old role on screen).
+                         invalidateInFlightRosterLoads()
+
+                         let changesAccountType = !isSelfSave && (
+                             (role != nil && role != previousRole)
+                                 || updatedUser.permissions.adminAccess != previousPermissions.adminAccess
+                                 || updatedUser.permissions.manager != previousPermissions.manager
+                                 || updatedUser.permissions.operativeMode != previousPermissions.operativeMode
+                         )
+                         if changesAccountType {
+                             // Read the saved document back from the server: the screen shows what was stored,
+                             // never the value it asked for.
+                             let orgId = normalizedOrganizationId(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "")
+                             switch await firebaseBackend.probeOrganizationUser(userId: userId, organizationId: orgId) {
+                             case .present(let stored):
+                                 var confirmed = stored
+                                 confirmed.placedByManagersRecord = updatedUser.placedByManagersRecord
+                                 confirmed.sameEmailUserIds = updatedUser.sameEmailUserIds
+                                 if !UserTypeChangeReadBack.landed(
+                                     expectedRole: isSelfSave ? nil : role,
+                                     expected: updatedUser.permissions,
+                                     stored: stored
+                                 ) {
+                                     if let current = organizationUsers.firstIndex(where: { $0.id == userId }) {
+                                         organizationUsers[current] = confirmed
+                                     }
+                                     errorMessage = UserTypeChangeReadBack.notSavedMessage(stored: stored)
+                                     NSLog("ROLE_CHANGE_NOT_STORED id=%@ role=%@ adminAccess=%@", userId, stored.role.rawValue, stored.permissions.adminAccess ? "true" : "false")
+                                     return false
+                                 }
+                                 updatedUser = confirmed
+                             case .confirmedMissing:
+                                 errorMessage = "This person's profile no longer exists, so their account type was not changed."
+                                 return false
+                             case .permissionDenied, .unconfirmed:
+                                 // The server accepted the write; only the read-back could not be made.
+                                 NSLog("ROLE_CHANGE_READBACK_UNCONFIRMED id=%@", userId)
+                             }
+                             if let role, !isSelfSave {
+                                 await patchSameEmailDocuments(
+                                     of: updatedUser,
+                                     permissions: updatedUser.permissions,
+                                     role: role,
+                                     organizationId: orgId
+                                 )
+                             }
+                         }
+
+                         // The roster may have been republished while the write was in flight: find the row again.
+                         guard let savedIndex = organizationUsers.firstIndex(where: { $0.id == userId }) else {
+                             return true
+                         }
+                         organizationUsers[savedIndex] = updatedUser
+                         let saved = organizationUsers[savedIndex]
 
                          if let holidayStore,
                             UserRoleTransitionPolicy.shouldClearPendingAnnualLeave(
                                 old: previousPermissions,
                                 new: sanitized,
-                                oldHasNoLineManager: organizationUsers[index].hasNoLineManager,
-                                newHasNoLineManager: organizationUsers[index].hasNoLineManager,
-                                oldLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
-                                newLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
+                                oldHasNoLineManager: saved.hasNoLineManager,
+                                newHasNoLineManager: saved.hasNoLineManager,
+                                oldLineManagerUserIds: saved.lineManagerUserIds,
+                                newLineManagerUserIds: saved.lineManagerUserIds,
                                 users: organizationUsers
                             ) {
                              await holidayStore.deletePendingHolidayRequestsFor(
@@ -2130,10 +2193,10 @@ class UserStore: ObservableObject {
                             UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
                                 old: previousPermissions,
                                 new: sanitized,
-                                oldHasNoLineManager: organizationUsers[index].hasNoLineManager,
-                                newHasNoLineManager: organizationUsers[index].hasNoLineManager,
-                                oldLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
-                                newLineManagerUserIds: organizationUsers[index].lineManagerUserIds,
+                                oldHasNoLineManager: saved.hasNoLineManager,
+                                newHasNoLineManager: saved.hasNoLineManager,
+                                oldLineManagerUserIds: saved.lineManagerUserIds,
+                                newLineManagerUserIds: saved.lineManagerUserIds,
                                 users: organizationUsers
                             ) {
                              await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: userId)
@@ -2141,12 +2204,52 @@ class UserStore: ObservableObject {
 
                          return true
                      }
+                     errorMessage = "This person is not in the loaded user list. Pull to refresh and try again."
                      return false
                  } catch {
                      print("🔥🔥🔥 DEBUG: Error updating user permissions: \(error)")
+                     errorMessage = UserTypeChangeReadBack.writeRefusedMessage(error)
                      return false
                  }
              }
+
+    /// Ends every roster load already in flight: its result is ignored when it lands. The next load starts afresh.
+    private func invalidateInFlightRosterLoads() {
+        organizationUsersLoadGeneration += 1
+        organizationUsersLoadInProgress = false
+        lastOrganizationUsersLoadAt = nil
+    }
+
+    /// The person's other `users` documents with the same email in this organisation (`rosterPeople`
+    /// `sameEmailUserIds`) get the same account type, so the document their own sign-in reads
+    /// (`users/{auth uid}`) is not left on the old one. A document whose `organizationId` is another company is
+    /// never written. A failure here is logged; the row the editor saved stays saved.
+    private func patchSameEmailDocuments(
+        of person: AppUser,
+        permissions: UserPermissions,
+        role: UserRole,
+        organizationId: String
+    ) async {
+        guard let firebaseBackend, !organizationId.isEmpty else { return }
+        for aliasId in person.sameEmailUserIds where aliasId.caseInsensitiveCompare(person.id) != .orderedSame {
+            guard case .present(let alias) = await firebaseBackend.probeOrganizationUser(
+                userId: aliasId,
+                organizationId: organizationId
+            ) else { continue }
+            guard organizationIdsMatch(alias.organizationId, organizationId), !alias.isSuperAdmin else { continue }
+            do {
+                try await firebaseBackend.patchChangedUserPermissions(
+                    userId: aliasId,
+                    previous: alias.permissions,
+                    updated: permissions,
+                    previousRole: alias.role,
+                    nextRole: role
+                )
+            } catch {
+                NSLog("ROLE_CHANGE_ALIAS_SKIPPED id=%@ error=%@", aliasId, error.localizedDescription)
+            }
+        }
+    }
 
     /// Persists annual leave entitlement on `users/{userId}` as a field-limited patch. The write does not include organizationId.
     func updateUserAnnualLeaveEntitlement(

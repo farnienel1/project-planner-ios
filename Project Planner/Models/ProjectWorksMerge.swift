@@ -37,13 +37,22 @@ enum ProjectWorksMerge {
 
     /// Every job document, once: `workDocuments` (placeholders and exact duplicate ids out; two
     /// documents may share a job number, and bookings point at either, so both stay).
+    ///
+    /// Projects are passed as `projects` and small works as `smallWorks`, in that order, as web does: when a
+    /// `projects` and a `smallWorks` document share an id (older builds re-saved a small works job typed
+    /// "CAT A" into `projects` under the same id), the project is the one kept. The order used to follow
+    /// whichever listener fired last, so the shared job dropped off Projects each time the projects listener ran.
     static func uniqueWorks(_ projects: [Project]) -> [Project] {
-        let rows: [[String: Any]] = projects.map { ["id": $0.id.uuidString, "jobNumber": $0.jobNumber] }
-        guard let kept = CanonicalBusinessEngine.workDocuments(projects: rows, smallWorks: []) else {
-            return uniqueById(projects)
+        let projectRows: [[String: Any]] = projects.filter { $0.jobType != .smallWorks }
+            .map { ["id": $0.id.uuidString, "jobNumber": $0.jobNumber] }
+        let smallWorkRows: [[String: Any]] = projects.filter { $0.jobType == .smallWorks }
+            .map { ["id": $0.id.uuidString, "jobNumber": $0.jobNumber] }
+        guard let kept = CanonicalBusinessEngine.workDocuments(projects: projectRows, smallWorks: smallWorkRows) else {
+            return uniqueById(projects.filter { $0.jobType != .smallWorks } + projects.filter { $0.jobType == .smallWorks })
         }
         var byId: [String: Project] = [:]
-        for project in projects where byId[project.id.uuidString] == nil {
+        let projectsFirst = projects.filter { $0.jobType != .smallWorks } + projects.filter { $0.jobType == .smallWorks }
+        for project in projectsFirst where byId[project.id.uuidString] == nil {
             byId[project.id.uuidString] = project
         }
         return kept.compactMap { ($0["id"] as? String).flatMap { byId[$0] } }

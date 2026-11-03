@@ -480,8 +480,9 @@ class ProjectStore: ObservableObject {
                 plan: firebaseBackend.jobReadSources(organizationId: organizationId, collection: collection)
             ) { [weak self] rows, fromCache in
                 guard let self else { return }
-                // `job(fromCanonical:)` puts every `smallWorks` document in the small works slice, so this filter
-                // only leaves out a `projects` document typed Small Works (as `loadProjects` does).
+                // `job(fromCanonical:)` routes by collection: every `smallWorks` document is a small work and every
+                // `projects` document a project (one typed "Small Works" reads as CAT A), so this filter keeps the
+                // whole snapshot and only guards the slice the listener owns.
                 let incoming = FirebaseBackend.jobs(fromDocuments: rows, smallWorks: smallWorks)
                     .filter { ($0.jobType == .smallWorks) == smallWorks }
                 self.applyLiveWorkSlice(

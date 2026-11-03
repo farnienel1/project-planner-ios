@@ -236,3 +236,51 @@ enum UserRoleTransitionPolicy {
         return user
     }
 }
+
+/// Change user type read-back. After the write, the server copy of `users/{uid}` is read again and the screen
+/// shows that copy. This only compares what was asked for with what is stored (`parseUserDocument` reads both
+/// sides); it decides nothing about what a role may do.
+enum UserTypeChangeReadBack {
+    /// True when the stored document carries the role (when one was sent) and the account-type flags the save wrote.
+    static func landed(expectedRole: UserRole?, expected: UserPermissions, stored: AppUser) -> Bool {
+        if let expectedRole, stored.role != expectedRole { return false }
+        return stored.permissions.adminAccess == expected.adminAccess
+            && stored.permissions.manager == expected.manager
+            && stored.permissions.operativeMode == expected.operativeMode
+    }
+
+    static func notSavedMessage(stored: AppUser) -> String {
+        "The account type did not save. The server still has \(stored.fullName.isEmpty ? "this person" : stored.fullName) as \(stored.role.displayName). Nothing on this screen was changed."
+    }
+
+    /// The reason a write was refused, in words the person can act on.
+    static func writeRefusedMessage(_ error: Error) -> String {
+        let nsError = error as NSError
+        if LaunchStartupPolicy.isPermissionDenied(
+            domain: nsError.domain,
+            code: nsError.code,
+            description: nsError.localizedDescription
+        ) {
+            return "The server refused this change, so nothing was saved. Their profile may belong to another company, or your admin access may have changed."
+        }
+        return "Could not save the account type: \(error.localizedDescription). Nothing was changed."
+    }
+}
+
+/// Edit User saves only what the editor changed: each flag that differs between the draft's starting copy and the
+/// draft is laid over the stored copy; every other flag keeps its stored value. No rule is decided here.
+enum UserPermissionsDraftMerge {
+    static let flags: [WritableKeyPath<UserPermissions, Bool>] = [
+        \.adminAccess, \.manager, \.operatives, \.skills, \.qualifications, \.materials, \.projects,
+        \.smallWorks, \.operativeMode, \.annualLeaveSelfBook, \.weeklyReports, \.dailyOverview,
+        \.subContractors, \.siteAudit, \.wholesalersOrderHistory,
+    ]
+
+    static func applyingEdits(from baseline: UserPermissions, to draft: UserPermissions, onto stored: UserPermissions) -> UserPermissions {
+        var result = stored
+        for flag in flags where draft[keyPath: flag] != baseline[keyPath: flag] {
+            result[keyPath: flag] = draft[keyPath: flag]
+        }
+        return result
+    }
+}
