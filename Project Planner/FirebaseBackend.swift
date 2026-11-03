@@ -2899,7 +2899,23 @@ class FirebaseBackend: ObservableObject {
                 print("⚠️ [HealthSafety] Uploaded file but could not fetch download URL (attempt \(attempt + 1)): \(error.localizedDescription)")
             }
         }
-        try? await storageRef.delete()
+        // RULEBOOK 1.25.0 §24 (`CanonicalBusinessEngine.fileDeletePermission`): the uploader's own clean-up inside the
+        // undo window. A refused or failed delete is logged; the object is then kept (soft delete / an admin restores it).
+        let cleanup = CanonicalBusinessEngine.fileDeletePermission(
+            storagePath: path,
+            organizationId: organizationId,
+            viewerUserId: userId,
+            viewerRole: CanonicalBusinessEngine.CanonicalStaffAccountRole(isSuperAdmin: false, isAdmin: false, isManager: false, isOperativeMode: false)
+        )
+        if cleanup.allowed {
+            do {
+                try await storageRef.delete()
+            } catch {
+                print("⚠️ [HealthSafety] Could not remove the unlinked upload \(path): \(error.localizedDescription)")
+            }
+        } else {
+            print("⚠️ [HealthSafety] Unlinked upload kept (\(cleanup.reason)): \(path)")
+        }
         throw NSError(
             domain: "FirebaseBackend",
             code: 502,

@@ -475,10 +475,30 @@ extension FirebaseBackend {
         return (path, url)
     }
 
-    func deleteVariationEvidenceFile(storagePath: String) async {
-        guard !storagePath.isEmpty else { return }
-        let ref = storage.reference().child(storagePath)
-        try? await ref.delete()
+    /// RULEBOOK 1.25.0 §24 `CanonicalBusinessEngine.fileDeletePermission`: deletes the evidence object only for an admin of
+    /// this organisation or its uploader within the undo window; otherwise nothing is deleted and the caller unlinks it
+    /// and keeps the file. A refused or failed delete is reported, never swallowed.
+    func deleteVariationEvidenceFile(
+        storagePath: String,
+        viewerRole: CanonicalBusinessEngine.CanonicalStaffAccountRole,
+        uploadedAt: Date?
+    ) async -> StoredFileRemoval {
+        guard !storagePath.isEmpty else { return .kept }
+        let permission = CanonicalBusinessEngine.fileDeletePermission(
+            storagePath: storagePath,
+            organizationId: currentOrganization?.firestoreDocumentId ?? "",
+            viewerUserId: currentUser?.uid ?? "",
+            viewerRole: viewerRole,
+            uploadedAt: uploadedAt
+        )
+        guard permission.allowed else { return .kept }
+        do {
+            try await storage.reference().child(storagePath).delete()
+            return .deleted
+        } catch {
+            print("⚠️ [Variations] evidence delete refused or failed for \(storagePath): \(error.localizedDescription)")
+            return .failed(error.localizedDescription)
+        }
     }
     #else
     func uploadVariationEvidence(
@@ -497,7 +517,11 @@ extension FirebaseBackend {
         )
     }
 
-    func deleteVariationEvidenceFile(storagePath: String) async {}
+    func deleteVariationEvidenceFile(
+        storagePath: String,
+        viewerRole: CanonicalBusinessEngine.CanonicalStaffAccountRole,
+        uploadedAt: Date?
+    ) async -> StoredFileRemoval { .kept }
     #endif
 }
 
