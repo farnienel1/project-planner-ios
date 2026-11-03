@@ -1342,6 +1342,191 @@ nonisolated private struct WorkingHoursWeekendPreviewModel: Sendable {
     }
 }
 
+/// The live calculation under Saturday and Sunday, as Monday–Friday has. No figure is computed here.
+private struct WorkingHoursWeekendPreview: View {
+    let policy: OrgPayrollTimePolicy
+    let day: RulebookWeekendDay
+    let accent: Color
+
+    var body: some View {
+        if let model = WorkingHoursWeekendPreviewModel.make(policy: policy, day: day) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(model.summary)
+                    .font(.footnote)
+                    .foregroundStyle(WorkingHoursPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(model.title.uppercased())
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(accent)
+                        .tracking(0.8)
+                    ForEach(model.rows) { row in
+                        if row.lines.isEmpty {
+                            Text(row.line)
+                                .font(.footnote.weight(.semibold))
+                                .monospacedDigit()
+                        } else {
+                            ForEach(Array(row.lines.enumerated()), id: \.offset) { _, line in
+                                HStack {
+                                    Text(line.label)
+                                        .font(line.kind == "total" ? .subheadline.weight(.semibold) : .subheadline)
+                                        .foregroundStyle(line.kind == "total" ? accent : WorkingHoursPalette.muted)
+                                    Spacer()
+                                    Text(line.value)
+                                        .font(line.kind == "total" ? .body.weight(.heavy) : .body.weight(.bold))
+                                        .monospacedDigit()
+                                        .foregroundStyle(line.kind == "total" ? accent : WorkingHoursPalette.ink)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(14)
+                .background(accent.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("organisationWorkingHours.\(day.rawValue).preview")
+        }
+    }
+}
+
+// MARK: - Reusable controls
+
+private struct WorkingHoursSegmentedPicker: View {
+    let selection: Binding<Int>
+    let options: [(Int, String)]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.0) { option in
+                Button {
+                    selection.wrappedValue = option.0
+                } label: {
+                    Text(option.1)
+                        .font(.footnote.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(selection.wrappedValue == option.0 ? Color(.systemBackground) : Color.clear)
+                        .foregroundStyle(selection.wrappedValue == option.0 ? Color.primary : Color(.systemGray))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .shadow(color: selection.wrappedValue == option.0 ? Color.black.opacity(0.06) : .clear, radius: 2, y: 1)
+                }
+                .accessibilityIdentifier("workingHoursSegmentedPicker.row.\(option)")
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(ProjectWorksRevampColors.wellFill)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct WorkingHoursToggle: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                Capsule()
+                    .fill(isOn ? WorkingHoursPalette.indigo : Color(.systemGray3))
+                    .frame(width: 46, height: 27)
+                Circle()
+                    .fill(Color.white)
+                    .shadow(color: Color.black.opacity(0.12), radius: 2, y: 1)
+                    .frame(width: 23, height: 23)
+                    .padding(2)
+            }
+        }
+        .accessibilityIdentifier("workingHoursToggle.button")
+        .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.2), value: isOn)
+    }
+}
+
+private struct WorkingHoursStepper: View {
+    @Binding var value: Double
+    let step: Double
+    let min: Double
+    let max: Double
+    let suffix: String
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button {
+                value = Swift.max(min, roundedStep(value - step, step: step))
+            } label: {
+                Text("–")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 32, height: 32)
+            }
+            .accessibilityIdentifier("workingHoursStepper.button")
+            .buttonStyle(.plain)
+
+            Text(displayValue)
+                .font(.subheadline.weight(.bold))
+                .monospacedDigit()
+                .frame(minWidth: 52)
+
+            Button {
+                value = Swift.min(max, roundedStep(value + step, step: step))
+            } label: {
+                Text("+")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 32, height: 32)
+            }
+            .accessibilityIdentifier("workingHoursStepper.button2")
+            .buttonStyle(.plain)
+        }
+        .background(ProjectWorksRevampColors.wellFill)
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+
+    private var displayValue: String {
+        if suffix == " min" {
+            return "\(Int(value))\(suffix)"
+        }
+        if abs(value - value.rounded()) < 0.05 {
+            return "\(Int(value))\(suffix)"
+        }
+        return String(format: "%.1f%@", value, suffix)
+    }
+
+    private func roundedStep(_ raw: Double, step: Double) -> Double {
+        guard step > 0 else { return raw }
+        return (raw / step).rounded() * step
+    }
+}
+
+private struct WorkingHoursMultiplierField: View {
+    @Binding var value: Double
+    let accent: Color
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField("×", value: $value, format: .number)
+                .accessibilityIdentifier("workingHoursMultiplierField.textField")
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.center)
+                .font(.body.weight(.bold))
+                .foregroundStyle(accent)
+                .frame(width: 56)
+                .padding(.vertical, 8)
+                .background(ProjectWorksRevampColors.canvas)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
+                )
+            Text("x")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(Color(red: 0.580, green: 0.639, blue: 0.722))
+        }
+    }
+}
+
 /// RULEBOOK 1.20.2 / 1.20.3 §4.3: day start and finish (weekday and weekend windows) are picked on the 30-minute step
 /// (`PAYROLL_POLICY_TIME_STEP_MINUTES`, `payrollPolicyTimeOnStep`); lunch-break start and end on the 15-minute step
 /// (`PAYROLL_BREAK_TIME_STEP_MINUTES`, `payrollBreakTimeOnStep`), e.g. 10:00–10:45. A time saved off its step is kept
