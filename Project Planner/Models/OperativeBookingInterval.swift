@@ -11,7 +11,8 @@ enum OperativeBookingInterval {
     /// Clock interval for clash detection, in minutes from midnight: the canonical script's
     /// `slotInterval` with the stored slot and stored clock times. Clock times win; the named slot
     /// applies only when the script rejects the clock pair. The day input is always the weekday
-    /// standard day and break, on every day of the week. Overnight spans are not extended.
+    /// standard day and break, on every day of the week. A finish before the start crosses midnight (RULEBOOK 1.13.0
+    /// Q5): the script runs it past 24:00; the clock times are passed unchanged.
     static func clashInterval(for booking: Booking, policy: OrgPayrollTimePolicy) -> (Int, Int)? {
         CanonicalBusinessEngine.slotInterval(
             timeSlot: booking.timeSlot.rawValue,

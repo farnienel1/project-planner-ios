@@ -95,7 +95,7 @@ struct ScheduleOperativeView: View {
 
     private func defaultChoiceForDay(_ day: Date, policy: OrgPayrollTimePolicy) -> OperativeDayBookingChoice {
         if PayrollTimePolicyCatalog.isWeekend(day) {
-            return PayrollTimePolicyCatalog.defaultWeekendBookingChoice(policy: policy, day: day)
+            return .weekendCustomHours(on: day, policy: policy)
         }
         return .legacy(.fullDay)
     }
@@ -1043,11 +1043,25 @@ struct ScheduleOperativeView: View {
                 .padding(.leading, 4)
             VStack(alignment: .leading, spacing: 10) {
                 VStack(spacing: 8) {
-                    HStack(spacing: 8) {
-                        bulkHoursSlotChip(title: "AM", slot: .morning, enabled: canBookStandardDayWindow)
-                        bulkHoursSlotChip(title: "PM", slot: .afternoon, enabled: canBookStandardDayWindow)
-                        bulkHoursSlotChip(title: "FULL DAY", slot: .fullDay, enabled: canBookStandardDayWindow)
+                    // RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: Saturday and Sunday are custom hours only.
+                    // A stored weekend FULL DAY / AM / PM being edited still shows its own slot.
+                    let offered = RulebookBookingSlot.allCases.filter {
+                        CanonicalBusinessEngine.slotOffered($0, on: refDay, storedTimeSlot: editingBooking?.timeSlot.rawValue)
                     }
+                    if offered.contains(.am) || offered.contains(.pm) || offered.contains(.fullDay) {
+                        HStack(spacing: 8) {
+                            if offered.contains(.am) {
+                                bulkHoursSlotChip(title: "AM", slot: .morning, enabled: canBookStandardDayWindow)
+                            }
+                            if offered.contains(.pm) {
+                                bulkHoursSlotChip(title: "PM", slot: .afternoon, enabled: canBookStandardDayWindow)
+                            }
+                            if offered.contains(.fullDay) {
+                                bulkHoursSlotChip(title: "FULL DAY", slot: .fullDay, enabled: canBookStandardDayWindow)
+                            }
+                        }
+                    }
+                    WeekendBookingNoteView(day: refDay, policy: p)
                     Button {
                         operativeCustomHoursPick = OperativeCustomHoursPick(
                             operativeId: nil,
@@ -1381,7 +1395,7 @@ struct ScheduleOperativeView: View {
         selectedDates = next
         let policy = payrollPolicy(for: normalizedDate)
         if PayrollTimePolicyCatalog.isWeekend(normalizedDate, calendar: calendar) {
-            dateSlotChoices[key] = PayrollTimePolicyCatalog.defaultWeekendBookingChoice(policy: policy, day: normalizedDate)
+            dateSlotChoices[key] = .weekendCustomHours(on: normalizedDate, policy: policy)
         } else {
             dateSlotChoices[key] = sharedBulkChoice
         }
@@ -1401,7 +1415,7 @@ struct ScheduleOperativeView: View {
             let key = slotKey(for: d)
             let policy = payrollPolicy(for: d)
             if PayrollTimePolicyCatalog.isWeekend(d) {
-                dateSlotChoices[key] = PayrollTimePolicyCatalog.defaultWeekendBookingChoice(policy: policy, day: d)
+                dateSlotChoices[key] = .weekendCustomHours(on: d, policy: policy)
             } else {
                 dateSlotChoices[key] = sharedBulkChoice
             }

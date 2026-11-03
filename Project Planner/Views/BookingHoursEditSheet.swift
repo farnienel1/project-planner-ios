@@ -477,6 +477,9 @@ private struct BookingHMTimePickerColumn: View {
 struct OperativeCustomHoursSheet: View {
     let policy: OrgPayrollTimePolicy
     let referenceDay: Date
+    /// The day as the caller passed it (an organisation-zone midnight), for the rulebook's day key. `referenceDay` is
+    /// the device-calendar start of day the timeline drawing uses.
+    private let rulebookDay: Date
     var title: String
     var subtitle: String?
     var headerName: String?
@@ -508,6 +511,8 @@ struct OperativeCustomHoursSheet: View {
     @State private var timeValidationBanner: String?
     @State private var bannerDismissTask: Task<Void, Never>?
     @State private var confirmDelete = false
+    /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): shown before saving hours that cover the unpaid break.
+    @State private var breakWarningMessage: String?
 
     init(
         policy: OrgPayrollTimePolicy,
@@ -529,6 +534,7 @@ struct OperativeCustomHoursSheet: View {
     ) {
         self.policy = policy
         self.referenceDay = Calendar.current.startOfDay(for: referenceDay)
+        self.rulebookDay = referenceDay
         self.title = title
         self.subtitle = subtitle
         self.headerName = headerName
@@ -551,8 +557,13 @@ struct OperativeCustomHoursSheet: View {
         var otm = ""
 
         let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: referenceDay, policy: policy)
-        let defaultStart = timeline.standardWindowStart ?? policy.standardDayStart
-        let defaultEnd = timeline.standardWindowEnd ?? policy.standardDayEnd
+        // RULEBOOK 1.13.1 §4.3 `weekendCustomHoursDefault`: a set-window Saturday or Sunday opens on that day's window.
+        let weekendPrefill = CanonicalBusinessEngine.weekendCustomHoursDefault(
+            policy: policy,
+            dayKey: CanonicalBusinessEngine.bookingDayKey(referenceDay)
+        )
+        let defaultStart = weekendPrefill?.start ?? timeline.standardWindowStart ?? policy.standardDayStart
+        let defaultEnd = weekendPrefill?.end ?? timeline.standardWindowEnd ?? policy.standardDayEnd
 
         if let ic {
             let s = ic.workStartTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -666,6 +677,8 @@ struct OperativeCustomHoursSheet: View {
                         Color.clear.frame(height: 44)
                     }
                     headerSection
+                    WeekendBookingNoteView(day: rulebookDay, policy: policy)
+                        .padding(.horizontal, 4)
                     if !showsBreakControls {
                         Text("This user is PAYE and is not paid hourly.")
                             .font(.footnote)
@@ -747,6 +760,23 @@ struct OperativeCustomHoursSheet: View {
                 .accessibilityIdentifier("operativeCustomHours.keepBooking")
         } message: {
             Text("This removes it from the schedule, daily overview, warnings, weekly report, timesheets, and My Schedule.")
+        }
+        .alert(
+            "Unpaid break",
+            isPresented: Binding(
+                get: { breakWarningMessage != nil },
+                set: { if !$0 { breakWarningMessage = nil } }
+            )
+        ) {
+            Button("Go back", role: .cancel) { breakWarningMessage = nil }
+                .accessibilityIdentifier("operativeCustomHours.breakWarning.back")
+            Button("Save anyway") {
+                breakWarningMessage = nil
+                validateAndSave(breakWarningConfirmed: true)
+            }
+                .accessibilityIdentifier("operativeCustomHours.breakWarning.save")
+        } message: {
+            Text(breakWarningMessage ?? "")
         }
     }
 
@@ -1081,10 +1111,23 @@ struct OperativeCustomHoursSheet: View {
         }
     }
 
-    private func validateAndSave() {
+    private func validateAndSave(breakWarningConfirmed: Bool = false) {
         errorMessage = nil
         guard endMinutes > startMinutes else {
             errorMessage = "Choose an end time after the start time."
+            return
+        }
+        // RULEBOOK 1.13.0 §8 `customHoursBreakWarning`: confirm before saving custom hours that cover the unpaid break
+        // while Unpaid break is on. Pay is unchanged either way.
+        if showsBreakControls && !breakWarningConfirmed,
+           let warning = CanonicalBusinessEngine.customHoursBreakWarning(
+               on: rulebookDay,
+               policy: policy,
+               workStartTime: startText,
+               workEndTime: endText,
+               isBreakRemoved: !breakIncluded
+           ) {
+            breakWarningMessage = warning
             return
         }
         var otOut: Double? = nil

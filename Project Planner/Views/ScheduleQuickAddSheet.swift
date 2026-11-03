@@ -42,11 +42,23 @@ struct ScheduleQuickAddSheet: View {
         self.showsNotes = showsNotes
         self.onSave = onSave
         self.onCancel = onCancel
-        let start = clocks.flatMap { ManagerScheduleInterval.parseMinutes($0.fullDay.start) } ?? (7 * 60 + 30)
-        let end = clocks.flatMap { ManagerScheduleInterval.parseMinutes($0.fullDay.end) } ?? (16 * 60)
-        _customStart = State(initialValue: start)
-        _customEnd = State(initialValue: end)
+        // RULEBOOK 1.13.1 §4.3: Saturday and Sunday are custom hours only (`allowedTimeSlotsOnDay`), opened on that
+        // day's window (`weekendCustomHoursDefault`).
+        let offered = CanonicalBusinessEngine.allowedTimeSlots(on: day)
+        if offered.contains(.fullDay) {
+            let start = clocks.flatMap { ManagerScheduleInterval.parseMinutes($0.fullDay.start) } ?? (7 * 60 + 30)
+            let end = clocks.flatMap { ManagerScheduleInterval.parseMinutes($0.fullDay.end) } ?? (16 * 60)
+            _customStart = State(initialValue: start)
+            _customEnd = State(initialValue: end)
+        } else {
+            let prefill = CanonicalBusinessEngine.customHoursPrefill(on: day, policy: policy)
+            _slot = State(initialValue: .custom)
+            _customStart = State(initialValue: ManagerScheduleInterval.parseMinutes(prefill.start) ?? (7 * 60 + 30))
+            _customEnd = State(initialValue: ManagerScheduleInterval.parseMinutes(prefill.end) ?? (16 * 60))
+        }
     }
+
+    private var offeredSlots: [RulebookBookingSlot] { CanonicalBusinessEngine.allowedTimeSlots(on: day) }
 
     var body: some View {
         NavigationStack {
@@ -91,16 +103,21 @@ struct ScheduleQuickAddSheet: View {
     private var slotPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionLabel("Slot")
-            VStack(spacing: 8) {
-                HStack(spacing: 8) {
-                    slotChip(.fullDay, title: "Full day", range: clocks?.fullDay.label)
-                    slotChip(.morning, title: "AM", range: clocks?.morning.label)
+            if offeredSlots.contains(.fullDay) {
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        slotChip(.fullDay, title: "Full day", range: clocks?.fullDay.label)
+                        slotChip(.morning, title: "AM", range: clocks?.morning.label)
+                    }
+                    HStack(spacing: 8) {
+                        slotChip(.afternoon, title: "PM", range: clocks?.afternoon.label)
+                        slotChip(.custom, title: "Custom", range: nil)
+                    }
                 }
-                HStack(spacing: 8) {
-                    slotChip(.afternoon, title: "PM", range: clocks?.afternoon.label)
-                    slotChip(.custom, title: "Custom", range: nil)
-                }
+            } else {
+                slotChip(.custom, title: "Custom", range: nil)
             }
+            WeekendBookingNoteView(day: day, policy: policy)
         }
     }
 
