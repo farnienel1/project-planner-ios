@@ -351,3 +351,67 @@ extension FirebaseBackend {
         }
     }
 }
+
+// MARK: - Half-applied user type (accountTypeSyncState, RULEBOOK 1.12.2 §11)
+
+/// `accountTypeSyncState` result.
+nonisolated struct RulebookAccountTypeSyncState: Equatable, Sendable {
+    var inSync: Bool
+    var level: RulebookPermissionLevel?
+    var membersRole: String?
+    /// The level to write on every record when the type was only partly saved; nil when in sync.
+    var repair: RulebookPermissionLevel?
+}
+
+extension CanonicalBusinessEngine {
+    /// `ACCOUNT_TYPE_OUT_OF_SYNC_MESSAGE`.
+    nonisolated static var accountTypeOutOfSyncMessage: String {
+        constant("ACCOUNT_TYPE_OUT_OF_SYNC_MESSAGE", as: String.self)
+            ?? "This person's user type was only partly saved. Press Save to finish it on every record."
+    }
+
+    /// `accountTypeSyncState({ person, organizationId, members, membership? })`: whether the user type on the users
+    /// document matches `members.{uid}` (and the membership, when read). Nil when the script did not answer.
+    nonisolated static func accountTypeSyncState(
+        person: [String: Any],
+        organizationId: String,
+        members: [String: String],
+        membershipRole: String? = nil
+    ) -> RulebookAccountTypeSyncState? {
+        var input: [String: Any] = ["person": person, "organizationId": organizationId, "members": members]
+        if let membershipRole { input["membership"] = ["role": membershipRole] }
+        guard let row = callJSON("accountTypeSyncState", arguments: [input]) as? [String: Any],
+              let inSync = row["inSync"] as? Bool else { return nil }
+        return RulebookAccountTypeSyncState(
+            inSync: inSync,
+            level: (row["level"] as? String).flatMap(RulebookPermissionLevel.init(rawValue:)),
+            membersRole: row["membersRole"] as? String,
+            repair: (row["repair"] as? String).flatMap(RulebookPermissionLevel.init(rawValue:))
+        )
+    }
+}
+
+extension AppUser {
+    /// The person as `accountTypeSyncState` reads them (web `accountTypeSubject`): id, organisation, role, super admin
+    /// and the permission flags at the top level and nested.
+    var accountTypeSubject: [String: Any] {
+        var row = permissionSubject
+        row["id"] = id
+        row["organizationId"] = organizationId
+        return row
+    }
+
+    /// `accountTypeSyncState` against the open organisation's live `members` map. Nil when the map is not loaded,
+    /// belongs to another organisation, or the script did not answer (nothing is shown or repaired then).
+    @MainActor
+    func accountTypeSyncState(in backend: FirebaseBackend) -> RulebookAccountTypeSyncState? {
+        guard let snapshot = backend.organizationMembersSnapshot,
+              let open = backend.currentOrganization?.firestoreDocumentId,
+              organizationIdsMatch(snapshot.organizationId, open) else { return nil }
+        return CanonicalBusinessEngine.accountTypeSyncState(
+            person: accountTypeSubject,
+            organizationId: snapshot.organizationId,
+            members: snapshot.members
+        )
+    }
+}

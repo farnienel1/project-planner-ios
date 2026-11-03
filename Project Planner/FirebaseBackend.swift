@@ -189,6 +189,10 @@ class FirebaseBackend: ObservableObject {
         }
     }
     @Published var userRole: UserRole = .basic
+    /// RULEBOOK 1.12.2 §11: the open organisation's `members` map (uid → role) from the live `organizations/{orgId}`
+    /// listener, keyed by that organisation id so another company's map is never read after a switch. Input to
+    /// `accountTypeSyncState` in Manage Users and Edit User.
+    @Published var organizationMembersSnapshot: (organizationId: String, members: [String: String])?
     /// True when the session chooser answered that the signed-in account belongs to no organisation and recovery did
     /// not find one. The root shows "You're not a member of an organisation yet" instead of an empty Home.
     @Published var sessionHasNoOrganization = false
@@ -315,7 +319,7 @@ class FirebaseBackend: ObservableObject {
         return trimmedOrgId
     }
 
-    private func isFirestorePermissionDenied(_ error: Error) -> Bool {
+    func isFirestorePermissionDenied(_ error: Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7
     }
@@ -352,6 +356,7 @@ class FirebaseBackend: ObservableObject {
         organizationDocumentListener?.remove()
         organizationDocumentListener = nil
         organizationDocumentListenerTarget = nil
+        organizationMembersSnapshot = nil
         stopScheduleLiveListeners()
     }
 
@@ -402,6 +407,8 @@ class FirebaseBackend: ObservableObject {
                     guard organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
                     self.applyOrganizationDocumentSettings(from: data, organizationId: orgId)
                     self.applyOrganizationDocumentBilling(from: data, organizationId: orgId)
+                    let members = (data["members"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
+                    self.organizationMembersSnapshot = (organizationId: orgId, members: members)
                 }
             }
     }

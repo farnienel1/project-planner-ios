@@ -184,7 +184,21 @@ extension FirebaseBackend {
         let orgId = normalizedOrganizationId(organizationId)
         guard !userId.isEmpty, !orgId.isEmpty else { return false }
         let ref = orgMembershipsCollection(userId: userId).document(orgId)
-        let snap = try await ref.getDocument(source: .server)
+        let snap: DocumentSnapshot
+        do {
+            snap = try await ref.getDocument(source: .server)
+        } catch {
+            // RULEBOOK 1.12.2 §11: an admin reads a membership in their organisation, but older deployed rules let only
+            // the person read it. A refused read must not stop a user type change: write the role and the nested
+            // permissions as a merge (no read needed), which every rules version accepts from an admin.
+            guard isFirestorePermissionDenied(error), writer == "admin" else { throw error }
+            var merged: [String: Any] = [:]
+            if let role = next["role"] as? String { merged["role"] = role }
+            if let permissions = next["permissions"] as? [String: Bool], !permissions.isEmpty { merged["permissions"] = permissions }
+            guard !merged.isEmpty else { throw error }
+            try await ref.setData(merged, merge: true)
+            return true
+        }
         if !snap.exists && !createIfMissing { return false }
         let stored: Any = snap.exists ? Self.firestoreJSON(snap.data() ?? [:]) : NSNull()
         let nowMarker = "__serverNow__"

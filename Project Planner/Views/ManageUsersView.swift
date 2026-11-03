@@ -244,6 +244,9 @@ struct ManageUsersView: View {
                 if userStore.hasAdminAccess() && !usersMissingLineManager.isEmpty {
                     usersMissingLineManagerNotice
                 }
+                if userStore.hasAdminAccess() && !usersWithAccountTypeOutOfSync.isEmpty {
+                    accountTypeOutOfSyncNotice
+                }
                 manageUsersListHeader
                 manageUsersCardList
             }
@@ -257,6 +260,38 @@ struct ManageUsersView: View {
     /// requirement (RULEBOOK §8, §11). Their timesheets and requests reach every active admin meanwhile.
     private var usersMissingLineManager: [AppUser] {
         AnnualLeaveApproval.usersMissingLineManager(userStore.organizationUsers)
+    }
+
+    /// RULEBOOK 1.12.2 §11 `accountTypeSyncState`: active people whose user type was only partly saved (users
+    /// document vs the live `members.{uid}`). Opening the person and pressing Save finishes it on every record.
+    private var usersWithAccountTypeOutOfSync: [AppUser] {
+        rosterListed(userStore.organizationUsers, segment: .active).filter { person in
+            person.accountTypeSyncState(in: firebaseBackend)?.inSync == false
+        }
+    }
+
+    private var accountTypeOutOfSyncNotice: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(CanonicalBusinessEngine.accountTypeOutOfSyncMessage, systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+            ForEach(usersWithAccountTypeOutOfSync, id: \.id) { person in
+                Button {
+                    selectedUser = person
+                } label: {
+                    Text(person.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? person.email : person.fullName)
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 4)
+        .accessibilityIdentifier("manageUsers.accountTypeOutOfSync")
     }
 
     private var usersMissingLineManagerNotice: some View {
@@ -1889,7 +1924,15 @@ struct EditUserView: View {
     }
     
     // Check if any changes have been made
+    /// RULEBOOK 1.12.2 §11 `accountTypeSyncState(...).repair`: the level to finish on every record, nil when the user
+    /// type is the same on the users document and `members.{uid}`.
+    private var accountTypeRepair: RulebookPermissionLevel? {
+        let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        return stored.accountTypeSyncState(in: firebaseBackend)?.repair
+    }
+
     private var hasChanges: Bool {
+        if canUseAdminAccountTools && !isViewingSuperAdminProfile && accountTypeRepair != nil { return true }
         let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
         let trimmedTradeP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTradeC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2093,6 +2136,19 @@ struct EditUserView: View {
                         .padding(.horizontal, PPMetrics.screenGutter)
                         .padding(.top, 12)
                         .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+                }
+                if canUseAdminAccountTools && accountTypeRepair != nil && !showingChangeUserType {
+                    // RULEBOOK 1.12.2 §11 `accountTypeSyncState`: Save finishes the partly saved user type.
+                    Label(CanonicalBusinessEngine.accountTypeOutOfSyncMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.orange)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .padding(.horizontal, PPMetrics.screenGutter)
+                        .padding(.top, 12)
+                        .accessibilityIdentifier("editUser.accountTypeOutOfSync")
                 }
                 editUserFormSections
             }
@@ -3662,6 +3718,21 @@ struct EditUserView: View {
                     linkedOperativeUUID: linkedOpId
                 )
             }
+        }
+
+        // RULEBOOK 1.12.2 §11 `accountTypeSyncState`: a user type only partly saved (older build, interrupted save) is
+        // finished on every record from the profile's level, through the same `accountTypeChangeWrites` plan.
+        if canUseAdminAccountTools && !isViewingSuperAdminProfile && permissionsSuccess,
+           let repair = subjectUser.accountTypeSyncState(in: firebaseBackend)?.repair {
+            let current = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? subjectUser
+            let repaired = await userStore.changeAccountType(
+                userId: user.id,
+                kind: repair,
+                screenPermissions: current.permissions,
+                holidayStore: holidayStore,
+                linkedOperativeUUID: linkedOpId
+            )
+            if !repaired.ok { permissionsSuccess = false }
         }
 
         var activeSuccess = true
