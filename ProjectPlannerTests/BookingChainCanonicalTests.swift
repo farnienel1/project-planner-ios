@@ -6,6 +6,13 @@ import XCTest
 /// Booking identity itself is covered by `BookingIdentityTests` and `BookingAuditTests`.
 @MainActor
 final class BookingChainCanonicalTests: XCTestCase {
+    /// Other tests set a signed-in viewer on the shared `JobAccessContext`; these check the unscoped rules, so start
+    /// with no viewer (an admin-wide scope), as a device does before the profile loads.
+    nonisolated override func setUp() {
+        super.setUp()
+        JobAccessContext.updateViewer(nil)
+    }
+
     /// A Firebase Auth uid: what web stores as `operativeId` for a person with no operative record.
     private let uid = "Xy7AbcFirebaseUid0123456789"
     private let projectId = "11111111-2222-3333-4444-555555555555"
