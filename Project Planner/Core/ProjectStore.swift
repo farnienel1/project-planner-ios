@@ -14,8 +14,13 @@ import FirebaseAuth
 class ProjectStore: ObservableObject {
     @Published var projects: [Project] = [] {
         // RULEBOOK 1.10.0 §17: a restricted manager reads the bookings of the jobs they see (`bookingQueryPlan`).
-        didSet { JobAccessContext.updateJobs(projects) }
+        didSet {
+            JobAccessContext.updateJobs(projects)
+            revision &+= 1
+        }
     }
+    /// Bumped on every change to `projects`, so booking-flow conflict labels can be memoised per data version.
+    private(set) var revision = 0
     @Published var clients: [Client] = []
     @Published var jobTypes: Set<String> = []
     @Published var isLoading: Bool = false

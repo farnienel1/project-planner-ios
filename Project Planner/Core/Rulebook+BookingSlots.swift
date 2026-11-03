@@ -5,7 +5,7 @@
 //  Typed wrappers for the booking slot rules of rulebook 1.13.0 / 1.13.1 (docs/RULEBOOK.md §4.3, §5, §8; web
 //  `lib/canonical/bookingSlots.ts`): Saturday and Sunday are custom hours only (`allowedTimeSlotsOnDay`,
 //  `timeSlotAllowedOnDay`), the editor's weekend prefill (`weekendCustomHoursDefault`), the weekend note
-//  (`weekendBookingNote`), the weekday + weekend mix refusal (`bookingDaysMixWeekdayAndWeekend`,
+//  (`weekendBookingNote`; for a whole selection `weekendBookingNotes`, 1.17.0), the weekday + weekend mix refusal (`bookingDaysMixWeekdayAndWeekend`,
 //  `WEEKEND_WEEKDAY_MIX_MESSAGE`) and the custom-hours lunch confirm (`customHoursBreakWarning`,
 //  `CUSTOM_HOURS_BREAK_WARNING`). Every answer comes from the packed script; this file only maps Swift values to its
 //  inputs (a `Date` to an organisation-zone day key, `OrgPayrollTimePolicy` to the script's field names).
@@ -99,6 +99,59 @@ extension CanonicalBusinessEngine {
         weekendBookingNote(policy: policy, dayKey: bookingDayKey(date))
     }
 
+    /// RULEBOOK 1.17.0 §4.3 `weekendBookingNotes(policyState, dayKeys, timeZone)`: the lines under a weekend booking
+    /// picker for the whole selection. `policyDocument` is the organisation's four stored working-hours fields; it is
+    /// read into the policy state (`payrollTimePolicyTimeline`, promoted to `todayKey`) so each day uses the rules in
+    /// effect on it (`effectivePayrollTimePolicy`). Saturday and Sunday under the same rule give one "Saturday/Sunday …"
+    /// line; different rules give the Saturday line then the Sunday line; weekdays give none. Nil when the script did
+    /// not answer.
+    nonisolated static func weekendBookingNotes(
+        policyDocument: [String: Any],
+        dayKeys: [String],
+        todayKey: String? = nil,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> [String]? {
+        let today = todayKey ?? organizationDayKey(Date(), timeZoneIdentifier: timeZone)
+        guard let state = callJSON("payrollTimePolicyTimeline", arguments: [policyDocument, today, timeZone]) as? [String: Any] else {
+            return nil
+        }
+        return callJSON("weekendBookingNotes", arguments: [state, dayKeys, timeZone]) as? [String]
+    }
+
+    /// `weekendBookingNotes(policy, dayKeys, timeZone)` with one policy for every day. Nil when the script did not answer.
+    nonisolated static func weekendBookingNotes(
+        policy: OrgPayrollTimePolicy,
+        dayKeys: [String],
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> [String]? {
+        guard let policyJSON = payrollPolicyJSON(policy) else { return nil }
+        return callJSON("weekendBookingNotes", arguments: [policyJSON, dayKeys, timeZone]) as? [String]
+    }
+
+    /// `weekendBookingNotes` for the dates a picker has selected: the open organisation's policy state
+    /// (`OrganizationRulebookContext.payrollPolicyDocument`) when loaded, else `fallbackPolicy` (web
+    /// `weekendNotesForDates`). Empty on weekdays or when the script did not answer.
+    nonisolated static func weekendBookingNotes(on dates: [Date], fallbackPolicy: OrgPayrollTimePolicy) -> [String] {
+        let keys = dates.map { bookingDayKey($0) }
+        if let document = OrganizationRulebookContext.payrollPolicyDocument,
+           let notes = weekendBookingNotes(policyDocument: document, dayKeys: keys) {
+            return notes
+        }
+        return weekendBookingNotes(policy: fallbackPolicy, dayKeys: keys) ?? []
+    }
+
+    /// The day a picker that keeps one pair of times for the whole request opens custom hours on (web
+    /// `customHoursPrefillForDates`): the first selected Saturday in the organisation zone, else the first selected day.
+    /// Each booked day's own prefill stays `weekendCustomHoursDefault` for that day. Nil for no dates.
+    nonisolated static func singlePairPrefillDay(_ dates: [Date]) -> Date? {
+        let calendar = OrganizationRulebookContext.calendar
+        let keyed = dates
+            .map { (date: $0, key: bookingDayKey($0)) }
+            .sorted { $0.key < $1.key }
+        let saturday = keyed.first { calendar.component(.weekday, from: $0.date) == 7 }
+        return (saturday ?? keyed.first)?.date
+    }
+
     /// `WEEKEND_WEEKDAY_MIX_MESSAGE` (the iOS wording web adopted).
     nonisolated static var weekendWeekdayMixMessage: String {
         constant("WEEKEND_WEEKDAY_MIX_MESSAGE", as: String.self)
@@ -171,18 +224,35 @@ extension OperativeDayBookingChoice {
     }
 }
 
-/// The weekend note under a booking picker (`weekendBookingNote`). Nothing on a weekday.
+/// The weekend notes under a booking picker (`weekendBookingNotes`, RULEBOOK 1.17.0): one line per returned note for
+/// the whole selection, each day read under the working hours in effect on it. Nothing on weekdays.
 struct WeekendBookingNoteView: View {
-    let day: Date
+    let days: [Date]
     let policy: OrgPayrollTimePolicy
 
+    init(day: Date, policy: OrgPayrollTimePolicy) {
+        self.days = [day]
+        self.policy = policy
+    }
+
+    init(days: [Date], policy: OrgPayrollTimePolicy) {
+        self.days = days
+        self.policy = policy
+    }
+
     var body: some View {
-        if let note = CanonicalBusinessEngine.weekendBookingNote(on: day, policy: policy) {
-            Label(note, systemImage: "calendar.badge.clock")
-                .font(.system(size: 11))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("booking.weekendNote")
+        let notes = CanonicalBusinessEngine.weekendBookingNotes(on: days, fallbackPolicy: policy)
+        if !notes.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
+                    Label(note, systemImage: "calendar.badge.clock")
+                        .font(.system(size: 11))
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("booking.weekendNote")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

@@ -338,6 +338,7 @@ private struct SchedulePersonSelectionRow: View {
                     ForEach(summary.rows) { row in
                         ScheduleConflictRowView(
                             row: row,
+                            personName: person.name,
                             isAcknowledged: acknowledgedIds.contains(row.id),
                             isStruck: struckIds.contains(row.id),
                             onAcknowledge: { onAcknowledge(row.id) },

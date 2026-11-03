@@ -5,80 +5,44 @@
 
 import SwiftUI
 
+/// One scheduling conflict row in the shared booking-conflict style (RULEBOOK 1.16.0, web `BookingConflictRows`):
+/// orange double bookings and purple annual leave, ✓ to keep the day and red ✕ to drop it.
 struct ScheduleConflictRowView: View {
     let row: ScheduleConflictRow
+    let personName: String
     let isAcknowledged: Bool
     let isStruck: Bool
     let onAcknowledge: () -> Void
     let onStrike: () -> Void
 
-    private var isApprovedAL: Bool { row.kind == .approvedAnnualLeave }
-    private var isPendingAL: Bool { row.kind == .pendingAnnualLeave }
-    private var isLeave: Bool { isApprovedAL || isPendingAL }
-    private var needsActions: Bool { row.requiresAcknowledgement }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    // RULEBOOK 1.16.0: annual leave is purple, double bookings orange.
-                    Circle()
-                        .fill(isLeave ? ProjectWorksRevampColors.leavePurple : ProjectWorksRevampColors.clashOrange)
-                        .frame(width: 8, height: 8)
-                    if isLeave {
-                        Image(systemName: "beach.umbrella.fill")
-                            .font(.caption2)
-                            .foregroundStyle(ProjectWorksRevampColors.leavePurple)
-                    }
-                    Text(row.title)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(isStruck ? .secondary : (isLeave ? ProjectWorksRevampColors.leavePurple : .primary))
-                        .strikethrough(isStruck)
-                }
-                if !row.detail.isEmpty {
-                    Text(row.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .strikethrough(isStruck)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(8)
-            .background(rowBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .opacity(isPendingAL && !isAcknowledged && !isStruck ? 0.72 : 1)
-
-            if needsActions {
-                Button(action: onStrike) {
-                    Image(systemName: "xmark")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.red)
-                        .frame(width: 28, height: 28)
-                        .background(Color.red.opacity(0.1))
-                        .clipShape(Circle())
-                }
-                .accessibilityIdentifier("scheduleConflictRow.close")
-                .buttonStyle(.plain)
-                Button(action: onAcknowledge) {
-                    Image(systemName: "checkmark")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 28, height: 28)
-                        .background(isAcknowledged ? Color.blue : Color.blue.opacity(0.35))
-                        .clipShape(Circle())
-                }
-                .accessibilityIdentifier("scheduleConflictRow.checkmark")
-                .buttonStyle(.plain)
-            }
-        }
+    private var item: BookingConflictItem {
+        let isLeave = row.kind == .approvedAnnualLeave || row.kind == .pendingAnnualLeave
+        let dayKey = OrganizationRulebookContext.dayKey(row.date)
+        return BookingConflictItem(
+            id: row.id,
+            personKey: row.operativeId.uuidString,
+            dayKey: dayKey,
+            kind: isLeave ? .annualLeave : .doubleBooking,
+            personName: personName,
+            dayLabel: BookingConflictItem.dayLabel(dayKey),
+            detail: row.conflictDetail ?? row.detail,
+            pending: row.kind == .pendingAnnualLeave
+        )
     }
 
-    private var rowBackground: Color {
-        if isStruck { return Color(.systemGray6) }
-        if isLeave { return ProjectWorksRevampColors.leavePurpleTint }
-        if isAcknowledged { return Color.blue.opacity(0.08) }
-        if isStruck { return Color(.systemGray6) }
-        return Color(.systemGray6)
+    private var decision: BookingConflictDecision? {
+        if isStruck { return .drop }
+        if isAcknowledged { return .confirm }
+        return nil
+    }
+
+    var body: some View {
+        BookingConflictRowView(row: item, decision: decision) { next in
+            switch next {
+            case .confirm: onAcknowledge()
+            case .drop: onStrike()
+            }
+        }
     }
 }
 
@@ -123,6 +87,7 @@ struct ScheduleOperativeMainConflictBlock: View {
                 ForEach(summary.rows) { row in
                     ScheduleConflictRowView(
                         row: row,
+                        personName: person.name,
                         isAcknowledged: acknowledgedIds.contains(row.id),
                         isStruck: struckIds.contains(row.id),
                         onAcknowledge: { onAcknowledge(row.id) },

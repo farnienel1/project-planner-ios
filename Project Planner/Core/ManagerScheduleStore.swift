@@ -11,7 +11,11 @@ import FirebaseAuth
 
 @MainActor
 class ManagerScheduleStore: ObservableObject {
-    @Published var managerSiteBookings: [ManagerSiteBooking] = []
+    @Published var managerSiteBookings: [ManagerSiteBooking] = [] {
+        didSet { revision &+= 1 }
+    }
+    /// Bumped on every change to `managerSiteBookings`, so booking-flow conflict checks can be memoised per data version.
+    private(set) var revision = 0
     @Published var isLoading = false
     @Published var errorMessage: String?
     /// The last server read failed and nothing (or only a cached copy) is on screen.

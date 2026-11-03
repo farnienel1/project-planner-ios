@@ -10,7 +10,11 @@ import FirebaseFirestore
 
 @MainActor
 class HolidayStore: ObservableObject {
-    @Published var bookings: [HolidayBooking] = []
+    @Published var bookings: [HolidayBooking] = [] {
+        didSet { revision &+= 1 }
+    }
+    /// Bumped on every change to `bookings`, so booking-flow conflict checks can be memoised per data version.
+    private(set) var revision = 0
     @Published var isLoading = false
     @Published var errorMessage: String?
     /// The organisation whose annual leave last finished loading (read, listener snapshot, or failed).

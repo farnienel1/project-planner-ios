@@ -127,11 +127,17 @@ enum BookingLeaveConflictInputs {
         workEndTime: String? = nil
     ) -> [BookingLeaveConflict] {
         guard !people.isEmpty, !dates.isEmpty, !holidays.isEmpty else { return [] }
+        let dayKeys = Array(Set(dates.map { OrganizationRulebookContext.dayKey($0) })).sorted()
+        // Only leave whose stored day range touches the booked days can produce a row, so only that leave is sent to
+        // the script (the whole company's leave was serialised on every check). The rule itself stays the script's.
+        guard let firstKey = dayKeys.first, let lastKey = dayKeys.last else { return [] }
+        let nearby = holidays.filter { min($0.startDayKey, $0.endDayKey) <= lastKey && max($0.startDayKey, $0.endDayKey) >= firstKey }
+        guard !nearby.isEmpty else { return [] }
         let day = CanonicalStandardDayInput(policy: policy)
         var input: [String: Any] = [
             "people": people.map(\.payload),
-            "dayKeys": Array(Set(dates.map { OrganizationRulebookContext.dayKey($0) })).sorted(),
-            "holidays": holidays.map { holiday($0) },
+            "dayKeys": dayKeys,
+            "holidays": nearby.map { holiday($0) },
             "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
             "roster": RulebookPeople.roster(users),
         ]

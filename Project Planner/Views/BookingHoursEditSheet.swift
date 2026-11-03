@@ -480,6 +480,9 @@ struct OperativeCustomHoursSheet: View {
     /// The day as the caller passed it (an organisation-zone midnight), for the rulebook's day key. `referenceDay` is
     /// the device-calendar start of day the timeline drawing uses.
     private let rulebookDay: Date
+    /// Every day this one pair of times is booked on, for the weekend notes (`weekendBookingNotes`, 1.17.0). Defaults
+    /// to the reference day alone.
+    private let noteDays: [Date]
     var title: String
     var subtitle: String?
     var headerName: String?
@@ -517,6 +520,7 @@ struct OperativeCustomHoursSheet: View {
     init(
         policy: OrgPayrollTimePolicy,
         referenceDay: Date = Date(),
+        noteDays: [Date]? = nil,
         title: String = "Edit booking",
         subtitle: String? = nil,
         headerName: String? = nil,
@@ -535,6 +539,11 @@ struct OperativeCustomHoursSheet: View {
         self.policy = policy
         self.referenceDay = Calendar.current.startOfDay(for: referenceDay)
         self.rulebookDay = referenceDay
+        if let noteDays, !noteDays.isEmpty {
+            self.noteDays = noteDays
+        } else {
+            self.noteDays = [referenceDay]
+        }
         self.title = title
         self.subtitle = subtitle
         self.headerName = headerName
@@ -677,7 +686,7 @@ struct OperativeCustomHoursSheet: View {
                         Color.clear.frame(height: 44)
                     }
                     headerSection
-                    WeekendBookingNoteView(day: rulebookDay, policy: policy)
+                    WeekendBookingNoteView(days: noteDays, policy: policy)
                         .padding(.horizontal, 4)
                     if !showsBreakControls {
                         Text("This user is PAYE and is not paid hourly.")

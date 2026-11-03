@@ -101,7 +101,8 @@ struct ScheduleOperativeView: View {
     }
 
     private func applyBulkTimeSlot(_ slot: TimeSlot) {
-        let refDay = selectedDates.sorted().first ?? Date()
+        // One pair of times for every selected day opens on the first selected Saturday's (RULEBOOK 1.17.0).
+        let refDay = CanonicalBusinessEngine.singlePairPrefillDay(Array(selectedDates)) ?? Date()
         let p = payrollPolicy(for: refDay)
         let next: OperativeDayBookingChoice
         switch slot {
@@ -245,8 +246,10 @@ struct ScheduleOperativeView: View {
 
     private func refreshDefaultHoursFromOrgPolicy() {
         guard !didApplyEditingBookingPrefill, !didApplyEditingGroupPrefill else { return }
-        let p = primarySelectedDatePolicy
-        let refDay = selectedDates.sorted().first ?? Date()
+        // One pair of times for every selected day opens on the first selected Saturday's (RULEBOOK 1.17.0), under the
+        // rules in effect on that day.
+        let refDay = CanonicalBusinessEngine.singlePairPrefillDay(Array(selectedDates)) ?? Date()
+        let p = payrollPolicy(for: refDay)
         sharedBulkChoice = defaultChoiceForDay(refDay, policy: p)
         didApplyOrgDefaultHours = true
         if !selectedDates.isEmpty {
@@ -330,6 +333,7 @@ struct ScheduleOperativeView: View {
         return OperativeCustomHoursSheet(
             policy: dayPolicy,
             referenceDay: refDay,
+            noteDays: selectedDates.sorted(),
             title: pick.operativeId == nil ? "Hours" : "Edit booking",
             subtitle: pick.operativeId == nil ? "Applies to all selected operatives and dates" : pick.operativeDisplaySubtitle,
             allowsOtMultiplierOverride: pick.operativeId != nil,
@@ -1047,7 +1051,8 @@ struct ScheduleOperativeView: View {
                             }
                         }
                     }
-                    WeekendBookingNoteView(day: refDay, policy: p)
+                    // RULEBOOK 1.17.0 `weekendBookingNotes`: the note covers every selected day.
+                    WeekendBookingNoteView(days: selectedDates.isEmpty ? [refDay] : selectedDates.sorted(), policy: p)
                     Button {
                         operativeCustomHoursPick = OperativeCustomHoursPick(
                             operativeId: nil,
@@ -1445,7 +1450,8 @@ struct ScheduleOperativeView: View {
                 approvedOverlapOperativeIds.removeAll()
             },
             onConfirmBooking: { proceedWithBooking() },
-            canConfirmBooking: !selectedOperatives.isEmpty && !selectedDates.isEmpty && clashReviewOperativeIds.isEmpty && !isBooking
+            canConfirmBooking: !selectedOperatives.isEmpty && !selectedDates.isEmpty && clashReviewOperativeIds.isEmpty && !isBooking,
+            approvedOperativeIds: approvedOverlapOperativeIds
         )
         .environmentObject(projectStore)
         .environmentObject(firebaseBackend)

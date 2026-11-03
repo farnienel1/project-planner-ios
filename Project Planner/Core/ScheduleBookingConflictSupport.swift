@@ -173,6 +173,9 @@ struct ScheduleConflictRow: Identifiable, Hashable {
     let detail: String
     /// Approved AL and auto-excluded days do not require acknowledgement.
     let requiresAcknowledgement: Bool
+    /// The line under the person and day in the shared conflict row (`BookingConflictRowView`): "Annual leave booked ·
+    /// AM" for leave (`bookingLeaveConflicts`), "Already booked · time · job" for a double booking.
+    var conflictDetail: String? = nil
 
     static func rowId(operativeId: UUID, date: Date, kind: ScheduleConflictKind, suffix: String = "") -> String {
         let day = Calendar.current.startOfDay(for: date).timeIntervalSince1970
@@ -249,12 +252,77 @@ enum ScheduleBookingConflictEngine {
                 kind: kind,
                 title: "\(day.formatted(date: .abbreviated, time: .omitted)) — \(conflict.detail)",
                 detail: "Tick to book anyway, or ✕ to drop this day.",
-                requiresAcknowledgement: true
+                requiresAcknowledgement: true,
+                conflictDetail: conflict.detail
             )
         }
     }
 
+    /// What `buildConflictRows` depends on. The stores enter by revision, so a list redraw (a tap, a tick) reuses the
+    /// rows instead of re-running the leave check (`bookingLeaveConflicts`) and the overlap scan for every person.
+    private struct ConflictRowsKey: Hashable {
+        let person: ScheduleBookablePerson
+        let dates: [Date]
+        let choice: OperativeDayBookingChoice
+        let projectId: UUID
+        let policy: OrgPayrollTimePolicy
+        let excludingBookingIds: Set<UUID>
+        let bookings: Int
+        let managerBookings: Int
+        let holidays: Int
+        let projects: Int
+        let roster: Int
+        let timeZone: String
+    }
+
+    private static var conflictRowsCache: [ConflictRowsKey: [ScheduleConflictRow]] = [:]
+
     static func buildConflictRows(
+        person: ScheduleBookablePerson,
+        selectedDates: Set<Date>,
+        choice: OperativeDayBookingChoice,
+        projectId: UUID,
+        projectStore: ProjectStore,
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        holidayStore: HolidayStore,
+        policy: OrgPayrollTimePolicy,
+        excludingBookingIds: Set<UUID>
+    ) -> [ScheduleConflictRow] {
+        guard !selectedDates.isEmpty else { return [] }
+        let key = ConflictRowsKey(
+            person: person,
+            dates: selectedDates.sorted(),
+            choice: choice,
+            projectId: projectId,
+            policy: policy,
+            excludingBookingIds: excludingBookingIds,
+            bookings: bookingStore.revision,
+            managerBookings: managerScheduleStore.revision,
+            holidays: holidayStore.revision,
+            projects: projectStore.revision,
+            roster: RulebookRosterSnapshot.revision,
+            timeZone: OrganizationRulebookContext.timeZoneIdentifier
+        )
+        if let cached = conflictRowsCache[key] { return cached }
+        let rows = computeConflictRows(
+            person: person,
+            selectedDates: selectedDates,
+            choice: choice,
+            projectId: projectId,
+            projectStore: projectStore,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            policy: policy,
+            excludingBookingIds: excludingBookingIds
+        )
+        if conflictRowsCache.count > 400 { conflictRowsCache.removeAll() }
+        conflictRowsCache[key] = rows
+        return rows
+    }
+
+    private static func computeConflictRows(
         person: ScheduleBookablePerson,
         selectedDates: Set<Date>,
         choice: OperativeDayBookingChoice,
@@ -316,7 +384,8 @@ enum ScheduleBookingConflictEngine {
                         kind: kind,
                         title: "\(day.formatted(date: .abbreviated, time: .omitted)) — \(timeLabel)",
                         detail: jobLabel,
-                        requiresAcknowledgement: true
+                        requiresAcknowledgement: true,
+                        conflictDetail: "Already booked · \(timeLabel) · \(jobLabel)"
                     )
                 )
             }
@@ -340,7 +409,8 @@ enum ScheduleBookingConflictEngine {
                             kind: .myScheduleItem,
                             title: "\(day.formatted(date: .abbreviated, time: .omitted)) — \(timeLabel)",
                             detail: location,
-                            requiresAcknowledgement: true
+                            requiresAcknowledgement: true,
+                            conflictDetail: "Already booked · \(timeLabel) · \(location)"
                         )
                     )
                 }

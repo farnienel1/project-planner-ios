@@ -18,13 +18,6 @@ fileprivate struct SecondBookingDialog: Identifiable {
     let onConfirm: () -> Void
 }
 
-fileprivate struct PendingScheduleOverlapResolution: Identifiable {
-    let id = UUID()
-    let message: String
-    let detailLines: [String]
-    let onContinue: () -> Void
-}
-
 fileprivate struct CustomHoursEditorContext: Identifiable {
     let id = UUID()
     let days: [Date]
@@ -514,8 +507,10 @@ fileprivate struct ManagerCustomHoursSheet: View {
         self.onCancel = onCancel
         let seedS = context.seedStart?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let seedE = context.seedEnd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        // RULEBOOK 1.13.1 `weekendCustomHoursDefault`: a set-window weekend day opens on that day's window.
-        let prefill = CanonicalBusinessEngine.customHoursPrefill(on: context.days.first ?? Date(), policy: policy)
+        // RULEBOOK 1.13.1 `weekendCustomHoursDefault`: a set-window weekend day opens on that day's window. One pair of
+        // times for the whole request opens on the first selected Saturday's (1.17.0, web `customHoursPrefillForDates`).
+        let prefillDay = CanonicalBusinessEngine.singlePairPrefillDay(context.days) ?? Date()
+        let prefill = CanonicalBusinessEngine.customHoursPrefill(on: prefillDay, policy: policy)
         _startText = State(initialValue: seedS.isEmpty ? prefill.start : seedS)
         _endText = State(initialValue: seedE.isEmpty ? prefill.end : seedE)
         _breakRemoved = State(initialValue: context.seedBreakRemoved ?? false)
@@ -533,8 +528,8 @@ fileprivate struct ManagerCustomHoursSheet: View {
                         .keyboardType(.numbersAndPunctuation)
                     Toggle("No break (on this booking)", isOn: $breakRemoved)
                         .accessibilityIdentifier("managerCustomHours.noBreakOnThisBooking")
-                    if let day = context.days.first {
-                        WeekendBookingNoteView(day: day, policy: policy)
+                    if !context.days.isEmpty {
+                        WeekendBookingNoteView(days: context.days, policy: policy)
                     }
                 } footer: {
                     Text("Uses your organisation standard day (\(policy.standardDayStart)–\(policy.standardDayEnd)) as the default. Touching times (e.g. one job ends when the next starts) are allowed.")
@@ -704,7 +699,6 @@ struct ManagerScheduleContentView: View {
     /// Expanded "Book yourself in" item: true = Office, non-nil UUID = that project/small work (only one expanded at a time).
     @State private var expandedStandardLocation: ManagerLocationType?
     @State private var expandedLocationId: UUID?
-    @State private var pendingOverlapResolution: PendingScheduleOverlapResolution?
     @State private var isMultiDaySelectionEnabled = false
     @State private var selectedDates: Set<Date> = []
     @State private var expandedCustomLocationName: String?
@@ -916,9 +910,6 @@ struct ManagerScheduleContentView: View {
                     dayContent(for: day)
                 }
             }
-            if let pending = pendingOverlapResolution {
-                scheduleOverlapWarningTile(pending)
-            }
         }
         .onAppear {
             weekStart = Date()
@@ -933,7 +924,8 @@ struct ManagerScheduleContentView: View {
             managerScheduleStore.loadData(force: true)
         }
         .sheet(item: $customHoursContext) { ctx in
-            let policyDay = ctx.days.first ?? selectedDate ?? Date()
+            // The rules in effect on the day the one pair of times opens on (`singlePairPrefillDay`).
+            let policyDay = CanonicalBusinessEngine.singlePairPrefillDay(ctx.days) ?? selectedDate ?? Date()
             ManagerCustomHoursSheet(
                 context: ctx,
                 policy: payrollPolicy(for: policyDay),
@@ -1161,19 +1153,6 @@ struct ManagerScheduleContentView: View {
         coverSchedule(from: start)
     }
 
-    private func scheduleOverlapWarningTile(_ pending: PendingScheduleOverlapResolution) -> some View {
-        ScheduleOverlapWarningPanel(
-            message: pending.message,
-            detailLines: pending.detailLines,
-            onCancel: { pendingOverlapResolution = nil },
-            onConfirm: {
-                let proceed = pending.onContinue
-                pendingOverlapResolution = nil
-                proceed()
-            }
-        )
-    }
-
     private func bookingProbe(
         userId: String,
         day: Date,
@@ -1287,9 +1266,15 @@ struct ManagerScheduleContentView: View {
         if replaceBookingId == nil, !ManagerTimeSlot.offered(on: normalizedDays).contains(timeSlot) {
             return
         }
+        // RULEBOOK 1.16.0 §5, §9: a time overlap with something already on your schedule is an orange row in the same
+        // conflict list as the purple leave rows (`BOOKING_CONFLICTS_HEADING`), ticked to book anyway or ✕ to drop
+        // that day (web `BookingConflictRows`). Annual leave is `bookingLeaveConflicts` in `commit`.
+        let conflictPersonKey = userStore.currentUser?.id ?? uid
+        let conflictPersonName = userStore.currentUser?.fullName ?? "You"
+        var clashRows: [BookingConflictItem] = []
         if !allowOverlap {
             for day in normalizedDays {
-                var detailLines: [String] = []
+                let dayKey = OrganizationRulebookContext.dayKey(day)
                 if isDuplicateBooking(
                     on: day,
                     timeSlot: timeSlot,
@@ -1301,24 +1286,14 @@ struct ManagerScheduleContentView: View {
                     customLocationName: customLocationName,
                     ignoringBookingId: replaceBookingId
                 ) {
-                    detailLines.append("This matches a booking you already have on \(fullDateLabel(day)).")
-                    presentOverlapWarning(
-                        message: "This booking overlaps something already on your schedule.",
-                        detailLines: detailLines,
-                        days: normalizedDays,
-                        timeSlot: timeSlot,
-                        workStart: workStart,
-                        workEnd: workEnd,
-                        breakRemoved: breakRemoved,
-                        locationType: locationType,
-                        locationId: locationId,
-                        customLocationName: customLocationName,
-                        replaceBookingId: replaceBookingId
-                    )
-                    return
+                    clashRows.append(.doubleBooking(
+                        personKey: conflictPersonKey,
+                        dayKey: dayKey,
+                        personName: conflictPersonName,
+                        detail: "Already booked · this matches a booking you already have"
+                    ))
+                    continue
                 }
-                // RULEBOOK 1.16.0 §5, §9: annual leave is checked by `bookingLeaveConflicts` in `commit` (purple rows,
-                // slot-aware), not here.
                 let probe = bookingProbe(
                     userId: uid,
                     day: day,
@@ -1335,35 +1310,18 @@ struct ManagerScheduleContentView: View {
                     let existing = mySiteBookings(on: day)
                         .filter { $0.id != replaceBookingId }
                         .filter { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
-                    detailLines = existing.map {
-                        "\($0.scheduleLabel(policy: policy)) — \(locationNameString(for: $0))"
-                    }
-                    let newLabel = newBookingSummaryLabel(
-                        timeSlot: timeSlot,
-                        workStart: workStart,
-                        workEnd: workEnd,
-                        breakRemoved: breakRemoved,
-                        day: day
-                    )
-                    detailLines.append("New booking: \(newLabel) — \(locationNameString(for: probe))")
-                    presentOverlapWarning(
-                        message: "This booking overlaps another in time on \(fullDateLabel(day)).",
-                        detailLines: detailLines,
-                        days: normalizedDays,
-                        timeSlot: timeSlot,
-                        workStart: workStart,
-                        workEnd: workEnd,
-                        breakRemoved: breakRemoved,
-                        locationType: locationType,
-                        locationId: locationId,
-                        customLocationName: customLocationName,
-                        replaceBookingId: replaceBookingId
-                    )
-                    return
+                    let lines = existing.map { "\($0.scheduleLabel(policy: policy)) — \(locationNameString(for: $0))" }
+                    clashRows.append(.doubleBooking(
+                        personKey: conflictPersonKey,
+                        dayKey: dayKey,
+                        personName: conflictPersonName,
+                        detail: (["Already booked"] + lines).joined(separator: " · ")
+                    ))
                 }
             }
         }
 
+        let clashRowsToDecide = clashRows
         let commit: () -> Void = {
             // RULEBOOK 1.16.0 §5, §9 `bookingLeaveConflicts`: leave on the chosen days is ticked or dropped first;
             // dropping every day saves nothing.
@@ -1387,7 +1345,7 @@ struct ManagerScheduleContentView: View {
                 workStartTime: probeSlot?.workStartTime ?? workStart,
                 workEndTime: probeSlot?.workEndTime ?? workEnd
             )
-            self.leaveGate.run(rows: leaveRows, afterDismiss: true) { dropped in
+            self.leaveGate.run(rows: clashRowsToDecide + leaveRows, afterDismiss: true) { dropped in
                 let keptDays = normalizedDays.filter {
                     !dropped.contains("\(leavePerson.id)|\(OrganizationRulebookContext.dayKey($0))")
                 }
@@ -1413,7 +1371,7 @@ struct ManagerScheduleContentView: View {
             }
         }
 
-        if !allowOverlap, normalizedDays.count == 1, let only = normalizedDays.first {
+        if !allowOverlap, clashRows.isEmpty, normalizedDays.count == 1, let only = normalizedDays.first {
             let existing = mySiteBookings(on: only).filter { $0.id != replaceBookingId }
             if !existing.isEmpty {
                 let newLabel = newBookingSummaryLabel(
@@ -1432,39 +1390,6 @@ struct ManagerScheduleContentView: View {
             }
         }
         commit()
-    }
-
-    private func presentOverlapWarning(
-        message: String,
-        detailLines: [String],
-        days: [Date],
-        timeSlot: ManagerTimeSlot,
-        workStart: String?,
-        workEnd: String?,
-        breakRemoved: Bool,
-        locationType: ManagerLocationType,
-        locationId: UUID?,
-        customLocationName: String?,
-        replaceBookingId: UUID?
-    ) {
-        pendingOverlapResolution = PendingScheduleOverlapResolution(
-            message: message,
-            detailLines: detailLines,
-            onContinue: {
-                runBookingFlow(
-                    days: days,
-                    timeSlot: timeSlot,
-                    workStart: workStart,
-                    workEnd: workEnd,
-                    breakRemoved: breakRemoved,
-                    locationType: locationType,
-                    locationId: locationId,
-                    customLocationName: customLocationName,
-                    replaceBookingId: replaceBookingId,
-                    allowOverlap: true
-                )
-            }
-        )
     }
 
     private func shiftSelectedDay(by delta: Int) {
@@ -1902,8 +1827,9 @@ struct ManagerScheduleContentView: View {
         // RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: Saturday and Sunday are custom hours only.
         let offered = ManagerTimeSlot.offered(on: daysToBook)
         return VStack(alignment: .leading, spacing: 10) {
+            // RULEBOOK 1.17.0 `weekendBookingNotes`: one note for the whole selection, each day under its own rules.
             if let first = daysToBook.first {
-                WeekendBookingNoteView(day: first, policy: payrollPolicy(for: first))
+                WeekendBookingNoteView(days: daysToBook, policy: payrollPolicy(for: first))
             }
             HStack(spacing: 14) {
                 ForEach([ManagerTimeSlot.fullDay, ManagerTimeSlot.morning, ManagerTimeSlot.afternoon].filter { offered.contains($0) }, id: \.self) { slot in

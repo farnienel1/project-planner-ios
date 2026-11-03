@@ -6568,6 +6568,9 @@ class FirebaseBackend: ObservableObject {
     }
 
     private func writePushTokens(userId: String, currentDeviceToken: String) async throws {
+        // RULEBOOK 1.17.0 §13 (`pushTokenOwnerWrites`): `pushTokens` is written only to the signed-in Auth uid's users
+        // document — never a same-email copy, an invite placeholder (`isPushTokenPlaceholderUserId`) or another company's.
+        guard let authUid = auth.currentUser?.uid, !authUid.isEmpty, authUid == userId else { return }
         let ref = db.collection("users").document(userId)
         // A failed read is not an empty list. Replacing pushTokens then would delete tokens this client never received.
         let snap = try await ref.getDocument(source: .server)
