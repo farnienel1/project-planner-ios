@@ -10247,96 +10247,26 @@ extension FirebaseBackend {
 
     // MARK: - Email Service
     
+    /// Launch checklist 3.1: one `sendEmail` call (template `material_request`) for every recipient. The function sends
+    /// one message per recipient with the signed-in user in CC (`ccCaller`), as "<user> via Project Planner"
+    /// (`fromCaller`), Reply-To the user, and renders the subject and body with web's builder. No separate "Copy:" email.
     func sendMaterialRequest(_ request: MaterialOrderRequest, organizationId: String) async throws {
-        let isQuote = request.requestType == .quote
-        let senderEmail = request.senderEmail.isEmpty
-            ? (currentUser?.email ?? "info@projectplanner.us")
-            : request.senderEmail
-        let senderName = request.senderName.isEmpty
-            ? (request.sentBy.split(separator: "\n").first.map(String.init) ?? "Project Planner")
-            : request.senderName
-        let company = request.senderCompany.isEmpty
-            ? (currentOrganization?.name ?? "")
-            : request.senderCompany
-        let logoURL = request.companyLogoURL ?? currentOrganization?.companyLogoURL
-        var wholesalerSent = 0
-
-        for contact in request.recipientContacts {
-            let contactName = contact.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            let supplierFirst = contactName.split(separator: " ").first.map(String.init) ?? contactName
-            // Plain-text emails use the full wholesaler contact name; HTML keeps the short greeting.
-            let supplierGreeting = request.sendAsPlainText
-                ? (contactName.isEmpty ? supplierFirst : contactName)
-                : supplierFirst
-            let emailContext = MaterialRequestEmailBuilder.Context(
-                supplierName: supplierGreeting,
-                userName: senderName,
-                userEmail: senderEmail,
-                userPhone: request.senderPhone,
-                userCompany: company,
-                jobNumber: request.projectNumber,
-                siteName: request.projectName,
-                deliveryAddress: request.siteAddress,
-                requestedDate: CanonicalBusinessEngine.orderDeliveryRequiredLabel(
-                    requestType: request.requestType.rawValue,
-                    at: request.requiredDeliveryDate
-                ),
-                quoteNeededBy: nil,
-                companyLogoURL: logoURL,
-                materials: request.materials,
-                sentAt: request.sentAt
-            )
-            let emailBody: String
-            if request.sendAsPlainText {
-                let plain = MaterialRequestEmailBuilder.buildPlainTextEmail(context: emailContext, isQuote: isQuote)
-                emailBody = MaterialRequestEmailBuilder.plainTextAsSimpleHTML(plain)
-            } else {
-                emailBody = isQuote
-                    ? MaterialRequestEmailBuilder.buildQuoteEmail(context: emailContext)
-                    : MaterialRequestEmailBuilder.buildOrderEmail(context: emailContext)
-            }
-            let subject = isQuote
-                ? MaterialRequestEmailBuilder.quoteSubject(jobNumber: request.projectNumber, company: company)
-                : MaterialRequestEmailBuilder.orderSubject(jobNumber: request.projectNumber, company: company)
-            let replyTo = ExportTextEscaping.sanitizeReplyToAddress(senderEmail)
-            let fromName = ExportTextEscaping.sanitizeFromDisplayName("\(senderName) (via Project Planner)")
-
-            let emailService = ResendEmailService()
-            let success = await emailService.sendEmail(
-                to: contact.email,
-                subject: subject,
-                htmlContent: emailBody,
-                replyTo: replyTo,
-                fromName: fromName
-            )
-
-            if success {
-                print("✅ Email sent successfully to \(contact.email)")
-                wholesalerSent += 1
-                let copyAddress = senderEmail.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !copyAddress.isEmpty {
-                    let copied = await emailService.sendEmail(
-                        to: copyAddress,
-                        subject: ExportTextEscaping.sanitizeEmailSubject("Copy: \(subject)"),
-                        htmlContent: emailBody,
-                        replyTo: replyTo,
-                        fromName: fromName
-                    )
-                    if !copied {
-                        print("🔥🔥🔥 DEBUG: [materials/send] user copy failed for \(copyAddress)")
-                    }
-                }
-            } else {
-                print("❌ Failed to send email to \(contact.email)")
-            }
+        let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
+        let senderEmail = (currentUser?.email ?? request.senderEmail).trimmingCharacters(in: .whitespacesAndNewlines)
+        let result: MaterialRequestEmailResult
+        do {
+            result = try await MaterialRequestEmailClient.send(request, organizationId: orgId, senderEmail: senderEmail)
+        } catch {
+            print("❌ [materials/send] sendEmail failed: \(error.localizedDescription)")
+            throw error
         }
-
-        guard wholesalerSent > 0 else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 500,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to send material list"]
-            )
+        print("✅ [materials/send] sendEmail sent \(result.sentCount) · ids \(result.messageIds) · cc \(result.cc)")
+        if !result.failed.isEmpty {
+            print("❌ [materials/send] not sent to \(result.failed)")
+        }
+        if result.cc.isEmpty {
+            // The deployed function ignored `ccCaller` (app callers need the server change in web functions/email).
+            print("⚠️ [materials/send] sendEmail did not CC the sender (ccSupported \(result.ccSupported))")
         }
 
         let requestedStatus: MaterialWorkflowStatus = request.requestType == .quote ? .sentForQuote : .ordered
