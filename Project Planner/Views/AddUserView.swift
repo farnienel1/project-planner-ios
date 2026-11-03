@@ -67,6 +67,8 @@ struct AddUserView: View {
     @State private var isCreating = false
     @State private var showSuccess = false
     @State private var errorMessage: String?
+    /// RULEBOOK 1.14.0 `payRateRequiredError`, shown under the rate field after a refused create.
+    @State private var rateFieldError: String?
     
     private var totalSteps: Int { 4 }
     
@@ -517,18 +519,32 @@ struct AddUserView: View {
                     )
                 }
                 
-                if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                // RULEBOOK 1.14.0 §8, §11: every level has a rate field, because a self-employed person of any level
+                // needs a rate (`payRateRequiredError`) when the adder may set pay.
+                if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager
+                    || invitedAccountType == .admin {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Day rate (optional)")
+                        Text(inviteRateRequired ? "Day rate *" : "Day rate (optional)")
                             .font(.headline)
                         TextField("e.g. 250", text: dayRateBindingForSelectedType)
                             .accessibilityIdentifier("addUser.eG250")
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                             .keyboardType(.decimalPad)
-                        Text(invitedAccountType == .manager ? "Optional for managers. Leave blank if not needed." : "Stored on their user account.")
+                        if let rateFieldError {
+                            Text(rateFieldError)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .accessibilityIdentifier("addUser.payRateRequired")
+                        }
+                        Text(inviteRateRequired
+                             ? CanonicalBusinessEngine.payRateRequiredMessage
+                             : (invitedAccountType == .operative || mode == .managerAddingOperative
+                                ? "Stored on their user account."
+                                : "Optional. Leave blank if not needed."))
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
+                    .onChange(of: employmentType) { _, _ in rateFieldError = nil }
                 }
 
                 // Admins only (`canViewSensitiveProfile` for someone else). Saved to the placeholder's private/taxIds.
@@ -1078,6 +1094,14 @@ struct AddUserView: View {
             }
         }
 
+        // RULEBOOK 1.14.0 §8, §11 `payRateRequiredError`: a self-employed person needs a day rate above 0, checked only
+        // when the adder may set this person's pay (`canChangePersonPay`).
+        if let payMessage = inviteRateError {
+            rateFieldError = payMessage
+            errorMessage = payMessage
+            return
+        }
+
         // RULEBOOK 1.12.0 §4.4 `validateLeaveYearMonths`: the invite's leave year must be 12 months.
         if let leaveYearError = CanonicalBusinessEngine.leaveYearMonthsError(
             startMonth: annualLeaveStartMonth,
@@ -1188,6 +1212,7 @@ struct AddUserView: View {
                 return managerDayRateText
             },
             set: { newValue in
+                rateFieldError = nil
                 if mode == .managerAddingOperative || invitedAccountType == .operative {
                     operativeDayRateText = newValue
                 } else {
@@ -1201,10 +1226,31 @@ struct AddUserView: View {
         if mode == .managerAddingOperative || invitedAccountType == .operative {
             return operativeDayRateText
         }
-        if invitedAccountType == .manager {
+        if invitedAccountType == .manager || invitedAccountType == .admin {
             return managerDayRateText
         }
         return ""
+    }
+
+    /// `canChangePersonPay` for the person being added (an operative for an operative invite).
+    private var adderMaySetInvitePay: Bool {
+        userStore.canChangePayOfNewPerson(isOperative: mode == .managerAddingOperative || invitedAccountType == .operative)
+    }
+
+    /// The rate field is required: self-employed (`payRateRequiredError` with no rate fails) and the adder may set pay.
+    private var inviteRateRequired: Bool {
+        adderMaySetInvitePay
+            && PayRateRequiredRulebook.error(employmentType: employmentType, payBasis: "day", amount: nil) != nil
+    }
+
+    /// `payRateRequiredError` for the invite as it will be saved: a day rate (Add User writes `payBasis` `day`).
+    private var inviteRateError: String? {
+        guard adderMaySetInvitePay else { return nil }
+        return PayRateRequiredRulebook.error(
+            employmentType: employmentType,
+            payBasis: "day",
+            amount: parseDayRate(from: selectedDayRateTextForReview)
+        )
     }
 
     private func parseDayRate(from text: String) -> Double? {

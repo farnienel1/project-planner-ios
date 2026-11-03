@@ -6,7 +6,9 @@
 //  `lib/canonical/lineManagers.ts`, called through `CanonicalBusinessEngine`:
 //    - `lineManagerCandidates(person, roster)`: who may be picked;
 //    - `lineManagerOptions(person)`: whether "No line manager" is offered (admins only);
-//    - `lineManagerSummary(person, roster)`: the label ("Unknown person" for an unknown id, "+N more" only for N ≥ 1).
+//    - `lineManagerSummary(person, roster)`: the label ("Unknown person" for an unknown id, "+N more" only for N ≥ 1);
+//    - `lineManagerSelectedIds(person, roster)` (1.14.0): the picker's selection, a stored id on a folded-away
+//      duplicate of a person mapped onto that person's one option.
 //  Nothing is decided here.
 //
 
@@ -49,6 +51,12 @@ extension CanonicalBusinessEngine {
         )
     }
 
+    /// `lineManagerSelectedIds(person, roster)` (rulebook 1.14.0 §11): the stored line managers as picker option ids,
+    /// one per person. Nil when the script did not answer.
+    nonisolated static func lineManagerSelectedIds(person: [String: Any], roster: [[String: Any]]) -> [String]? {
+        callJSON("lineManagerSelectedIds", arguments: [person, roster]) as? [String]
+    }
+
     /// `lineManagerSummary(person, roster)` → its `label`. Nil when the script did not answer.
     nonisolated static func lineManagerSummaryLabel(person: [String: Any], roster: [[String: Any]]) -> String? {
         (callJSON("lineManagerSummary", arguments: [person, roster]) as? [String: Any])?["label"] as? String
@@ -89,6 +97,27 @@ enum LineManagerRulebook {
         var byId: [String: AppUser] = [:]
         for user in users where byId[user.id.lowercased()] == nil { byId[user.id.lowercased()] = user }
         return rows.compactMap { byId[$0.id.lowercased()] }
+    }
+
+    /// `lineManagerSelectedIds(person, roster)`: what the Edit User picker starts with (and the baseline a save compares
+    /// against), so a stored id on the other users document of the same person selects that person's one option.
+    /// Falls back to the stored ids when the script did not answer.
+    static func selectedIds(for person: AppUser, roster users: [AppUser]) -> Set<String> {
+        guard let ids = CanonicalBusinessEngine.lineManagerSelectedIds(person: row(person), roster: roster(users)) else {
+            return Set(person.lineManagerUserIds)
+        }
+        return Set(ids)
+    }
+
+    /// Whether the picker's selection differs from the person's stored line managers, both read through
+    /// `lineManagerSelectedIds` (so the same person under their other users document is no change). The
+    /// `hasNoLineManager` flag is compared separately by the screen.
+    static func selectionChanged(_ selected: Set<String>, from person: AppUser, roster users: [AppUser]) -> Bool {
+        var stored = person
+        stored.hasNoLineManager = false
+        var draft = stored
+        draft.setLineManagerUserIds(Array(selected).sorted())
+        return selectedIds(for: draft, roster: users) != selectedIds(for: stored, roster: users)
     }
 
     /// `lineManagerOptions(person).allowsNoLineManager`: "No line manager" is offered only to admins and super admins.
