@@ -17,6 +17,12 @@ struct DeleteMyAccountView: View {
     @State private var message: String?
     @State private var showsDeleteButton = true
     @State private var isDeleting = false
+    /// RULEBOOK 1.15.0 §11 `accountDeletionPath` `delete_with_company`: organisations deleted with the account; each
+    /// name must be typed (`organizationDeleteConfirmationError`).
+    @State private var companiesToConfirm: [AccountDeletionClient.CompanyToDelete] = []
+    @State private var typedCompanyNames: [String: String] = [:]
+    /// `handover_required`: make another admin the super admin first.
+    @State private var handoverMessage: String?
 
     private let consequences = [
         "This permanently deletes your Project Planner login. You will not be able to sign in again.",
@@ -37,6 +43,42 @@ struct DeleteMyAccountView: View {
                         }
                     }
                     .padding(.vertical, 14)
+                }
+
+                if let handoverMessage {
+                    Text(handoverMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(PPColor.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 4)
+                        .padding(.bottom, 8)
+                        .accessibilityIdentifier("deleteMyAccount.handoverRequired")
+                }
+
+                if !companiesToConfirm.isEmpty {
+                    Text(CanonicalBusinessEngine.accountDeleteWithCompanyMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 4)
+                        .padding(.bottom, 8)
+                        .accessibilityIdentifier("deleteMyAccount.deleteWithCompany")
+                    SettingsHubChrome.card {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(companiesToConfirm, id: \.orgId) { company in
+                                labeledField("Type the company name: \(company.orgName)") {
+                                    TextField(company.orgName, text: Binding(
+                                        get: { typedCompanyNames[company.orgId] ?? "" },
+                                        set: { typedCompanyNames[company.orgId] = $0 }
+                                    ))
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .autocorrectionDisabled()
+                                    .accessibilityIdentifier("deleteMyAccount.companyName.\(company.orgId)")
+                                }
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
                 }
 
                 SettingsHubChrome.card {
@@ -90,6 +132,7 @@ struct DeleteMyAccountView: View {
             .padding(16)
         }
         .background(PPColor.page.ignoresSafeArea())
+        .task { loadDeletionPath() }
         .navigationTitle("Delete your account?")
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
@@ -105,12 +148,51 @@ struct DeleteMyAccountView: View {
         .padding(.vertical, 8)
     }
 
+    /// RULEBOOK 1.15.0 §11 `accountDeletionPath` for the open organisation: hand over super admin first, or delete
+    /// the company with the account (its name typed). The server decides again for every organisation.
+    private func loadDeletionPath() {
+        guard let me = userStore.currentUser, let org = firebaseBackend.currentOrganization else { return }
+        var viewer = RulebookPeople.person(me)
+        viewer["organizationId"] = me.organizationId
+        let roster: [[String: Any]] = userStore.organizationUsers.map { user in
+            var row = RulebookPeople.person(user)
+            row["firstName"] = user.firstName
+            row["surname"] = user.surname
+            row["organizationId"] = user.organizationId
+            return row
+        }
+        var orgRow: [String: Any] = ["id": org.firestoreDocumentId]
+        if let creator = org.creatorUserId { orgRow["creatorUserId"] = creator }
+        if let deletion = OrganizationBillingMap.dictionary(json: org.deletionJSON) { orgRow["deletion"] = deletion }
+        switch CanonicalBusinessEngine.accountDeletionPath(viewer: viewer, roster: roster, org: orgRow) {
+        case .handoverRequired:
+            handoverMessage = CanonicalBusinessEngine.accountHandoverRequiredMessage
+            showsDeleteButton = false
+        case .deleteWithCompany:
+            companiesToConfirm = [AccountDeletionClient.CompanyToDelete(orgId: org.firestoreDocumentId, orgName: org.name)]
+        case .delete, .none:
+            break
+        }
+    }
+
     private func deleteAccount() {
         guard !isDeleting else { return }
+        // Each company deleted with the account: its name typed exactly (`organizationDeleteConfirmationError`).
+        for company in companiesToConfirm {
+            if let error = CanonicalBusinessEngine.organizationDeleteConfirmationError(
+                organizationName: company.orgName,
+                typedName: typedCompanyNames[company.orgId] ?? "",
+                typedConfirmation: AccountDeletionClient.requiredConfirmation
+            ) {
+                message = error
+                return
+            }
+        }
         isDeleting = true
         message = nil
         let typedConfirmation = confirmation
         let typedPassword = password
+        let companyNames = typedCompanyNames.filter { entry in companiesToConfirm.contains { $0.orgId == entry.key } }
         Task {
             let session = AccountDeletionSession()
             session.user = Auth.auth().currentUser
@@ -132,6 +214,7 @@ struct DeleteMyAccountView: View {
                 sessionAfterFailure: {
                     await Self.sessionAfterFailedDelete()
                 },
+                companyNames: companyNames,
                 userId: session.user?.uid,
                 clearRememberedOrganization: {
                     firebaseBackend.clearLocalOrganizationCache()
@@ -147,6 +230,16 @@ struct DeleteMyAccountView: View {
             message = result.failureMessage
             if result.hidesDeleteButton {
                 showsDeleteButton = false
+            }
+            if case .handoverRequired(let text) = result {
+                handoverMessage = text
+                message = nil
+            }
+            if case .companyDeleteRequired(_, let orgs) = result, !orgs.isEmpty {
+                // The server named the organisations whose name is missing: ask for each one.
+                for org in orgs where !companiesToConfirm.contains(where: { $0.orgId == org.orgId }) {
+                    companiesToConfirm.append(org)
+                }
             }
         }
     }

@@ -247,4 +247,110 @@ final class Rulebook1160Tests: XCTestCase {
         XCTAssertEqual(BookingConflictResolution.droppedPersonDays([row], decisions: [row.id: .confirm]), [])
         XCTAssertEqual(BookingConflictResolution.droppedPersonDays([row], decisions: [row.id: .drop]), ["OP-1|2026-11-04"])
     }
+
+    // MARK: 1.15.0 owner decisions
+
+    /// `accountTypeWritePermissions`: a type change keeps the stored toggles; only the level flags change and only
+    /// the new level's editable toggles take the screen's values.
+    func testAccountTypeChangeKeepsSavedToggles() throws {
+        let stored: [String: Any] = [
+            "role": "manager", "manager": true, "adminAccess": false, "operativeMode": false,
+            "projects": true, "smallWorks": false, "weeklyReports": true, "operatives": false, "permissions": [:] as [String: Any],
+        ]
+        let toAdmin = try XCTUnwrap(CanonicalBusinessEngine.accountTypeWritePermissions(
+            kind: .admin, person: stored, screen: ["projects": true, "smallWorks": true, "annualLeaveSelfBook": true]
+        ))
+        XCTAssertEqual(toAdmin["adminAccess"], true)
+        XCTAssertEqual(toAdmin["smallWorks"], false, "an admin's locked toggles never overwrite the stored value")
+        XCTAssertEqual(toAdmin["annualLeaveSelfBook"], true)
+        let backToManager = try XCTUnwrap(CanonicalBusinessEngine.accountTypeWritePermissions(
+            kind: .manager, person: stored, screen: ["smallWorks": true, "materials": false]
+        ))
+        XCTAssertEqual(backToManager["adminAccess"], false)
+        XCTAssertEqual(backToManager["smallWorks"], true)
+        XCTAssertEqual(backToManager["materials"], true, "Materials is locked on for a manager")
+        XCTAssertEqual(backToManager["weeklyReports"], true)
+    }
+
+    /// `canSendMaterialOrders` and `materialOrderRecipientCheck`.
+    func testMaterialOrderAccess() throws {
+        typealias Role = CanonicalBusinessEngine.CanonicalStaffAccountRole
+        XCTAssertTrue(CanonicalBusinessEngine.canSendMaterialOrders(Role(isSuperAdmin: false, isAdmin: true, isManager: false, isOperativeMode: false)))
+        XCTAssertTrue(CanonicalBusinessEngine.canSendMaterialOrders(Role(isSuperAdmin: false, isAdmin: false, isManager: true, isOperativeMode: false)))
+        XCTAssertFalse(CanonicalBusinessEngine.canSendMaterialOrders(Role(isSuperAdmin: false, isAdmin: false, isManager: false, isOperativeMode: true)))
+        XCTAssertFalse(CanonicalBusinessEngine.canSendMaterialOrders(Role(isSuperAdmin: true, isAdmin: true, isManager: false, isOperativeMode: true)))
+        XCTAssertEqual(CanonicalBusinessEngine.materialOrderTypedRecipientsMax, 3)
+
+        let tooMany = try XCTUnwrap(CanonicalBusinessEngine.materialOrderRecipientCheck(
+            recipients: ["a@x.co", "B@x.co", "c@y.co", "d@y.co", "e@y.co", "me@x.co"],
+            savedContactEmails: ["a@x.co"],
+            senderEmail: "me@x.co"
+        ))
+        XCTAssertFalse(tooMany.ok)
+        XCTAssertEqual(tooMany.reason, "too_many_typed")
+        XCTAssertEqual(tooMany.message, CanonicalBusinessEngine.materialOrderTypedRecipientsMessage)
+        let ok = try XCTUnwrap(CanonicalBusinessEngine.materialOrderRecipientCheck(
+            recipients: ["a@x.co", "c@y.co", "Me@x.co"], savedContactEmails: ["A@x.co"], senderEmail: "me@x.co"
+        ))
+        XCTAssertTrue(ok.ok)
+        XCTAssertEqual(ok.saved, ["a@x.co"])
+        XCTAssertEqual(ok.typed, ["c@y.co"])
+        let onlyMe = try XCTUnwrap(CanonicalBusinessEngine.materialOrderRecipientCheck(
+            recipients: ["me@x.co"], savedContactEmails: [], senderEmail: "me@x.co"
+        ))
+        XCTAssertEqual(onlyMe.reason, "none")
+    }
+
+    /// `organizationDeletionState` / `organizationDeletedMessage`.
+    func testOrganizationDeletionState() {
+        let deletion: [String: Any] = [
+            "status": "scheduled",
+            "requestedAt": ["seconds": 1_790_000_000],
+            "requestedBy": "U",
+            "eraseAfter": ["seconds": 1_795_184_000],
+            "restoreBy": "super_admin",
+        ]
+        let state = CanonicalBusinessEngine.organizationDeletionState(
+            deletion: deletion, now: Date(timeIntervalSince1970: 1_790_000_000)
+        )
+        XCTAssertEqual(state, .scheduled(eraseAfterMs: 1_795_184_000_000, due: false, restoreBy: "super_admin"))
+        XCTAssertTrue(state.isLocked)
+        XCTAssertEqual(
+            CanonicalBusinessEngine.organizationDeletedMessage(eraseAfterMs: 1_795_184_000_000, timeZone: "Europe/London"),
+            "This organisation has been deleted and will be erased on 20 November 2026."
+        )
+        XCTAssertEqual(CanonicalBusinessEngine.organizationDeletionState(deletion: ["status": "erased"]), .erased)
+        XCTAssertEqual(CanonicalBusinessEngine.organizationDeletionState(deletion: nil), .active)
+    }
+
+    /// `accountDeletionPath` and `organizationDeleteConfirmationError`.
+    func testAccountDeletionPath() {
+        let org: [String: Any] = ["id": "ORG", "creatorUserId": "SA"]
+        let superAdmin: [String: Any] = ["id": "SA", "email": "sa@x", "isActive": true, "passwordSet": true]
+        let member: [String: Any] = ["id": "M", "email": "m@x", "isActive": true, "passwordSet": true]
+        XCTAssertEqual(CanonicalBusinessEngine.accountDeletionPath(viewer: ["id": "SA", "email": "sa@x"], roster: [superAdmin, member], org: org), .handoverRequired)
+        XCTAssertEqual(CanonicalBusinessEngine.accountDeletionPath(viewer: ["id": "SA", "email": "sa@x"], roster: [superAdmin], org: org), .deleteWithCompany)
+        XCTAssertEqual(CanonicalBusinessEngine.accountDeletionPath(viewer: ["id": "M", "email": "m@x"], roster: [superAdmin, member], org: org), .delete)
+        XCTAssertNil(CanonicalBusinessEngine.organizationDeleteConfirmationError(organizationName: "Acme Ltd", typedName: " acme ltd ", typedConfirmation: "DELETE"))
+        XCTAssertEqual(
+            CanonicalBusinessEngine.organizationDeleteConfirmationError(organizationName: "Acme Ltd", typedName: "acme", typedConfirmation: "DELETE"),
+            "Type the company name exactly as it is shown."
+        )
+    }
+
+    /// The web route's 1.15.0 409 codes.
+    func testAccountDeleteConflictCodes() throws {
+        let handover = try JSONSerialization.data(withJSONObject: ["error": "Hand over first.", "code": "handover_required", "orgName": "Acme"])
+        XCTAssertEqual(AccountDeletionClient.interpret(statusCode: 409, body: handover), .handoverRequired("Hand over first."))
+        XCTAssertTrue(AccountDeletionClient.interpret(statusCode: 409, body: handover).hidesDeleteButton)
+        let company = try JSONSerialization.data(withJSONObject: [
+            "error": "Type the company name.",
+            "code": "company_delete_required",
+            "orgs": [["orgId": "ORG", "orgName": "Acme"]],
+        ] as [String: Any])
+        XCTAssertEqual(
+            AccountDeletionClient.interpret(statusCode: 409, body: company),
+            .companyDeleteRequired("Type the company name.", [AccountDeletionClient.CompanyToDelete(orgId: "ORG", orgName: "Acme")])
+        )
+    }
 }

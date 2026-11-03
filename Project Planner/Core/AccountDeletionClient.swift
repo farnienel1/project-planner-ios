@@ -92,11 +92,25 @@ enum AccountDeletionClient {
         }
     }
 
+    /// An organisation the server deletes with the account (RULEBOOK 1.15.0 `accountDeletionPath`
+    /// `delete_with_company`); its name must be typed to confirm.
+    struct CompanyToDelete: Equatable, Hashable {
+        let orgId: String
+        let orgName: String
+    }
+
+    static let handoverRequiredCode = "handover_required"
+    static let companyDeleteRequiredCode = "company_delete_required"
+
     enum Result: Equatable {
         case rejectedBeforeRequest(String)
         case supportAccountRefused(String)
         case deleted
         case soleAdmin(String)
+        /// 1.15.0: the super admin with other active members makes another admin the super admin first.
+        case handoverRequired(String)
+        /// 1.15.0: the super admin is the only member; type each company's name to delete it with the account.
+        case companyDeleteRequired(String, [CompanyToDelete])
         case passwordNotAccepted(String)
         case rateLimited(String)
         case serverNotConfigured(String)
@@ -117,6 +131,8 @@ enum AccountDeletionClient {
             case .rejectedBeforeRequest(let text),
                  .supportAccountRefused(let text),
                  .soleAdmin(let text),
+                 .handoverRequired(let text),
+                 .companyDeleteRequired(let text, _),
                  .passwordNotAccepted(let text),
                  .rateLimited(let text),
                  .serverNotConfigured(let text),
@@ -126,8 +142,10 @@ enum AccountDeletionClient {
         }
 
         var hidesDeleteButton: Bool {
-            if case .soleAdmin = self { return true }
-            return false
+            switch self {
+            case .soleAdmin, .handoverRequired: return true
+            default: return false
+            }
         }
     }
 
@@ -206,6 +224,7 @@ enum AccountDeletionClient {
             print("account/delete HTTP \(status)")
         },
         sessionAfterFailure: () async -> SessionAfterFailure = { .stillSignedIn },
+        companyNames: [String: String] = [:],
         userId: String?,
         defaults: UserDefaults = .standard,
         clearRememberedOrganization: () -> Void,
@@ -256,10 +275,14 @@ enum AccountDeletionClient {
         }
         let resolvedTransport = transport ?? URLSessionAccountDeletionTransport()
 
-        guard let body = try? JSONSerialization.data(withJSONObject: [
+        var bodyFields: [String: Any] = [
             "confirmation": requiredConfirmation,
-            "password": password
-        ]) else {
+            "password": password,
+        ]
+        // RULEBOOK 1.15.0: the company name typed for each organisation deleted with the account (web route
+        // `companyNames`, checked with `organizationDeleteConfirmationError`).
+        if !companyNames.isEmpty { bodyFields["companyNames"] = companyNames }
+        guard let body = try? JSONSerialization.data(withJSONObject: bodyFields) else {
             return .failed(genericFailureMessage)
         }
 
@@ -388,7 +411,8 @@ enum AccountDeletionClient {
 
     static func ambiguousDeleteFailure(_ result: Result, statusCode: Int?) -> Bool {
         switch result {
-        case .soleAdmin, .serverNotConfigured, .rejectedBeforeRequest, .supportAccountRefused, .rateLimited, .deleted:
+        case .soleAdmin, .handoverRequired, .companyDeleteRequired, .serverNotConfigured, .rejectedBeforeRequest,
+             .supportAccountRefused, .rateLimited, .deleted:
             return false
         case .passwordNotAccepted:
             return true
@@ -465,6 +489,19 @@ enum AccountDeletionClient {
             if (payload?["code"] as? String) == "sole_admin" {
                 let orgName = payload?["orgName"] as? String ?? ""
                 return .soleAdmin(soleAdminMessage(orgName: orgName))
+            }
+            if (payload?["code"] as? String) == handoverRequiredCode {
+                return .handoverRequired(serverMessage(in: payload, fallback: CanonicalBusinessEngine.accountHandoverRequiredMessage))
+            }
+            if (payload?["code"] as? String) == companyDeleteRequiredCode {
+                let orgs = (payload?["orgs"] as? [Any] ?? []).compactMap { item -> CompanyToDelete? in
+                    guard let row = item as? [String: Any], let id = row["orgId"] as? String, !id.isEmpty else { return nil }
+                    return CompanyToDelete(orgId: id, orgName: row["orgName"] as? String ?? "")
+                }
+                return .companyDeleteRequired(
+                    serverMessage(in: payload, fallback: CanonicalBusinessEngine.accountDeleteWithCompanyMessage),
+                    orgs
+                )
             }
             return .failed(serverMessage(in: payload, fallback: genericFailureMessage))
         case 429:

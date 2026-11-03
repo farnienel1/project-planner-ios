@@ -73,6 +73,9 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
     var payrollTimePolicyScheduled: OrgPayrollTimePolicyScheduledChange?
     /// JSON text of `organizations/{id}.billing`, or nil when that nested map is absent.
     var billingJSON: String?
+    /// JSON text of `organizations/{id}.deletion` (RULEBOOK 1.15.0 §20), or nil when the organisation is not being
+    /// deleted. Read with `organizationDeletionState`.
+    var deletionJSON: String? = nil
     /// True after an organisation document has been read. A stub company is still unresolved.
     var billingResolved: Bool
 
@@ -96,7 +99,8 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         payrollTimePolicyEffectiveFrom: Date? = nil,
         payrollTimePolicyScheduled: OrgPayrollTimePolicyScheduledChange? = nil,
         billingJSON: String? = nil,
-        billingResolved: Bool = false
+        billingResolved: Bool = false,
+        deletionJSON: String? = nil
     ) {
         self.id = id
         if let fid = firestoreDocumentId, !fid.isEmpty {
@@ -124,13 +128,14 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         self.payrollTimePolicyScheduled = payrollTimePolicyScheduled
         self.billingJSON = billingJSON
         self.billingResolved = billingResolved
+        self.deletionJSON = deletionJSON
     }
 
     enum CodingKeys: String, CodingKey {
         case id, firestoreDocumentId, name, settings, officeAddressLine1, officeAddressLine2, officeCity, officeCounty, officePostcode
         case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, documentAbbreviation, createdAt, updatedAt, creatorUserId
         case payrollTimePolicyPrior, payrollTimePolicyEffectiveFrom, payrollTimePolicyScheduled
-        case billingJSON, billingResolved
+        case billingJSON, billingResolved, deletionJSON
     }
 
     init(from decoder: Decoder) throws {
@@ -157,6 +162,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         payrollTimePolicyScheduled = try c.decodeIfPresent(OrgPayrollTimePolicyScheduledChange.self, forKey: .payrollTimePolicyScheduled)
         billingJSON = try c.decodeIfPresent(String.self, forKey: .billingJSON)
         billingResolved = try c.decodeIfPresent(Bool.self, forKey: .billingResolved) ?? false
+        deletionJSON = try c.decodeIfPresent(String.self, forKey: .deletionJSON)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -183,6 +189,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(payrollTimePolicyScheduled, forKey: .payrollTimePolicyScheduled)
         try c.encodeIfPresent(billingJSON, forKey: .billingJSON)
         try c.encode(billingResolved, forKey: .billingResolved)
+        try c.encodeIfPresent(deletionJSON, forKey: .deletionJSON)
     }
 
     /// Script result for this company's nested billing map. A missing map stays open. A script failure stays open.
@@ -232,7 +239,8 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
             documentAbbreviation: OrganizationDocumentAbbreviation.normalized(detail("documentAbbreviation")),
             creatorUserId: data["creatorUserId"] as? String,
             billingJSON: OrganizationBillingMap.storedJSON(from: data),
-            billingResolved: true
+            billingResolved: true,
+            deletionJSON: OrganizationBillingMap.storedJSON(field: "deletion", from: data)
         )
         return organization
     }

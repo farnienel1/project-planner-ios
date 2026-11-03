@@ -476,9 +476,12 @@ class FirebaseBackend: ObservableObject {
         guard var org = currentOrganization else { return }
         guard organizationIdsMatch(org.firestoreDocumentId, organizationId) else { return }
         let next = OrganizationBillingMap.storedJSON(from: data)
-        guard org.billingJSON != next || !org.billingResolved else { return }
+        // RULEBOOK 1.15.0 §20: the `deletion` map follows the live organisation document too.
+        let nextDeletion = OrganizationBillingMap.storedJSON(field: "deletion", from: data)
+        guard org.billingJSON != next || !org.billingResolved || org.deletionJSON != nextDeletion else { return }
         org.billingJSON = next
         org.billingResolved = true
+        org.deletionJSON = nextDeletion
         currentOrganization = org
         cacheBillingJSON(org)
     }

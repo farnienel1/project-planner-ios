@@ -31,6 +31,21 @@ nonisolated enum OrganizationBillingMap {
         return jsonText(payload)
     }
 
+    /// Stable JSON for another nested map of the organisation document (`deletion`, 1.15.0). Nil when absent.
+    static func storedJSON(field: String, from organizationData: [String: Any]) -> String? {
+        let raw = organizationData[field]
+        var swift: [String: Any]?
+        if let map = raw as? [String: Any] {
+            swift = map
+        } else if let map = raw as? NSDictionary {
+            var out: [String: Any] = [:]
+            for (key, value) in map { if let name = key as? String { out[name] = value } }
+            swift = out
+        }
+        guard let swift else { return nil }
+        return jsonText(jsonSafeMap(swift))
+    }
+
     static func dictionary(json: String?) -> [String: Any]? {
         guard let json, let data = json.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {

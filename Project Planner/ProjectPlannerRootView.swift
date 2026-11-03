@@ -313,6 +313,14 @@ struct ProjectPlannerRootView: View {
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
         } else if let organization = firebaseBackend.currentOrganization,
+                  organization.deletionState.isLocked,
+                  !CanonicalBusinessEngine.isPlatformOwnerEmail(userStore.currentUser?.email) {
+            // RULEBOOK 1.15.0 §20 `organizationDeletionState`: a scheduled or erased organisation is locked for every
+            // member (the security rules refuse its data); only the message, Sign out and Switch organisation.
+            OrganizationDeletedView(organization: organization)
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+        } else if let organization = firebaseBackend.currentOrganization,
                   organization.subscriptionAccess(viewer: userStore.currentUser) != .open {
             // RULEBOOK 1.13.0 §19 `subscriptionAccess`: blocked for everyone; iOS has no billing screen, so an admin
             // (`adminBillingOnly`) sees the same block and only `SUBSCRIPTION_LAPSED_MESSAGE` (1.14.0 §19).
