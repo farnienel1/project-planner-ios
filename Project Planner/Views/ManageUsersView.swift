@@ -1021,6 +1021,12 @@ struct ManageUserRowView: View {
     private func sendSignUpEmail() {
         isSendingSignUpEmail = true
         rowEmailFeedback = nil
+        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before the old link is marked used.
+        if let refusal = InvitationDocument.resendRefusal(subject: user, inviter: userStore.currentUser) {
+            isSendingSignUpEmail = false
+            rowEmailFeedback = "❌ \(refusal)"
+            return
+        }
 
         Task {
             let db = Firestore.firestore()
@@ -3522,6 +3528,24 @@ struct EditUserView: View {
                 }
                 return
             }
+            // RULEBOOK 1.12.0 §4.4 `validateLeaveYearMonths`: when this save changes the leave-year months, a year that
+            // is not 12 months is refused before anything is written.
+            if canEditPermissionsMatrix && annualLeaveEntitlementDirty {
+                let saved = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+                let monthsChanged = annualLeaveStartMonth != saved.annualLeaveYearStartMonth
+                    || annualLeaveEndMonth != saved.annualLeaveYearEndMonth
+                if monthsChanged,
+                   let leaveYearError = CanonicalBusinessEngine.leaveYearMonthsError(
+                       startMonth: annualLeaveStartMonth,
+                       endMonth: annualLeaveEndMonth
+                   ) {
+                    await MainActor.run {
+                        isUpdating = false
+                        saveErrorMessage = leaveYearError
+                    }
+                    return
+                }
+            }
             if willDisableAnnualLeaveSelfBookOnSave && !selfBookOffConfirmationAccepted {
                 await MainActor.run {
                     isUpdating = false
@@ -3917,6 +3941,12 @@ struct EditUserView: View {
     }
     
     private func createNewInvitation() async {
+        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before the old links are marked used.
+        if let refusal = InvitationDocument.resendRefusal(subject: user, inviter: userStore.currentUser) {
+            resendEmailMessage = "❌ \(refusal)"
+            isResendingEmail = false
+            return
+        }
         let db = Firestore.firestore()
         do {
             // Mark all existing invitations for this email as used so only the new link works
@@ -3990,6 +4020,14 @@ struct EditUserView: View {
             isSendingSignUpEmail = true
         }
         signUpEmailMessage = nil
+        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before the old links are marked used.
+        if let refusal = InvitationDocument.resendRefusal(subject: user, inviter: userStore.currentUser) {
+            isSendingSignUpEmail = false
+            isResendingEmail = false
+            signUpEmailMessage = "❌ \(refusal)"
+            resendEmailMessage = "❌ \(refusal)"
+            return
+        }
 
         Task {
             let db = Firestore.firestore()

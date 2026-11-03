@@ -640,7 +640,9 @@ struct AddUserView: View {
             ? String(Int(defaults.daysPerYear))
             : String(format: "%.1f", defaults.daysPerYear)
         annualLeaveStartMonth = defaults.startMonth
-        annualLeaveEndMonth = defaults.endMonth
+        // RULEBOOK 1.12.0 §4.4: a stored mismatch reads as 12 months from the start (`leaveYearEndMonth`), so an
+        // invite never inherits a year the save would refuse.
+        annualLeaveEndMonth = CanonicalBusinessEngine.leaveYearEndMonth(startMonth: defaults.startMonth) ?? defaults.endMonth
         annualLeaveCarriesOver = defaults.carriesOver
         annualLeaveEnabledInvite = true
         remainingLeaveText = annualLeaveDaysText
@@ -1074,6 +1076,15 @@ struct AddUserView: View {
                 errorMessage = "Enter the remaining allowance in steps of 0.5."
                 return
             }
+        }
+
+        // RULEBOOK 1.12.0 §4.4 `validateLeaveYearMonths`: the invite's leave year must be 12 months.
+        if let leaveYearError = CanonicalBusinessEngine.leaveYearMonthsError(
+            startMonth: annualLeaveStartMonth,
+            endMonth: annualLeaveEndMonth
+        ) {
+            errorMessage = leaveYearError
+            return
         }
 
         guard !isCreating else { return }

@@ -372,7 +372,7 @@ struct ProjectPlannerRootView: View {
         }
         .task { await forcedUpdate.check() }
         .onChange(of: firebaseAuthUID) { _, _ in
-            // The rules let a signed-in user read `platformConfig`; check again once someone signs in.
+            // RULEBOOK 1.12.0 §18: `platformConfig/app` is readable signed out too; check again when the account changes.
             Task { await forcedUpdate.check() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -1794,6 +1794,7 @@ class FirebaseBackend: ObservableObject {
             let userData: [String: Any]
             if userDoc.exists, let data = userDoc.data() {
                 userData = data
+                await syncSignedInEmailToProfileIfNeeded(userId: userId, storedData: data)
             } else {
                 print("🔥🔥🔥 DEBUG: ❌ User document missing or empty at users/\(userId) — keeping this device's company")
                 errorMessage = userDoc.exists
@@ -5900,6 +5901,45 @@ class FirebaseBackend: ObservableObject {
             )
         }
         try await user.sendEmailVerification(beforeUpdatingEmail: trimmed, actionCodeSettings: nil)
+        // Remembered on this device only, so the profile follows once Auth has changed (never an admin's edit).
+        UserDefaults.standard.set(trimmed.lowercased(), forKey: Self.pendingSignInEmailKey(uid: user.uid))
+    }
+
+    nonisolated static func pendingSignInEmailKey(uid: String) -> String {
+        "pending_signin_email_\(uid)"
+    }
+
+    /// RULEBOOK 1.12.0 §14, §16: the person's own `users/{uid}.email` changes only to their signed-in Auth email,
+    /// after Firebase Auth has changed it (verify-before-update, then the next sign-in). When this device asked for
+    /// that change and the Auth email is now the requested one, the profile (and the organisation `userEmails`
+    /// claim) take it. Anything else — an admin's edit in Manage Users, a request from another device — is left alone.
+    func syncSignedInEmailToProfileIfNeeded(userId: String, storedData: [String: Any]) async {
+        let key = Self.pendingSignInEmailKey(uid: userId)
+        guard let pending = UserDefaults.standard.string(forKey: key), !pending.isEmpty,
+              let authUser = auth.currentUser, authUser.uid == userId,
+              let authEmail = authUser.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              authEmail == pending else { return }
+        let stored = (storedData["email"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard !stored.isEmpty else { return }
+        guard stored != authEmail else {
+            UserDefaults.standard.removeObject(forKey: key)
+            return
+        }
+        do {
+            try await db.collection("users").document(userId)
+                .updateData(WriteMetadata.stamped(["email": authEmail], userId: userId))
+            UserDefaults.standard.removeObject(forKey: key)
+            if let orgId = organizationIdFromFirestore(storedData["organizationId"]), !orgId.isEmpty {
+                try? await reconcileUserEmailIndex(
+                    organizationId: orgId,
+                    userId: userId,
+                    oldEmailNormalized: stored,
+                    newEmail: authEmail
+                )
+            }
+        } catch {
+            NSLog("SIGN_IN_EMAIL_SYNC_SKIPPED %@", error.localizedDescription)
+        }
     }
     
     /// A photo upload stores the fresh download URL and `profilePhotoUpdatedAt`, which tells every screen
@@ -6784,7 +6824,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil, inviterIsAdmin: Bool? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         guard let lookup = Self.inviteEmailUsersQuery(organizationId: organizationId, email: email) else {
             throw NSError(
@@ -6934,8 +6974,12 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Invitation keys: \(invitationData.keys.sorted().joined(separator: ", "))")
         #endif
         
-        // RULEBOOK 1.9.0 §11: the invitation is created once with `invitationCreateFields`.
-        try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+        // RULEBOOK 1.9.0 §11: the invitation is created once with `invitationCreateFields`. 1.12.0 §11: a manager with
+        // operatives access (not an admin) may write only an operative-only invitation (`invitationIsOperativeOnly`);
+        // anything else is refused here, before any write, instead of as a permission error.
+        let invitationFields = try InvitationDocument.createFields(from: invitationData)
+        try InvitationDocument.requireAllowed(invitationFields, inviterIsAdmin: inviterIsAdmin)
+        try await db.collection("invitations").document(invitationId).setData(invitationFields)
         
         print("🔥🔥🔥 DEBUG: Invitation document created successfully")
         

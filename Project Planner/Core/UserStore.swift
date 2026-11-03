@@ -1565,6 +1565,8 @@ class UserStore: ObservableObject {
             return false
         }
         
+        // Whether the inviter is an admin, from their stored document; nil when it could not be read (the rules decide).
+        var inviterIsAdmin: Bool?
         // Load the actual user document from Firebase to check permissions
         if let firebaseUserData = try? await firebaseBackend.getUserData(userId: currentUserId) {
             print("🔥🔥🔥 DEBUG: Current user (inviter) Firebase document data:")
@@ -1574,6 +1576,7 @@ class UserStore: ObservableObject {
             
             // Check if user has admin permissions in Firebase
             let hasAdmin = firebaseUserData.isSuperAdmin || firebaseUserData.permissions.adminAccess || firebaseUserData.role == .admin
+            inviterIsAdmin = hasAdmin
             let canInviteOperativesAsManager =
                 !hasAdmin &&
                 !firebaseUserData.permissions.operativeMode &&
@@ -1656,7 +1659,8 @@ class UserStore: ObservableObject {
                 timesheetsEnabled: timesheetsEnabled,
                 // Only an admin may set another person's tax fields (`canViewSensitiveProfile`).
                 vatNumber: canViewSensitiveProfile(of: "") ? vatNumber : nil,
-                utrNumber: canViewSensitiveProfile(of: "") ? utrNumber : nil
+                utrNumber: canViewSensitiveProfile(of: "") ? utrNumber : nil,
+                inviterIsAdmin: inviterIsAdmin
             )
             print("🔥🔥🔥 DEBUG: createUserInvitation succeeded")
             
@@ -1665,6 +1669,10 @@ class UserStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: Organization users reloaded")
             
             return true
+        } catch let refusal as InvitationNotOperativeOnlyError {
+            // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused before anything was written.
+            errorMessage = refusal.errorDescription
+            return false
         } catch {
             print("🔥🔥🔥 DEBUG: Error inviting user: \(error)")
             print("🔥🔥🔥 DEBUG: Error type: \(type(of: error))")
@@ -1988,18 +1996,37 @@ class UserStore: ObservableObject {
             return false
         }
 
+        // RULEBOOK 1.12.0 §16: on their own users document a person changes `email` only to their signed-in Auth
+        // email. So a self change asks Firebase Auth first (`sendEmailVerification(beforeUpdatingEmail:)`) and every
+        // document keeps the current email; it moves to the new address only after Auth has changed
+        // (`syncSignedInEmailToProfileIfNeeded` on the next sign-in). A refused request writes nothing.
+        let requestedEmailChange = oldEmailNorm != trimmedEmail
+        let isSelf = Auth.auth().currentUser?.uid == userId
+        var pendingSelfEmail: String?
+        if requestedEmailChange && isSelf {
+            do {
+                try await firebaseBackend.sendVerifyBeforeUpdateEmail(to: trimmedEmail)
+                pendingSelfEmail = trimmedEmail
+            } catch {
+                errorMessage = "Could not change your sign-in email: \(error.localizedDescription)"
+                print("🔥🔥🔥 DEBUG: verifyBeforeUpdateEmail failed: \(error)")
+                return false
+            }
+        }
+        let savedEmail = pendingSelfEmail == nil ? trimmedEmail : oldEmailNorm
+
         updated.firstName = trimmedFirst
         updated.surname = trimmedSurname
-        updated.email = trimmedEmail
+        updated.email = savedEmail
         updated.mobileNumber = mobileOut
 
-        let emailChanged = oldEmailNorm != trimmedEmail
+        let emailChanged = oldEmailNorm != savedEmail
         let orgId = updated.organizationId
         let previousFirst = organizationUsers[index].firstName
         let previousSurname = organizationUsers[index].surname
         var idsToPatch = Set(organizationUsers.filter { person in
             let email = person.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            return email == oldEmailNorm || email == trimmedEmail
+            return email == oldEmailNorm || email == savedEmail
         }.map(\.id))
         idsToPatch.insert(userId)
 
@@ -2010,7 +2037,7 @@ class UserStore: ObservableObject {
                         userId: id,
                         firstName: trimmedFirst,
                         surname: trimmedSurname,
-                        email: trimmedEmail,
+                        email: savedEmail,
                         mobileNumber: mobileOut
                     )
                 } catch {
@@ -2022,7 +2049,7 @@ class UserStore: ObservableObject {
                     organizationId: orgId,
                     userId: userId,
                     oldEmailNormalized: oldEmailNorm,
-                    newEmail: trimmedEmail
+                    newEmail: savedEmail
                 )
             }
 
@@ -2033,7 +2060,7 @@ class UserStore: ObservableObject {
                     var op = opStore.operatives[oi]
                     op.firstName = trimmedFirst
                     op.lastName = trimmedSurname
-                    op.email = trimmedEmail
+                    op.email = savedEmail
                     op.phone = mobileOut
                     op.updatedAt = Date()
                     await opStore.updateOperative(op)
@@ -2042,7 +2069,7 @@ class UserStore: ObservableObject {
                     opStore.managers[$0].email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == oldEmailNorm
                 }
                 for mi in managerIndexes {
-                    opStore.managers[mi].email = trimmedEmail
+                    opStore.managers[mi].email = savedEmail
                     opStore.managers[mi].firstName = trimmedFirst
                     opStore.managers[mi].lastName = trimmedSurname
                     opStore.managers[mi].mobileNumber = mobileOut ?? ""
@@ -2054,7 +2081,7 @@ class UserStore: ObservableObject {
                         previousEmail: oldEmailNorm,
                         firstName: trimmedFirst,
                         lastName: trimmedSurname,
-                        email: trimmedEmail,
+                        email: savedEmail,
                         mobileNumber: mobileOut ?? ""
                     )
                 } catch {
@@ -2066,7 +2093,7 @@ class UserStore: ObservableObject {
             for offset in people.indices where idsToPatch.contains(people[offset].id) {
                 people[offset].firstName = trimmedFirst
                 people[offset].surname = trimmedSurname
-                people[offset].email = trimmedEmail
+                people[offset].email = savedEmail
                 people[offset].mobileNumber = mobileOut
             }
             if people.indices.contains(index) {
@@ -2079,7 +2106,7 @@ class UserStore: ObservableObject {
                 previousSurname: previousSurname,
                 firstName: trimmedFirst,
                 surname: trimmedSurname,
-                email: trimmedEmail,
+                email: savedEmail,
                 mobile: mobileOut,
                 savedAt: Date()
             )
@@ -2089,18 +2116,14 @@ class UserStore: ObservableObject {
             if var cu = currentUser, cu.id == userId {
                 cu.firstName = trimmedFirst
                 cu.surname = trimmedSurname
-                cu.email = trimmedEmail
+                cu.email = savedEmail
                 cu.mobileNumber = mobileOut
                 currentUser = cu
             }
 
-            if emailChanged, Auth.auth().currentUser?.uid == userId {
-                do {
-                    try await firebaseBackend.sendVerifyBeforeUpdateEmail(to: trimmedEmail)
-                } catch {
-                    errorMessage = "Profile saved. Could not send sign-in email verification: \(error.localizedDescription). You can try again later or update the address in Firebase Authentication."
-                    print("🔥🔥🔥 DEBUG: verifyBeforeUpdateEmail failed: \(error)")
-                }
+            if let pendingSelfEmail {
+                // Not an error: Firebase Auth emailed the confirmation link; the profile email moves after it.
+                print("🔥🔥🔥 DEBUG: sign-in email change to \(pendingSelfEmail) waits for confirmation")
             }
 
             return true

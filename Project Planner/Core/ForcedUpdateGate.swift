@@ -2,10 +2,11 @@
 //  ForcedUpdateGate.swift
 //  Project Planner
 //
-//  Forced update: `platformConfig/app.minimumIosBuild` (an Int build number, compared with this build's
-//  `CFBundleVersion`) is read at launch and whenever the app returns to the foreground. When the running build is
-//  lower, the app shows a blocking "Update required" screen. A missing document, a missing or unreadable field, a
-//  read error or a build number that is not a whole number never blocks. App plumbing; no business rule.
+//  Forced update (RULEBOOK 1.12.0 §18): the one document `PLATFORM_CONFIG_APP_PATH` (`platformConfig/app`) is read at
+//  launch and whenever the app returns to the foreground — signed out too (the rules allow that read) — and the
+//  rulebook decides with `appUpdateRequired({ platform: 'ios', runningBuild: CFBundleVersion }, config)`. When it is
+//  true the app shows a blocking "Update required" screen. A missing document, a failed read, an unreadable value or
+//  an unanswered script never blocks.
 //
 
 import Foundation
@@ -15,11 +16,11 @@ import FirebaseFirestore
 
 @MainActor
 final class ForcedUpdateGate: ObservableObject {
-    /// True only when `minimumIosBuild` was read and this build is lower.
+    /// True only when `platformConfig/app` was read and `appUpdateRequired` says this build is too old.
     @Published private(set) var updateRequired = false
 
-    static let documentPath = "platformConfig/app"
-    static let fieldName = "minimumIosBuild"
+    /// `PLATFORM_CONFIG_APP_PATH`. Nil when the script did not answer (the check is then skipped).
+    static var documentPath: String? { CanonicalBusinessEngine.platformConfigAppPath }
 
     /// This build's `CFBundleVersion` as a whole number, nil when it is not one.
     static var runningBuild: Int? {
@@ -27,24 +28,14 @@ final class ForcedUpdateGate: ObservableObject {
             .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
-    /// Whether `stored` (the field as read) asks for a newer build than `running`. Unknown values never block.
-    nonisolated static func blocks(running: Int?, stored: Any?) -> Bool {
-        guard let running else { return false }
-        let minimum: Int?
-        if let number = stored as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
-            minimum = number.intValue
-        } else if let text = stored as? String {
-            minimum = Int(text.trimmingCharacters(in: .whitespacesAndNewlines))
-        } else {
-            minimum = nil
-        }
-        guard let minimum else { return false }
-        return running < minimum
+    /// `appUpdateRequired` for this build against the `platformConfig/app` document as read (nil when missing).
+    nonisolated static func blocks(running: Int?, config: [String: Any]?) -> Bool {
+        CanonicalBusinessEngine.appUpdateRequired(runningBuild: running, config: config)
     }
 
     private var inFlight = false
 
-    /// Reads the minimum build (server first, then cache). Any failure leaves the app usable.
+    /// Reads `platformConfig/app` (server first, then cache). Any failure leaves the app usable.
     func check() async {
         #if DEBUG
         if UITestingMode.shouldSkipNetworkBootstrap { return }
@@ -52,7 +43,11 @@ final class ForcedUpdateGate: ObservableObject {
         guard FirebaseApp.app() != nil, !inFlight else { return }
         inFlight = true
         defer { inFlight = false }
-        let ref = Firestore.firestore().document(Self.documentPath)
+        guard let path = Self.documentPath else {
+            NSLog("FORCED_UPDATE_CHECK_SKIPPED no PLATFORM_CONFIG_APP_PATH from the rulebook")
+            return
+        }
+        let ref = Firestore.firestore().document(path)
         let snapshot: DocumentSnapshot?
         do {
             snapshot = try await ref.getDocument(source: .server)
@@ -66,6 +61,6 @@ final class ForcedUpdateGate: ObservableObject {
             updateRequired = false
             return
         }
-        updateRequired = Self.blocks(running: Self.runningBuild, stored: snapshot.data()?[Self.fieldName])
+        updateRequired = Self.blocks(running: Self.runningBuild, config: snapshot.data())
     }
 }
