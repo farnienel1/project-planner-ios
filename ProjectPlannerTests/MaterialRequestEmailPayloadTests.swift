@@ -104,6 +104,32 @@ final class MaterialRequestEmailPayloadTests: XCTestCase {
         XCTAssertNil(data["deliveryRequiredAt"])
     }
 
+    func testDataCarriesTheJobDocumentIdInItsStoredCase() throws {
+        for type in [MaterialOrderRequest.RequestType.quote, .order] {
+            let data = MaterialRequestEmailPayload.data(for: request(type: type, contacts: [supplier]), includesDeliveryRequired: false)
+            let jobId = try XCTUnwrap(data["jobId"] as? String)
+            XCTAssertEqual(jobId, JobKeys.storedJobId(for: projectId))
+            XCTAssertEqual(jobId.lowercased(), projectId.uuidString.lowercased())
+        }
+    }
+
+    func testJobIdMatchesTheFunctionsAcceptedShape() throws {
+        // functions/email/handler.js `checkJobInOrganization`: 1–128 of [A-Za-z0-9_-], else 400.
+        let web = JobKeys.inAppId("abc123de-0000-4000-8000-00000000beef")
+        var webRequest = request(type: .order, contacts: [supplier])
+        webRequest.projectId = web
+        let jobId = try XCTUnwrap(MaterialRequestEmailPayload.data(for: webRequest, includesDeliveryRequired: true)["jobId"] as? String)
+        XCTAssertEqual(jobId, "abc123de-0000-4000-8000-00000000beef", "a web lower-case job id is sent as stored")
+        XCTAssertNotNil(jobId.range(of: #"^[A-Za-z0-9_-]{1,128}$"#, options: .regularExpression))
+        let body = MaterialRequestEmailPayload.body(
+            organizationId: "org-test",
+            request: webRequest,
+            senderEmail: "sender@example.com",
+            includesDeliveryRequired: true
+        )
+        XCTAssertEqual((body["data"] as? [String: Any])?["jobId"] as? String, jobId)
+    }
+
     func testOrderDataCarriesTheDeliveryInstantAsISO() throws {
         let data = MaterialRequestEmailPayload.data(
             for: request(type: .order, contacts: [supplier], delivery: Date(timeIntervalSince1970: 1_800_000_000), phone: "  "),

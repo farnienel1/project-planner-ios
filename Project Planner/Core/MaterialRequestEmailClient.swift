@@ -116,6 +116,9 @@ enum MaterialRequestEmailPayload {
     static func data(for request: MaterialOrderRequest, includesDeliveryRequired: Bool) -> [String: Any] {
         var data: [String: Any] = [
             "requestType": requestTypeValue(request.requestType),
+            // Rulebook 1.24.0 (§16): the job's document id in its stored case; the function checks it is a project or
+            // small works of `orgId` (404 when not, 400 when malformed).
+            "jobId": JobKeys.storedJobId(for: request.projectId),
             "jobNumber": request.projectNumber,
             "siteName": request.projectName,
             "siteAddress": request.siteAddress,
