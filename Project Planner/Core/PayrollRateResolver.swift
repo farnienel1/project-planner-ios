@@ -39,6 +39,12 @@ struct ResolvedPayrollRate: Equatable {
     /// — hourly rate × hours, or day rate × (hours ÷ `orgDayHours`), × multiplier, `roundPennies`. 0 when the script
     /// did not answer (no Swift copy of the sum).
     func payForHours(_ paidHours: Double, standardDayHours: Double, otMultiplier: Double = 1) -> Double {
+        payForHoursIfCalculated(paidHours, standardDayHours: standardDayHours, otMultiplier: otMultiplier) ?? 0
+    }
+
+    /// `payForHours`, or nil when the script did not answer — a pay that could not be calculated, never £0
+    /// (money audit #15). Callers that total pay use this and say "could not calculate".
+    func payForHoursIfCalculated(_ paidHours: Double, standardDayHours: Double, otMultiplier: Double = 1) -> Double? {
         let input: [String: Any] = [
             "payBasis": basis == .hourly ? "hourly" : "day",
             "dayRate": dayRate.map { ($0.isFinite ? $0 : 0) as Any } ?? NSNull(),
@@ -47,7 +53,7 @@ struct ResolvedPayrollRate: Equatable {
             "standardDayHours": standardDayHours.isFinite ? standardDayHours : 0,
             "otMultiplier": otMultiplier.isFinite ? otMultiplier : 1,
         ]
-        return (CanonicalBusinessEngine.callJSON("payForHours", arguments: [input]) as? NSNumber)?.doubleValue ?? 0
+        return (CanonicalBusinessEngine.callJSON("payForHours", arguments: [input]) as? NSNumber)?.doubleValue
     }
 
     func splitPay(

@@ -70,6 +70,13 @@ nonisolated final class CompositeListenerRegistration: NSObject, ListenerRegistr
         previous?.remove()
     }
 
+    /// True once `remove()` ran: a scheduled re-attach does nothing then.
+    var isRemoved: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return removed
+    }
+
     func remove() {
         lock.lock()
         removed = true
@@ -246,7 +253,7 @@ extension FirebaseBackend {
             let merged = merge.update(source: index, docs: docs, fromCache: fromCache)
             Task { @MainActor in onChange(merged.docs, merged.fromCache) }
         }
-        func attach(_ index: Int, _ query: Query, fallback: Query?) {
+        func attach(_ index: Int, _ query: Query, fallback: Query?, attempt: Int = 0) {
             let listener = query.addSnapshotListener { snapshot, error in
                 if let error {
                     if let fallback, Self.isFailedPrecondition(error) {
@@ -254,9 +261,17 @@ extension FirebaseBackend {
                         attach(index, fallback, fallback: nil)
                         return
                     }
-                    NSLog("PLANNED_LISTENER_FAILED label=%@ source=%d error=%@", label, index, error.localizedDescription)
+                    NSLog("PLANNED_LISTENER_FAILED label=%@ source=%d attempt=%d error=%@", label, index, attempt, error.localizedDescription)
                     // Counted as answered (from cache), so the other sources can still add their rows.
                     deliver(index, [], true)
+                    // A failed listener is dead: say so (the "Last updated" offline state) and attach it again
+                    // with backoff (2 s, 4 s, … up to 60 s) until it answers or the plan is replaced.
+                    Self.postPlannedListenerFailed(label: label, error: error)
+                    let delay = Self.plannedListenerRetryDelay(attempt: attempt)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        guard !registration.isRemoved else { return }
+                        attach(index, query, fallback: nil, attempt: attempt + 1)
+                    }
                     return
                 }
                 guard let snapshot else { return }
@@ -283,6 +298,23 @@ extension FirebaseBackend {
             }
         }
         return registration
+    }
+
+    /// Seconds before a failed planned listener is attached again: 2, 4, 8, 16, 32, then 60.
+    nonisolated static func plannedListenerRetryDelay(attempt: Int) -> Double {
+        min(60, pow(2, Double(min(max(attempt, 0), 6) + 1)))
+    }
+
+    /// Tells the screens a planned listener failed (`.plannedListenerFailed`; bookings and manager bookings also
+    /// `.bookingsListenerFailed`, which shows the offline "Last updated" state).
+    nonisolated static func postPlannedListenerFailed(label: String, error: Error) {
+        let info: [String: Any] = ["label": label, "error": error.localizedDescription]
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .plannedListenerFailed, object: nil, userInfo: info)
+            if label == "bookings" || label == "managerSiteBookings" {
+                NotificationCenter.default.post(name: .bookingsListenerFailed, object: nil, userInfo: info)
+            }
+        }
     }
 
     /// `listenOrganizationQuery` for a planned read: one registry entry (`key`) whose target is the plan, so a

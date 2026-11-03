@@ -76,7 +76,9 @@ struct BookLabourFlowView: View {
     @State private var selectedPersonIds: Set<String> = []
     @State private var bookingParty: [BookLabourCandidate] = []
 
-    private let calendar = Calendar.current
+    /// RULEBOOK §1: one business time zone. Booking days are organisation-zone midnights (the day keys every
+    /// reader uses), never the phone's midnight (launch data audit #1).
+    private let calendar = OrganizationRulebookContext.calendar
 
     private struct PendingOperativeBookLabourOverlap {
         let message: String
@@ -318,7 +320,7 @@ struct BookLabourFlowView: View {
     }
 
     private var bookFlowDayLine: String {
-        day.formatted(.dateTime.weekday(.wide).day().month(.abbreviated))
+        day.formatted(Date.FormatStyle(timeZone: OrganizationRulebookContext.timeZone).weekday(.wide).day().month(.abbreviated))
     }
 
     private var unbookedCount: Int { candidates.count }

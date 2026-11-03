@@ -4126,7 +4126,11 @@ private struct OperativeTimesheetReviewView: View {
     @State private var payInputsState: PayInputsLoadState = .loading
     /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
     private var payInputsBlockMessage: String? {
-        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
+        if let blocked = PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization) {
+            return blocked
+        }
+        // A script call that did not answer is "could not calculate", never £0 (money audit #15).
+        return payrollSummary.calculationFailed ? TimesheetPayrollSummary.calculationFailedMessage : nil
     }
     @State private var editingPayrollLineId: String?
     @State private var editingExpenseId: UUID?

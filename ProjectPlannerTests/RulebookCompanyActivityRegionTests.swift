@@ -141,12 +141,14 @@ final class RulebookCompanyActivityRegionTests: XCTestCase {
             member("OPERATIVE-F", admin: false, operativeMode: true),
         ]
         let recipients = try XCTUnwrap(CanonicalBusinessEngine.companyActivityRecipients(actor: actor, roster: roster))
-        XCTAssertEqual(recipients, ["SUPER-B"])
+        // RULEBOOK 1.11.0 §8 "Admin and operative mode": a stray operative-mode flag on an admin is ignored, so
+        // ADMIN-OPMODE-E is an admin recipient (web canonical.test.ts "company activity" expects A2, A4).
+        XCTAssertEqual(recipients, ["SUPER-B", "ADMIN-OPMODE-E"])
         XCTAssertFalse(recipients.contains("ADMIN-A"))
 
         // The actor by bare id is removed too.
         let byId = try XCTUnwrap(CanonicalBusinessEngine.companyActivityRecipients(actor: "SUPER-B", roster: roster))
-        XCTAssertEqual(byId, ["ADMIN-A"])
+        XCTAssertEqual(byId, ["ADMIN-A", "ADMIN-OPMODE-E"])
 
         XCTAssertEqual(
             CanonicalBusinessEngine.companyActivityNoticeTypes,

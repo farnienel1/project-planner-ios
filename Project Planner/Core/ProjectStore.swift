@@ -854,9 +854,12 @@ class ProjectStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: ========== ADD SMALL WORKS END ==========")
     }
     
-    func updateProject(_ project: Project) async {
+    /// `editedFrom` is the copy the editor opened with: only the fields changed from it are written, so a change
+    /// another device saved meanwhile to a field this editor did not touch is not overwritten (launch data audit #5).
+    /// Without it, the store copy at save time is the base (as before).
+    func updateProject(_ project: Project, editedFrom base: Project? = nil) async {
         if let index = projects.firstIndex(where: { $0.id == project.id }) {
-            let previous = projects[index]
+            let previous = base ?? projects[index]
             projects[index] = project
             // Saves only this job, and only the fields changed from the copy it was edited from
             // (routed to projects or smallWorks by jobType).
@@ -1092,7 +1095,8 @@ class ProjectStore: ObservableObject {
             } else if !saveErrors.isEmpty {
                 print("🔥🔥🔥 DEBUG: Some Firebase saves failed: \(saveErrors.joined(separator: "; "))")
                 // Keep local state without forcing retry storms on partial/permission failures.
-                self.errorMessage = "Some cloud saves failed. Local data is kept."
+                // Said, never silent: the next server snapshot replaces the local edit (launch data audit #10).
+                self.errorMessage = "Not saved: \(saveErrors.joined(separator: "; ")). Check your connection and try again."
             }
         } catch {
             errorMessage = "Failed to save data: \(error.localizedDescription)"
