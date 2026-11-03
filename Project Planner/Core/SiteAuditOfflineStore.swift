@@ -68,6 +68,21 @@ final class SiteAuditOfflineStore: ObservableObject {
         persistIndex()
     }
 
+    /// Sign-out: every queued audit and its photos are removed, so the next account on this phone never uploads
+    /// (or sees) them (security audit M6).
+    func clearAll() {
+        for record in pending {
+            try? FileManager.default.removeItem(at: pendingFolderURL(for: record.id))
+        }
+        try? FileManager.default.removeItem(
+            at: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent(folderName, isDirectory: true)
+        )
+        pending = []
+        UserDefaults.standard.removeObject(forKey: indexKey)
+        objectWillChange.send()
+    }
+
     func image(for record: PendingSiteAuditRecord, itemId: UUID) -> UIImage? {
         guard let fileName = record.localImageNames[itemId.uuidString] else { return nil }
         let url = pendingFolderURL(for: record.id).appendingPathComponent(fileName)

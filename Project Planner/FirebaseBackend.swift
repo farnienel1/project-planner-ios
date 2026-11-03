@@ -901,6 +901,7 @@ class FirebaseBackend: ObservableObject {
     /// cache (`clearAllCache`, through `.appDidSignOut`).
     func clearDeviceQueuesOnSignOut() {
         OfflineOutboxStore.shared.clearAll()
+        SiteAuditOfflineStore.shared.clearAll()
         TimesheetDraftStore.clearAll()
         NotificationCenter.default.post(name: .appDidSignOut, object: nil)
     }
@@ -909,6 +910,11 @@ class FirebaseBackend: ObservableObject {
     /// `users` document it was written to before Firebase Auth signs out, exactly as `AppSignOut` does. The wait is
     /// bounded (`removeThisDevicePushTokenBeforeSignOut`); sign-out goes ahead either way.
     func forcedSignOutRemovingPushToken() async {
+        let pending = OfflineOutboxStore.shared.pendingCount + SiteAuditOfflineStore.shared.pendingCount
+        if pending > 0 {
+            // A forced sign-out cannot ask; the queued changes are discarded with the session (logged).
+            NSLog("FORCED_SIGN_OUT_DISCARDS_PENDING count=%d", pending)
+        }
         await removeThisDevicePushTokenBeforeSignOut()
         try? auth.signOut()
         clearDeviceQueuesOnSignOut()

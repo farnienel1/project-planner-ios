@@ -90,7 +90,7 @@ struct SwitchOrganisationView: View {
     }
 
     private var webSetupNote: some View {
-        Text("New organisations are set up using the Project Planner web app, which can be reached at www.projectplanner.us.")
+        Text("New organisations are set up by your company administrator.")
             .font(.footnote)
             .foregroundStyle(Color.secondary)
             .fixedSize(horizontal: false, vertical: true)

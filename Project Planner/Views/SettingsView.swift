@@ -99,16 +99,12 @@ struct SettingsView: View {
         }
         .navigationBarBackButtonHidden(true)
         .ppNavyNavigationBar()
-        .alert("Sign Out", isPresented: $showingSignOutAlert) {
-            Button("Cancel", role: .cancel) { }
-                .accessibilityIdentifier("settings.cancel")
-            Button("Sign Out", role: .destructive) {
-                AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
-            }
-                .accessibilityIdentifier("settings.signOut")
-        } message: {
-            Text("Are you sure you want to sign out?")
-        }
+        .signOutConfirmation(
+            isPresented: $showingSignOutAlert,
+            firebaseBackend: firebaseBackend,
+            userStore: userStore,
+            idPrefix: "settings"
+        )
     }
 
     private func goBackFromSettings() {

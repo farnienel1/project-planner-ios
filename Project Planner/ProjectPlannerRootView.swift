@@ -249,6 +249,8 @@ struct ProjectPlannerRootView: View {
     @EnvironmentObject private var notificationService: NotificationService
     @EnvironmentObject private var appLock: AppLockService
     @Environment(\.scenePhase) private var scenePhase
+    /// `platformConfig/app.minimumIosBuild`: blocks an outdated build with "Update required". Never blocks on a failed read.
+    @StateObject private var forcedUpdate = ForcedUpdateGate()
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
@@ -358,6 +360,15 @@ struct ProjectPlannerRootView: View {
                 AppLaunchSplashView()
                     .zIndex(1)
             }
+            if forcedUpdate.updateRequired {
+                ForcedUpdateView()
+                    .zIndex(2)
+            }
+        }
+        .task { await forcedUpdate.check() }
+        .onChange(of: firebaseAuthUID) { _, _ in
+            // The rules let a signed-in user read `platformConfig`; check again once someone signs in.
+            Task { await forcedUpdate.check() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ProjectWorksRevampColors.canvas)
@@ -377,7 +388,9 @@ struct ProjectPlannerRootView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background: appLock.appDidEnterBackground()
-            case .active: appLock.appDidBecomeActive()
+            case .active:
+                appLock.appDidBecomeActive()
+                Task { await forcedUpdate.check() }
             default: break
             }
         }

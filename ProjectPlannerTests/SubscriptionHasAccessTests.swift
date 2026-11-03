@@ -39,13 +39,17 @@ final class SubscriptionHasAccessTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(CanonicalBusinessEngine.hasAccess(billing: payload)))
     }
 
-    func testVisibleCopyContainsSubscriptionHasRunOut() {
+    func testVisibleCopySaysTheSubscriptionIsNotActive() {
         let superAdmin = SubscriptionLapsedCopy.visibleText(isSuperAdmin: true)
         let otherRole = SubscriptionLapsedCopy.visibleText(isSuperAdmin: false)
-        XCTAssertTrue(superAdmin.contains("subscription has run out"))
-        XCTAssertTrue(otherRole.contains("subscription has run out"))
-        XCTAssertTrue(superAdmin.contains("Project Planner web app"))
-        XCTAssertTrue(otherRole.contains("Ask the super admin to renew."))
+        // App Store 3.1.1 / 3.1.3: no price, renewal or web billing route.
+        XCTAssertEqual(superAdmin, "Your organisation's subscription is not active.\nContact your organisation's administrator.")
+        XCTAssertEqual(otherRole, superAdmin)
+        for text in [superAdmin, otherRole] {
+            XCTAssertFalse(text.lowercased().contains("renew"))
+            XCTAssertFalse(text.lowercased().contains("web app"))
+            XCTAssertFalse(text.contains("£"))
+        }
         XCTAssertFalse(superAdmin.lowercased().contains("transfer"))
         XCTAssertFalse(otherRole.lowercased().contains("transfer"))
         XCTAssertFalse(superAdmin.lowercased().contains("stripe"))
