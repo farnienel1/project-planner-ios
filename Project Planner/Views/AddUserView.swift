@@ -341,7 +341,11 @@ struct AddUserView: View {
                 previous: previousLevel,
                 next: RulebookPermissionLevel(rawValue: type.rawValue) ?? .manager,
                 lineManagerIds: selectedLineManagerUserIds,
-                hasNoLineManager: hasNoLineManager
+                hasNoLineManager: hasNoLineManager,
+                // RULEBOOK 1.24.0 §11 `CanonicalBusinessEngine` `lineManagerSelectionAfterLevelChange`: the invite draft
+                // as `person`, as `lineManagerCandidates` gets it.
+                person: inviteDraftUserForValidation,
+                roster: userStore.organizationUsers
             )
             selectedLineManagerUserIds = lineManagers.lineManagerIds
             hasNoLineManager = lineManagers.hasNoLineManager
