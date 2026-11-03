@@ -514,8 +514,10 @@ fileprivate struct ManagerCustomHoursSheet: View {
         self.onCancel = onCancel
         let seedS = context.seedStart?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let seedE = context.seedEnd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        // RULEBOOK 1.13.1 `weekendCustomHoursDefault`: a set-window weekend day opens on that day's window.
-        let prefill = CanonicalBusinessEngine.customHoursPrefill(on: context.days.first ?? Date(), policy: policy)
+        // RULEBOOK 1.13.1 `weekendCustomHoursDefault`: a set-window weekend day opens on that day's window. One pair of
+        // times for the whole request opens on the first selected Saturday's (1.17.0, web `customHoursPrefillForDates`).
+        let prefillDay = CanonicalBusinessEngine.singlePairPrefillDay(context.days) ?? Date()
+        let prefill = CanonicalBusinessEngine.customHoursPrefill(on: prefillDay, policy: policy)
         _startText = State(initialValue: seedS.isEmpty ? prefill.start : seedS)
         _endText = State(initialValue: seedE.isEmpty ? prefill.end : seedE)
         _breakRemoved = State(initialValue: context.seedBreakRemoved ?? false)
@@ -533,8 +535,8 @@ fileprivate struct ManagerCustomHoursSheet: View {
                         .keyboardType(.numbersAndPunctuation)
                     Toggle("No break (on this booking)", isOn: $breakRemoved)
                         .accessibilityIdentifier("managerCustomHours.noBreakOnThisBooking")
-                    if let day = context.days.first {
-                        WeekendBookingNoteView(day: day, policy: policy)
+                    if !context.days.isEmpty {
+                        WeekendBookingNoteView(days: context.days, policy: policy)
                     }
                 } footer: {
                     Text("Uses your organisation standard day (\(policy.standardDayStart)–\(policy.standardDayEnd)) as the default. Touching times (e.g. one job ends when the next starts) are allowed.")
@@ -933,7 +935,8 @@ struct ManagerScheduleContentView: View {
             managerScheduleStore.loadData(force: true)
         }
         .sheet(item: $customHoursContext) { ctx in
-            let policyDay = ctx.days.first ?? selectedDate ?? Date()
+            // The rules in effect on the day the one pair of times opens on (`singlePairPrefillDay`).
+            let policyDay = CanonicalBusinessEngine.singlePairPrefillDay(ctx.days) ?? selectedDate ?? Date()
             ManagerCustomHoursSheet(
                 context: ctx,
                 policy: payrollPolicy(for: policyDay),
@@ -1902,8 +1905,9 @@ struct ManagerScheduleContentView: View {
         // RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: Saturday and Sunday are custom hours only.
         let offered = ManagerTimeSlot.offered(on: daysToBook)
         return VStack(alignment: .leading, spacing: 10) {
+            // RULEBOOK 1.17.0 `weekendBookingNotes`: one note for the whole selection, each day under its own rules.
             if let first = daysToBook.first {
-                WeekendBookingNoteView(day: first, policy: payrollPolicy(for: first))
+                WeekendBookingNoteView(days: daysToBook, policy: payrollPolicy(for: first))
             }
             HStack(spacing: 14) {
                 ForEach([ManagerTimeSlot.fullDay, ManagerTimeSlot.morning, ManagerTimeSlot.afternoon].filter { offered.contains($0) }, id: \.self) { slot in

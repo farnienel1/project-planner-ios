@@ -22,6 +22,12 @@ nonisolated enum OrganizationRulebookContext {
     /// The open organisation's document id (trimmed), or nil before one is loaded. Device caches that hold one
     /// company's data (timesheet drafts) put it in their keys so another company never reads them (§1).
     nonisolated(unsafe) private(set) static var organizationId: String? = nil
+    /// The open organisation's four stored working-hours fields (`payrollTimePolicy`, `payrollTimePolicyPrior`,
+    /// `payrollTimePolicyEffectiveFrom`, `payrollTimePolicyScheduled`) in the raw document shape the script reads
+    /// (`CanonicalBusinessEngine.payrollPolicyDocument`), so a
+    /// booking picker can ask for the rules in effect on each selected day (web `livePayrollState`). Nil until an
+    /// organisation is loaded.
+    nonisolated(unsafe) private(set) static var payrollPolicyDocument: [String: Any]? = nil
 
     @MainActor static func update(from org: Organization?) {
         let country = org?.countryCode ?? "GB"
@@ -34,6 +40,7 @@ nonisolated enum OrganizationRulebookContext {
         annualLeaveDefaults = org?.settings.annualLeaveDefaults
         let orgId = org?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         organizationId = orgId.isEmpty ? nil : orgId
+        payrollPolicyDocument = org.map { PayrollTimePolicyCatalog.payrollPolicyDocument(for: $0) }
     }
 
     static var timeZone: TimeZone {
