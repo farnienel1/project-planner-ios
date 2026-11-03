@@ -68,6 +68,19 @@ enum RosterRetention {
         UserDefaults.standard.set(Array(buried), forKey: tombstonePrefix + orgId)
     }
 
+    /// Lifts a burial. Used for the signed-in account and the organisation's creator, who are never deleted in-app
+    /// (`canDeleteUser`) — older builds buried anyone whose user document read was denied once, and that hid the
+    /// super admin from their own roster on this phone for good.
+    static func untombstone(_ userIds: [String], organizationId: String) {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { return }
+        let lift = Set(userIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        guard !lift.isEmpty else { return }
+        let buried = tombstones(for: orgId)
+        guard !buried.isDisjoint(with: lift) else { return }
+        UserDefaults.standard.set(Array(buried.subtracting(lift)), forKey: tombstonePrefix + orgId)
+    }
+
     private static func tombstones(for organizationId: String) -> Set<String> {
         let stored = UserDefaults.standard.stringArray(forKey: tombstonePrefix + organizationId) ?? []
         return Set(stored)

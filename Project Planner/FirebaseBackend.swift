@@ -4223,6 +4223,8 @@ class FirebaseBackend: ObservableObject {
         var userIdByEmail: [String: String] = [:]
         /// False only when both the server read and the cache read of `userEmails` failed.
         var emailClaimsLoaded = false
+        /// `organizations/{orgId}.creatorUserId`. The creator belongs to the organisation they made.
+        var creatorUserId: String?
     }
 
     private func loadOrgMemberIndex(organizationId: String) async -> OrgMemberIndex {
@@ -4241,6 +4243,11 @@ class FirebaseBackend: ObservableObject {
                 index.memberIds.insert(trimmed)
                 index.indexedUserIds.insert(trimmed)
             }
+        }
+        if let creator = (orgSnap?.data()?["creatorUserId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !creator.isEmpty {
+            index.creatorUserId = creator
+            index.indexedUserIds.insert(creator)
         }
         let emailQuery = orgRef.collection("userEmails")
         let emailSnap: QuerySnapshot?
@@ -4459,7 +4466,11 @@ class FirebaseBackend: ObservableObject {
             }
     }
 
-    func getOrganizationUsers(organizationId: String) async throws -> OrganizationUserRoster {
+    /// The organisation's people. `signedInUserId` is the account using this phone: when the members map, their
+    /// own `orgMemberships/{orgId}` document or `creatorUserId` says they belong, their `users` document is read
+    /// whatever `organizationId` it holds (the company they last opened), so they are never missing from their own
+    /// roster or from line-manager pickers.
+    func getOrganizationUsers(organizationId: String, signedInUserId: String? = nil) async throws -> OrganizationUserRoster {
         let orgId = normalizedOrganizationId(organizationId)
         print("🔥🔥🔥 DEBUG: getOrganizationUsers called with organizationId: \(orgId)")
         guard !orgId.isEmpty else { return OrganizationUserRoster(users: [], claimedEmails: nil) }
@@ -4500,12 +4511,23 @@ class FirebaseBackend: ObservableObject {
                 directoryDocumentIds.insert(link.documentId)
             }
         }
+        var anchorIds = Set<String>()
+        if let creator = memberIndex.creatorUserId { anchorIds.insert(creator) }
+        let signedIn = signedInUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !signedIn.isEmpty {
+            if memberIndex.memberIds.contains(signedIn) || memberIndex.creatorUserId == signedIn {
+                anchorIds.insert(signedIn)
+            } else if await signedInMembershipExists(userId: signedIn, organizationId: orgId) {
+                anchorIds.insert(signedIn)
+            }
+        }
         let pointIds = LaunchStartupPolicy.pointReadUserIds(
             alreadyLoaded: Set(documentsById.keys),
             memberUserIds: memberIndex.memberIds,
             claimUserIds: Set(memberIndex.userIdByEmail.values),
             explicitLinkUserIds: explicitLinkUserIds,
-            directoryDocumentIds: directoryDocumentIds
+            directoryDocumentIds: directoryDocumentIds,
+            anchorUserIds: anchorIds
         )
         var fetched = 0
         for userId in pointIds {
@@ -4576,7 +4598,9 @@ class FirebaseBackend: ObservableObject {
             let belongsByField = organizationIdsMatch(docOrganizationId, orgId)
             // members, userEmails, operatives, and managers are this company's list.
             // organizationId on the user document is only the company they last opened.
-            let linkedToThisOrganisation = memberIndex.indexedUserIds.contains(userId) || staffResolvedUserIds.contains(userId)
+            let linkedToThisOrganisation = memberIndex.indexedUserIds.contains(userId)
+                || staffResolvedUserIds.contains(userId)
+                || anchorIds.contains(userId)
 
             print("🔥🔥🔥 DEBUG: Processing user - DocumentID: \(userId), Email: \(email), DocOrgId: \(docOrganizationId), RequestedOrgId: \(orgId)")
 
@@ -4603,7 +4627,21 @@ class FirebaseBackend: ObservableObject {
 
         print("🔥🔥🔥 DEBUG: Returning \(uniqueUsers.count) unique users")
         let claimedEmails: Set<String>? = memberIndex.emailClaimsLoaded ? Set(memberIndex.userIdByEmail.keys) : nil
-        return OrganizationUserRoster(users: uniqueUsers, claimedEmails: claimedEmails, userIdAliases: userIdAliases)
+        let anchoredUserIds = memberIndex.memberIds.union(anchorIds).filter { documentsById[$0] != nil }
+        return OrganizationUserRoster(
+            users: uniqueUsers,
+            claimedEmails: claimedEmails,
+            userIdAliases: userIdAliases,
+            anchoredUserIds: Set(anchoredUserIds)
+        )
+    }
+
+    /// The signed-in account's own `users/{uid}/orgMemberships/{orgId}` exists (readable by its owner).
+    private func signedInMembershipExists(userId: String, organizationId: String) async -> Bool {
+        let ref = db.collection("users").document(userId).collection("orgMemberships").document(organizationId)
+        if let server = try? await ref.getDocument(source: .server) { return server.exists }
+        if let cached = try? await ref.getDocument(source: .cache) { return cached.exists }
+        return false
     }
 
     /// `rosterPeople` over the parsed documents. Swift only carries the other document's manager-list

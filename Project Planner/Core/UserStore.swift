@@ -419,12 +419,13 @@ class UserStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: Cannot load users - missing firebaseBackend or currentUser")
             return
         }
-        var requestedOrganizationId = normalizedOrganizationId(currentUser.organizationId)
-        if requestedOrganizationId.isEmpty {
-            requestedOrganizationId = normalizedOrganizationId(
-                firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
-            )
-        }
+        // The open organisation is `FirebaseBackend.currentOrganization` (AGENTS rule 2). `currentUser.organizationId`
+        // is only a fallback: before the phone-session overlay lands it is `users/{uid}.organizationId`, the company
+        // the person last opened, and loading that roster showed another company's people here.
+        let requestedOrganizationId = Self.rosterOrganizationId(
+            openOrganizationId: firebaseBackend.currentOrganization?.firestoreDocumentId,
+            profileOrganizationId: currentUser.organizationId
+        )
         guard !requestedOrganizationId.isEmpty else {
             print("🔥🔥🔥 DEBUG: ROSTER_LOAD skipped — no organisation id, leaving the current list in place")
             return
@@ -469,8 +470,19 @@ class UserStore: ObservableObject {
         
         print("🔥🔥🔥 DEBUG: loadOrganizationUsers called for organizationId: \(requestedOrganizationId)")
         
+        // The signed-in account and the creator are never deleted in-app (`canDeleteUser`): lift any burial an older
+        // build left after one denied read, or they stay off this phone's roster for good.
+        let signedInUserId = Auth.auth().currentUser?.uid ?? currentUser.id
+        RosterRetention.untombstone(
+            [signedInUserId, firebaseBackend.currentOrganization?.creatorUserId ?? ""],
+            organizationId: requestedOrganizationId
+        )
+
         do {
-            let roster = try await firebaseBackend.getOrganizationUsers(organizationId: requestedOrganizationId)
+            let roster = try await firebaseBackend.getOrganizationUsers(
+                organizationId: requestedOrganizationId,
+                signedInUserId: signedInUserId
+            )
             // Rows the rulebook could not read (no role, no permissions) never replace rows it did read.
             let users = Self.rosterKeepingReadRows(roster.users, onScreen: organizationUsers)
             guard generation == organizationUsersLoadGeneration else {
@@ -490,9 +502,12 @@ class UserStore: ObservableObject {
 
             // `users/{uid}` is the only source of pay and line manager (RULEBOOK §1, §8). The
             // `operativeProfiles` mirror and on-device copies are never laid over it.
+            let anchored = roster.anchoredUserIds
+                .union([signedInUserId, firebaseBackend.currentOrganization?.creatorUserId ?? ""].filter { !$0.isEmpty })
             let healed = await healRosterKeepingKnownPeople(
                 incoming: users,
-                organizationId: requestedOrganizationId
+                organizationId: requestedOrganizationId,
+                anchoredIds: anchored
             )
             // Healing probes absent people for up to 8 seconds. A save made meanwhile (a role change) ends this
             // load: its server copy is older than what the save wrote, so it is never published.
@@ -555,6 +570,47 @@ class UserStore: ObservableObject {
             zip(fetched, kept).filter { $0.0.parsedWithoutRulebook && !$0.1.parsedWithoutRulebook }.count
         )
         return kept
+    }
+
+    /// The organisation whose roster to load: the open one, else the profile's. Not a business rule — which
+    /// company is open is `chooseSessionOrganization`, already applied to `currentOrganization`.
+    static func rosterOrganizationId(openOrganizationId: String?, profileOrganizationId: String) -> String {
+        let open = normalizedOrganizationId(openOrganizationId ?? "")
+        if !open.isEmpty { return open }
+        return normalizedOrganizationId(profileOrganizationId)
+    }
+
+    /// One live-listener snapshot laid over the roster on screen, before the `rosterPeople` fold.
+    /// Changed rows replace or join by id; a row the snapshot does not mention — including one that left the
+    /// `organizationId` query (`removedIds`) — stays. Someone found through the members map, a membership, the
+    /// creator or a staff link has a `users` document naming another company, so this query never returns them;
+    /// only the full load decides who leaves (RULEBOOK §1).
+    static func liveRosterMerge(
+        onScreen: [AppUser],
+        changed: [AppUser],
+        isTombstoned: (String) -> Bool
+    ) -> [AppUser] {
+        var byId: [String: AppUser] = [:]
+        var order: [String] = []
+        for user in onScreen where byId[user.id] == nil {
+            byId[user.id] = user
+            order.append(user.id)
+        }
+        for incoming in changed where !isTombstoned(incoming.id) {
+            var user = incoming
+            if user.parsedWithoutRulebook, let existing = byId[user.id], !existing.parsedWithoutRulebook {
+                NSLog("ROSTER_ROW_KEPT id=%@ — parseUserDocument did not answer for the live copy", user.id)
+                continue
+            }
+            if let existing = byId[user.id] {
+                user.placedByManagersRecord = existing.placedByManagersRecord
+                user.sameEmailUserIds = existing.sameEmailUserIds
+            } else {
+                order.append(user.id)
+            }
+            byId[user.id] = user
+        }
+        return order.compactMap { byId[$0] }
     }
 
     /// Sorts and publishes a `listedRosterUsers` result and saves it on this phone.
@@ -628,27 +684,12 @@ class UserStore: ObservableObject {
             Task { await self.loadOrganizationUsers(forceRefresh: true) }
         }
         guard !changed.isEmpty else { return }
-        var byId: [String: AppUser] = [:]
-        var order: [String] = []
-        for user in organizationUsers where byId[user.id] == nil {
-            byId[user.id] = user
-            order.append(user.id)
-        }
-        for incoming in changed where !RosterRetention.isTombstoned(incoming.id, organizationId: organizationId) {
-            var user = incoming
-            if user.parsedWithoutRulebook, let existing = byId[user.id], !existing.parsedWithoutRulebook {
-                NSLog("ROSTER_ROW_KEPT id=%@ — parseUserDocument did not answer for the live copy", user.id)
-                continue
-            }
-            if let existing = byId[user.id] {
-                user.placedByManagersRecord = existing.placedByManagersRecord
-                user.sameEmailUserIds = existing.sameEmailUserIds
-            } else {
-                order.append(user.id)
-            }
-            byId[user.id] = user
-        }
-        let folded = collapseRosterByEmail(order.compactMap { byId[$0] })
+        let merged = Self.liveRosterMerge(
+            onScreen: organizationUsers,
+            changed: changed,
+            isTombstoned: { RosterRetention.isTombstoned($0, organizationId: organizationId) }
+        )
+        let folded = collapseRosterByEmail(merged)
         guard let listed = CanonicalBusinessEngine.listedRosterUsers(folded, claimedEmails: organizationUserEmailClaims) else {
             print("🔥🔥🔥 DEBUG: ROSTER_LISTENER script did not return a list — keeping the roster on screen")
             return
@@ -699,7 +740,12 @@ class UserStore: ObservableObject {
     /// A short Firestore query must not delete managers or operatives who were already on the list.
     /// Someone leaves when their user document is confirmed gone, an admin deletes them, or that
     /// document's read is permission-denied. A timeout is not a reason to drop them.
-    private func healRosterKeepingKnownPeople(incoming: [AppUser], organizationId: String) async -> [AppUser] {
+    /// `anchoredIds` (members map, creator, signed-in account) leave only when their document is confirmed gone.
+    private func healRosterKeepingKnownPeople(
+        incoming: [AppUser],
+        organizationId: String,
+        anchoredIds: Set<String> = []
+    ) async -> [AppUser] {
         guard let firebaseBackend else { return incoming }
         var byId: [String: AppUser] = [:]
         for user in RosterRetention.users(for: organizationId) where user.isStoredUserDocument && !RosterRetention.isTombstoned(user.id, organizationId: organizationId) {
@@ -748,7 +794,7 @@ class UserStore: ObservableObject {
             case .unconfirmed:
                 read = .unconfirmed
             }
-            switch LaunchStartupPolicy.rosterAbsenceDecision(read) {
+            switch LaunchStartupPolicy.rosterAbsenceDecision(read, anchored: anchoredIds.contains(id)) {
             case .keep:
                 if case .present(let user) = probe {
                     var kept = user
@@ -762,8 +808,8 @@ class UserStore: ObservableObject {
             case .drop:
                 byId.removeValue(forKey: id)
                 if read == .permissionDenied {
-                    // Local only. A denied read does not write organizationId on the user document.
-                    RosterRetention.tombstone([id], organizationId: organizationId)
+                    // Off this list only. A denied read is never a tombstone: a burial outlived the read and kept the
+                    // person (the super admin included) off this phone's roster on every later load, under any account.
                     print("🔥🔥🔥 DEBUG: ROSTER_DROPPED \(id) — user document read was denied")
                 } else {
                     print("🔥🔥🔥 DEBUG: ROSTER_CONFIRMED_GONE \(id)")
@@ -1897,11 +1943,13 @@ class UserStore: ObservableObject {
                 }
                 
                 // Remember the delete. A later short fetch must not put this person back, and must not be the way anyone else disappears.
-                let removedIds = organizationUsers
-                    .filter { $0.email.lowercased() == userEmail }
-                    .map(\.id) + [userId]
+                // A blank email is nobody's: it must not bury every other row without one.
+                let sameEmail: (AppUser) -> Bool = { !userEmail.isEmpty && $0.email.lowercased() == userEmail }
+                let neverBuried = Set([actorUid, firebaseBackend.currentOrganization?.creatorUserId ?? ""])
+                let removedIds = (organizationUsers.filter(sameEmail).map(\.id) + [userId])
+                    .filter { !neverBuried.contains($0) }
                 RosterRetention.tombstone(removedIds, organizationId: organizationId)
-                organizationUsers.removeAll { $0.email.lowercased() == userEmail }
+                organizationUsers.removeAll { sameEmail($0) || $0.id == userId }
                 RosterRetention.save(organizationUsers, organizationId: organizationId)
                 print("🔥🔥🔥 DEBUG: ✅ User removed from local array")
                 await loadOrganizationUsers()
@@ -2172,6 +2220,11 @@ class UserStore: ObservableObject {
                          }
                          organizationUsers[savedIndex] = updatedUser
                          let saved = organizationUsers[savedIndex]
+                         // The copy saved on this phone follows the stored role too: an organisation switch or a cold
+                         // start paints this cache first, and a load that missed the person then kept the old role.
+                         if let orgId = organizationUsersLoadOrganizationId {
+                             RosterRetention.save(organizationUsers, organizationId: orgId)
+                         }
 
                          if let holidayStore,
                             UserRoleTransitionPolicy.shouldClearPendingAnnualLeave(

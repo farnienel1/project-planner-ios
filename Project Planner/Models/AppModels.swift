@@ -368,6 +368,10 @@ struct OrganizationUserRoster {
     /// Every listed `users` document id that was folded into another because they share an email,
     /// mapped to the id that was kept (web `userIdAliases`, the input of `rosterAliasIdsFor`).
     var userIdAliases: [String: String] = [:]
+    /// Ids this organisation lists itself — members map keys, `creatorUserId`, and the signed-in account when it
+    /// belongs — that this load read. Their `users` document may name another company, so the live
+    /// `organizationId` listener never returns them and must not be the reason they leave the list.
+    var anchoredUserIds: Set<String> = []
 }
 
 // MARK: - User roster segments (Manage Users, Managers, Operatives)
