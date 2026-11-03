@@ -112,7 +112,7 @@ extension CanonicalBusinessEngine {
     }
 
     /// `WEEKEND_WEEKDAY_MIX_MESSAGE` when `dates` mix weekdays and weekend days, else nil.
-    nonisolated static func weekendWeekdayMixMessage(for dates: [Date], calendar: Calendar = OrganizationRulebookContext.calendar) -> String? {
+    nonisolated static func weekendWeekdayMixRefusal(for dates: [Date], calendar: Calendar = OrganizationRulebookContext.calendar) -> String? {
         let keys = dates.map { dayKey(for: $0, calendar: calendar) }
         return bookingDaysMixWeekdayAndWeekend(keys) ? weekendWeekdayMixMessage : nil
     }
