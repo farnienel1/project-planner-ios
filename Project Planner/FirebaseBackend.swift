@@ -1459,7 +1459,9 @@ class FirebaseBackend: ObservableObject {
             daysPerYear: daysPerYear,
             startMonth: startMonth,
             endMonth: endMonth,
-            carriesOver: carriesOver
+            carriesOver: carriesOver,
+            // RULEBOOK 1.13.0 §4.4 `parseMaxCarryOverDays`: null / blank / negative = no cap.
+            maxCarryOverDays: CanonicalBusinessEngine.parseMaxCarryOverDays(data["maxCarryOverDays"])
         )
     }
 
@@ -4185,6 +4187,7 @@ class FirebaseBackend: ObservableObject {
         parsed.documentUpdatedAt = row.date("updatedAtMs")
         parsed.status = row.optionalText("status")
         parsed.payBasis = row.optionalText("payBasis")
+        parsed.employmentStartDate = row.optionalText("employmentStartDayKey")
         parsed.profilePhotoUpdatedAt = row.date("profilePhotoUpdatedAtMs")
         parsed.operativeModeStored = row.bool("operativeModeStored")
         parsed.annualLeaveDefaultsPending = row.bool("annualLeaveDefaultsPending")
@@ -5097,12 +5100,7 @@ class FirebaseBackend: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No organization loaded"]
             )
         }
-        let payload: [String: Any] = [
-            "daysPerYear": defaults.daysPerYear,
-            "startMonth": defaults.startMonth,
-            "endMonth": defaults.endMonth,
-            "carriesOver": defaults.carriesOver,
-        ]
+        let payload = defaults.firestoreMap
         try await db.collection("organizations").document(orgId).updateData(
             WriteMetadata.stamped(["annualLeaveDefaults": payload], userId: auth.currentUser?.uid)
         )
@@ -5159,12 +5157,8 @@ class FirebaseBackend: ObservableObject {
         let trimmed = bankHolidayRegionId.trimmingCharacters(in: .whitespacesAndNewlines)
         // Rulebook 1.4.0 §4.4: a country with no listed region (`bankHolidayRegionsForCountry` empty) has nothing
         // to choose, so the leave defaults still save and the stored region is left alone.
-        let payload: [String: Any] = [
-            "daysPerYear": defaults.daysPerYear,
-            "startMonth": defaults.startMonth,
-            "endMonth": defaults.endMonth,
-            "carriesOver": defaults.carriesOver,
-        ]
+        // RULEBOOK 1.13.0 §4.4: the whole map, `maxCarryOverDays` included, so the cap is never dropped.
+        let payload = defaults.firestoreMap
         var fields: [String: Any] = ["annualLeaveDefaults": payload]
         if !trimmed.isEmpty {
             // Dotted `settings.bankHolidayRegionId` is a path only in updateData (never setData(merge:)).
@@ -5864,6 +5858,13 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Patch-only: show or hide annual leave in the app. Does not write organizationId.
+    /// RULEBOOK 1.13.0 §4.4: `users/{uid}.employmentStartDate` (`YYYY-MM-DD`), or deleted when blank.
+    func updateEmploymentStartDate(userId: String, dayKey: String?) async throws {
+        let value: Any = dayKey.map { $0 as Any } ?? FieldValue.delete()
+        try await db.collection("users").document(userId)
+            .updateData(WriteMetadata.stamped(["employmentStartDate": value], userId: auth.currentUser?.uid))
+    }
+
     func updateAnnualLeaveEnabled(userId: String, enabled: Bool) async throws {
         let payload: [String: Any] = [
             "annualLeaveEnabled": enabled,
@@ -5950,17 +5951,25 @@ class FirebaseBackend: ObservableObject {
             UserDefaults.standard.removeObject(forKey: key)
             return
         }
+        // RULEBOOK 1.13.0 §14 `signInEmailSyncWrites`: the users email follows the verified token email, and the
+        // organisation `userEmails` claim moves with it (the rules let the person delete their own old claim).
+        let orgId = organizationIdFromFirestore(storedData["organizationId"])
+        guard let plan = CanonicalBusinessEngine.signInEmailSyncWrites(
+            userId: userId,
+            organizationId: orgId,
+            tokenEmail: authEmail,
+            tokenEmailVerified: authUser.isEmailVerified,
+            storedEmail: stored
+        ) else { return }
         do {
             try await db.collection("users").document(userId)
-                .updateData(WriteMetadata.stamped(["email": authEmail], userId: userId))
+                .updateData(WriteMetadata.stamped(["email": plan.email], userId: userId))
             UserDefaults.standard.removeObject(forKey: key)
-            if let orgId = organizationIdFromFirestore(storedData["organizationId"]), !orgId.isEmpty {
-                try? await reconcileUserEmailIndex(
-                    organizationId: orgId,
-                    userId: userId,
-                    oldEmailNormalized: stored,
-                    newEmail: authEmail
-                )
+            if let path = plan.claimSetPath, let claimUser = plan.claimSetUserId {
+                try? await db.document(path).setData(["userId": claimUser], merge: true)
+            }
+            if let path = plan.claimDeletePath, path != plan.claimSetPath {
+                try? await db.document(path).delete()
             }
         } catch {
             NSLog("SIGN_IN_EMAIL_SYNC_SKIPPED %@", error.localizedDescription)

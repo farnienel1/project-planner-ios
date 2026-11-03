@@ -36,10 +36,10 @@ extension CanonicalBusinessEngine {
         (callJSON("leaveYearEndMonth", arguments: [startMonth]) as? NSNumber)?.intValue
     }
 
-    /// The start month whose `leaveYearEndMonth` is `endMonth` (picking the end month moves the start, as web does).
-    /// Searches the script's answers only; nil when none matches or the script did not answer.
+    /// `leaveYearStartMonth(endMonth)` (RULEBOOK 1.13.0 §4.4): the start month of the 12-month leave year that ends in
+    /// `endMonth` (picking the end month moves the start, as web does). Nil when the script did not answer.
     nonisolated static func leaveYearStartMonth(endingIn endMonth: Int) -> Int? {
-        (1...12).first { leaveYearEndMonth(startMonth: $0) == endMonth }
+        (callJSON("leaveYearStartMonth", arguments: [endMonth]) as? NSNumber)?.intValue
     }
 
     /// `LEAVE_YEAR_MONTHS_MESSAGE`. Nil when the script did not answer.
@@ -117,5 +117,64 @@ extension InvitationDocument {
         } catch {
             return error.localizedDescription
         }
+    }
+}
+
+// MARK: - Self email change (RULEBOOK 1.13.0 §14, §16)
+
+/// `selfEmailChangeAction` result.
+nonisolated enum RulebookSelfEmailChangeAction: String, Sendable {
+    case unchanged
+    case invalid
+    case verifyBeforeUpdate
+}
+
+/// `signInEmailSyncWrites` result: the users write and the `userEmails` claim moves.
+nonisolated struct RulebookSignInEmailSync: Sendable {
+    var email: String
+    var claimSetPath: String?
+    var claimSetUserId: String?
+    var claimDeletePath: String?
+}
+
+extension CanonicalBusinessEngine {
+    /// `selfEmailChangeAction({ storedEmail, nextEmail })`. Nil when the script did not answer.
+    nonisolated static func selfEmailChangeAction(storedEmail: String, nextEmail: String) -> RulebookSelfEmailChangeAction? {
+        (callJSON("selfEmailChangeAction", arguments: [["storedEmail": storedEmail, "nextEmail": nextEmail]]) as? String)
+            .flatMap(RulebookSelfEmailChangeAction.init(rawValue:))
+    }
+
+    /// `selfEmailChangeSentMessage(nextEmail)`.
+    nonisolated static func selfEmailChangeSentMessage(_ nextEmail: String) -> String {
+        callJSON("selfEmailChangeSentMessage", arguments: [nextEmail]) as? String
+            ?? "We sent a link to \(nextEmail). Open it to confirm, then sign in with \(nextEmail). Until then you sign in with your current email."
+    }
+
+    /// `signInEmailSyncWrites({ userId, organizationId, tokenEmail, tokenEmailVerified, storedEmail })`: nil when there
+    /// is nothing to write (unverified token, same email) or the script did not answer.
+    nonisolated static func signInEmailSyncWrites(
+        userId: String,
+        organizationId: String?,
+        tokenEmail: String,
+        tokenEmailVerified: Bool,
+        storedEmail: String
+    ) -> RulebookSignInEmailSync? {
+        let input: [String: Any] = [
+            "userId": userId,
+            "organizationId": organizationId ?? "",
+            "tokenEmail": tokenEmail,
+            "tokenEmailVerified": tokenEmailVerified,
+            "storedEmail": storedEmail,
+        ]
+        guard let row = callJSON("signInEmailSyncWrites", arguments: [input]) as? [String: Any],
+              let user = row["userFields"] as? [String: Any],
+              let email = user["email"] as? String else { return nil }
+        let claimSet = row["claimSet"] as? [String: Any]
+        return RulebookSignInEmailSync(
+            email: email,
+            claimSetPath: claimSet?["path"] as? String,
+            claimSetUserId: (claimSet?["fields"] as? [String: Any])?["userId"] as? String,
+            claimDeletePath: row["claimDelete"] as? String
+        )
     }
 }

@@ -493,6 +493,9 @@ struct AppUser: Identifiable, Codable, Hashable {
     var status: String? = nil
     /// `users/{uid}.payBasis`: `day` or `hourly` (RULEBOOK §8). A rate save writes exactly one basis.
     var payBasis: String? = nil
+    /// `users/{uid}.employmentStartDate` (`YYYY-MM-DD`, read as `parseUserDocument.employmentStartDayKey`): the leave
+    /// year joined is pro rata from it (RULEBOOK 1.13.0 §4.4, `proRataLeaveAllowance`). Nil: full allowance.
+    var employmentStartDate: String? = nil
     /// `users/{uid}.profilePhotoUpdatedAt`: refreshes a cached avatar when the photo changes (RULEBOOK §12).
     var profilePhotoUpdatedAt: Date? = nil
     /// The stored `operativeMode` flag (`parseUserDocument.operativeModeStored`). `permissions.operativeMode` is the
@@ -1020,6 +1023,8 @@ nonisolated struct OrganizationAnnualLeaveDefaults: Codable, Hashable, Sendable 
     var startMonth: Int
     var endMonth: Int
     var carriesOver: Bool
+    /// `annualLeaveDefaults.maxCarryOverDays` (RULEBOOK 1.13.0 §4.4, `parseMaxCarryOverDays`): nil = no cap.
+    var maxCarryOverDays: Double? = nil
 
     nonisolated static let `default` = OrganizationAnnualLeaveDefaults(
         daysPerYear: AnnualLeavePolicy.defaultDaysPerYear,
@@ -1028,11 +1033,24 @@ nonisolated struct OrganizationAnnualLeaveDefaults: Codable, Hashable, Sendable 
         carriesOver: AnnualLeavePolicy.defaultCarriesOver
     )
 
-    init(daysPerYear: Double, startMonth: Int, endMonth: Int, carriesOver: Bool) {
+    init(daysPerYear: Double, startMonth: Int, endMonth: Int, carriesOver: Bool, maxCarryOverDays: Double? = nil) {
         self.daysPerYear = AnnualLeavePolicy.clampDaysPerYear(daysPerYear)
         self.startMonth = AnnualLeavePolicy.clampMonth(startMonth)
         self.endMonth = AnnualLeavePolicy.clampMonth(endMonth)
         self.carriesOver = carriesOver
+        self.maxCarryOverDays = maxCarryOverDays
+    }
+
+    /// The whole `annualLeaveDefaults` map as saved (RULEBOOK 1.13.0 §4.4): every key, `maxCarryOverDays` included
+    /// (null = no cap), so a save never drops the cap.
+    var firestoreMap: [String: Any] {
+        [
+            "daysPerYear": daysPerYear,
+            "startMonth": startMonth,
+            "endMonth": endMonth,
+            "carriesOver": carriesOver,
+            "maxCarryOverDays": maxCarryOverDays.map { $0 as Any } ?? NSNull(),
+        ]
     }
 }
 

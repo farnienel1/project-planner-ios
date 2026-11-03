@@ -183,4 +183,81 @@ final class Rulebook1130Tests: XCTestCase {
         XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: admin, subject: op, roster: roster))
         XCTAssertFalse(CanonicalBusinessEngine.canViewPersonPay(viewer: operativesManager, subject: lineManager, roster: roster))
     }
+
+    // MARK: Carry-over and pro rata (1.13.0 Q4 §4.4)
+
+    func testMaxCarryOverDaysParsesLikeWeb() {
+        XCTAssertEqual(CanonicalBusinessEngine.parseMaxCarryOverDays("5"), 5)
+        XCTAssertEqual(CanonicalBusinessEngine.parseMaxCarryOverDays("2.3"), 2.5)
+        XCTAssertNil(CanonicalBusinessEngine.parseMaxCarryOverDays("-1"))
+        XCTAssertNil(CanonicalBusinessEngine.parseMaxCarryOverDays(""))
+        XCTAssertNil(CanonicalBusinessEngine.parseMaxCarryOverDays("x"))
+        XCTAssertNil(CanonicalBusinessEngine.parseMaxCarryOverDays(nil))
+        XCTAssertEqual(CanonicalBusinessEngine.parseMaxCarryOverDays(NSNumber(value: 400)), 365)
+        XCTAssertEqual(CanonicalBusinessEngine.suggestedMaxCarryOverDays, 5)
+        let defaults = OrganizationAnnualLeaveDefaults(daysPerYear: 25, startMonth: 1, endMonth: 12, carriesOver: true)
+        XCTAssertTrue(defaults.firestoreMap["maxCarryOverDays"] is NSNull, "no cap is written as null, never dropped")
+    }
+
+    private func balance(start: String?, cap: Double?) throws -> (balance: CanonicalBusinessEngine.CanonicalAnnualLeaveBalance, yearEntitlement: Double, proRata: Bool) {
+        try XCTUnwrap(CanonicalBusinessEngine.annualLeaveBalanceDetail(
+            annualLeaveEnabled: true, daysPerYear: 20, startMonth: 1, endMonth: 12,
+            orgDaysPerYear: nil, orgStartMonth: nil, orgEndMonth: nil, carriesOver: true,
+            yearAllowance: nil, yearAllowanceKey: nil, bookings: [], onDayKey: "2026-11-03",
+            nonWorkingDayKeys: [], employmentStartDayKey: start, maxCarryOverDays: cap, timeZone: "Europe/London"
+        ))
+    }
+
+    func testTheLeaveYearJoinedIsProRataAndCarryOverIsCapped() throws {
+        let joined = try balance(start: "2026-07-01", cap: nil)
+        XCTAssertEqual(joined.yearEntitlement, 10.5)
+        XCTAssertTrue(joined.proRata)
+        XCTAssertEqual(joined.balance.carriedForward, 0)
+        XCTAssertEqual(joined.balance.remaining, 10.5)
+        let capped = try balance(start: nil, cap: 5)
+        XCTAssertEqual(capped.yearEntitlement, 20)
+        XCTAssertFalse(capped.proRata)
+        XCTAssertEqual(capped.balance.carriedForward, 5)
+        XCTAssertEqual(capped.balance.remaining, 25)
+        let uncapped = try balance(start: nil, cap: nil)
+        XCTAssertEqual(uncapped.balance.carriedForward, 20)
+        XCTAssertEqual(uncapped.balance.remaining, 40)
+    }
+
+    func testLeaveYearStartMonthIsTheCanonicalFunction() {
+        XCTAssertEqual(CanonicalBusinessEngine.leaveYearStartMonth(endingIn: 12), 1)
+        XCTAssertEqual(CanonicalBusinessEngine.leaveYearStartMonth(endingIn: 3), 4)
+        XCTAssertEqual(CanonicalBusinessEngine.leaveYearStartMonth(endingIn: 1), 2)
+    }
+
+    // MARK: Launch countries (1.13.0 Q6 §4.1)
+
+    func testCompanyCountryPickerOffersLaunchCountriesAndKeepsAStoredOne() {
+        XCTAssertEqual(CanonicalBusinessEngine.launchCountryOptions(storedCountryCode: "GB")?.map(\.code), ["GB", "IE"])
+        XCTAssertEqual(CanonicalBusinessEngine.launchCountryOptions(storedCountryCode: nil)?.map(\.code), ["GB", "IE"])
+        XCTAssertEqual(CanonicalBusinessEngine.launchCountryOptions(storedCountryCode: "FR")?.map(\.code), ["GB", "IE", "FR"])
+        XCTAssertEqual(CanonicalBusinessEngine.launchCountryOptions(storedCountryCode: "GB")?.first?.title, "United Kingdom")
+    }
+
+    // MARK: Self email change (1.13.0 §14)
+
+    func testSelfEmailChangeUsesTheRulebook() throws {
+        XCTAssertEqual(CanonicalBusinessEngine.selfEmailChangeAction(storedEmail: "a@x.com", nextEmail: " A@x.com "), .unchanged)
+        XCTAssertEqual(CanonicalBusinessEngine.selfEmailChangeAction(storedEmail: "a@x.com", nextEmail: "bad"), .invalid)
+        XCTAssertEqual(CanonicalBusinessEngine.selfEmailChangeAction(storedEmail: "a@x.com", nextEmail: "b@x.com"), .verifyBeforeUpdate)
+        XCTAssertEqual(
+            CanonicalBusinessEngine.selfEmailChangeSentMessage("B@x.com"),
+            "We sent a link to b@x.com. Open it to confirm, then sign in with b@x.com. Until then you sign in with your current email."
+        )
+        let plan = try XCTUnwrap(CanonicalBusinessEngine.signInEmailSyncWrites(
+            userId: "u1", organizationId: "org", tokenEmail: "b@x.com", tokenEmailVerified: true, storedEmail: "a@x.com"
+        ))
+        XCTAssertEqual(plan.email, "b@x.com")
+        XCTAssertEqual(plan.claimSetPath, "organizations/org/userEmails/b@x.com")
+        XCTAssertEqual(plan.claimSetUserId, "u1")
+        XCTAssertEqual(plan.claimDeletePath, "organizations/org/userEmails/a@x.com")
+        XCTAssertNil(CanonicalBusinessEngine.signInEmailSyncWrites(
+            userId: "u1", organizationId: "org", tokenEmail: "b@x.com", tokenEmailVerified: false, storedEmail: "a@x.com"
+        ))
+    }
 }

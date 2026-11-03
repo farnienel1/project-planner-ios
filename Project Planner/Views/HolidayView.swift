@@ -111,7 +111,8 @@ struct HolidayView: View {
             orgStartMonth: org.startMonth,
             orgEndMonth: org.endMonth,
             yearAllowance: u.annualLeaveYearAllowance,
-            yearAllowanceKey: u.annualLeaveYearAllowanceKey
+            yearAllowanceKey: u.annualLeaveYearAllowanceKey,
+            employmentStartDayKey: u.employmentStartDate
         )
     }
 
@@ -447,6 +448,7 @@ struct HolidayView: View {
                                 startMonth: u.annualLeaveYearStartMonth,
                                 endMonth: u.annualLeaveYearEndMonth,
                                 carriesOver: u.annualLeaveCarriesOver,
+                                employmentStartDayKey: u.employmentStartDate,
                                 calendar: calendar
                             )
                         }
@@ -1124,7 +1126,8 @@ struct HolidayView: View {
             orgStartMonth: org.startMonth,
             orgEndMonth: org.endMonth,
             yearAllowance: user.annualLeaveYearAllowance,
-            yearAllowanceKey: user.annualLeaveYearAllowanceKey
+            yearAllowanceKey: user.annualLeaveYearAllowanceKey,
+            employmentStartDayKey: user.employmentStartDate
         )
         return (summary.remainingDays, summary.entitlementDays, summary.takenDays, summary.hasAllowance, summary.usedThisYear)
     }
@@ -1557,6 +1560,7 @@ struct HolidayView: View {
             startMonth: u.annualLeaveYearStartMonth,
             endMonth: u.annualLeaveYearEndMonth,
             carriesOver: u.annualLeaveCarriesOver,
+            employmentStartDayKey: u.employmentStartDate,
             calendar: calendar
         )
     }

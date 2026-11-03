@@ -224,6 +224,15 @@ struct ManageUsersView: View {
         .refreshable {
             await userStore.loadOrganizationUsers()
         }
+        .alert("Check your email", isPresented: Binding(
+            get: { userStore.selfEmailChangeNotice != nil },
+            set: { if !$0 { userStore.selfEmailChangeNotice = nil } }
+        )) {
+            Button("OK") { userStore.selfEmailChangeNotice = nil }
+                .accessibilityIdentifier("manageUsers.selfEmailChange.ok")
+        } message: {
+            Text(userStore.selfEmailChangeNotice ?? "")
+        }
     }
 
     // MARK: - Revamped list (matches manage-users-iphone.html / ManageUsers.tsx)
@@ -1470,6 +1479,8 @@ struct EditUserView: View {
     @State private var annualLeaveStartMonth: Int
     @State private var annualLeaveEndMonth: Int
     @State private var annualLeaveCarriesOver: Bool
+    /// `users/{uid}.employmentStartDate` draft (`YYYY-MM-DD`, empty = none). RULEBOOK 1.13.0 §4.4, admins only.
+    @State private var employmentStartDateDraft: String
     @State private var annualLeaveEnabledDraft: Bool
     @State private var remainingLeaveText = ""
     @State private var baselineRemainingText = ""
@@ -1505,6 +1516,7 @@ struct EditUserView: View {
         self._annualLeaveStartMonth = State(initialValue: user.annualLeaveYearStartMonth)
         self._annualLeaveEndMonth = State(initialValue: user.annualLeaveYearEndMonth)
         self._annualLeaveCarriesOver = State(initialValue: user.annualLeaveCarriesOver)
+        self._employmentStartDateDraft = State(initialValue: user.employmentStartDate ?? "")
         self._annualLeaveEnabledDraft = State(initialValue: user.annualLeaveEnabled)
         self._employmentTypeDraft = State(initialValue: user.employmentType)
     }
@@ -1698,7 +1710,8 @@ struct EditUserView: View {
             orgStartMonth: org.startMonth,
             orgEndMonth: org.endMonth,
             yearAllowance: subject.annualLeaveYearAllowance,
-            yearAllowanceKey: subject.annualLeaveYearAllowanceKey
+            yearAllowanceKey: subject.annualLeaveYearAllowanceKey,
+            employmentStartDayKey: subject.employmentStartDate
         )
         return summary.remainingDays ?? 0
     }
@@ -1726,6 +1739,51 @@ struct EditUserView: View {
             || remainingLeaveText != baselineRemainingText
     }
 
+    /// RULEBOOK 1.13.0 §4.4: an admin changed the start date the leave year joined is pro rata from.
+    private var employmentStartDateDirty: Bool {
+        guard canUseAdminAccountTools else { return false }
+        let stored = (userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user).employmentStartDate ?? ""
+        return employmentStartDateDraft != stored
+    }
+
+    private var employmentStartDateBinding: Binding<Date> {
+        Binding(
+            get: { OrganizationRulebookContext.date(fromDayKey: employmentStartDateDraft) ?? OrganizationRulebookContext.calendar.startOfDay(for: Date()) },
+            set: { employmentStartDateDraft = OrganizationRulebookContext.dayKey($0) }
+        )
+    }
+
+    @ViewBuilder
+    private var employmentStartDateRow: some View {
+        if canUseAdminAccountTools {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Start date")
+                    .font(.subheadline.weight(.semibold))
+                if employmentStartDateDraft.isEmpty {
+                    Button("Set start date") {
+                        employmentStartDateDraft = OrganizationRulebookContext.dayKey(Date())
+                    }
+                    .accessibilityIdentifier("editUser.employmentStartDate.set")
+                } else {
+                    HStack {
+                        DatePicker("Start date", selection: employmentStartDateBinding, displayedComponents: .date)
+                            .labelsHidden()
+                            .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                            .accessibilityIdentifier("editUser.employmentStartDate")
+                        Spacer()
+                        Button("Clear") { employmentStartDateDraft = "" }
+                            .accessibilityIdentifier("editUser.employmentStartDate.clear")
+                    }
+                }
+                Text("The day this person started. Their allowance for that leave year is pro rata from it. Leave blank for a full allowance.")
+                    .font(.caption)
+                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 14)
+        }
+    }
+
     private var annualLeaveEntitlementSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             ManageUserSectionTitle(text: "Annual leave")
@@ -1751,6 +1809,7 @@ struct EditUserView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
+                employmentStartDateRow
             }
         }
     }
@@ -1933,6 +1992,7 @@ struct EditUserView: View {
 
     private var hasChanges: Bool {
         if canUseAdminAccountTools && !isViewingSuperAdminProfile && accountTypeRepair != nil { return true }
+        if employmentStartDateDirty { return true }
         let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
         let trimmedTradeP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTradeC = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3832,6 +3892,14 @@ struct EditUserView: View {
             )
         }
 
+        var employmentStartSuccess = true
+        if employmentStartDateDirty {
+            employmentStartSuccess = await userStore.updateUserEmploymentStartDate(
+                userId: user.id,
+                dayKey: employmentStartDateDraft.isEmpty ? nil : employmentStartDateDraft
+            )
+        }
+
         var annualLeaveEnabledSuccess = true
         if canEditPermissionsMatrix && annualLeaveAccessDirty {
             annualLeaveEnabledSuccess = await userStore.updateUserAnnualLeaveEnabled(userId: user.id, enabled: annualLeaveEnabledDraft)
@@ -3871,7 +3939,8 @@ struct EditUserView: View {
                     orgStartMonth: (firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default).startMonth,
                     orgEndMonth: (firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default).endMonth,
                     yearAllowance: subjectUser.annualLeaveYearAllowance,
-                    yearAllowanceKey: subjectUser.annualLeaveYearAllowanceKey
+                    yearAllowanceKey: subjectUser.annualLeaveYearAllowanceKey,
+                    employmentStartDayKey: subjectUser.employmentStartDate
                 )
                 guard let override = CanonicalBusinessEngine.applyRemainingOverride(
                     remaining: remaining,
@@ -3959,7 +4028,7 @@ struct EditUserView: View {
             employmentTypeConfirmationAccepted = false
             showingEmploymentTypeEffectiveDatePicker = false
             selfBookOffConfirmationAccepted = false
-            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess && billingSuccess {
+            if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && employmentStartSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess && billingSuccess {
                 dismiss()
             } else {
                 if !permissionsSuccess {

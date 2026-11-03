@@ -171,8 +171,40 @@ extension CanonicalBusinessEngine {
         bookings: [CanonicalLeaveBooking],
         onDayKey: String,
         nonWorkingDayKeys: [String],
+        employmentStartDayKey: String? = nil,
+        maxCarryOverDays: Double? = nil,
         timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> CanonicalAnnualLeaveBalance? {
+        annualLeaveBalanceDetail(
+            annualLeaveEnabled: annualLeaveEnabled, daysPerYear: daysPerYear, startMonth: startMonth, endMonth: endMonth,
+            orgDaysPerYear: orgDaysPerYear, orgStartMonth: orgStartMonth, orgEndMonth: orgEndMonth, carriesOver: carriesOver,
+            yearAllowance: yearAllowance, yearAllowanceKey: yearAllowanceKey, bookings: bookings, onDayKey: onDayKey,
+            nonWorkingDayKeys: nonWorkingDayKeys, employmentStartDayKey: employmentStartDayKey,
+            maxCarryOverDays: maxCarryOverDays, timeZone: timeZone
+        )?.balance
+    }
+
+    /// `annualLeaveBalance` with the 1.13.0 fields (§4.4): `employmentStartDayKey` (pro rata in the year joined,
+    /// `proRataLeaveAllowance`) and `maxCarryOverDays` (carry-over cap). Also returns `yearEntitlement` (this year's
+    /// allowance after pro rata) and `proRata`. Nil when the script did not answer.
+    nonisolated static func annualLeaveBalanceDetail(
+        annualLeaveEnabled: Bool?,
+        daysPerYear: Double?,
+        startMonth: Int?,
+        endMonth: Int?,
+        orgDaysPerYear: Double?,
+        orgStartMonth: Int?,
+        orgEndMonth: Int?,
+        carriesOver: Bool?,
+        yearAllowance: Double?,
+        yearAllowanceKey: String?,
+        bookings: [CanonicalLeaveBooking],
+        onDayKey: String,
+        nonWorkingDayKeys: [String],
+        employmentStartDayKey: String?,
+        maxCarryOverDays: Double?,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> (balance: CanonicalAnnualLeaveBalance, yearEntitlement: Double, proRata: Bool)? {
         var input: [String: Any] = [
             "onDayKey": onDayKey,
             "timeZone": timeZone,
@@ -194,12 +226,33 @@ extension CanonicalBusinessEngine {
         if let carriesOver { input["carriesOver"] = carriesOver }
         if let yearAllowance, yearAllowance.isFinite { input["yearAllowance"] = yearAllowance }
         if let yearAllowanceKey { input["yearAllowanceKey"] = yearAllowanceKey }
-        guard let result = callJSON("annualLeaveBalance", arguments: [input]),
+        if let employmentStartDayKey, !employmentStartDayKey.isEmpty { input["employmentStartDayKey"] = employmentStartDayKey }
+        if let maxCarryOverDays, maxCarryOverDays.isFinite { input["maxCarryOverDays"] = maxCarryOverDays }
+        guard let result = callJSON("annualLeaveBalance", arguments: [input]) as? [String: Any],
               JSONSerialization.isValidJSONObject(result),
-              let data = try? JSONSerialization.data(withJSONObject: result) else {
+              let data = try? JSONSerialization.data(withJSONObject: result),
+              let balance = try? JSONDecoder().decode(CanonicalAnnualLeaveBalance.self, from: data) else {
             return nil
         }
-        return try? JSONDecoder().decode(CanonicalAnnualLeaveBalance.self, from: data)
+        let entitlement = (result["yearEntitlement"] as? NSNumber)?.doubleValue ?? balance.daysPerYear
+        return (balance, entitlement, result["proRata"] as? Bool ?? false)
+    }
+
+    /// `parseMaxCarryOverDays(value)`: a whole or half number of days 0–365, or nil (no cap) for blank, negative or
+    /// unreadable input.
+    nonisolated static func parseMaxCarryOverDays(_ value: Any?) -> Double? {
+        let argument: Any
+        switch value {
+        case let text as String: argument = text
+        case let number as NSNumber: argument = number
+        default: argument = NSNull()
+        }
+        return (callJSON("parseMaxCarryOverDays", arguments: [argument]) as? NSNumber)?.doubleValue
+    }
+
+    /// `SUGGESTED_MAX_CARRY_OVER_DAYS`: shown as the field's suggestion, never saved.
+    nonisolated static var suggestedMaxCarryOverDays: Double {
+        constant("SUGGESTED_MAX_CARRY_OVER_DAYS", as: Double.self) ?? 5
     }
 
     /// `leaveApproverIds(user, roster)`: the requester's active line managers, else every active admin

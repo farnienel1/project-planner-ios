@@ -357,3 +357,25 @@ extension CanonicalBusinessEngine {
         callJSON("scheduleOptionsWriteFields", arguments: [scheduleOptionsJSON(options)]) as? [String: Any]
     }
 }
+
+// MARK: - Launch countries (RULEBOOK 1.13.0 §4.1, owner decision Q6)
+
+/// One `launchCountryOptions` row.
+nonisolated struct RulebookCountryOption: Hashable, Sendable {
+    var code: String
+    var title: String
+}
+
+extension CanonicalBusinessEngine {
+    /// `launchCountryOptions(storedCountryCode)`: `LAUNCH_COUNTRY_CODES` (GB, IE), plus a stored other country so it
+    /// is kept and shown. Nil when the script did not answer.
+    nonisolated static func launchCountryOptions(storedCountryCode: String?) -> [RulebookCountryOption]? {
+        guard let rows = callJSON("launchCountryOptions", arguments: [storedCountryCode ?? NSNull()]) as? [[String: Any]] else {
+            return nil
+        }
+        return rows.compactMap { row in
+            guard let code = row["code"] as? String else { return nil }
+            return RulebookCountryOption(code: code, title: row["title"] as? String ?? code)
+        }
+    }
+}

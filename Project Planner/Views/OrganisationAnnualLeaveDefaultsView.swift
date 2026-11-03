@@ -14,6 +14,9 @@ struct OrganisationAnnualLeaveDefaultsView: View {
     @State private var startMonth: Int = AnnualLeavePolicy.defaultStartMonth
     @State private var endMonth: Int = AnnualLeavePolicy.defaultEndMonth
     @State private var carriesOver: Bool = AnnualLeavePolicy.defaultCarriesOver
+    /// RULEBOOK 1.13.0 §4.4 `annualLeaveDefaults.maxCarryOverDays` as typed; blank = no cap (`parseMaxCarryOverDays`).
+    @State private var maxCarryText: String = ""
+    @State private var baselineMaxCarryText = ""
     @State private var bankHolidayRegionId: String = ""
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -29,6 +32,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             || startMonth != baselineStartMonth
             || endMonth != baselineEndMonth
             || carriesOver != baselineCarriesOver
+            || maxCarryText != baselineMaxCarryText
             || bankHolidayRegionId != baselineRegionId
     }
 
@@ -138,6 +142,23 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                     .accessibilityIdentifier("organisationAnnualLeaveDefaults.carryUnusedDays")
                     .disabled(isSaving)
                     .padding(.bottom, 12)
+                    if carriesOver {
+                        // RULEBOOK 1.13.0 §4.4: the suggested cap is shown, never saved.
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Most days carried over")
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(Color.secondary)
+                            TextField(suggestedMaxCarryText, text: $maxCarryText)
+                                .keyboardType(.decimalPad)
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(isSaving)
+                                .accessibilityIdentifier("organisationAnnualLeaveDefaults.maxCarryOverDays")
+                            Text("Leave blank for no limit. \(suggestedMaxCarryText) is a common limit.")
+                                .font(.footnote)
+                                .foregroundStyle(Color.secondary)
+                        }
+                        .padding(.bottom, 12)
+                    }
                 }
 
                 SettingsHubChrome.sectionTitle("Bank holiday region", sentenceCase: true)
@@ -215,6 +236,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             startMonth = defaults.startMonth
             endMonth = defaults.endMonth
             carriesOver = defaults.carriesOver
+            maxCarryText = defaults.maxCarryOverDays.map(Self.daysText) ?? ""
             // The saved region (already `parseCompanyDetails`), aliases resolved; else the country's default.
             let storedRegion = firebaseBackend.currentOrganization?.settings.bankHolidayRegionId
             bankHolidayRegionId = CanonicalBusinessEngine.normalizeBankHolidayRegionId(storedRegion)
@@ -228,11 +250,18 @@ struct OrganisationAnnualLeaveDefaultsView: View {
         }
     }
 
+    private var suggestedMaxCarryText: String { Self.daysText(CanonicalBusinessEngine.suggestedMaxCarryOverDays) }
+
+    private static func daysText(_ value: Double) -> String {
+        value.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(value)) : String(format: "%.1f", value)
+    }
+
     private func captureBaseline() {
         baselineDaysText = daysText
         baselineStartMonth = startMonth
         baselineEndMonth = endMonth
         baselineCarriesOver = carriesOver
+        baselineMaxCarryText = maxCarryText
         baselineRegionId = bankHolidayRegionId
     }
 
@@ -241,6 +270,7 @@ struct OrganisationAnnualLeaveDefaultsView: View {
         startMonth = baselineStartMonth
         endMonth = baselineEndMonth
         carriesOver = baselineCarriesOver
+        maxCarryText = baselineMaxCarryText
         bankHolidayRegionId = baselineRegionId
     }
 
@@ -306,7 +336,11 @@ struct OrganisationAnnualLeaveDefaultsView: View {
             daysPerYear: parsedDays,
             startMonth: startMonth,
             endMonth: endMonth,
-            carriesOver: carriesOver
+            carriesOver: carriesOver,
+            // Web: the cap applies only with carry-over on; blank = no cap. The whole map is written.
+            maxCarryOverDays: carriesOver
+                ? CanonicalBusinessEngine.parseMaxCarryOverDays(maxCarryText.replacingOccurrences(of: ",", with: "."))
+                : nil
         )
         do {
             try await firebaseBackend.updateOrganizationAnnualLeaveSettings(

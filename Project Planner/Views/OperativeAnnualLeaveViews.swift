@@ -922,7 +922,8 @@ struct OperativeAnnualLeaveCalendarView: View {
             orgStartMonth: defaults.startMonth,
             orgEndMonth: defaults.endMonth,
             yearAllowance: user?.annualLeaveYearAllowance,
-            yearAllowanceKey: user?.annualLeaveYearAllowanceKey
+            yearAllowanceKey: user?.annualLeaveYearAllowanceKey,
+            employmentStartDayKey: user?.employmentStartDate
         )
     }
 
