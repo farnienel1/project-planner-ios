@@ -178,8 +178,13 @@ struct ScheduleConflictRow: Identifiable, Hashable {
     var conflictDetail: String? = nil
 
     static func rowId(operativeId: UUID, date: Date, kind: ScheduleConflictKind, suffix: String = "") -> String {
-        let day = Calendar.current.startOfDay(for: date).timeIntervalSince1970
+        let day = OrganizationRulebookContext.calendar.startOfDay(for: date).timeIntervalSince1970
         return "\(operativeId.uuidString)|\(Int(day))|\(kind)|\(suffix)"
+    }
+
+    /// The day at the front of a row title ("7 Nov 2026"), in the organisation zone (RULEBOOK §1), never the device's.
+    static func dayTitle(_ day: Date) -> String {
+        day.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone))
     }
 }
 
@@ -241,16 +246,18 @@ enum ScheduleBookingConflictEngine {
         )
         var dateByKey: [String: Date] = [:]
         for date in sortedDates { dateByKey[OrganizationRulebookContext.dayKey(date)] = date }
+        // Days and their labels are organisation-zone days (RULEBOOK §1), never the device calendar.
+        let calendar = OrganizationRulebookContext.calendar
         return conflicts.compactMap { conflict in
             guard let date = dateByKey[conflict.dayKey] else { return nil }
-            let day = Calendar.current.startOfDay(for: date)
+            let day = calendar.startOfDay(for: date)
             let kind: ScheduleConflictKind = conflict.isPending ? .pendingAnnualLeave : .approvedAnnualLeave
             return ScheduleConflictRow(
                 id: ScheduleConflictRow.rowId(operativeId: person.operativeId, date: day, kind: kind, suffix: conflict.leaveId),
                 operativeId: person.operativeId,
                 date: day,
                 kind: kind,
-                title: "\(day.formatted(date: .abbreviated, time: .omitted)) — \(conflict.detail)",
+                title: "\(ScheduleConflictRow.dayTitle(day)) — \(conflict.detail)",
                 detail: "Tick to book anyway, or ✕ to drop this day.",
                 requiresAcknowledgement: true,
                 conflictDetail: conflict.detail
@@ -337,6 +344,7 @@ enum ScheduleBookingConflictEngine {
         guard !selectedDates.isEmpty else { return [] }
         let sortedDates = selectedDates.sorted()
         var rows: [ScheduleConflictRow] = []
+        let calendar = OrganizationRulebookContext.calendar
 
         let probeBooker = "Schedule"
         let leaveRows = leaveConflictRows(
@@ -347,7 +355,7 @@ enum ScheduleBookingConflictEngine {
             policy: policy
         )
         for date in sortedDates {
-            let day = Calendar.current.startOfDay(for: date)
+            let day = calendar.startOfDay(for: date)
             let probe = choice.bookingProbe(
                 operativeId: person.operativeId,
                 projectId: projectId,
@@ -355,11 +363,11 @@ enum ScheduleBookingConflictEngine {
                 bookedBy: probeBooker
             )
 
-            rows.append(contentsOf: leaveRows.filter { Calendar.current.isDate($0.date, inSameDayAs: day) })
+            rows.append(contentsOf: leaveRows.filter { calendar.isDate($0.date, inSameDayAs: day) })
 
             let existingProjectBookings = bookingStore.bookings.filter { booking in
                 person.owns(booking) &&
-                    Calendar.current.isDate(booking.date, inSameDayAs: day) &&
+                    calendar.isDate(booking.date, inSameDayAs: day) &&
                     booking.occupiesDay &&
                     !excludingBookingIds.contains(booking.id)
             }
@@ -382,7 +390,7 @@ enum ScheduleBookingConflictEngine {
                         operativeId: person.operativeId,
                         date: day,
                         kind: kind,
-                        title: "\(day.formatted(date: .abbreviated, time: .omitted)) — \(timeLabel)",
+                        title: "\(ScheduleConflictRow.dayTitle(day)) — \(timeLabel)",
                         detail: jobLabel,
                         requiresAcknowledgement: true,
                         conflictDetail: "Already booked · \(timeLabel) · \(jobLabel)"
@@ -393,7 +401,7 @@ enum ScheduleBookingConflictEngine {
             if let uid = person.userId {
                 let managerBookings = managerScheduleStore.managerSiteBookings.filter { booking in
                     booking.userId == uid &&
-                        Calendar.current.isDate(booking.date, inSameDayAs: day)
+                        calendar.isDate(booking.date, inSameDayAs: day)
                 }
                 for msb in managerBookings {
                     guard managerProbeOverlapsOperativeProbe(msb: msb, probe: probe, policy: policy) else { continue }
@@ -407,7 +415,7 @@ enum ScheduleBookingConflictEngine {
                             operativeId: person.operativeId,
                             date: day,
                             kind: .myScheduleItem,
-                            title: "\(day.formatted(date: .abbreviated, time: .omitted)) — \(timeLabel)",
+                            title: "\(ScheduleConflictRow.dayTitle(day)) — \(timeLabel)",
                             detail: location,
                             requiresAcknowledgement: true,
                             conflictDetail: "Already booked · \(timeLabel) · \(location)"
@@ -450,12 +458,13 @@ enum ScheduleBookingConflictEngine {
         )
         // RULEBOOK 1.16.0: approved leave is no longer dropped without asking; it is a row to tick or drop like the rest.
         let approvedDates: Set<Date> = []
+        let calendar = OrganizationRulebookContext.calendar
         let autoExcluded = manuallyExcludedDays
         let struckDates = Set(
-            rows.filter { struckRowIds.contains($0.id) }.map { Calendar.current.startOfDay(for: $0.date) }
+            rows.filter { struckRowIds.contains($0.id) }.map { calendar.startOfDay(for: $0.date) }
         )
         let effective = selectedDates
-            .map { Calendar.current.startOfDay(for: $0) }
+            .map { calendar.startOfDay(for: $0) }
             .filter { !autoExcluded.contains($0) && !struckDates.contains($0) }
             .sorted()
 

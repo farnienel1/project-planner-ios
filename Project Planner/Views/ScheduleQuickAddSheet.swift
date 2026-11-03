@@ -213,19 +213,40 @@ struct ScheduleQuickAddSheet: View {
         )
         let total = existingPaidHours + paid
         let missing = max(0, max(policy.standardPaidHours, 0) - total)
+        // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a Saturday or Sunday shows the day as the pay rule prices it in
+        // place of the standard / overtime lines (memoised by input in the wrapper). Saved with the break kept.
+        let weekendLines = CanonicalBusinessEngine.collapsedBreakdownLines(
+            CanonicalBusinessEngine.weekendBookingBreakdown(
+                on: [day],
+                start: range.start,
+                end: range.end,
+                isBreakRemoved: false,
+                fallbackPolicy: policy
+            )
+        )
         return VStack(alignment: .leading, spacing: 6) {
             sectionLabel("Hours breakdown")
             VStack(alignment: .leading, spacing: 4) {
-                breakdownLine("Standard rate", value: "\(ScheduleCoverageFormat.hours(detail.standardRateHours))h · 1×", color: ProjectWorksRevampColors.blue)
-                if detail.overtimeHours > 0.05 {
-                    breakdownLine(
-                        "Overtime",
-                        value: "\(ScheduleCoverageFormat.overtimeEquation(rawHours: detail.overtimeHours, multiplier: detail.overtimeMultiplier))h",
-                        color: ProjectWorksRevampColors.upcomingAmber
-                    )
-                }
-                if detail.showsBreakLine {
-                    breakdownLine("Break", value: "−\(ScheduleCoverageFormat.hours(detail.breakDeductionHours))h", color: ProjectWorksRevampColors.requiredPillFg)
+                if weekendLines.isEmpty {
+                    breakdownLine("Standard rate", value: "\(ScheduleCoverageFormat.hours(detail.standardRateHours))h · 1×", color: ProjectWorksRevampColors.blue)
+                    if detail.overtimeHours > 0.05 {
+                        breakdownLine(
+                            "Overtime",
+                            value: "\(ScheduleCoverageFormat.overtimeEquation(rawHours: detail.overtimeHours, multiplier: detail.overtimeMultiplier))h",
+                            color: ProjectWorksRevampColors.upcomingAmber
+                        )
+                    }
+                    if detail.showsBreakLine {
+                        breakdownLine("Break", value: "−\(ScheduleCoverageFormat.hours(detail.breakDeductionHours))h", color: ProjectWorksRevampColors.requiredPillFg)
+                    }
+                } else {
+                    ForEach(weekendLines, id: \.self) { line in
+                        Text(line)
+                            .font(.system(size: 12, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .accessibilityIdentifier("booking.weekendBreakdownRow")
+                    }
                 }
                 breakdownLine("Existing booked", value: "\(ScheduleCoverageFormat.hours(existingPaidHours))h", color: ProjectWorksRevampColors.muted)
                 breakdownLine("New booking", value: "\(ScheduleCoverageFormat.hours(paid))h", color: ProjectWorksRevampColors.activeGreen)

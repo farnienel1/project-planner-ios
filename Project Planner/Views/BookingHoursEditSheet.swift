@@ -516,6 +516,9 @@ struct OperativeCustomHoursSheet: View {
     @State private var confirmDelete = false
     /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): shown before saving hours that cover the unpaid break.
     @State private var breakWarningMessage: String?
+    /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for `noteDays` at the times on screen; empty on weekdays. Worked
+    /// out when the times change, never per redraw.
+    @State private var weekendBreakdownLines: [String] = []
 
     init(
         policy: OrgPayrollTimePolicy,
@@ -571,8 +574,15 @@ struct OperativeCustomHoursSheet: View {
             policy: policy,
             dayKey: CanonicalBusinessEngine.bookingDayKey(referenceDay)
         )
-        let defaultStart = weekendPrefill?.start ?? timeline.standardWindowStart ?? policy.standardDayStart
-        let defaultEnd = weekendPrefill?.end ?? timeline.standardWindowEnd ?? policy.standardDayEnd
+        // RULEBOOK 1.18.0 §4.3 `customHoursPrefillForDays`: one pair of times for every day this sheet books — the first
+        // selected Saturday's window (Sunday's when Saturday is all hours at N×) for a weekend selection, the standard
+        // day in effect on the first day for weekdays. A refused weekday + weekend mix keeps the day's own default.
+        let selectionPrefill = CanonicalBusinessEngine.customHoursPrefill(
+            on: (noteDays?.isEmpty == false ? noteDays : nil) ?? [referenceDay],
+            fallbackPolicy: policy
+        ).flatMap { $0.kind == .mixed ? nil : $0 }
+        let defaultStart = selectionPrefill?.start ?? weekendPrefill?.start ?? timeline.standardWindowStart ?? policy.standardDayStart
+        let defaultEnd = selectionPrefill?.end ?? weekendPrefill?.end ?? timeline.standardWindowEnd ?? policy.standardDayEnd
 
         if let ic {
             let s = ic.workStartTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -740,6 +750,9 @@ struct OperativeCustomHoursSheet: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: timeValidationBanner)
+        .onChange(of: weekendBreakdownInput, initial: true) { _, _ in
+            refreshWeekendBreakdown()
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
@@ -1025,7 +1038,40 @@ struct OperativeCustomHoursSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
+    /// What the weekend rows depend on; they are recomputed only when it changes.
+    private var weekendBreakdownInput: String {
+        "\(startText)|\(endText)|\(breakIncluded)|\(otMultText)"
+    }
+
+    /// RULEBOOK 1.18.0 §4.3 `weekendBookingBreakdown`: per-day rows for a selection with a Saturday or Sunday. Not used
+    /// when an overtime multiplier override is typed (the rule prices the organisation's multiplier) or the times are
+    /// not a valid same-day window; the standard breakdown shows then.
+    private func refreshWeekendBreakdown() {
+        guard endMinutes > startMinutes, resolvedOtMultiplierOverride == nil else {
+            weekendBreakdownLines = []
+            return
+        }
+        weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownLines(
+            CanonicalBusinessEngine.weekendBookingBreakdown(
+                on: noteDays,
+                start: startText,
+                end: endText,
+                isBreakRemoved: !breakIncluded,
+                fallbackPolicy: policy
+            )
+        )
+    }
+
+    @ViewBuilder
     private var breakdownCard: some View {
+        if weekendBreakdownLines.isEmpty {
+            standardBreakdownCard
+        } else {
+            WeekendBookingBreakdownView(lines: weekendBreakdownLines, title: "Breakdown")
+        }
+    }
+
+    private var standardBreakdownCard: some View {
         let bd = breakdown
 
         return VStack(alignment: .leading, spacing: 10) {
