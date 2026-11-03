@@ -1525,8 +1525,9 @@ struct ProjectDetailView: View {
         return String(format: "x%.1f", mult)
     }
 
-    private func schedulingHoursPill(hours: Double, hasOvertime: Bool) -> some View {
-        let text = "\(formatSchedulingOTHours(hours))h"
+    /// RULEBOOK 1.20.2 §10: the row's hours are `bookingHoursLabel` (the pay rule's hours for that day with the
+    /// multiplier sum, e.g. "13h (6.5h × 2)"), never the clock duration.
+    private func schedulingHoursPill(label text: String, hasOvertime: Bool) -> some View {
         let bg = hasOvertime ? ProjectWorksRevampColors.amberTint : ProjectWorksRevampColors.greenTint
         let fg = hasOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen
         return Text(text)
@@ -1798,7 +1799,6 @@ struct ProjectDetailView: View {
         )
         let initials = PlannerUIInitials.from(name)
         let p = firebaseBackend.payrollPolicy(for: booking.date)
-        let hrs = booking.paidBookedHours(policy: p)
         let ot = booking.overtimeHoursBeyondPaidStandard(policy: p)
         return Button(action: onTap) {
             HStack(spacing: 8) {
@@ -1815,7 +1815,7 @@ struct ProjectDetailView: View {
                 Text(booking.scheduleLabel(policy: p))
                     .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
-                schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
+                schedulingHoursPill(label: booking.payrollHoursResult(policy: p).paidHoursLabel, hasOvertime: ot > 0.05)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(ProjectWorksRevampColors.muted.opacity(0.7))
@@ -1833,7 +1833,6 @@ struct ProjectDetailView: View {
         let managerName = userStore.organizationUsers.first(where: { $0.id == booking.userId })?.fullName ?? "Manager"
         let initials = PlannerUIInitials.from(managerName)
         let p = firebaseBackend.payrollPolicy(for: booking.date)
-        let hrs = booking.paidBookedHours(policy: p)
         let ot = booking.overtimeHoursBeyondPaidStandard(policy: p)
         return Button {
             bookingEditTarget = .manager(
@@ -1856,7 +1855,7 @@ struct ProjectDetailView: View {
                 Text(booking.scheduleLabel(policy: p))
                     .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
-                schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
+                schedulingHoursPill(label: booking.payrollHoursResult(policy: p).paidHoursLabel, hasOvertime: ot > 0.05)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(ProjectWorksRevampColors.muted.opacity(0.7))
@@ -1875,7 +1874,6 @@ struct ProjectDetailView: View {
         let name = sub?.name ?? "Subcontractor"
         let operativeNames = booking.bookedOperativeNames(subcontractor: sub)
         let initials = PlannerUIInitials.from(name)
-        let hrs = subcontractorApproximateHours(booking)
         let ot = booking.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: firebaseBackend.payrollPolicy(for: booking.date))
         return Button {
             subcontractorEditBooking = booking
@@ -1900,7 +1898,7 @@ struct ProjectDetailView: View {
                 Text(subcontractorScheduleLabel(booking))
                     .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
-                schedulingHoursPill(hours: hrs, hasOvertime: ot > 0.05)
+                schedulingHoursPill(label: booking.payrollMirrorBooking().payrollHoursResult(policy: firebaseBackend.payrollPolicy(for: booking.date)).paidHoursLabel, hasOvertime: ot > 0.05)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(ProjectWorksRevampColors.muted.opacity(0.7))

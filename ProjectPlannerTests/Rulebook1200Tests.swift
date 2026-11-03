@@ -37,14 +37,15 @@ final class Rulebook1200Tests: XCTestCase {
         )))
     }
 
-    func testThePackedScriptIsRulebook1201OrLater() throws {
+    func testThePackedScriptIsRulebook1202OrLater() throws {
         let stamp = try XCTUnwrap(CanonicalBusinessEngine.rulebookStamp())
         let parts = stamp.version.split(separator: ".").compactMap { Int($0) }
-        XCTAssertFalse(parts.lexicographicallyPrecedes([1, 20, 1]), "rulebook \(stamp.version) predates 1.20.1")
+        XCTAssertFalse(parts.lexicographicallyPrecedes([1, 20, 2]), "rulebook \(stamp.version) predates 1.20.2")
         let names = Set(CanonicalBusinessEngine.exportNames())
         for name in [
             "derivedWeekdayPaidHours", "weekdayPaidHours", "withDerivedWeekdayPaidHours", "weekdayPaidDayPreview",
             "leaveHalfDayWindows", "leaveHalfDayLabel", "leaveComparableInterval", "allowedTimeSlotsOnDay",
+            "bookingHoursLabel", "bookingRequestIdentity", "isSameBookingRequest", "payrollPolicyTimeOnStep",
         ] {
             XCTAssertTrue(names.contains(name), name)
         }
@@ -111,14 +112,17 @@ final class Rulebook1200Tests: XCTestCase {
     }
 
     func testValidationChecksTheDerivedDay() {
-        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(ownerPolicy(derived: false)))
+        // The owner's break ends at 10:45 (off the 1.20.2 30-minute step): saved like that, it passes until changed.
+        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(
+            ownerPolicy(derived: false), previous: ownerPolicy(derived: false)
+        ))
         var tooShort = ownerPolicy(derived: false)
         tooShort.standardDayStart = "10:00"
         tooShort.standardDayEnd = "10:50"
         tooShort.breakWindowStart = "10:00"
         tooShort.breakWindowEnd = "10:45"
         XCTAssertEqual(
-            CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(tooShort),
+            CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(tooShort, previous: tooShort),
             "The working day must give between 1 and 12 paid hours (finish − start − unpaid break)."
         )
     }
@@ -230,5 +234,64 @@ final class Rulebook1200Tests: XCTestCase {
         XCTAssertEqual(ScheduleCoverageFormat.hours(7.25), "7.25")
         XCTAssertEqual(ScheduleCoverageFormat.hours(8), "8")
         XCTAssertEqual(ScheduleCoverageFormat.hours(3.5), "3.5")
+    }
+
+    // MARK: 1.20.2
+
+    func testWorkingHoursTimesAreOnThirtyMinuteSteps() {
+        XCTAssertEqual(CanonicalBusinessEngine.payrollPolicyTimeStepMinutes, 30)
+        XCTAssertEqual(CanonicalBusinessEngine.payrollPolicyTimeStepMessage, "Working hours use 30-minute steps (e.g. 07:30).")
+        XCTAssertTrue(CanonicalBusinessEngine.payrollPolicyTimeOnStep("07:30"))
+        XCTAssertFalse(CanonicalBusinessEngine.payrollPolicyTimeOnStep("10:45"))
+        let saved = ownerPolicy(derived: false)
+        XCTAssertEqual(
+            CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(saved),
+            "Working hours use 30-minute steps (e.g. 07:30).",
+            "with no saved policy the off-step 10:45 is refused"
+        )
+        var changed = saved
+        changed.breakWindowStart = "10:15"
+        changed.breakWindowEnd = "11:00"
+        XCTAssertEqual(
+            CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(changed, previous: saved),
+            "Working hours use 30-minute steps (e.g. 07:30).",
+            "an off-step time is refused once it is changed"
+        )
+        var onStep = saved
+        onStep.breakWindowEnd = "10:30"
+        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(onStep, previous: saved))
+        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(.default), "break length stays any minutes")
+    }
+
+    func testBookingHoursLabelIsThePayRulesHoursWithTheMultiplierSum() {
+        func label(_ total: Double, _ standard: Double, _ outside: Double, _ multiplier: Double) -> String {
+            CanonicalBusinessEngine.bookingHoursLabel(RulebookBookingHoursInput(
+                totalPaidHours: total, standardHours: standard, outsideHours: outside, outsideMultiplier: multiplier
+            ))
+        }
+        XCTAssertEqual(label(8, 8, 0, 2), "8h")
+        XCTAssertEqual(label(13, 0, 6.5, 2), "13h (6.5h × 2)")
+        XCTAssertEqual(label(11, 8, 2, 1.5), "11h (8h + 2h × 1.5)")
+        XCTAssertEqual(label(7.25, 7.25, 0, 1.5), "7.25h")
+    }
+
+    func testABookingIsAlreadyBookedOnlyWithTheSameTimes() {
+        let morning = RulebookBookingRequest(
+            personId: "U1", dayKey: saturday, timeSlot: "CUSTOM_HOURS", locationType: "project", locationId: "J1",
+            workStartTime: "07:30", workEndTime: "11:00"
+        )
+        XCTAssertEqual(CanonicalBusinessEngine.bookingRequestIdentity(morning), "u1|2026-11-07|CUSTOM|project|j1||450|660|")
+        var afternoon = morning
+        afternoon.workStartTime = "12:00"
+        afternoon.workEndTime = "14:00"
+        XCTAssertFalse(
+            CanonicalBusinessEngine.isSameBookingRequest(morning, afternoon),
+            "a second weekend booking at the same place with other times is a new booking, never skipped"
+        )
+        var sameAgain = morning
+        sameAgain.personId = "u1"
+        sameAgain.locationId = "j1"
+        sameAgain.workStartTime = "7:30"
+        XCTAssertTrue(CanonicalBusinessEngine.isSameBookingRequest(morning, sameAgain), "ids without case, clock as minutes")
     }
 }

@@ -1236,16 +1236,25 @@ struct ManagerScheduleContentView: View {
         customLocationName: String?,
         ignoringBookingId: UUID? = nil
     ) -> Bool {
-        mySiteBookings(on: day)
+        // RULEBOOK 1.20.2 §2 `isSameBookingRequest`: same slot, place and — for custom hours — the same start, finish
+        // and break. `mySiteBookings` are already this person's, so the person is the same on both sides.
+        let request = RulebookBookingRequest(
+            personId: "me",
+            dayKey: OrganizationRulebookContext.dayKey(day),
+            timeSlot: timeSlot.rawValue,
+            locationType: locationType.rawValue,
+            locationId: locationId?.uuidString,
+            customLocationName: customLocationName,
+            workStartTime: workStart,
+            workEndTime: workEnd,
+            isBreakRemoved: breakRemoved
+        )
+        return mySiteBookings(on: day)
             .filter { $0.id != ignoringBookingId }
             .contains { existing in
-                existing.timeSlot == timeSlot &&
-                    existing.locationType == locationType &&
-                    existing.locationId == locationId &&
-                    (existing.customLocationName ?? "") == (customLocationName ?? "") &&
-                    existing.workStartTime == workStart &&
-                    existing.workEndTime == workEnd &&
-                    existing.isBreakRemoved == breakRemoved
+                var stored = existing.bookingRequest
+                stored.personId = "me"
+                return CanonicalBusinessEngine.isSameBookingRequest(stored, request)
             }
     }
 
@@ -2582,8 +2591,22 @@ struct ManagerBookingSheet: View {
         return "\(p.jobNumber) \(p.siteName)"
     }
 
+    /// RULEBOOK 1.20.2 §2 `isSameBookingRequest`: this sheet's request carries no clock times, so a custom-hours
+    /// booking with times never counts as "already booked" here.
     private var alreadyBooked: Bool {
-        existingBookings.contains { $0.timeSlot == timeSlot && $0.locationType == locationType && $0.locationId == locationId }
+        let request = RulebookBookingRequest(
+            personId: "me",
+            dayKey: OrganizationRulebookContext.dayKey(date),
+            timeSlot: timeSlot.rawValue,
+            locationType: locationType.rawValue,
+            locationId: locationId?.uuidString
+        )
+        return existingBookings.contains { existing in
+            var stored = existing.bookingRequest
+            stored.personId = "me"
+            stored.customLocationName = nil
+            return CanonicalBusinessEngine.isSameBookingRequest(stored, request)
+        }
     }
 
     var body: some View {

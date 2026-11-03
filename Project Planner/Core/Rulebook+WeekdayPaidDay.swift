@@ -64,9 +64,32 @@ extension CanonicalBusinessEngine {
 
     /// RULEBOOK 1.20.0 §4.3: the save check of a Working hours draft — `validatePayrollTimePolicy(withDerivedWeekdayPaidHours(draft))`
     /// ("The working day must give between 1 and 12 paid hours (finish − start − unpaid break)."). Nil when it can be saved.
-    nonisolated static func validateDerivedPayrollTimePolicy(_ policy: OrgPayrollTimePolicy) -> String? {
+    /// 1.20.2: `previous` is the saved policy (`validatePayrollTimePolicy(policy, previous)`), so a time stored off
+    /// the 30-minute step is refused only once it is changed.
+    nonisolated static func validateDerivedPayrollTimePolicy(_ policy: OrgPayrollTimePolicy, previous: OrgPayrollTimePolicy? = nil) -> String? {
         guard let derived = withDerivedWeekdayPaidHours(policy) else { return "Could not check these working hours." }
-        return validatePayrollTimePolicy(derived)
+        return validatePayrollTimePolicy(derived, previous: previous)
+    }
+
+    // MARK: - Working-hours time step (1.20.2 §4.3)
+
+    /// `PAYROLL_POLICY_TIME_STEP_MINUTES` (30): every working-hours clock time is on this step. Break length is not.
+    nonisolated static var payrollPolicyTimeStepMinutes: Int {
+        constant("PAYROLL_POLICY_TIME_STEP_MINUTES", as: Int.self) ?? 30
+    }
+
+    /// `PAYROLL_POLICY_TIME_STEP_MESSAGE`.
+    nonisolated static var payrollPolicyTimeStepMessage: String {
+        constant("PAYROLL_POLICY_TIME_STEP_MESSAGE", as: String.self) ?? "Working hours use 30-minute steps (e.g. 07:30)."
+    }
+
+    nonisolated private static let timeOnStepMemo = RulebookAnswerMemo<String, Bool>(limit: 256)
+
+    /// `payrollPolicyTimeOnStep(value)`: whether a working-hours clock time is on the 30-minute step.
+    nonisolated static func payrollPolicyTimeOnStep(_ value: String) -> Bool {
+        timeOnStepMemo.value(for: value) {
+            callJSON("payrollPolicyTimeOnStep", arguments: [value]) as? Bool
+        } ?? true
     }
 
     /// RULEBOOK 1.20.0 §4.3 `weekdayPaidDayPreview(policy)`. Nil when the script did not answer.
@@ -146,5 +169,108 @@ extension CanonicalBusinessEngine {
               let start = (map["start"] as? NSNumber)?.intValue,
               let end = (map["end"] as? NSNumber)?.intValue else { return nil }
         return CanonicalMinuteInterval(start: start, end: end)
+    }
+}
+
+// MARK: - Booking rows and booking requests (RULEBOOK 1.20.2 §2, §6, §10)
+
+/// `BookingRequestIdentityInput`: one booking (stored or requested) as `bookingRequestIdentity` reads it.
+nonisolated struct RulebookBookingRequest: Hashable, Sendable {
+    var personId: String
+    var dayKey: String
+    var timeSlot: String
+    /// Manager bookings: `project`, `small_work`, `office`, …; operative bookings leave it nil.
+    var locationType: String? = nil
+    /// The job id (operative `projectId`, manager `locationId`).
+    var locationId: String? = nil
+    var customLocationName: String? = nil
+    var workStartTime: String? = nil
+    var workEndTime: String? = nil
+    var isBreakRemoved: Bool = false
+
+    fileprivate var scriptArgument: [String: Any] {
+        var out: [String: Any] = [
+            "personId": personId, "dayKey": dayKey, "timeSlot": timeSlot, "isBreakRemoved": isBreakRemoved,
+        ]
+        if let locationType { out["locationType"] = locationType }
+        if let locationId { out["locationId"] = locationId }
+        if let customLocationName { out["customLocationName"] = customLocationName }
+        if let workStartTime { out["workStartTime"] = workStartTime }
+        if let workEndTime { out["workEndTime"] = workEndTime }
+        return out
+    }
+}
+
+/// The four `payrollHoursResult` figures `bookingHoursLabel` reads.
+nonisolated struct RulebookBookingHoursInput: Hashable, Sendable {
+    var totalPaidHours: Double
+    var standardHours: Double
+    var outsideHours: Double
+    var outsideMultiplier: Double
+}
+
+extension CanonicalBusinessEngine {
+    nonisolated private static let requestIdentityMemo = RulebookAnswerMemo<RulebookBookingRequest, String>(limit: 2048)
+    nonisolated private static let hoursLabelMemo = RulebookAnswerMemo<RulebookBookingHoursInput, String>(limit: 2048)
+
+    /// RULEBOOK 1.20.2 §2 `bookingRequestIdentity(input)`: same person, day, slot, place and — for custom hours — the
+    /// same start, finish and break. Nil when the script did not answer.
+    nonisolated static func bookingRequestIdentity(_ request: RulebookBookingRequest) -> String? {
+        requestIdentityMemo.value(for: request) {
+            callJSON("bookingRequestIdentity", arguments: [request.scriptArgument]) as? String
+        }
+    }
+
+    /// RULEBOOK 1.20.2 §2 `isSameBookingRequest(a, b)` (compared through the memoised identities). A new booking is
+    /// "already booked" only when this is true; a booking that only matches person|day|slot|place is never skipped.
+    /// False when the script did not answer, so a save is never dropped on a missing answer.
+    nonisolated static func isSameBookingRequest(_ a: RulebookBookingRequest, _ b: RulebookBookingRequest) -> Bool {
+        guard let left = bookingRequestIdentity(a), let right = bookingRequestIdentity(b) else { return false }
+        return left == right
+    }
+
+    /// RULEBOOK 1.20.2 §6/§10 `bookingHoursLabel(result)`: the pay rule's hours for a booking row, with the multiplier
+    /// sum — "8h", "13h (6.5h × 2)", "11h (8h + 2h × 1.5)". Memoised by the four figures.
+    nonisolated static func bookingHoursLabel(_ input: RulebookBookingHoursInput) -> String {
+        hoursLabelMemo.value(for: input) {
+            let argument: [String: Any] = [
+                "totalPaidHours": input.totalPaidHours, "standardHours": input.standardHours,
+                "outsideHours": input.outsideHours, "outsideMultiplier": input.outsideMultiplier,
+            ]
+            return (callJSON("bookingHoursLabel", arguments: [argument]) as? [String: Any])?["label"] as? String
+        } ?? "\(input.totalPaidHours)h"
+    }
+}
+
+extension ManagerSiteBooking {
+    /// This manager booking as a `bookingRequestIdentity` input (RULEBOOK 1.20.2 §2). A mapping only.
+    var bookingRequest: RulebookBookingRequest {
+        RulebookBookingRequest(
+            personId: userId,
+            dayKey: OrganizationRulebookContext.dayKey(date),
+            timeSlot: timeSlot.rawValue,
+            locationType: locationType.rawValue,
+            locationId: locationId?.uuidString,
+            customLocationName: customLocationName,
+            workStartTime: workStartTime,
+            workEndTime: workEndTime,
+            isBreakRemoved: isBreakRemoved
+        )
+    }
+}
+
+extension Booking {
+    /// This operative booking as a `bookingRequestIdentity` input (RULEBOOK 1.20.2 §2). `personId` is the stored
+    /// operative id the caller has already matched to the person (`samePersonIds`). A mapping only.
+    func bookingRequest(personId: String) -> RulebookBookingRequest {
+        RulebookBookingRequest(
+            personId: personId,
+            dayKey: OrganizationRulebookContext.dayKey(date),
+            timeSlot: timeSlot.rawValue,
+            locationId: projectId.uuidString,
+            workStartTime: workStartTime,
+            workEndTime: workEndTime,
+            isBreakRemoved: isBreakRemoved
+        )
     }
 }

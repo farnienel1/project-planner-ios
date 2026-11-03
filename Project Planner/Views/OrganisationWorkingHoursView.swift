@@ -82,7 +82,7 @@ struct OrganisationWorkingHoursView: View {
     /// RULEBOOK 1.20.0 §4.3: `validatePayrollTimePolicy(withDerivedWeekdayPaidHours(draft))` — the draft as it will be
     /// saved. Nil when the draft can be saved.
     private var validationMessage: String? {
-        CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(draft)
+        CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(draft, previous: baselineDraft)
     }
 
     /// RULEBOOK 1.20.0 §4.3 `weekdayPaidDayPreview(draft)` (memoised by the draft): the Monday–Friday paid day worked out
@@ -1190,7 +1190,7 @@ struct OrganisationWorkingHoursView: View {
         // priced under the policy in effect on it (history first), so today's bookings are not re-timed here (the
         // former `PayrollPolicyBookingRecalibrator` pass rewrote them, which web never does).
         do {
-            try await firebaseBackend.applyOrganizationPayrollTimePolicyImmediately(draft, baseStateJSON: baseStateJSON)
+            try await firebaseBackend.applyOrganizationPayrollTimePolicyImmediately(draft, baseStateJSON: baseStateJSON, previous: baselineDraft)
             await MainActor.run {
                 isSaving = false
                 baselineDraft = draft
@@ -1214,7 +1214,8 @@ struct OrganisationWorkingHoursView: View {
             try await firebaseBackend.scheduleOrganizationPayrollTimePolicyChange(
                 draft,
                 effectiveFrom: scheduleEffectiveDate,
-                baseStateJSON: baseStateJSON
+                baseStateJSON: baseStateJSON,
+                previous: baselineDraft
             )
             await MainActor.run {
                 isSaving = false
@@ -1537,66 +1538,58 @@ private struct WorkingHoursMultiplierField: View {
     }
 }
 
+/// RULEBOOK 1.20.2 §4.3: a working-hours clock time is picked on the 30-minute step (`PAYROLL_POLICY_TIME_STEP_MINUTES`,
+/// :00 / :30). A time saved off the step before 1.20.2 (`payrollPolicyTimeOnStep` false) is kept and listed as
+/// "07:45 (saved)" until it is changed; the save check (`validatePayrollTimePolicy(policy, previous)`) refuses an
+/// off-step time only once it is changed. Break LENGTH is not a clock time and keeps any minutes.
 private struct WorkingHoursTimeField: View {
     @Binding var text: String
-    @State private var draft: String = ""
-    @FocusState private var focused: Bool
+
+    private static var stepTimes: [String] {
+        let step = max(1, CanonicalBusinessEngine.payrollPolicyTimeStepMinutes)
+        return stride(from: 0, to: 24 * 60, by: step).map { String(format: "%02d:%02d", $0 / 60, $0 % 60) }
+    }
+
+    /// The picker only offers on-step times, so a current value off the step is the saved one.
+    private var offStepSaved: String? {
+        guard !text.isEmpty, !CanonicalBusinessEngine.payrollPolicyTimeOnStep(text) else { return nil }
+        return text
+    }
+
+    private var label: String {
+        guard !text.isEmpty else { return "—" }
+        return text == offStepSaved ? "\(text) (saved)" : text
+    }
 
     var body: some View {
-        HStack {
-            TextField("07:30", text: $draft)
-                .accessibilityIdentifier("workingHoursTimeField.n0730")
-                .keyboardType(.numbersAndPunctuation)
-                .multilineTextAlignment(.center)
-                .font(.body.weight(.bold))
-                .monospacedDigit()
-                .focused($focused)
-                .onSubmit { commit() }
-                .onChange(of: focused) { _, isFocused in
-                    if !isFocused { commit() }
-                }
-            Image(systemName: "clock")
-                .font(.subheadline)
-                .foregroundStyle(Color(.systemGray3))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(ProjectWorksRevampColors.canvas)
-        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(focused ? WorkingHoursPalette.indigo.opacity(0.35) : WorkingHoursPalette.cardBorder, lineWidth: 1)
-        )
-        .onAppear { draft = text }
-        .onChange(of: text) { _, newValue in
-            if !focused { draft = newValue }
-        }
-    }
-
-    private func commit() {
-        let clamped = clampTimeInput(draft, fallback: text)
-        draft = clamped
-        text = clamped
-    }
-
-    private func clampTimeInput(_ raw: String, fallback: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let r = trimmed.range(of: #"^\d{1,2}:\d{2}$"#, options: .regularExpression),
-           r.lowerBound == trimmed.startIndex && r.upperBound == trimmed.endIndex {
-            let parts = trimmed.split(separator: ":")
-            if parts.count == 2, let hRaw = Int(parts[0]), let mRaw = Int(parts[1]) {
-                return String(format: "%02d:%02d", Swift.min(23, Swift.max(0, hRaw)), Swift.min(59, Swift.max(0, mRaw)))
+        Menu {
+            if let offStepSaved {
+                Button("\(offStepSaved) (saved)") { text = offStepSaved }
             }
-        }
-        let digits = trimmed.filter(\.isNumber)
-        if digits.count == 3 || digits.count == 4 {
-            let hPart = String(digits.prefix(digits.count - 2))
-            let mPart = String(digits.suffix(2))
-            if let hRaw = Int(hPart), let mRaw = Int(mPart) {
-                return String(format: "%02d:%02d", Swift.min(23, Swift.max(0, hRaw)), Swift.min(59, Swift.max(0, mRaw)))
+            ForEach(Self.stepTimes, id: \.self) { time in
+                Button(time) { text = time }
             }
+        } label: {
+            HStack {
+                Text(label)
+                    .font(.body.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(WorkingHoursPalette.ink)
+                    .frame(maxWidth: .infinity)
+                Image(systemName: "clock")
+                    .font(.subheadline)
+                    .foregroundStyle(Color(.systemGray3))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(ProjectWorksRevampColors.canvas)
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
+            )
         }
-        return fallback
+        .accessibilityIdentifier("workingHoursTimeField.n0730")
     }
 }
 
