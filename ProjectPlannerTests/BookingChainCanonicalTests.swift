@@ -173,7 +173,9 @@ final class BookingChainCanonicalTests: XCTestCase {
         XCTAssertEqual(early.outsideMultiplier, 1.5, accuracy: 0.001)
         XCTAssertEqual(paid(.morning).totalPaidHours, 4, accuracy: 0.001)
         XCTAssertEqual(paid(.fullDay).totalPaidHours, 8, accuracy: 0.001)
-        XCTAssertEqual(paid(.customHours, "22:00", "02:00").totalPaidHours, 4, accuracy: 0.001)
+        // RULEBOOK 1.13.0 Q5 (web canonical.test.ts): a weekday night is paid at the start day's rules — 22:00–02:00 is
+        // 4 hours outside the standard day at the weekday multiplier (1.5), so 6 paid hours.
+        XCTAssertEqual(paid(.customHours, "22:00", "02:00").totalPaidHours, 6, accuracy: 0.001)
         XCTAssertEqual(CanonicalBusinessEngine.reportDayValue(totalPaidHours: 11, standardPaidHours: 8) ?? 0, 1.375, accuracy: 0.001)
         XCTAssertEqual(CanonicalBusinessEngine.subcontractorDayValue("CUSTOM_HOURS"), 0.5)
     }
