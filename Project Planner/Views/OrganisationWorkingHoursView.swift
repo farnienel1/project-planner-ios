@@ -205,15 +205,24 @@ struct OrganisationWorkingHoursView: View {
         .sheet(isPresented: $showingScheduleSheet) {
             scheduleChangeSheet
         }
+        // RULEBOOK §4.3: apply from today (`payrollTimePolicyApplyNowWriteFields`) or schedule from a later
+        // date (`payrollTimePolicyScheduleWriteFields`, the same sheet as the Schedule button).
         .alert("Apply changes today?", isPresented: $showingImmediateSaveWarning) {
-            Button("Decline Changes", role: .cancel) { }
-                .accessibilityIdentifier("organisationWorkingHours.declineChanges")
-            Button("Approve Changes") {
+            Button("Apply from today") {
                 Task { await saveImmediately() }
             }
-                .accessibilityIdentifier("organisationWorkingHours.approveChanges")
+                .accessibilityIdentifier("organisationWorkingHours.applyFromToday")
+            Button("Schedule for a later date") {
+                // Open the sheet on the next turn, after the alert has gone.
+                DispatchQueue.main.async {
+                    showingScheduleSheet = true
+                }
+            }
+                .accessibilityIdentifier("organisationWorkingHours.scheduleForLaterDate")
+            Button("Cancel", role: .cancel) { }
+                .accessibilityIdentifier("organisationWorkingHours.cancelApply")
         } message: {
-            Text("If you save these settings now, they will take immediate effect. Any bookings on today's schedule will have these new working hours applied. This will be reflected in the weekly report, timesheets and on invoices. If you would like these changes to take effect from a future date, then use the Schedule Changes Button.")
+            Text("These hours will apply to today's bookings, timesheets, weekly report and invoices. To start on a later date, choose Schedule for a later date.")
         }
         .background(SettingsSwipeBackGuard(disabled: isDirty))
         .alert("Unsaved changes", isPresented: $showingCancelConfirm) {

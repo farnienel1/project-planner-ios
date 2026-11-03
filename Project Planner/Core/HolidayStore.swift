@@ -13,6 +13,9 @@ class HolidayStore: ObservableObject {
     @Published var bookings: [HolidayBooking] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
+    /// The organisation whose annual leave last finished loading (read, listener snapshot, or failed).
+    /// Warnings wait for it (`WarningInputsReadiness`): leave not read yet must not list people as unbooked.
+    private(set) var finishedLoadOrganizationId: String?
 
     private var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
@@ -158,8 +161,15 @@ class HolidayStore: ObservableObject {
             let pending = self.bookings.filter { self.isPendingSync($0) }
             let pendingIds = Set(pending.map(\.id))
             let incoming = parsed.filter { !pendingIds.contains($0.id) } + pending
+            let firstDelivery = !organizationIdsMatch(self.finishedLoadOrganizationId, organizationId)
+            self.finishedLoadOrganizationId = normalizedOrganizationId(organizationId)
             guard let next = LiveSnapshotMerge.apply(existing: self.bookings, incoming: incoming, fromCache: fromCache),
-                  Set(next) != Set(self.bookings) else { return }
+                  Set(next) != Set(self.bookings) else {
+                if firstDelivery {
+                    NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+                }
+                return
+            }
             self.bookings = next
             NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
         }
@@ -179,14 +189,19 @@ class HolidayStore: ObservableObject {
         guard !isLoadingInFlight else { return }
         isLoadingInFlight = true
         isLoading = true
+        var attemptedOrganizationId = fb.currentOrganization?.firestoreDocumentId
         defer {
             isLoading = false
             isLoadingInFlight = false
+            if let attemptedOrganizationId, !attemptedOrganizationId.isEmpty {
+                finishedLoadOrganizationId = attemptedOrganizationId
+            }
         }
         errorMessage = nil
         do {
             print("🔥🔥🔥 DEBUG: HolidayStore loadData starting…")
             let orgId = try await resolveOrganizationId()
+            attemptedOrganizationId = orgId
             print("🔥🔥🔥 DEBUG: HolidayStore resolved org \(orgId); fetching holidayBookings…")
             bookings = try await fb.loadHolidayBookings(organizationId: orgId)
             print("🔥🔥🔥 DEBUG: HolidayStore loaded \(bookings.count) holiday bookings")

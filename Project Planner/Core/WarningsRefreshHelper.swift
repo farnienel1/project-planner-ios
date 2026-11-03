@@ -24,7 +24,7 @@ enum WarningsRefreshHelper {
     }
 
     @MainActor private static var lastRefreshAt: Date?
-    @MainActor private static var inFlightTask: Task<Void, Never>?
+    @MainActor private static var inFlightTask: Task<Bool, Never>?
     @MainActor private static var inFlightReason: InFlightReason?
     @MainActor private static var bookingInputs: BookingScanInputs?
     @MainActor private static var bookingRefreshDeferred = false
@@ -97,7 +97,7 @@ enum WarningsRefreshHelper {
         managerScheduleStore: ManagerScheduleStore,
         holidayStore: HolidayStore,
         firebaseBackend: FirebaseBackend,
-        appSettings _: AppSettingsStore,
+        appSettings: AppSettingsStore,
         force: Bool = false,
         manualUserInitiated: Bool = false,
         allowWhileSheetVisible: Bool = false,
@@ -129,11 +129,19 @@ enum WarningsRefreshHelper {
         if manualUserInitiated {
             for attempt in 0..<8 {
                 let bootstrapping = firebaseBackend.isBootstrappingOrgDataLoad
-                let storesBusy = bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading
-                if !bootstrapping && firebaseBackend.hasBootstrappedOrgDataLoad && !storesBusy {
+                let readiness = inputsReadiness(
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    managerScheduleStore: managerScheduleStore,
+                    holidayStore: holidayStore,
+                    firebaseBackend: firebaseBackend
+                )
+                if !bootstrapping && firebaseBackend.hasBootstrappedOrgDataLoad && readiness.storeInputsReady {
                     break
                 }
-                print("🔥🔥🔥 DEBUG: Warnings refresh waiting (attempt \(attempt + 1)/8 bootstrapping=\(bootstrapping) storesBusy=\(storesBusy))")
+                print("🔥🔥🔥 DEBUG: Warnings refresh waiting (attempt \(attempt + 1)/8 bootstrapping=\(bootstrapping) missing=\(readiness.missingStoreInputs.map(\.rawValue)))")
                 try? await Task.sleep(nanoseconds: 450_000_000)
             }
         }
@@ -148,16 +156,35 @@ enum WarningsRefreshHelper {
             if bookingDataChanged { bookingRefreshDeferred = true }
             return false
         }
-        if bookingStore.isLoading || operativeStore.isLoading || projectStore.isLoading {
-            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (stores still loading)")
+        // Every input the warning functions read must have loaded for this organisation. A scan of
+        // not-yet-loaded inputs published "0 active" (or a default window) on the first open.
+        let readiness = inputsReadiness(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend
+        )
+        if !readiness.storeInputsReady {
+            print("🔥🔥🔥 DEBUG: Warnings refresh skipped (inputs still loading: \(readiness.missingStoreInputs.map(\.rawValue)))")
             if bookingDataChanged { bookingRefreshDeferred = true }
+            // Run on its own once they have (a listener may not deliver again).
+            armScanWhenInputsReady(
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                projectStore: projectStore,
+                userStore: userStore,
+                managerScheduleStore: managerScheduleStore,
+                holidayStore: holidayStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings
+            )
             return false
         }
 
         if !force {
-            if holidayStore.isLoading {
-                return false
-            }
             let now = Date()
             if let lastRefreshAt, now.timeIntervalSince(lastRefreshAt) < minRefreshInterval {
                 return false
@@ -184,12 +211,10 @@ enum WarningsRefreshHelper {
             } else if !bookingDataChanged && inFlightReason == .bookingData {
                 print("🔥🔥🔥 DEBUG: Warnings refresh is a duplicate of the booking-driven scan")
                 bookingScheduler.armRedundantDuplicate()
-                await inFlightTask.value
-                return true
+                return await inFlightTask.value
             } else {
                 print("🔥🔥🔥 DEBUG: Warnings refresh awaiting in-flight pass (no second snapshot)")
-                await inFlightTask.value
-                return true
+                return await inFlightTask.value
             }
         }
 
@@ -209,17 +234,104 @@ enum WarningsRefreshHelper {
                 userStore: userStore,
                 managerScheduleStore: managerScheduleStore,
                 holidayStore: holidayStore,
-                firebaseBackend: firebaseBackend
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings
             )
         }
         inFlightTask = task
         lastRefreshAt = Date()
-        await task.value
+        let published = await task.value
         if inFlightTask == task {
             inFlightTask = nil
             inFlightReason = nil
         }
-        return true
+        if !published {
+            // Waited for an input (payment runs, a wider booking download): the next scan may run at once.
+            lastRefreshAt = nil
+        }
+        return published
+    }
+
+    /// Load state of every input the shared warning functions read, for the open organisation.
+    /// `paymentRunsLoaded` is the server read of the payment runs made at the start of a scan.
+    @MainActor
+    static func inputsReadiness(
+        operativeStore: OperativeStore,
+        bookingStore: BookingStore,
+        projectStore: ProjectStore,
+        userStore: UserStore,
+        managerScheduleStore: ManagerScheduleStore,
+        holidayStore: HolidayStore,
+        firebaseBackend: FirebaseBackend,
+        paymentRunsLoaded: Bool = true
+    ) -> WarningInputsReadiness {
+        let organization = firebaseBackend.currentOrganization
+        let orgId = organization?.firestoreDocumentId
+        func loaded(_ finished: String?) -> Bool { organizationIdsMatch(finished, orgId) }
+        return WarningInputsReadiness(
+            organisationSettingsLoaded: loaded(firebaseBackend.warningSettingsLoadedOrganizationId),
+            paymentRunsLoaded: paymentRunsLoaded,
+            usesInvoicingPeriod: organization?.settings.warningDetection.clashLookaheadMode == .endOfInvoicingPeriod,
+            bookingsLoaded: !bookingStore.isLoading && loaded(bookingStore.finishedLoadOrganizationId),
+            managerBookingsLoaded: !managerScheduleStore.isLoading && loaded(managerScheduleStore.finishedLoadOrganizationId),
+            operativesLoaded: !operativeStore.isLoading && loaded(operativeStore.finishedLoadOrganizationId),
+            rosterLoaded: loaded(userStore.organizationUsersFinishedLoadOrganizationId),
+            annualLeaveLoaded: !holidayStore.isLoading && loaded(holidayStore.finishedLoadOrganizationId),
+            jobsLoaded: !projectStore.isLoading && loaded(projectStore.finishedLoadOrganizationId)
+        )
+    }
+
+    /// Home: no scan has published yet. Queues one readiness-gated scan without cancelling one that is
+    /// already running (a booking change would restart it).
+    @MainActor
+    static func requestFirstScanWhenInputsReady(
+        operativeStore: OperativeStore,
+        bookingStore: BookingStore,
+        projectStore: ProjectStore,
+        userStore: UserStore,
+        managerScheduleStore: ManagerScheduleStore,
+        holidayStore: HolidayStore,
+        firebaseBackend: FirebaseBackend,
+        appSettings: AppSettingsStore
+    ) {
+        guard !WarningsService.shared.hasCompletedLiveDetection,
+              inFlightTask == nil,
+              !bookingScheduler.isDataScanInFlight else { return }
+        armScanWhenInputsReady(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings
+        )
+    }
+
+    /// Queues one scan for when every input has loaded (the booking scheduler retries until it is ready).
+    @MainActor
+    private static func armScanWhenInputsReady(
+        operativeStore: OperativeStore,
+        bookingStore: BookingStore,
+        projectStore: ProjectStore,
+        userStore: UserStore,
+        managerScheduleStore: ManagerScheduleStore,
+        holidayStore: HolidayStore,
+        firebaseBackend: FirebaseBackend,
+        appSettings: AppSettingsStore
+    ) {
+        bookingInputs = BookingScanInputs(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            appSettings: appSettings
+        )
+        bookingScheduler.scanWasNotReady()
     }
 
     /// Organisation switch must not reuse the previous scan's cooldown or in-flight task.
@@ -283,10 +395,17 @@ enum WarningsRefreshHelper {
         if isWeeklyReportVisible { return false }
         if inputs.firebaseBackend.isBootstrappingOrgDataLoad { return false }
         if !inputs.firebaseBackend.hasBootstrappedOrgDataLoad { return false }
-        if inputs.bookingStore.isLoading || inputs.operativeStore.isLoading || inputs.projectStore.isLoading
-            || inputs.managerScheduleStore.isLoading || inputs.holidayStore.isLoading || inputs.userStore.isLoading {
-            return false
-        }
+        if inputs.userStore.isLoading { return false }
+        let readiness = inputsReadiness(
+            operativeStore: inputs.operativeStore,
+            bookingStore: inputs.bookingStore,
+            projectStore: inputs.projectStore,
+            userStore: inputs.userStore,
+            managerScheduleStore: inputs.managerScheduleStore,
+            holidayStore: inputs.holidayStore,
+            firebaseBackend: inputs.firebaseBackend
+        )
+        if !readiness.storeInputsReady { return false }
         if let quietUntil = inputs.firebaseBackend.launchQuietUntil, Date() < quietUntil {
             return false
         }
@@ -323,21 +442,37 @@ enum WarningsRefreshHelper {
         userStore: UserStore,
         managerScheduleStore: ManagerScheduleStore,
         holidayStore: HolidayStore,
-        firebaseBackend: FirebaseBackend
-    ) async {
+        firebaseBackend: FirebaseBackend,
+        appSettings: AppSettingsStore
+    ) async -> Bool {
         let cal = CanonicalBusinessEngine.businessCalendar
         let today = cal.startOfDay(for: Date())
         // The phone can still be on the default horizon until settings is opened.
         // Re-read the organisation document so exclusion and the scan window match Firestore.
         let livePaymentRuns = await firebaseBackend.refreshWarningDetectionFromServer()
-        if Task.isCancelled { return }
+        if Task.isCancelled { return false }
+        // Returns false whenever nothing was published, so no caller reports "Updated · 0 active" for a
+        // scan that waited (this was the first-open race: the early returns below still reported success).
+        let readiness = inputsReadiness(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend,
+            paymentRunsLoaded: livePaymentRuns
+        )
+        if !readiness.isReady {
+            // Only the server read of the payment runs can be missing here (the other inputs were checked
+            // before this scan started). It is not retried in a loop: the organisation listener's next
+            // snapshot, a booking change or the open Warnings screen runs the scan again.
+            print("🔥🔥🔥 DEBUG: Warnings refresh waiting for \(readiness.missing.map(\.rawValue))")
+            return false
+        }
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let warningDetection = firebaseBackend.currentOrganization?.settings.warningDetection ?? .default
         let invoicingSettings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
-        if warningDetection.clashLookaheadMode == .endOfInvoicingPeriod && !livePaymentRuns {
-            print("🔥🔥🔥 DEBUG: Warnings refresh waiting for live payment runs")
-            return
-        }
         // Missing bookings must never become unbooked warnings: skip the scan and say why.
         if let reason = WarningsDataCompleteness.blockingReason(
             bookingsLoadFailed: bookingStore.lastLoadFailed,
@@ -346,7 +481,7 @@ enum WarningsRefreshHelper {
         ) {
             NSLog("WARNINGS_SCAN_SKIPPED reason=%@", reason)
             WarningsService.shared.setIncompleteDataMessage(reason)
-            return
+            return false
         }
         WarningsService.shared.setIncompleteDataMessage(nil)
         let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
@@ -374,7 +509,18 @@ enum WarningsRefreshHelper {
             NSLog("WARNINGS_SCAN_WAITING reason=bookings start after window start %@", CanonicalBusinessEngine.isoString(from: coverageStart))
             bookingStore.loadData()
             managerScheduleStore.loadData(force: true)
-            return
+            // Scan again once the wider download has landed (`loadData` does not post a booking change itself).
+            armScanWhenInputsReady(
+                operativeStore: operativeStore,
+                bookingStore: bookingStore,
+                projectStore: projectStore,
+                userStore: userStore,
+                managerScheduleStore: managerScheduleStore,
+                holidayStore: holidayStore,
+                firebaseBackend: firebaseBackend,
+                appSettings: appSettings
+            )
+            return false
         }
         let unbookedEnd = scanWindow?.unbookedEnd ?? coverageEnd
         let dataEnd = scanWindow?.dataEnd ?? max(coverageEnd, unbookedEnd)
@@ -402,7 +548,7 @@ enum WarningsRefreshHelper {
             projectIds: Array(tomorrowIds),
             firebaseBackend: firebaseBackend
         )
-        if Task.isCancelled { return }
+        if Task.isCancelled { return false }
 
         // Pre-window to the detection horizon before WarningsService snapshot work.
         let liveBookings = bookingStore.bookings.filter {
@@ -427,7 +573,7 @@ enum WarningsRefreshHelper {
         await Task.yield()
         try? await Task.sleep(nanoseconds: 250_000_000)
         await Task.yield()
-        if Task.isCancelled { return }
+        if Task.isCancelled { return false }
 
         let materialCutOffClock = OrgMaterialCutOff.resolve(
             stored: firebaseBackend.currentOrganization?.settings.materialCutOff,
@@ -468,6 +614,7 @@ enum WarningsRefreshHelper {
             publishToLiveCache: true
         )
         postWarningsCountDidChange()
+        return !Task.isCancelled && WarningsService.shared.hasCompletedLiveDetection
     }
 
     /// Material lines and send records for the jobs booked tomorrow. `loadedProjectIds` holds the jobs whose
