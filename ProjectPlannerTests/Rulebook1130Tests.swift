@@ -135,4 +135,52 @@ final class Rulebook1130Tests: XCTestCase {
         XCTAssertEqual(interval?.start, 22 * 60)
         XCTAssertEqual(interval?.end, 30 * 60)
     }
+
+    // MARK: Pay privacy (1.13.0 Q1)
+
+    func testPayProfileWritesCarryOnlyThePayFields() throws {
+        XCTAssertEqual(CanonicalBusinessEngine.payProfilePath(organizationId: "org-1", subjectId: "u-1"), "organizations/org-1/payProfiles/u-1")
+        XCTAssertNil(CanonicalBusinessEngine.payProfilePath(organizationId: " ", subjectId: "u-1"))
+        let fields = try XCTUnwrap(CanonicalBusinessEngine.payProfileWriteFields(
+            subjectId: "u-1",
+            profileWrite: ["firstName": "Ann", "dayRate": 250.0, "payBasis": "day", "updatedAt": "stamp"]
+        ))
+        XCTAssertEqual(Set(fields.keys), ["userId", "dayRate", "payBasis"])
+        XCTAssertEqual(fields["userId"] as? String, "u-1")
+        XCTAssertEqual(fields["dayRate"] as? Double, 250)
+        XCTAssertNil(CanonicalBusinessEngine.payProfileWriteFields(subjectId: "u-1", profileWrite: ["firstName": "Ann"]))
+        XCTAssertEqual(CanonicalBusinessEngine.payProfileFields?.count, 6)
+    }
+
+    func testPayIsReadPayProfileFirst() throws {
+        let person: [String: Any] = ["payBasis": "hourly", "dayRate": NSNull(), "hourlyRate": 20, "employmentType": "self_employed"]
+        let row = try XCTUnwrap(CanonicalBusinessEngine.overlayPayProfile(
+            person: person, profileId: "u-1", profile: ["dayRate": 250, "payBasis": "day", "userId": "u-1"]
+        ))
+        XCTAssertEqual(row["payBasis"] as? String, "day")
+        XCTAssertEqual((row["dayRate"] as? NSNumber)?.doubleValue, 250)
+        XCTAssertEqual((row["hourlyRate"] as? NSNumber)?.doubleValue, 20, "a field the pay profile lacks stays as stored")
+        let untouched = try XCTUnwrap(CanonicalBusinessEngine.overlayPayProfile(person: person, profileId: "u-1", profile: nil))
+        XCTAssertEqual(untouched["payBasis"] as? String, "hourly")
+    }
+
+    func testCanViewPersonPayFollowsTheRulebook() {
+        let op: [String: Any] = ["id": "op", "email": "op@x.com", "isActive": true, "role": "operative", "operativeMode": true,
+                                 "permissions": ["operativeMode": true], "assignedManagerUserIds": ["lm"]]
+        let lineManager: [String: Any] = ["id": "lm", "email": "lm@x.com", "isActive": true, "role": "manager", "manager": true,
+                                          "permissions": ["manager": true]]
+        let otherManager: [String: Any] = ["id": "m2", "email": "m2@x.com", "isActive": true, "role": "manager", "manager": true,
+                                           "operatives": false, "permissions": ["manager": true, "operatives": false]]
+        let operativesManager: [String: Any] = ["id": "m3", "email": "m3@x.com", "isActive": true, "role": "manager", "manager": true,
+                                                "operatives": true, "permissions": ["manager": true, "operatives": true]]
+        let admin: [String: Any] = ["id": "a", "email": "a@x.com", "isActive": true, "role": "admin", "adminAccess": true,
+                                    "permissions": ["adminAccess": true]]
+        let roster = [op, lineManager, otherManager, operativesManager, admin]
+        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: op, subject: op, roster: roster))
+        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: lineManager, subject: op, roster: roster))
+        XCTAssertFalse(CanonicalBusinessEngine.canViewPersonPay(viewer: otherManager, subject: op, roster: roster))
+        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: operativesManager, subject: op, roster: roster))
+        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: admin, subject: op, roster: roster))
+        XCTAssertFalse(CanonicalBusinessEngine.canViewPersonPay(viewer: operativesManager, subject: lineManager, roster: roster))
+    }
 }

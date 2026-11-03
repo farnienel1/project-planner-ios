@@ -110,6 +110,8 @@ private struct SettingsProfileSheetsModifier: ViewModifier {
 struct SettingsProfileDetailView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
+    /// RULEBOOK 1.13.0 §8 (Q1 step C): the person's own pay, read pay profile first (`overlayPayProfile`).
+    @State private var payShownUser: AppUser?
     @State private var showingManualLinkSheet = false
     @State private var manualLinkOrganizationId = ""
     @State private var isLinking = false
@@ -183,6 +185,11 @@ struct SettingsProfileDetailView: View {
                 }
             ))
             .task(id: userStore.currentUser?.id) { await loadBillingDetails() }
+            .task(id: userStore.currentUser?.id) {
+                guard let me = userStore.currentUser else { return }
+                let profile = await firebaseBackend.loadPayProfile(subjectId: me.id)
+                payShownUser = me.overlayingPayProfile(profile)
+            }
     }
 
     private var profileScroll: some View {
@@ -231,7 +238,7 @@ struct SettingsProfileDetailView: View {
                         profileValueRow("Organisation", "Not linked", valueColor: PPColor.danger)
                     }
                     // Read-only rate (§12): `readStoredRates` honours `payBasis`; `formatMoney` in the organisation currency.
-                    if let user = userStore.currentUser,
+                    if let user = payShownUser ?? userStore.currentUser,
                        let stored = CanonicalBusinessEngine.readStoredRates(
                            payBasis: user.payBasis,
                            dayRate: user.dayRate,

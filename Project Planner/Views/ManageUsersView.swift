@@ -2155,6 +2155,7 @@ struct EditUserView: View {
         }
         .onAppear(perform: syncEditUserDraftsFromStore)
         .onAppear(perform: followStoredPermissionsIfDraftUnchanged)
+        .task(id: user.id) { await refreshPayFromPayProfile() }
         .onChange(of: displayedUser.permissions) { _, _ in
             followStoredPermissionsIfDraftUnchanged()
         }
@@ -2839,8 +2840,11 @@ struct EditUserView: View {
                         value: lastSeenDisplay(for: displayedUser)
                     )
                     ManageUserCardDivider()
-                    // RULEBOOK §8: employment type is pay (`canChangePersonPay`).
-                    if canEditPermissionsMatrix && userStore.canChangePay(of: displayedUser) {
+                    // RULEBOOK §8: employment type is pay (`canChangePersonPay`); 1.13.0 `canViewPersonPay` decides
+                    // whether it is shown at all.
+                    if !userStore.canViewPay(of: displayedUser) {
+                        EmptyView()
+                    } else if canEditPermissionsMatrix && userStore.canChangePay(of: displayedUser) {
                         Menu {
                             ForEach(EmploymentType.allCases) { type in
                                 Button(type.title) {
@@ -2889,6 +2893,7 @@ struct EditUserView: View {
                     lineManagerPickRow
                     ManageUserCardDivider()
                 }
+                if userStore.canViewPay(of: displayedUser) {
                 ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
                     .onChange(of: dayRateText) { _, newValue in
                         guard employmentTypeDraft == .paye else { return }
@@ -2903,6 +2908,7 @@ struct EditUserView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 6)
                 ManageUserCardDivider()
+                }
                 tradeTypePickSection
                 if (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {
                     ManageUserCardDivider()
@@ -3130,6 +3136,18 @@ struct EditUserView: View {
     /// Single edit field shows day or hourly — dirty must compare against whichever is currently displayed.
     private func displayedPayrollRate(for user: AppUser) -> Double? {
         UserStore.storedPay(of: user).amount
+    }
+
+    /// RULEBOOK 1.13.0 §8 (Q1 step C): pay is read pay profile first (`overlayPayProfile`), users document second.
+    /// Drafts the editor has not touched follow the pay profile's values.
+    private func refreshPayFromPayProfile() async {
+        let before = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let untouchedRate = dayRateText == Self.formatPayrollRateText(user: before)
+        let untouchedType = employmentTypeDraft == before.employmentType
+        let after = await userStore.refreshPayFromPayProfile(of: before)
+        guard after != before else { return }
+        if untouchedRate { dayRateText = Self.formatPayrollRateText(user: after) }
+        if untouchedType { employmentTypeDraft = after.employmentType }
     }
 
     private func isPayrollRateDirty(versus user: AppUser) -> Bool {

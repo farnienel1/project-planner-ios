@@ -37,7 +37,7 @@ class UserStore: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    private var firebaseBackend: FirebaseBackend?
+    private(set) var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
     @Published var isOffline: Bool = false
     /// Throttle `lastSeenAt` writes (foreground heartbeats).

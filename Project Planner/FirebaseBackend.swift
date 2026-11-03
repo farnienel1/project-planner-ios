@@ -3153,7 +3153,8 @@ class FirebaseBackend: ObservableObject {
         payload: [String: Any],
         previousPayload: [String: Any]?,
         writeFields: String = "operativeRowWriteFields",
-        mode: RecordSaveMode
+        mode: RecordSaveMode,
+        payProfileSubjectId: String? = nil
     ) async throws {
         let uid = auth.currentUser?.uid
         let snapshot = try await ref.getDocument(source: .server)
@@ -3177,7 +3178,15 @@ class FirebaseBackend: ObservableObject {
         var changes = write.firestoreFields(from: payload)
         changes.removeValue(forKey: "updatedAt")
         guard !changes.isEmpty else { return }
-        try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+        guard let payProfileSubjectId else {
+            try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+            return
+        }
+        // RULEBOOK 1.13.0 §8 (Q1 step B): a catalogue row's changed pay goes to `payProfiles/{rowId}` in the same batch.
+        let batch = db.batch()
+        batch.updateData(WriteMetadata.stamped(changes, userId: uid), forDocument: ref)
+        addPayProfileWrite(to: batch, subjectId: payProfileSubjectId, profileWrite: changes)
+        try await batch.commit()
     }
 
     private static func operativeDocumentPayload(_ operative: Operative, organizationId: String) -> [String: Any] {
@@ -3230,7 +3239,14 @@ class FirebaseBackend: ObservableObject {
         // The stored document id (stored case; a non-UUID id is kept), never the in-memory UUID.
         let ref = db.collection("organizations").document(organizationId).collection("operatives").document(operative.documentId)
         do {
-            try await writeChangedRosterRow(ref, payload: data, previousPayload: previousData, writeFields: "operativeRowWriteFields", mode: mode)
+            try await writeChangedRosterRow(
+                ref,
+                payload: data,
+                previousPayload: previousData,
+                writeFields: "operativeRowWriteFields",
+                mode: mode,
+                payProfileSubjectId: operative.documentId
+            )
             print("🔥🔥🔥 DEBUG: Operative saved successfully to Firebase")
         } catch {
             print("🔥🔥🔥 DEBUG: ERROR saving operative: \(error.localizedDescription)")
@@ -5599,7 +5615,8 @@ class FirebaseBackend: ObservableObject {
             changes.removeValue(forKey: "profilePhotoURL")
         }
         guard !changes.isEmpty else { return }
-        try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+        // RULEBOOK 1.13.0 §8 (Q1 step B): changed pay / employment fields go to the pay profile in the same batch.
+        try await updateUserDocumentWithPayProfile(userId: user.id, payload: WriteMetadata.stamped(changes, userId: uid))
     }
 
     /// Deactivate / reactivate: only `isActive` plus `WriteMetadata` on `users/{uid}` (RULEBOOK §11).
@@ -5881,7 +5898,8 @@ class FirebaseBackend: ObservableObject {
         if let timesheetsEnabled {
             payload["timesheetsEnabled"] = timesheetsEnabled
         }
-        try await db.collection("users").document(userId).updateData(payload)
+        // RULEBOOK 1.13.0 §8 (Q1 step B): employment type goes to the pay profile in the same batch.
+        try await updateUserDocumentWithPayProfile(userId: userId, payload: payload)
     }
 
     /// Keeps `organizations/{orgId}/userEmails/{email}` aligned when a member’s profile email changes.
@@ -6061,12 +6079,15 @@ class FirebaseBackend: ObservableObject {
     ) async throws {
         let uid = auth.currentUser?.uid
         let userRef = db.collection("users").document(userId)
-        guard !historyRows.isEmpty, let orgId = currentOrganization?.firestoreDocumentId else {
-            try await userRef.updateData(WriteMetadata.stamped(payload, userId: uid))
-            return
-        }
         let batch = db.batch()
         batch.updateData(WriteMetadata.stamped(payload, userId: uid), forDocument: userRef)
+        // RULEBOOK 1.13.0 §8 (Q1 step B): the pay fields go to `payProfiles/{uid}` in the same batch
+        // (`payProfileWriteFieldsFromProfileWrite`).
+        addPayProfileWrite(to: batch, subjectId: userId, profileWrite: payload)
+        guard !historyRows.isEmpty, let orgId = currentOrganization?.firestoreDocumentId else {
+            try await batch.commit()
+            return
+        }
         for row in historyRows {
             let fields: [String: Any] = [
                 "dayRate": row.dayRate.map { $0 as Any } ?? NSNull(),
