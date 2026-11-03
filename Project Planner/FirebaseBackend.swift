@@ -2835,14 +2835,38 @@ class FirebaseBackend: ObservableObject {
             }
         }
 
-        do {
-            let downloadURL = try await storageRef.downloadURL()
-            return downloadURL.absoluteString
-        } catch {
-            print("⚠️ [HealthSafety] Uploaded file but could not fetch download URL: \(error.localizedDescription)")
-            return "gs://\(storageRef.bucket)/\(storageRef.fullPath)"
+        // RULEBOOK 1.16.1 (§1 partial writes, health & safety file links): a `gs://` address is never stored as
+        // `fileURL` — no app can open it, so the row would lose its View link. Retry the download address, then
+        // remove the uploaded object and fail the upload so the screen shows the error and nothing is saved.
+        var lastError: Error?
+        for attempt in 0..<Self.healthSafetyDownloadURLAttempts {
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
+            }
+            do {
+                let downloadURL = try await storageRef.downloadURL()
+                return downloadURL.absoluteString
+            } catch {
+                lastError = error
+                print("⚠️ [HealthSafety] Uploaded file but could not fetch download URL (attempt \(attempt + 1)): \(error.localizedDescription)")
+            }
         }
+        try? await storageRef.delete()
+        throw NSError(
+            domain: "FirebaseBackend",
+            code: 502,
+            userInfo: [
+                NSLocalizedDescriptionKey: Self.healthSafetyDownloadURLFailedMessage,
+                NSUnderlyingErrorKey: lastError ?? NSError(domain: "StorageReference", code: -1),
+            ]
+        )
     }
+
+    /// How many times `uploadHealthSafetyFile` asks Storage for the download address before failing the upload.
+    nonisolated static let healthSafetyDownloadURLAttempts = 3
+    /// Shown when the file uploaded but no download address could be read (1.16.1: never save a `gs://` link).
+    nonisolated static let healthSafetyDownloadURLFailedMessage =
+        "The file uploaded but its link could not be created. Check your connection and try again."
     
     func uploadTaskImage(_ image: UIImage, taskId: UUID, organizationId: String) async throws -> String {
         guard let userId = currentUser?.uid else {
@@ -10669,19 +10693,21 @@ extension FirebaseBackend {
     }
 
     /// Two copies of a job's settings document (the shared id and an older web id) as one stored map for the reader:
-    /// the first copy's rows, then rows of the second whose id the first lacks; every signature row and
-    /// `signatureRecords` entry of both (the reader folds them).
+    /// rows through `mergeHealthSafetyRowCopies` (RULEBOOK 1.16.1: one row per id, the first copy first, but the copy
+    /// that still has a `fileURL` wins so a copy that lost its link never hides the download); every signature row
+    /// and `signatureRecords` entry of both (the reader folds them).
     nonisolated static func mergedHealthSafetyDocuments(_ documents: [[String: Any]]) -> [String: Any] {
         guard var merged = documents.first else { return [:] }
         for other in documents.dropFirst() {
             for field in ["talks", "issues", "ramsDocuments", "otherDocuments"] {
-                var rows = merged[field] as? [Any] ?? []
-                let ids = Set(rows.compactMap { (($0 as? [String: Any])?["id"] as? String)?.lowercased() })
-                for row in other[field] as? [Any] ?? [] {
-                    let id = ((row as? [String: Any])?["id"] as? String)?.lowercased() ?? ""
-                    if !id.isEmpty, !ids.contains(id) { rows.append(row) }
+                let primary = (merged[field] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
+                let secondary = (other[field] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
+                if let rows = CanonicalBusinessEngine.mergeHealthSafetyRowCopies(primary: primary, secondary: secondary) {
+                    merged[field] = rows
+                } else {
+                    // The script did not answer: keep the first copy's rows untouched (no second merge rule here).
+                    merged[field] = primary
                 }
-                merged[field] = rows
             }
             merged["signatures"] = (merged["signatures"] as? [Any] ?? []) + (other["signatures"] as? [Any] ?? [])
             var records = merged["signatureRecords"] as? [String: Any] ?? [:]

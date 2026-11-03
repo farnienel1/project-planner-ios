@@ -25,6 +25,37 @@ enum HSImportedFile {
     }
 }
 
+/// The trailing "View" control on a health & safety document row (web PR #227: every row opens its file), or
+/// "No file" when the row has nothing to open. `fileURL` is the row's `storedFileURL`.
+struct HSRowFileButton: View {
+    let fileURL: URL?
+    let identifier: String
+    let onOpen: (URL) -> Void
+
+    var body: some View {
+        if let fileURL {
+            Button {
+                HSHaptic.tap()
+                onOpen(fileURL)
+            } label: {
+                Label("View", systemImage: "eye.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(HS.blue)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(HS.blue.opacity(0.12)))
+            }
+            .buttonStyle(HSPressStyle())
+            .accessibilityIdentifier(identifier)
+        } else {
+            Text("No file")
+                .font(HSFont.meta)
+                .foregroundStyle(HS.slate2)
+                .accessibilityIdentifier(identifier)
+        }
+    }
+}
+
 struct HSDocumentPreviewItem: Identifiable, Hashable {
     let id: String
     let title: String
@@ -515,8 +546,10 @@ struct HSCustomSignedTalkView: View {
 }
 
 enum HSRemoteFileCache {
-    static func download(_ remoteURL: URL, suggestedName: String) async -> URL? {
+    static func download(_ storedURL: URL, suggestedName: String) async -> URL? {
         do {
+            // A `gs://` URL or Storage path is resolved to a download URL first (`StoredFileLink`).
+            let remoteURL = try await StoredFileLink.resolvedURL(storedURL)
             let (data, _) = try await URLSession.shared.data(from: remoteURL)
             guard !data.isEmpty else { return nil }
             let ext = remoteURL.pathExtension.isEmpty ? (suggestedName as NSString).pathExtension : remoteURL.pathExtension

@@ -131,7 +131,9 @@ struct InAppRemoteDocumentViewer: View {
             case .local(let url):
                 sourceURL = url
                 data = try Data(contentsOf: url)
-            case .remote(let url):
+            case .remote(let stored):
+                // A `gs://` URL, Storage path or token-less Firebase URL gets a fresh download URL first (web PR #227).
+                let url = try await StoredFileLink.resolvedURL(stored)
                 sourceURL = url
                 let (fetched, response) = try await URLSession.shared.data(from: url)
                 if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {

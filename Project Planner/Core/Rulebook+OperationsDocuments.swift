@@ -324,6 +324,35 @@ extension CanonicalBusinessEngine {
         opsRow("parseHealthSafetyDocument", [peopleDocumentJSON(data), ["projectId": projectId, "timeZone": timeZone] as [String: Any]])
     }
 
+    /// `mergeHealthSafetyRowCopies(primary, secondary)` (1.16.1): one row per id (ids compared without case), the
+    /// primary copy first; when only the later copy of a row has a non-blank `fileURL`, that copy is kept. Returns the
+    /// chosen rows as they were passed in (native values untouched): the script only sees `id`, `fileURL` and a
+    /// position marker, and Swift picks the original row the answer names. Nil when the script did not answer.
+    nonisolated static func mergeHealthSafetyRowCopies(
+        primary: [[String: Any]],
+        secondary: [[String: Any]]
+    ) -> [[String: Any]]? {
+        let all = primary + secondary
+        let marker = "__hsCopyIndex"
+        let probes: [[String: Any]] = all.enumerated().map { index, row in
+            var probe: [String: Any] = [marker: index]
+            if let id = row["id"] as? String { probe["id"] = id }
+            if let fileURL = row["fileURL"] as? String { probe["fileURL"] = fileURL }
+            return probe
+        }
+        let primaryProbes = Array(probes.prefix(primary.count))
+        let secondaryProbes = Array(probes.dropFirst(primary.count))
+        guard let answer = callJSON("mergeHealthSafetyRowCopies", arguments: [primaryProbes, secondaryProbes]) as? [Any] else {
+            return nil
+        }
+        return answer.compactMap { item in
+            guard let index = ((item as? [String: Any])?[marker] as? NSNumber)?.intValue, all.indices.contains(index) else {
+                return nil
+            }
+            return all[index]
+        }
+    }
+
     /// `healthSafetyDocumentWriteFields(stored, next, { removedIds })`: `{ set, remove }` for the five arrays only.
     /// `next` rows are native maps; the merged rows come back as JSON (instants as `{ seconds, nanoseconds }` or ms),
     /// so the caller converts them with `ScriptFirestoreValue.native(_:)`. `removedIds` (1.9.0) names, per array, the
