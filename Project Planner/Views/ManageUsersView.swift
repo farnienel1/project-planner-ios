@@ -2970,7 +2970,7 @@ struct EditUserView: View {
                 ManageUserCardDivider()
                 }
                 tradeTypePickSection
-                if (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {
+                if userStore.canViewPay(of: displayedUser), (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {
                     ManageUserCardDivider()
                     dayRateHistoryChromeBlock
                 }

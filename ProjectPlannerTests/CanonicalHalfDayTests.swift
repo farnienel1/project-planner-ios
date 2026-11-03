@@ -202,11 +202,12 @@ final class CanonicalHalfDayTests: XCTestCase {
         XCTAssertEqual(ManagerScheduleInterval.clashInterval(for: bareManager, policy: policy)?.1, 720)
     }
 
-    func testOvernightClockPairFallsThroughToTheNamedSlot() {
-        // The script rejects end <= start, so the CUSTOM slot is the whole standard day. No +24h in Swift.
+    func testOvernightClockPairRunsPastMidnight() {
+        // RULEBOOK 1.13.0 Q5: a finish before the start crosses midnight; `slotInterval` runs past 24:00
+        // (22:00–02:00 is 1320–1560). The +24h comes from the script, never from Swift.
         let overnight = LogicFixtures.booking(on: monday, slot: .customHours, start: "22:00", end: "02:00")
-        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: overnight, policy: LogicFixtures.policy)?.0, 450)
-        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: overnight, policy: LogicFixtures.policy)?.1, 960)
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: overnight, policy: LogicFixtures.policy)?.0, 1320)
+        XCTAssertEqual(OperativeBookingInterval.clashInterval(for: overnight, policy: LogicFixtures.policy)?.1, 1560)
     }
 
     func testSaturdayUsesTheWeekdayHalves() {
