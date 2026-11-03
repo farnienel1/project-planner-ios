@@ -711,6 +711,8 @@ struct ManagerScheduleContentView: View {
     @State private var customHoursContext: CustomHoursEditorContext?
     @State private var managerBookingEditTarget: ManagerSiteBooking?
     @State private var operativeBookingEditTarget: Booking?
+    /// RULEBOOK 1.16.0 `bookingLeaveConflicts`: annual leave on the booked days is ticked or dropped first.
+    @StateObject private var leaveGate = BookingConflictGate()
     @State private var secondBookingDialog: SecondBookingDialog?
     @State private var isBookYourselfExpanded = false
     @State private var isProjectsExpanded = false
@@ -990,6 +992,7 @@ struct ManagerScheduleContentView: View {
                 }
             )
         }
+        .bookingConflictSheet(leaveGate)
         .sheet(item: $managerBookingEditTarget) { booking in
             let personName = managerBookingPersonName(booking)
             let policy = payrollPolicy(for: booking.date)
@@ -1010,7 +1013,19 @@ struct ManagerScheduleContentView: View {
                     updated.workEndTime = end
                     updated.isBreakRemoved = breakRemoved
                     updated.updatedAt = Date()
-                    Task { await managerScheduleStore.saveBooking(updated) }
+                    let timesChanged = updated.timeSlot != booking.timeSlot
+                        || updated.workStartTime != booking.workStartTime
+                        || updated.workEndTime != booking.workEndTime
+                    let rows = timesChanged ? BookingLeaveConflictItems.items(
+                        for: updated,
+                        personName: personName,
+                        holidays: holidayStore.bookings,
+                        users: userStore.organizationUsers,
+                        policy: policy
+                    ) : []
+                    leaveGate.runSingle(rows: rows, afterDismiss: true) {
+                        Task { await managerScheduleStore.saveBooking(updated) }
+                    }
                 },
                 onCancel: { managerBookingEditTarget = nil },
                 onDelete: {
@@ -1041,9 +1056,22 @@ struct ManagerScheduleContentView: View {
                     updated.isBreakRemoved = isBreakRemoved
                     updated.otMultiplierOverride = otMult
                     updated.updatedAt = Date()
-                    Task {
-                        await bookingStore.updateBooking(updated)
-                        ScheduleChangeNotifier.postBookingStoreDidChange()
+                    let timesChanged = updated.timeSlot != booking.timeSlot
+                        || updated.workStartTime != booking.workStartTime
+                        || updated.workEndTime != booking.workEndTime
+                    let rows = timesChanged ? BookingLeaveConflictItems.items(
+                        for: updated,
+                        personName: personName,
+                        holidays: holidayStore.bookings,
+                        operatives: operativeStore.allOperatives,
+                        users: userStore.organizationUsers,
+                        policy: firebaseBackend.payrollPolicy(for: updated.date)
+                    ) : []
+                    leaveGate.runSingle(rows: rows, afterDismiss: true) {
+                        Task {
+                            await bookingStore.updateBooking(updated)
+                            ScheduleChangeNotifier.postBookingStoreDidChange()
+                        }
                     }
                 },
                 onCancel: { operativeBookingEditTarget = nil },
@@ -1144,22 +1172,6 @@ struct ManagerScheduleContentView: View {
                 proceed()
             }
         )
-    }
-
-    private func wouldClashWithHoliday(on day: Date) -> Bool {
-        !myHolidayBookings(on: day).isEmpty
-    }
-
-    private func holidayOverlapLines(on day: Date) -> [String] {
-        myHolidayBookings(on: day).map { holiday in
-            let slotLabel: String
-            switch holiday.timeSlot {
-            case .fullDay: slotLabel = "Full Day"
-            case .morning: slotLabel = "AM"
-            case .afternoon: slotLabel = "PM"
-            }
-            return holiday.status == .pending ? "Pending annual leave - \(slotLabel)" : "Annual leave - \(slotLabel)"
-        }
     }
 
     private func bookingProbe(
@@ -1305,42 +1317,8 @@ struct ManagerScheduleContentView: View {
                     )
                     return
                 }
-                if wouldClashWithHoliday(on: day) {
-                    detailLines = holidayOverlapLines(on: day)
-                    let holidayProbe = bookingProbe(
-                        userId: uid,
-                        day: day,
-                        timeSlot: timeSlot,
-                        workStart: workStart,
-                        workEnd: workEnd,
-                        breakRemoved: breakRemoved,
-                        locationType: locationType,
-                        locationId: locationId,
-                        customLocationName: customLocationName
-                    )
-                    let newLabel = newBookingSummaryLabel(
-                        timeSlot: timeSlot,
-                        workStart: workStart,
-                        workEnd: workEnd,
-                        breakRemoved: breakRemoved,
-                        day: day
-                    )
-                    detailLines.append("New booking: \(newLabel) — \(locationNameString(for: holidayProbe))")
-                    presentOverlapWarning(
-                        message: "You are on annual leave this day. Booking anyway will create a time overlap.",
-                        detailLines: detailLines,
-                        days: normalizedDays,
-                        timeSlot: timeSlot,
-                        workStart: workStart,
-                        workEnd: workEnd,
-                        breakRemoved: breakRemoved,
-                        locationType: locationType,
-                        locationId: locationId,
-                        customLocationName: customLocationName,
-                        replaceBookingId: replaceBookingId
-                    )
-                    return
-                }
+                // RULEBOOK 1.16.0 §5, §9: annual leave is checked by `bookingLeaveConflicts` in `commit` (purple rows,
+                // slot-aware), not here.
                 let probe = bookingProbe(
                     userId: uid,
                     day: day,
@@ -1387,12 +1365,39 @@ struct ManagerScheduleContentView: View {
         }
 
         let commit: () -> Void = {
+            // RULEBOOK 1.16.0 §5, §9 `bookingLeaveConflicts`: leave on the chosen days is ticked or dropped first;
+            // dropping every day saves nothing.
+            let me = self.userStore.currentUser
+            let leavePerson = me.map(BookingLeaveConflictInputs.person(user:))
+                ?? BookingLeaveConflictInputs.Person(id: uid, userId: uid)
+            let probeSlot = normalizedDays.first.map {
+                self.bookingProbe(
+                    userId: uid, day: $0, timeSlot: timeSlot, workStart: workStart, workEnd: workEnd,
+                    breakRemoved: breakRemoved, locationType: locationType, locationId: locationId,
+                    customLocationName: customLocationName
+                )
+            }
+            let leaveRows = BookingLeaveConflictItems.items(
+                booked: [.init(person: leavePerson, name: me?.fullName ?? "You")],
+                dates: normalizedDays,
+                holidays: self.holidayStore.bookings,
+                users: self.userStore.organizationUsers,
+                policy: self.payrollPolicy(for: normalizedDays.first ?? Date()),
+                timeSlot: probeSlot?.timeSlot.rawValue ?? timeSlot.rawValue,
+                workStartTime: probeSlot?.workStartTime ?? workStart,
+                workEndTime: probeSlot?.workEndTime ?? workEnd
+            )
+            self.leaveGate.run(rows: leaveRows, afterDismiss: true) { dropped in
+                let keptDays = normalizedDays.filter {
+                    !dropped.contains("\(leavePerson.id)|\(OrganizationRulebookContext.dayKey($0))")
+                }
+                guard !keptDays.isEmpty else { return }
             Task { @MainActor in
                 if let rid = replaceBookingId,
                    let existing = self.managerScheduleStore.managerSiteBookings.first(where: { $0.id == rid }) {
                     await self.managerScheduleStore.deleteBooking(existing)
                 }
-                for day in normalizedDays {
+                for day in keptDays {
                     self.saveBooking(
                         date: day,
                         timeSlot: timeSlot,
@@ -1404,6 +1409,7 @@ struct ManagerScheduleContentView: View {
                         isBreakRemoved: breakRemoved
                     )
                 }
+            }
             }
         }
 

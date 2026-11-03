@@ -179,4 +179,72 @@ final class Rulebook1160Tests: XCTestCase {
         XCTAssertEqual(try created("booking_created") as? String, "SERVER-TIME")
         XCTAssertEqual(try created("deadline_reminder") as? Date, due)
     }
+
+    // MARK: Annual leave when booking (1.16.0 §5, §9)
+
+    private let leaveDay = CanonicalStandardDayInput(
+        standardDayStart: "08:00", standardDayEnd: "16:30", breakWindowStart: "12:00", breakWindowEnd: "12:30"
+    )
+
+    private func leaveInput(slot: String, start: String? = nil, end: String? = nil) -> [String: Any] {
+        var input: [String: Any] = [
+            "people": [["id": "OP-1", "userId": "U1"]],
+            "dayKeys": ["2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07"],
+            "holidays": [
+                ["id": "H1", "userId": "U1", "startDayKey": "2026-11-04", "endDayKey": "2026-11-05", "timeSlot": "AM", "status": "approved"],
+                ["id": "H2", "operativeId": "op-1", "startDayKey": "2026-11-06", "endDayKey": "2026-11-06", "timeSlot": "FULL DAY", "status": "pending"],
+                ["id": "H3", "userId": "U1", "startDayKey": "2026-11-07", "endDayKey": "2026-11-07", "status": "rejected"],
+            ],
+            "timeZone": "Europe/London",
+            "day": [
+                "standardDayStart": leaveDay.standardDayStart ?? "",
+                "standardDayEnd": leaveDay.standardDayEnd ?? "",
+                "breakWindowStart": leaveDay.breakWindowStart ?? "",
+                "breakWindowEnd": leaveDay.breakWindowEnd ?? "",
+            ],
+            "timeSlot": slot,
+        ]
+        if let start { input["workStartTime"] = start }
+        if let end { input["workEndTime"] = end }
+        return input
+    }
+
+    /// Approved and pending leave whose window overlaps the slot; rejected leave never; ids without case.
+    func testBookingLeaveConflictsFollowTheSlot() throws {
+        let fullDay = try XCTUnwrap(CanonicalBusinessEngine.bookingLeaveConflicts(leaveInput(slot: "FULL DAY")))
+        XCTAssertEqual(fullDay.map(\.dayKey), ["2026-11-04", "2026-11-05", "2026-11-06"])
+        XCTAssertEqual(fullDay.map(\.status), ["approved", "approved", "pending"])
+        XCTAssertEqual(fullDay.first?.label, "Annual leave booked")
+        XCTAssertEqual(fullDay.first?.detail, "Annual leave booked · AM")
+        XCTAssertEqual(fullDay.last?.label, "Annual leave requested")
+        XCTAssertEqual(fullDay.last?.detail, "Annual leave requested · Full day")
+
+        let afternoon = try XCTUnwrap(CanonicalBusinessEngine.bookingLeaveConflicts(leaveInput(slot: "PM")))
+        XCTAssertEqual(afternoon.map(\.dayKey), ["2026-11-06"])
+
+        let customMorning = try XCTUnwrap(CanonicalBusinessEngine.bookingLeaveConflicts(
+            leaveInput(slot: "CUSTOM_HOURS", start: "09:00", end: "10:00")
+        ))
+        XCTAssertEqual(customMorning.count, 3)
+        let customAfternoon = try XCTUnwrap(CanonicalBusinessEngine.bookingLeaveConflicts(
+            leaveInput(slot: "CUSTOM_HOURS", start: "14:00", end: "15:00")
+        ))
+        XCTAssertEqual(customAfternoon.map(\.dayKey), ["2026-11-06"])
+        XCTAssertEqual(
+            CanonicalBusinessEngine.bookingConflictsHeading,
+            "Some selected days clash. Tick to confirm, or ✕ to drop that day."
+        )
+    }
+
+    /// Every row must be ticked or dropped; the dropped person-days are what the flow leaves out.
+    func testConflictDecisions() {
+        let row = BookingConflictItem.leave(
+            BookingLeaveConflict(personId: "OP-1", dayKey: "2026-11-04", leaveId: "H1", leaveSlot: "AM", status: "approved", label: "Annual leave booked"),
+            personName: "Olly"
+        )
+        XCTAssertFalse(BookingConflictResolution.resolved([row], decisions: [:]))
+        XCTAssertTrue(BookingConflictResolution.resolved([row], decisions: [row.id: .confirm]))
+        XCTAssertEqual(BookingConflictResolution.droppedPersonDays([row], decisions: [row.id: .confirm]), [])
+        XCTAssertEqual(BookingConflictResolution.droppedPersonDays([row], decisions: [row.id: .drop]), ["OP-1|2026-11-04"])
+    }
 }

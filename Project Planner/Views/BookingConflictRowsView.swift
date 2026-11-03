@@ -199,12 +199,33 @@ final class BookingConflictGate: ObservableObject {
 
     @Published var pending: Pending?
 
-    /// Saves at once when there is nothing to decide; otherwise asks first.
-    func run(rows: [BookingConflictItem], onConfirm: @escaping (Set<String>) -> Void) {
+    /// Saves at once when there is nothing to decide; otherwise asks first. `afterDismiss`: the flow's own sheet is
+    /// closing, so the list opens a moment later (one sheet at a time).
+    func run(
+        rows: [BookingConflictItem],
+        afterDismiss: Bool = false,
+        onConfirm: @escaping (Set<String>) -> Void
+    ) {
         if rows.isEmpty {
             onConfirm([])
+            return
+        }
+        let next = Pending(rows: rows, onConfirm: onConfirm)
+        if afterDismiss {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+                self?.pending = next
+            }
         } else {
-            pending = Pending(rows: rows, onConfirm: onConfirm)
+            pending = next
+        }
+    }
+
+    /// One booking (one person, one day): saves when nothing clashes or the row is ticked; dropping the day saves
+    /// nothing.
+    func runSingle(rows: [BookingConflictItem], afterDismiss: Bool = false, save: @escaping () -> Void) {
+        run(rows: rows, afterDismiss: afterDismiss) { dropped in
+            guard dropped.isEmpty else { return }
+            save()
         }
     }
 }
@@ -260,5 +281,112 @@ private struct BookingConflictSheetModifier: ViewModifier {
         content.sheet(item: $gate.pending) { pending in
             BookingConflictSheet(pending: pending) { gate.pending = nil }
         }
+    }
+}
+
+/// `bookingLeaveConflicts` for a booking about to be saved, as purple rows (RULEBOOK 1.16.0). Inputs only.
+enum BookingLeaveConflictItems {
+    struct Booked {
+        var person: BookingLeaveConflictInputs.Person
+        var name: String
+    }
+
+    /// The person behind a week-grid row or picker: books under the first operative id (stored), else the first
+    /// users id; every other id is one leave may be stored under.
+    static func person(operativeIds: [UUID], userIds: [String], email: String? = nil) -> BookingLeaveConflictInputs.Person {
+        let storedOperativeIds = operativeIds.map { Booking.storedOperativeId(for: $0) }
+        let id = storedOperativeIds.first ?? userIds.first ?? ""
+        return BookingLeaveConflictInputs.Person(
+            id: id,
+            userId: userIds.first,
+            operativeIds: Array(storedOperativeIds.dropFirst()) + userIds.dropFirst(),
+            email: email
+        )
+    }
+
+    static func items(
+        booked: [Booked],
+        dates: [Date],
+        holidays: [HolidayBooking],
+        users: [AppUser],
+        policy: OrgPayrollTimePolicy,
+        timeSlot: String?,
+        workStartTime: String? = nil,
+        workEndTime: String? = nil
+    ) -> [BookingConflictItem] {
+        let people = booked.map(\.person).filter { !$0.id.isEmpty }
+        let conflicts = BookingLeaveConflictInputs.conflicts(
+            people: people,
+            dates: dates,
+            holidays: holidays,
+            users: users,
+            policy: policy,
+            timeSlot: timeSlot,
+            workStartTime: workStartTime,
+            workEndTime: workEndTime
+        )
+        return conflicts.map { row in
+            let name = booked.first { $0.person.id == row.personId }?.name ?? "This person"
+            return BookingConflictItem.leave(row, personName: name)
+        }
+    }
+}
+
+/// The conflict rows inline in a one-day form (quick add, edit booking): shown under the heading, and the form saves
+/// only once each is ticked or dropped. Dropping the day saves nothing.
+struct InlineBookingConflicts: View {
+    let rows: [BookingConflictItem]
+    @Binding var decisions: [String: BookingConflictDecision]
+
+    var body: some View {
+        BookingConflictRowsView(rows: rows, decisions: $decisions)
+    }
+}
+
+extension BookingLeaveConflictItems {
+    /// Leave rows for one operative booking as it will be saved (edit booking, Daily Overview change booking).
+    static func items(
+        for booking: Booking,
+        personName: String,
+        holidays: [HolidayBooking],
+        operatives: [Operative],
+        users: [AppUser],
+        policy: OrgPayrollTimePolicy
+    ) -> [BookingConflictItem] {
+        items(
+            booked: [Booked(
+                person: BookingLeaveConflictInputs.person(operativeId: booking.operativeId, operatives: operatives, users: users),
+                name: personName
+            )],
+            dates: [booking.date],
+            holidays: holidays,
+            users: users,
+            policy: policy,
+            timeSlot: booking.timeSlot.rawValue,
+            workStartTime: booking.workStartTime,
+            workEndTime: booking.workEndTime
+        )
+    }
+
+    /// Leave rows for one manager site booking as it will be saved (My Schedule, manager bookings).
+    static func items(
+        for booking: ManagerSiteBooking,
+        personName: String,
+        holidays: [HolidayBooking],
+        users: [AppUser],
+        policy: OrgPayrollTimePolicy
+    ) -> [BookingConflictItem] {
+        let person = users.first { $0.id == booking.userId }.map(BookingLeaveConflictInputs.person(user:))
+            ?? BookingLeaveConflictInputs.Person(id: booking.userId, userId: booking.userId)
+        return items(
+            booked: [Booked(person: person, name: personName)],
+            dates: [booking.date],
+            holidays: holidays,
+            users: users,
+            policy: policy,
+            timeSlot: booking.timeSlot.rawValue,
+            workStartTime: booking.workStartTime,
+            workEndTime: booking.workEndTime
+        )
     }
 }

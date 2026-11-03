@@ -68,6 +68,8 @@ struct BookLabourFlowView: View {
 
     @State private var phase: Phase = .pickPerson
     @State private var errorBanner: String?
+    /// RULEBOOK 1.16.0 `bookingLeaveConflicts`: annual leave on the day is ticked or dropped before booking.
+    @StateObject private var leaveGate = BookingConflictGate()
     @State private var isSaving = false
     @State private var projectListSearchText = ""
     @State private var pendingOperativeOverlap: PendingOperativeBookLabourOverlap?
@@ -252,6 +254,7 @@ struct BookLabourFlowView: View {
                     }
                 }
             }
+            .bookingConflictSheet(leaveGate)
             .alert("Could not book", isPresented: Binding(
                 get: { errorBanner != nil },
                 set: { if !$0 { errorBanner = nil } }
@@ -1628,6 +1631,66 @@ struct BookLabourFlowView: View {
             return
         }
 
+        // RULEBOOK 1.16.0 §5, §9 `bookingLeaveConflicts`: each person's leave on the day is ticked (book anyway) or
+        // dropped (that person is not booked) first; dropping everyone saves nothing.
+        func leavePersonKey(_ person: BookLabourCandidate) -> BookingLeaveConflictInputs.Person {
+            if personUsesOperativeProjectPath(person, locationType: locationType, project: resolvedProject),
+               let op = person.linkedOperative {
+                var leavePerson = BookingLeaveConflictInputs.person(
+                    operativeId: op.id,
+                    operatives: operativeStore.allOperatives,
+                    users: userStore.organizationUsers
+                )
+                leavePerson.userId = leavePerson.userId ?? person.user.id
+                return leavePerson
+            }
+            return BookingLeaveConflictInputs.person(user: person.user)
+        }
+        let leavePeople = people.map { (candidate: $0, person: leavePersonKey($0)) }
+        let leaveRows = BookingLeaveConflictItems.items(
+            booked: leavePeople.map { .init(person: $0.person, name: $0.candidate.displayName) },
+            dates: [day],
+            holidays: holidayStore.bookings,
+            users: userStore.organizationUsers,
+            policy: dayPayrollPolicy,
+            timeSlot: slot.rawValue,
+            workStartTime: workStart,
+            workEndTime: workEnd
+        )
+        leaveGate.run(rows: leaveRows) { dropped in
+            let dayKey = OrganizationRulebookContext.dayKey(day)
+            let kept = leavePeople.filter { !dropped.contains("\($0.person.id)|\(dayKey)") }.map(\.candidate)
+            guard !kept.isEmpty else { return }
+            commitPartyBookings(
+                people: kept,
+                resolvedProject: resolvedProject,
+                operativeSlot: operativeSlot,
+                slot: slot,
+                locationType: locationType,
+                locationId: locationId,
+                customLocationName: customLocationName,
+                workStart: workStart,
+                workEnd: workEnd,
+                breakRemoved: breakRemoved,
+                otMultiplierOverride: otMultiplierOverride
+            )
+        }
+    }
+
+    /// Saves the party once every leave row is decided (`savePartyBookings`).
+    private func commitPartyBookings(
+        people: [BookLabourCandidate],
+        resolvedProject: Project?,
+        operativeSlot: TimeSlot,
+        slot: ManagerTimeSlot,
+        locationType: ManagerLocationType,
+        locationId: UUID?,
+        customLocationName: String?,
+        workStart: String?,
+        workEnd: String?,
+        breakRemoved: Bool,
+        otMultiplierOverride: Double?
+    ) {
         isSaving = true
         Task {
             var firstError: String?
@@ -1762,6 +1825,25 @@ struct BookLabourFlowView: View {
             )
             return
         }
+        // RULEBOOK 1.16.0 §5, §9 `bookingLeaveConflicts`: leave on the day is ticked or dropped first.
+        let leaveRows = BookingLeaveConflictItems.items(
+            booked: [.init(
+                person: BookingLeaveConflictInputs.person(
+                    operativeId: operative.id,
+                    operatives: operativeStore.allOperatives,
+                    users: userStore.organizationUsers
+                ),
+                name: operative.name
+            )],
+            dates: [day],
+            holidays: holidayStore.bookings,
+            users: userStore.organizationUsers,
+            policy: dayPayrollPolicy,
+            timeSlot: slot.rawValue,
+            workStartTime: workStart,
+            workEndTime: workEnd
+        )
+        leaveGate.runSingle(rows: leaveRows) {
         isSaving = true
         Task {
             await bookingStore.bookOperative(
@@ -1785,6 +1867,7 @@ struct BookLabourFlowView: View {
                 isSaving = false
                 dismiss()
             }
+        }
         }
     }
 
