@@ -922,6 +922,17 @@ struct BookLabourFlowView: View {
             let newPaidHours = paidHours(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
             let combinedPaidHours = existingPaidHours + newPaidHours
             let remainingHours = max(0, max(dayPayrollPolicy.standardPaidHours, 0) - combinedPaidHours)
+            // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a Saturday or Sunday shows the new booking as the pay rule
+            // prices it that day (memoised by input in the wrapper); empty on a weekday.
+            let weekendLines = CanonicalBusinessEngine.collapsedBreakdownLines(
+                CanonicalBusinessEngine.weekendBookingBreakdown(
+                    on: [day],
+                    start: timeText(from: draft.startMinutes),
+                    end: timeText(from: draft.endMinutes),
+                    isBreakRemoved: draft.breakRemoved,
+                    fallbackPolicy: dayPayrollPolicy
+                )
+            )
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     bookLabourPersonSummaryCard(people: activeParty(fallback: person))
@@ -1011,13 +1022,23 @@ struct BookLabourFlowView: View {
                         Text("Existing booked: \(ScheduleCoverageFormat.hours(existingPaidHours))h")
                             .font(.system(size: 11))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
-                        Text("New booking: \(ScheduleCoverageFormat.hours(newPaidHours))h")
-                            .font(.system(size: 11))
-                            .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                        Text("Total booked: \(ScheduleCoverageFormat.hours(combinedPaidHours))h")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                        if remainingHours > 0.05 {
+                        if weekendLines.isEmpty {
+                            Text("New booking: \(ScheduleCoverageFormat.hours(newPaidHours))h")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                            Text("Total booked: \(ScheduleCoverageFormat.hours(combinedPaidHours))h")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                        } else {
+                            ForEach(weekendLines, id: \.self) { line in
+                                Text(line)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .monospacedDigit()
+                                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                                    .accessibilityIdentifier("booking.weekendBreakdownRow")
+                            }
+                        }
+                        if weekendLines.isEmpty, remainingHours > 0.05 {
                             Text("Missing to standard day: \(ScheduleCoverageFormat.hours(remainingHours))h")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)

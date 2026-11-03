@@ -311,7 +311,7 @@ private struct SchedulePersonSelectionRow: View {
                             .foregroundStyle(.secondary)
                     }
                     if isSelected, let summary, !summary.droppedApprovedLeaveDates.isEmpty {
-                        Text("Dropped from booking: \(summary.droppedApprovedLeaveDates.map { $0.formatted(date: .abbreviated, time: .omitted) }.joined(separator: ", "))")
+                        Text("Dropped from booking: \(summary.droppedApprovedLeaveDates.map { ScheduleConflictRow.dayTitle($0) }.joined(separator: ", "))")
                             .font(.caption2)
                             .foregroundStyle(.orange)
                     }

@@ -59,6 +59,8 @@ struct ScheduleOperativeView: View {
     @State private var showingDateSelectionAlert = false
     @State private var dateSelectionAlertMessage = ""
     @State private var didShowHoursClashAlertThisSession = false
+    /// RULEBOOK 1.18.0 `customHoursPrefillForDays`: the selection kind the shared hours were last reset for.
+    @State private var customHoursKind = CustomHoursKindTracker()
     @EnvironmentObject var notificationService: NotificationService
     
     private var payrollTimePolicy: OrgPayrollTimePolicy {
@@ -251,6 +253,9 @@ struct ScheduleOperativeView: View {
         let refDay = CanonicalBusinessEngine.singlePairPrefillDay(Array(selectedDates)) ?? Date()
         let p = payrollPolicy(for: refDay)
         sharedBulkChoice = defaultChoiceForDay(refDay, policy: p)
+        customHoursKind = CustomHoursKindTracker(
+            seed: CanonicalBusinessEngine.customHoursPrefill(on: selectedDates.isEmpty ? [refDay] : selectedDates.sorted(), fallbackPolicy: p)
+        )
         didApplyOrgDefaultHours = true
         if !selectedDates.isEmpty {
             syncSharedBulkToAllSelectedDates()
@@ -521,6 +526,10 @@ struct ScheduleOperativeView: View {
         operativeSlotOverrides[k] = choice
         operativeDefaultChoice[booking.operativeId] = choice
         replaceBookingOnConfirmByOverrideKey[k] = booking.id
+        // The booking keeps its stored hours; only a later change of selection kind resets the shared hours (1.18.0).
+        customHoursKind = CustomHoursKindTracker(
+            seed: CanonicalBusinessEngine.customHoursPrefill(on: [day], fallbackPolicy: payrollPolicy(for: day))
+        )
     }
 
     private func applyPrefillFromEditingGroup(_ groupId: String) {
@@ -541,6 +550,9 @@ struct ScheduleOperativeView: View {
             operativeDefaultChoice[b.operativeId] = choice
             replaceBookingOnConfirmByOverrideKey[k] = b.id
         }
+        customHoursKind = CustomHoursKindTracker(
+            seed: CanonicalBusinessEngine.customHoursPrefill(on: selectedDates.sorted(), fallbackPolicy: primarySelectedDatePolicy)
+        )
     }
 
     // MARK: - Schedule booking (project_planner_scheduling_with_overtime.html)
@@ -575,6 +587,32 @@ struct ScheduleOperativeView: View {
         for d in selectedDates {
             dateSlotChoices[slotKey(for: d)] = sharedBulkChoice
         }
+    }
+
+    /// RULEBOOK 1.18.0 §4.3 `customHoursPrefillForDays` (web `useCustomHoursPrefillOnKindChange`): when the selection
+    /// turns weekend-only or weekday-only, every selected day's hours reset to that kind's default straight away —
+    /// weekend → the returned custom start/finish, weekday → the standard day (FULL DAY, the `halfDayWindows` day the
+    /// call returns). Within the same kind nothing is reset, so a manual edit survives adding another day.
+    private func applyCustomHoursPrefillOnKindChange() {
+        let dates = selectedDates.sorted()
+        let prefill = CanonicalBusinessEngine.customHoursPrefill(on: dates, fallbackPolicy: primarySelectedDatePolicy)
+        guard let apply = customHoursKind.prefillToApply(prefill) else { return }
+        switch apply.kind {
+        case .weekday:
+            let first = dates.first ?? Date()
+            sharedBulkChoice = defaultChoiceForDay(first, policy: payrollPolicy(for: first))
+        case .weekend:
+            sharedBulkChoice = OperativeDayBookingChoice(
+                timeSlot: .customHours,
+                workStartTime: apply.start,
+                workEndTime: apply.end,
+                isBreakRemoved: true,
+                otMultiplierOverride: nil
+            )
+        case .mixed:
+            return
+        }
+        syncSharedBulkToAllSelectedDates()
     }
 
     private func clearOverrides(for operativeId: UUID) {
@@ -927,6 +965,13 @@ struct ScheduleOperativeView: View {
                     Text(operativeLineForChoice(sharedBulkChoice))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(ProjectWorksRevampColors.ink)
+                    // RULEBOOK 1.18.0: a weekend booking confirms with its per-day hours (`weekendBookingBreakdown`).
+                    if let refDay = selectedDates.sorted().first {
+                        let window = displayClockWindow(for: sharedBulkChoice, day: refDay, policy: payrollPolicy(for: refDay))
+                        WeekendBookingBreakdownView(
+                            lines: weekendBreakdownLines(start: window.start, end: window.end, isBreakRemoved: sharedBulkChoice.isBreakRemoved)
+                        )
+                    }
                     if hasAnyOperativeOverrides {
                         Text("Some people have custom hours — tap a name above to review.")
                             .font(.system(size: 11))
@@ -1025,6 +1070,9 @@ struct ScheduleOperativeView: View {
         let paidH = probe.paidBookedHours(policy: p)
         let otH = probe.overtimeHoursBeyondPaidStandard(policy: p)
         let breakdown = probe.payrollHoursResult(policy: p)
+        // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a weekend selection shows each day as the pay rule prices it
+        // instead of the standard-day summary (memoised by input in the wrapper).
+        let weekendLines = weekendBreakdownLines(start: start, end: end, isBreakRemoved: choice.isBreakRemoved)
         return VStack(alignment: .leading, spacing: 10) {
             Text("HOURS · AM / PM / FULL DAY / CUSTOM")
                 .font(.footnote.weight(.semibold))
@@ -1129,27 +1177,46 @@ struct ScheduleOperativeView: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
             )
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(otH < 0.05 ? ProjectWorksRevampColors.activeGreen : ProjectWorksRevampColors.upcomingAmber)
-                Group {
-                    if otH < 0.05 {
-                        Text("\(formatHoursOneDecimal(paidH))h paid · \(breakdown.breakdownSummary)")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                    } else {
-                        Text(breakdown.breakdownSummary)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+            if !weekendLines.isEmpty {
+                WeekendBookingBreakdownView(lines: weekendLines)
+            } else {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(otH < 0.05 ? ProjectWorksRevampColors.activeGreen : ProjectWorksRevampColors.upcomingAmber)
+                    Group {
+                        if otH < 0.05 {
+                            Text("\(formatHoursOneDecimal(paidH))h paid · \(breakdown.breakdownSummary)")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                        } else {
+                            Text(breakdown.breakdownSummary)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                        }
                     }
                 }
+                .padding(EdgeInsets(top: 8, leading: 11, bottom: 8, trailing: 11))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(otH < 0.05 ? ProjectWorksRevampColors.greenTint : ProjectWorksRevampColors.amberTint)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
-            .padding(EdgeInsets(top: 8, leading: 11, bottom: 8, trailing: 11))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(otH < 0.05 ? ProjectWorksRevampColors.greenTint : ProjectWorksRevampColors.amberTint)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
+    }
+
+    /// `weekendBookingBreakdown` lines for the selected days with one pair of times (`collapsedBreakdownLines`); empty
+    /// for a weekday-only selection or no dates.
+    private func weekendBreakdownLines(start: String, end: String, isBreakRemoved: Bool) -> [String] {
+        guard !selectedDates.isEmpty else { return [] }
+        return CanonicalBusinessEngine.collapsedBreakdownLines(
+            CanonicalBusinessEngine.weekendBookingBreakdown(
+                on: selectedDates.sorted(),
+                start: start,
+                end: end,
+                isBreakRemoved: isBreakRemoved,
+                fallbackPolicy: primarySelectedDatePolicy
+            )
+        )
     }
 
     private var scheduleBookingCalendarCardCompact: some View {
@@ -1384,15 +1451,9 @@ struct ScheduleOperativeView: View {
         }
 
         selectedDates = next
-        let policy = payrollPolicy(for: normalizedDate)
-        if PayrollTimePolicyCatalog.isWeekend(normalizedDate, calendar: calendar) {
-            dateSlotChoices[key] = .weekendCustomHours(on: normalizedDate, policy: policy)
-        } else {
-            dateSlotChoices[key] = sharedBulkChoice
-        }
-        if next.count == 1, let choice = dateSlotChoices[key] {
-            sharedBulkChoice = choice
-        }
+        // A new day takes the request's current hours; a change of selection kind resets them (1.18.0).
+        dateSlotChoices[key] = sharedBulkChoice
+        applyCustomHoursPrefillOnKindChange()
         quickSelectDays = nil
     }
 
@@ -1414,6 +1475,7 @@ struct ScheduleOperativeView: View {
         if dates.count == 1, let only = dates.sorted().first, let choice = dateSlotChoices[slotKey(for: only)] {
             sharedBulkChoice = choice
         }
+        applyCustomHoursPrefillOnKindChange()
     }
     
     private func generateDaysInMonth(start: Date, end: Date) -> [Date] {

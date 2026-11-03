@@ -499,6 +499,8 @@ fileprivate struct ManagerCustomHoursSheet: View {
     @State private var errorMessage: String?
     /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): the confirm step before saving hours over the unpaid break.
     @State private var breakWarningMessage: String?
+    /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for the request's days, worked out when the times change.
+    @State private var weekendBreakdownLines: [String] = []
 
     init(context: CustomHoursEditorContext, policy: OrgPayrollTimePolicy, onSave: @escaping (String, String, Bool) -> Void, onCancel: @escaping () -> Void) {
         self.context = context
@@ -509,8 +511,12 @@ fileprivate struct ManagerCustomHoursSheet: View {
         let seedE = context.seedEnd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // RULEBOOK 1.13.1 `weekendCustomHoursDefault`: a set-window weekend day opens on that day's window. One pair of
         // times for the whole request opens on the first selected Saturday's (1.17.0, web `customHoursPrefillForDates`).
+        // RULEBOOK 1.18.0 `customHoursPrefillForDays`: the pair for the whole selection, each day under its own rules.
         let prefillDay = CanonicalBusinessEngine.singlePairPrefillDay(context.days) ?? Date()
-        let prefill = CanonicalBusinessEngine.customHoursPrefill(on: prefillDay, policy: policy)
+        let dayPrefill = CanonicalBusinessEngine.customHoursPrefill(on: prefillDay, policy: policy)
+        let selection = CanonicalBusinessEngine.customHoursPrefill(on: context.days, fallbackPolicy: policy)
+            .flatMap { $0.kind == .mixed ? nil : $0 }
+        let prefill = (start: selection?.start ?? dayPrefill.start, end: selection?.end ?? dayPrefill.end)
         _startText = State(initialValue: seedS.isEmpty ? prefill.start : seedS)
         _endText = State(initialValue: seedE.isEmpty ? prefill.end : seedE)
         _breakRemoved = State(initialValue: context.seedBreakRemoved ?? false)
@@ -531,6 +537,7 @@ fileprivate struct ManagerCustomHoursSheet: View {
                     if !context.days.isEmpty {
                         WeekendBookingNoteView(days: context.days, policy: policy)
                     }
+                    WeekendBookingBreakdownView(lines: weekendBreakdownLines)
                 } footer: {
                     Text("Uses your organisation standard day (\(policy.standardDayStart)–\(policy.standardDayEnd)) as the default. Touching times (e.g. one job ends when the next starts) are allowed.")
                 }
@@ -543,6 +550,17 @@ fileprivate struct ManagerCustomHoursSheet: View {
             }
             .navigationTitle("Custom hours")
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: "\(startText)|\(endText)|\(breakRemoved)", initial: true) { _, _ in
+                weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownLines(
+                    CanonicalBusinessEngine.weekendBookingBreakdown(
+                        on: context.days,
+                        start: startText.trimmingCharacters(in: .whitespacesAndNewlines),
+                        end: endText.trimmingCharacters(in: .whitespacesAndNewlines),
+                        isBreakRemoved: breakRemoved,
+                        fallbackPolicy: policy
+                    )
+                )
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { onCancel() }
@@ -2243,6 +2261,8 @@ fileprivate struct ManagerSelfBookingEntryView: View {
     @State private var startTime: Date
     @State private var endTime: Date
     @State private var errorMessage: String?
+    /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for this day, worked out when the times change.
+    @State private var weekendBreakdownLines: [String] = []
 
     init(
         day: Date,
@@ -2296,6 +2316,9 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                     }
                 }
                 WeekendBookingNoteView(day: day, policy: policy)
+                if selectedSlot == .customHours {
+                    WeekendBookingBreakdownView(lines: weekendBreakdownLines)
+                }
 
                 VStack(spacing: 10) {
                     DatePicker("Start time", selection: $startTime, displayedComponents: .hourAndMinute)
@@ -2346,6 +2369,18 @@ fileprivate struct ManagerSelfBookingEntryView: View {
         .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
         .navigationTitle("Book yourself in")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: "\(hhmm(startTime))|\(hhmm(endTime))", initial: true) { _, _ in
+            // Saved with the break kept (`breakRemoved: false`), as the booking flow writes it.
+            weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownLines(
+                CanonicalBusinessEngine.weekendBookingBreakdown(
+                    on: [day],
+                    start: hhmm(startTime),
+                    end: hhmm(endTime),
+                    isBreakRemoved: false,
+                    fallbackPolicy: policy
+                )
+            )
+        }
     }
 
     private var timelineCard: some View {
