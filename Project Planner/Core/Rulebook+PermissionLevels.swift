@@ -146,6 +146,22 @@ extension CanonicalBusinessEngine {
         return out
     }
 
+    /// `accountTypeWritePermissions(kind, person, screen)` (RULEBOOK 1.15.0 §11): the toggles a "Change user type" save
+    /// writes — every stored toggle kept (`accountTypePermissions`), only the level flags changed, then the screen's
+    /// values for the toggles the new level can change. Nil when the script did not answer.
+    nonisolated static func accountTypeWritePermissions(
+        kind: RulebookPermissionLevel,
+        person: [String: Any],
+        screen: [String: Bool]
+    ) -> [String: Bool]? {
+        boolMap(callJSON("accountTypeWritePermissions", arguments: [kind.rawValue, person, screen]))
+    }
+
+    /// `accountTypePermissions(kind, previous)` (1.15.0): the stored toggles with only the level flags changed.
+    nonisolated static func accountTypePermissions(kind: RulebookPermissionLevel, previous: [String: Any]) -> [String: Bool]? {
+        boolMap(callJSON("accountTypePermissions", arguments: [kind.rawValue, previous]))
+    }
+
     /// `permissionLevelOf(user)`. Nil when the script did not answer.
     nonisolated static func permissionLevelOf(_ subject: [String: Any]) -> RulebookPermissionLevel? {
         (callJSON("permissionLevelOf", arguments: [subject]) as? String).flatMap(RulebookPermissionLevel.init(rawValue:))
