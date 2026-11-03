@@ -2235,10 +2235,29 @@ class FirebaseBackend: ObservableObject {
     static func jobs(fromDocuments documents: [(id: String, data: [String: Any])], smallWorks: Bool) -> [Project] {
         documents.compactMap { doc -> Project? in
             guard let row = CanonicalBusinessEngine.parseJobDocument(documentId: doc.id, data: doc.data, smallWorks: smallWorks) else {
+                NSLog(
+                    "JOB_DOCUMENT_REFUSED collection=%@ id=%@ reason=%@",
+                    smallWorks ? "smallWorks" : "projects",
+                    doc.id,
+                    jobRefusalReason(documentId: doc.id)
+                )
                 return nil
             }
             return job(fromCanonical: row, smallWorks: smallWorks, storedManagerName: doc.data["manager"])
         }
+    }
+
+    /// Why `parseJobDocument` returned nothing for a document, for the `JOB_DOCUMENT_REFUSED` log line. The reader
+    /// refuses only a blank id and the legacy placeholder (`workDocuments` drops the same); anything else means the
+    /// packed script did not answer, which is a device fault, not the document.
+    nonisolated static func jobRefusalReason(documentId: String) -> String {
+        if documentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "blank document id" }
+        if let kept = CanonicalBusinessEngine.workDocuments(projects: [["id": documentId]], smallWorks: []), kept.isEmpty {
+            return "legacy placeholder document (workDocuments)"
+        }
+        return ReaderDiagnostics.scriptAnswers()
+            ? "parseJobDocument returned nothing"
+            : "rulebook script did not answer"
     }
 
     /// One `parseJobDocument` row as a `Project`. `storedManagerName` is the legacy `manager` label (the reader

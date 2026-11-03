@@ -263,8 +263,11 @@ nonisolated enum JobAccessContext {
     }
 
     /// Labour and manager site bookings on screen: the job ids an operative reads one by one (`jobQueryPlan`).
+    /// Every labour booking's job, cancelled ones included, as web `replanOperativeJobs` passes them; the job lists
+    /// still show only the jobs of bookings that occupy a day. Filtering here first meant iOS read fewer job
+    /// documents than web for the same operative.
     @MainActor static func updateOperativeJobIds(bookings: [Booking], managerBookings: [ManagerSiteBooking]) {
-        var ids = bookings.filter(\.occupiesDay).map(\.storedProjectId)
+        var ids = bookings.map(\.storedProjectId)
         for booking in managerBookings where booking.locationType == .project || booking.locationType == .smallWork {
             if let key = booking.locationKey ?? booking.locationId.map({ WorkDocumentKeys.storedId(for: $0) }) { ids.append(key) }
         }

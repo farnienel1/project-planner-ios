@@ -21,6 +21,10 @@ class ProjectStore: ObservableObject {
     }
     /// Bumped on every change to `projects`, so booking-flow conflict labels can be memoised per data version.
     private(set) var revision = 0
+    /// The last read of the `smallWorks` collection (load or listener), every document the rulebook reader accepted.
+    /// `smallWorks` lists from `projects`, plus any of these whose id a `projects` document also holds (that id is
+    /// kept once in `projects`, as the project): web lists each collection on its own screen, so neither is lost.
+    @Published private(set) var smallWorksDocuments: [Project] = []
     @Published var clients: [Client] = []
     @Published var jobTypes: Set<String> = []
     @Published var isLoading: Bool = false
@@ -316,6 +320,7 @@ class ProjectStore: ObservableObject {
                             cachedSlice: cachedSmallWorks,
                             isSmallWorks: true
                         )
+                        if smallWorksLoaded { self.smallWorksDocuments = firebaseSmallWorks }
                         self.projects = merged
                         let usedFallback =
                             (!projectsLoaded || (firebaseProjects.isEmpty && merged.contains { $0.jobType != .smallWorks })) ||
@@ -562,6 +567,7 @@ class ProjectStore: ObservableObject {
             rowCount: rowCount,
             collection: smallWorks ? "smallWorks" : "projects"
         ) else { return }
+        if smallWorks, smallWorksDocuments != nextSlice { smallWorksDocuments = nextSlice }
         let incomingIds = Set(nextSlice.map(\.id))
         nextSlice += existingSlice.filter { pendingCreateIds.contains($0.id) && !incomingIds.contains($0.id) }
         guard nextSlice != existingSlice else { return }
@@ -584,6 +590,7 @@ class ProjectStore: ObservableObject {
         isLoading = false
         finishedLoadOrganizationId = nil
         projects = []
+        smallWorksDocuments = []
         clients = []
         jobTypes = []
         errorMessage = nil
@@ -879,7 +886,10 @@ class ProjectStore: ObservableObject {
     
     func deleteProject(_ project: Project) async {
         let projectName = project.siteName
-        projects.removeAll { $0.id == project.id }
+        // Only this collection's row: a project and a small works document may share an id (`smallWorksList`).
+        let isSmallWorks = project.jobType == .smallWorks
+        projects.removeAll { $0.id == project.id && ($0.jobType == .smallWorks) == isSmallWorks }
+        if isSmallWorks { smallWorksDocuments.removeAll { $0.id == project.id } }
         
         // Delete from Firebase if available
         if let firebaseBackend = firebaseBackend,
@@ -980,9 +990,20 @@ class ProjectStore: ObservableObject {
         projects.filter { $0.isLive && $0.jobType != .smallWorks }
     }
     
-    /// Live small-works rows — subset of `projects` (same ids). Do not concatenate with `projects`.
+    /// Every small works job, live or not — what web's Small works list shows (`loadSmallWorks` keeps inactive jobs;
+    /// the list files them under Completed). It used to keep `isLive` jobs only, so a small works job switched off
+    /// on web vanished from iOS (Projects never had that filter). Rows come from `projects`, plus a small works
+    /// document whose id a project also holds (`ProjectWorksMerge.smallWorksList`). Pickers that need live jobs
+    /// filter `isLive` themselves. Do not concatenate with `projects`.
     var smallWorks: [Project] {
-        projects.filter { $0.isLive && $0.jobType == .smallWorks }
+        ProjectWorksMerge.smallWorksList(store: projects, smallWorksDocuments: smallWorksDocuments)
+    }
+
+    /// Stored job documents this device holds, for the Settings footer (`Projects N · Small works M`), so the
+    /// counts can be compared with web at a glance.
+    var jobDocumentCountsLine: String {
+        let projectCount = projects.filter { $0.jobType != .smallWorks }.count
+        return "Projects \(projectCount) · Small works \(smallWorks.count)"
     }
 
     /// All loaded works for scheduling/warnings lookups (includes small works).
@@ -1117,6 +1138,7 @@ class ProjectStore: ObservableObject {
 
     func clearAllData() async {
         projects.removeAll()
+        smallWorksDocuments.removeAll()
         clients.removeAll()
         jobTypes.removeAll()
         await saveData()

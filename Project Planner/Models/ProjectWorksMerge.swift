@@ -18,23 +18,6 @@ enum ProjectWorksMerge {
         return result
     }
 
-    /// Collapse legacy duplicates where the same job number exists in both collections.
-    static func dedupeByJobNumber(_ projects: [Project]) -> [Project] {
-        var byJob: [String: Project] = [:]
-        let sorted = projects.sorted { $0.updatedAt > $1.updatedAt }
-        for project in sorted {
-            let key = project.jobNumber.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if key.isEmpty {
-                byJob[project.id.uuidString] = project
-            } else if byJob[key] == nil {
-                byJob[key] = project
-            } else if project.jobType == .smallWorks, byJob[key]?.jobType != .smallWorks {
-                byJob[key] = project
-            }
-        }
-        return Array(byJob.values)
-    }
-
     /// Every job document, once: `workDocuments` (placeholders and exact duplicate ids out; two
     /// documents may share a job number, and bookings point at either, so both stay).
     ///
@@ -52,10 +35,40 @@ enum ProjectWorksMerge {
         }
         var byId: [String: Project] = [:]
         let projectsFirst = projects.filter { $0.jobType != .smallWorks } + projects.filter { $0.jobType == .smallWorks }
-        for project in projectsFirst where byId[project.id.uuidString] == nil {
+        for project in projectsFirst {
+            if let first = byId[project.id.uuidString] {
+                // Not lost: a small works document whose id a projects document also holds is still listed under
+                // Small works (`smallWorksList`), as web lists each collection on its own screen.
+                NSLog(
+                    "JOB_DOCUMENT_SHARES_ID id=%@ kept=%@ alsoIn=%@",
+                    project.documentId,
+                    first.jobType == .smallWorks ? "smallWorks" : "projects",
+                    project.jobType == .smallWorks ? "smallWorks" : "projects"
+                )
+                continue
+            }
             byId[project.id.uuidString] = project
         }
         return kept.compactMap { ($0["id"] as? String).flatMap { byId[$0] } }
+    }
+
+    /// The Small works list: every `smallWorks` document as read, as web lists the collection (`loadSmallWorks`).
+    ///
+    /// `store` is the store's job list (`uniqueWorks`, one row per id: when a `projects` and a `smallWorks` document
+    /// share an id the project is kept there, so job lookups and pickers see one job). `smallWorksDocuments` is the
+    /// last read of the `smallWorks` collection. A small works document that lost its id to a project in `store` is
+    /// added back here, so it is never missing from Small works while web shows it. Every other small works row
+    /// comes from `store`, so local creates, edits and deletes show at once.
+    static func smallWorksList(store: [Project], smallWorksDocuments: [Project]) -> [Project] {
+        var list = store.filter { $0.jobType == .smallWorks }
+        var listed = Set(list.map(\.id))
+        let projectIds = Set(store.filter { $0.jobType != .smallWorks }.map(\.id))
+        for document in smallWorksDocuments where document.jobType == .smallWorks
+            && projectIds.contains(document.id)
+            && listed.insert(document.id).inserted {
+            list.append(document)
+        }
+        return list
     }
 
     /// Merge one collection (projects or small works) without letting an empty/failed

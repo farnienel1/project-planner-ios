@@ -175,17 +175,28 @@ struct WorksListStatusCounts {
 
     var all: Int { active + upcoming + completed }
 
+    /// Web `countWorksByTab`: an inactive job (`workStatusOn` → inactive, `isLive` false) is counted under
+    /// Completed, so All is every job on the list. iOS used to drop inactive jobs from every count and every chip
+    /// except All, so a job switched off on web was missing from Completed here.
     static func from(_ projects: [Project]) -> WorksListStatusCounts {
         var a = 0, u = 0, c = 0
         for p in projects {
             switch p.status {
             case .active: a += 1
             case .upcoming: u += 1
-            case .completed: c += 1
-            case .inactive: break
+            case .completed, .inactive: c += 1
             }
         }
         return WorksListStatusCounts(active: a, upcoming: u, completed: c)
+    }
+
+    /// Web `filterWorksByTab`: nil (All) keeps every job; Completed keeps completed and inactive jobs; Active and
+    /// Upcoming keep that status. The status itself is the rulebook's (`Project.status`, `workStatusOn`).
+    static func matches(_ project: Project, chip: ProjectStatus?) -> Bool {
+        guard let chip else { return true }
+        let status = project.status
+        if chip == .completed || chip == .inactive { return status == .completed || status == .inactive }
+        return status == chip
     }
 }
 

@@ -494,7 +494,7 @@ struct ProjectsView: View {
         var projects = projectsBeforeStatusFilter
         
         if let status = selectedStatus {
-            projects = projects.filter { $0.status == status }
+            projects = projects.filter { WorksListStatusCounts.matches($0, chip: status) }
         }
         
         return projects
