@@ -212,7 +212,8 @@ final class BookingConflictGate: ObservableObject {
         }
         let next = Pending(rows: rows, onConfirm: onConfirm)
         if afterDismiss {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 450_000_000)
                 self?.pending = next
             }
         } else {
