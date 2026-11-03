@@ -464,10 +464,12 @@ private struct LoginAutofillField: UIViewRepresentable {
     }
 
     private func applyChrome(to field: UITextField) {
-        field.isSecureTextEntry = isSecure
-        field.textContentType = contentType
-        field.keyboardType = keyboardType
-        field.returnKeyType = returnKey
+        // Only touch traits that changed: this runs on every SwiftUI update (each keystroke clears the
+        // error banner), and re-setting input traits on the field that has the keyboard can reset it.
+        if field.isSecureTextEntry != isSecure { field.isSecureTextEntry = isSecure }
+        if field.textContentType != contentType { field.textContentType = contentType }
+        if field.keyboardType != keyboardType { field.keyboardType = keyboardType }
+        if field.returnKeyType != returnKey { field.returnKeyType = returnKey }
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }

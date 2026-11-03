@@ -799,11 +799,11 @@ private struct MyTasksRedesignTaskCard: View {
     private var statusPill: some View {
         switch resolvedTask.status {
         case .todo:
-            statusCapsule(text: "To do", fg: MyTasksScreenPalette.muted, bg: Color(red: 242 / 255, green: 243 / 255, blue: 245 / 255), icon: "circle.dashed")
+            statusCapsule(text: "To do", fg: MyTasksScreenPalette.muted, bg: ProjectWorksRevampColors.grayTint, icon: "circle.dashed")
         case .inProgress:
-            statusCapsule(text: "In progress", fg: MyTasksScreenPalette.inProgressCount, bg: Color(red: 250 / 255, green: 238 / 255, blue: 218 / 255), icon: "chart.line.uptrend.xyaxis")
+            statusCapsule(text: "In progress", fg: MyTasksScreenPalette.inProgressCount, bg: ProjectWorksRevampColors.amberTint, icon: "chart.line.uptrend.xyaxis")
         case .completed:
-            statusCapsule(text: "Done", fg: MyTasksScreenPalette.doneCount, bg: Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255), icon: "checkmark.circle.fill")
+            statusCapsule(text: "Done", fg: MyTasksScreenPalette.doneCount, bg: ProjectWorksRevampColors.greenTint, icon: "checkmark.circle.fill")
         }
     }
 
@@ -840,13 +840,13 @@ private struct MyTasksRedesignTaskCard: View {
     private var priorityColors: (Color, Color, Color) {
         switch resolvedTask.priority {
         case .low:
-            return (MyTasksScreenPalette.muted, Color(red: 242 / 255, green: 243 / 255, blue: 245 / 255), MyTasksScreenPalette.muted)
+            return (MyTasksScreenPalette.muted, ProjectWorksRevampColors.grayTint, MyTasksScreenPalette.muted)
         case .normal:
-            return (MyTasksScreenPalette.inProgressCount, Color(red: 250 / 255, green: 238 / 255, blue: 218 / 255), MyTasksScreenPalette.inProgressCount)
+            return (MyTasksScreenPalette.inProgressCount, ProjectWorksRevampColors.amberTint, MyTasksScreenPalette.inProgressCount)
         case .high:
-            return (MyTasksScreenPalette.overdueCount, Color(red: 252 / 255, green: 235 / 255, blue: 235 / 255), MyTasksScreenPalette.overdueCount)
+            return (MyTasksScreenPalette.overdueCount, ProjectWorksRevampColors.requiredPillBg, MyTasksScreenPalette.overdueCount)
         case .urgent:
-            return (MyTasksScreenPalette.overdueCount, Color(red: 252 / 255, green: 235 / 255, blue: 235 / 255), MyTasksScreenPalette.overdueCount)
+            return (MyTasksScreenPalette.overdueCount, ProjectWorksRevampColors.requiredPillBg, MyTasksScreenPalette.overdueCount)
         }
     }
 

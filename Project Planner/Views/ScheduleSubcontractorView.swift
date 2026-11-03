@@ -135,7 +135,7 @@ struct ScheduleSubcontractorView: View {
                                 .foregroundStyle(selectedTypeFilter == type ? .white : .secondary)
                                 .padding(.horizontal, 11)
                                 .padding(.vertical, 6)
-                                .background(selectedTypeFilter == type ? Color.purple : Color.white)
+                                .background(selectedTypeFilter == type ? Color.purple : ProjectWorksRevampColors.chipSurface)
                                 .clipShape(Capsule())
                                 .overlay(
                                     Capsule().stroke(Color(.systemGray5), lineWidth: selectedTypeFilter == type ? 0 : 0.8)

@@ -98,11 +98,11 @@ struct BookingClashWarningCard: View {
 
             footer
         }
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
         )
         .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 2)
     }
@@ -142,11 +142,11 @@ struct BookingClashWarningCard: View {
         VStack(alignment: .leading, spacing: 4) {
             (Text(personName).fontWeight(.semibold) + Text(" is booked in \(placeWord) places on \(dateLabel)."))
                 .font(.system(size: 14.5))
-                .foregroundStyle(Color(red: 0.071, green: 0.106, blue: 0.137))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
                 .fixedSize(horizontal: false, vertical: true)
             Text("Approve if it’s intentional and it’ll be noted on the weekly report.")
                 .font(.system(size: 13.5))
-                .foregroundStyle(Color(red: 0.424, green: 0.424, blue: 0.447))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -161,34 +161,34 @@ struct BookingClashWarningCard: View {
                 .clipShape(Circle())
             Text(personName)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Color(red: 0.071, green: 0.106, blue: 0.137))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
                 .lineLimit(2)
             Spacer(minLength: 8)
             Text(dateLabel)
                 .font(.system(size: 13, weight: .regular).monospacedDigit())
-                .foregroundStyle(Color(red: 0.424, green: 0.424, blue: 0.447))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
         }
     }
 
     private var summaryRow: some View {
-        let clash = Color(red: 0.702, green: 0.149, blue: 0.118)
+        let clash = ProjectWorksRevampColors.requiredPillFg
         return HStack(spacing: 8) {
             Text("\(WarningTimelineMath.formatDuration(minutes: analysis.minutes)) overlap")
                 .font(.system(size: 14.5, weight: .semibold).monospacedDigit())
                 .foregroundStyle(clash)
             if let start = analysis.startMinutes, let end = analysis.endMinutes {
                 Text("·")
-                    .foregroundStyle(Color(red: 0.604, green: 0.604, blue: 0.627))
+                    .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
                 Text("\(WarningTimelineMath.formatClock(start))–\(WarningTimelineMath.formatClock(end))")
                     .font(.system(size: 13).monospacedDigit())
-                    .foregroundStyle(Color(red: 0.424, green: 0.424, blue: 0.447))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
             }
             if analysis.peak > 2 {
                 Text("·")
-                    .foregroundStyle(Color(red: 0.604, green: 0.604, blue: 0.627))
+                    .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
                 Text("up to \(analysis.peak) at once")
                     .font(.system(size: 13).monospacedDigit())
-                    .foregroundStyle(Color(red: 0.424, green: 0.424, blue: 0.447))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
             }
             Spacer(minLength: 0)
         }
@@ -212,7 +212,7 @@ struct BookingClashWarningCard: View {
         .padding(.horizontal, 12)
         .padding(.top, 11)
         .padding(.bottom, 7)
-        .background(Color(red: 0.945, green: 0.949, blue: 0.965))
+        .background(ProjectWorksRevampColors.grayTint)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
@@ -220,11 +220,11 @@ struct BookingClashWarningCard: View {
         VStack(spacing: 0) {
             ForEach(Array(entries.enumerated()), id: \.element.rowId) { index, entry in
                 if index > 0 {
-                    Rectangle().fill(Color.black.opacity(0.08)).frame(height: 0.5)
+                    Rectangle().fill(ProjectWorksRevampColors.border).frame(height: 0.5)
                 }
                 bookingRow(entry: entry, palette: palette(at: index))
             }
-            Rectangle().fill(Color.black.opacity(0.08)).frame(height: 0.5)
+            Rectangle().fill(ProjectWorksRevampColors.border).frame(height: 0.5)
             Button {
                 withAnimation(.easeInOut(duration: 0.18)) { timelineOpen.toggle() }
             } label: {
@@ -235,7 +235,7 @@ struct BookingClashWarningCard: View {
                         .rotationEffect(.degrees(timelineOpen ? 180 : 0))
                 }
                 .font(.system(size: 13.5, weight: .medium))
-                .foregroundStyle(Color(red: 0.039, green: 0.400, blue: 0.839))
+                .foregroundStyle(ProjectWorksRevampColors.blue)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 11)
                 .frame(minHeight: 44)
@@ -245,7 +245,7 @@ struct BookingClashWarningCard: View {
         }
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
@@ -271,7 +271,7 @@ struct BookingClashWarningCard: View {
                     }
                     Text(entry.displayTitle)
                         .font(.system(size: 14.5, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.071, green: 0.106, blue: 0.137))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
                 }
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -281,10 +281,10 @@ struct BookingClashWarningCard: View {
                     + Text(" · ")
                     + Text("\(WarningTimelineMath.formatDuration(minutes: mine)) clashing")
                         .fontWeight(.semibold)
-                        .foregroundColor(Color(red: 0.702, green: 0.149, blue: 0.118))
+                        .foregroundColor(ProjectWorksRevampColors.requiredPillFg)
                 )
                 .font(.system(size: 12.5).monospacedDigit())
-                .foregroundStyle(Color(red: 0.424, green: 0.424, blue: 0.447))
+                .foregroundStyle(ProjectWorksRevampColors.muted)
                 .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -294,9 +294,9 @@ struct BookingClashWarningCard: View {
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color(red: 0.702, green: 0.149, blue: 0.118))
+                    .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                     .frame(width: 34, height: 34)
-                    .background(Color(red: 0.937, green: 0.937, blue: 0.957))
+                    .background(ProjectWorksRevampColors.grayTint)
                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
             .accessibilityIdentifier("bookingClashWarningCard.removeEntryJobNumberMap")
@@ -312,7 +312,7 @@ struct BookingClashWarningCard: View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(entries.enumerated()), id: \.element.rowId) { index, entry in
                 if index > 0 {
-                    Rectangle().fill(Color.black.opacity(0.08)).frame(height: 0.5)
+                    Rectangle().fill(ProjectWorksRevampColors.border).frame(height: 0.5)
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -326,11 +326,11 @@ struct BookingClashWarningCard: View {
                         }
                         Text(entry.displayTitle)
                             .font(.system(size: 13.5))
-                            .foregroundStyle(Color(red: 0.071, green: 0.106, blue: 0.137))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text(timeText(entry))
                             .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(Color(red: 0.424, green: 0.424, blue: 0.447))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
                     clashLane(entry: entry, palette: palette(at: index), height: 14, corner: 5)
                 }
@@ -340,7 +340,7 @@ struct BookingClashWarningCard: View {
         .padding(.horizontal, 12)
         .padding(.top, 12)
         .padding(.bottom, 8)
-        .background(Color(red: 0.945, green: 0.949, blue: 0.965))
+        .background(ProjectWorksRevampColors.grayTint)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
@@ -377,7 +377,7 @@ struct BookingClashWarningCard: View {
             Button(action: onOpenDay) {
                 Text("Open daily overview")
                     .font(.system(size: 14.5, weight: .medium))
-                    .foregroundStyle(Color(red: 0.039, green: 0.400, blue: 0.839))
+                    .foregroundStyle(ProjectWorksRevampColors.blue)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
                     .frame(minHeight: 46)
@@ -390,7 +390,7 @@ struct BookingClashWarningCard: View {
             Button(action: onRemoveWarning) {
                 Text("Dismiss")
                     .font(.system(size: 14.5, weight: .medium))
-                    .foregroundStyle(Color(red: 0.424, green: 0.424, blue: 0.447))
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
                     .frame(minHeight: 46)
@@ -399,7 +399,7 @@ struct BookingClashWarningCard: View {
             .buttonStyle(.plain)
         }
         .overlay(alignment: .top) {
-            Rectangle().fill(Color.black.opacity(0.08)).frame(height: 0.5)
+            Rectangle().fill(ProjectWorksRevampColors.border).frame(height: 0.5)
         }
     }
 
@@ -408,7 +408,7 @@ struct BookingClashWarningCard: View {
             let w = finiteWidth(geo.size.width)
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .fill(Color(red: 0.937, green: 0.937, blue: 0.957))
+                    .fill(ProjectWorksRevampColors.grayTint)
                 ForEach(Array(analysis.regions.enumerated()), id: \.offset) { _, region in
                     let left = max(0, WarningTimelineMath.fraction(in: window, minutes: region.startMinutes)) * w
                     let right = min(1, WarningTimelineMath.fraction(in: window, minutes: region.endMinutes)) * w
@@ -459,7 +459,7 @@ struct BookingClashWarningCard: View {
                     let x = WarningTimelineMath.fraction(in: window, minutes: tick) * width
                     Text(WarningTimelineMath.formatClock(tick))
                         .font(.system(size: 10).monospacedDigit())
-                        .foregroundStyle(Color(red: 0.604, green: 0.604, blue: 0.627))
+                        .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
                         .offset(x: axisOffset(x: x, index: index, last: index == ticks.count - 1, width: width))
                 }
             }
@@ -506,21 +506,23 @@ struct BookingClashWarningCard: View {
 private enum ClashBarPalette: CaseIterable {
     case green, blue, indigo, amber
 
+    /// Text and swatch colour. Lighter in dark mode so it reads on the dark card.
     var ink: Color {
         switch self {
-        case .green: return Color(red: 0.090, green: 0.447, blue: 0.290)
-        case .blue: return Color(red: 0.039, green: 0.373, blue: 0.753)
-        case .indigo: return Color(red: 0.290, green: 0.247, blue: 0.753)
-        case .amber: return Color(red: 0.604, green: 0.357, blue: 0.031)
+        case .green: return ProjectWorksRevampColors.activeGreen
+        case .blue: return ProjectWorksRevampColors.blue
+        case .indigo: return ProjectWorksRevampColors.jobTypePillInk
+        case .amber: return ProjectWorksRevampColors.upcomingAmber
         }
     }
 
+    /// Icon tile fill behind `ink`. Darker in dark mode.
     var soft: Color {
         switch self {
-        case .green: return Color(red: 0.875, green: 0.945, blue: 0.910)
-        case .blue: return Color(red: 0.886, green: 0.933, blue: 0.984)
-        case .indigo: return Color(red: 0.906, green: 0.898, blue: 0.984)
-        case .amber: return Color(red: 0.984, green: 0.937, blue: 0.863)
+        case .green: return ProjectWorksRevampColors.greenTint
+        case .blue: return ProjectWorksRevampColors.blueTint
+        case .indigo: return ProjectWorksRevampColors.jobTypePillBg
+        case .amber: return ProjectWorksRevampColors.amberTint
         }
     }
 

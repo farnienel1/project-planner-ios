@@ -333,7 +333,7 @@ struct CreateSmallWorksView: View {
                         .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(Color(red: 0.882, green: 0.961, blue: 0.933))
+                        .background(ProjectWorksRevampColors.greenTint)
                         .clipShape(Capsule())
                 } else {
                     Text("REQUIRED")
@@ -387,7 +387,7 @@ struct CreateSmallWorksView: View {
         } label: {
             HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(red: 0.97, green: 0.973, blue: 0.98))
+                    .fill(ProjectWorksRevampColors.canvas)
                     .frame(width: 30, height: 30)
                     .overlay(
                         Image(systemName: "chevron.down")
@@ -427,7 +427,7 @@ struct CreateSmallWorksView: View {
             Divider().overlay(ProjectWorksRevampColors.border)
             createFieldRow(
                 icon: "square.dashed",
-                iconBg: Color(red: 0.97, green: 0.973, blue: 0.98),
+                iconBg: ProjectWorksRevampColors.canvas,
                 iconTint: ProjectWorksRevampColors.muted,
                 label: "Address line 2 · Optional",
                 prompt: "Flat, unit, floor",
@@ -438,7 +438,7 @@ struct CreateSmallWorksView: View {
             Divider().overlay(ProjectWorksRevampColors.border)
             createFieldRow(
                 icon: "building.2",
-                iconBg: Color(red: 0.97, green: 0.973, blue: 0.98),
+                iconBg: ProjectWorksRevampColors.canvas,
                 iconTint: ProjectWorksRevampColors.muted,
                 label: "Town / City",
                 prompt: "e.g. London",
@@ -449,7 +449,7 @@ struct CreateSmallWorksView: View {
             Divider().overlay(ProjectWorksRevampColors.border)
             createFieldRow(
                 icon: "envelope",
-                iconBg: Color(red: 0.97, green: 0.973, blue: 0.98),
+                iconBg: ProjectWorksRevampColors.canvas,
                 iconTint: ProjectWorksRevampColors.muted,
                 label: "Postcode",
                 prompt: "e.g. SW7 1DR",
@@ -496,7 +496,7 @@ struct CreateSmallWorksView: View {
 
     private var timelineCard: some View {
         VStack(spacing: 0) {
-            dateRow(icon: "calendar", iconBg: Color(red: 0.882, green: 0.961, blue: 0.933), iconTint: ProjectWorksRevampColors.activeGreen, label: "Start date", date: $projectStartDate)
+            dateRow(icon: "calendar", iconBg: ProjectWorksRevampColors.greenTint, iconTint: ProjectWorksRevampColors.activeGreen, label: "Start date", date: $projectStartDate)
             Divider().overlay(ProjectWorksRevampColors.border)
             dateRow(icon: "flag.fill", iconBg: ProjectWorksRevampColors.endDateBg, iconTint: ProjectWorksRevampColors.endDateFg, label: "End date", date: $projectEndDate)
         }
@@ -561,7 +561,7 @@ struct CreateSmallWorksView: View {
     private var clientMenuRow: some View {
         HStack(spacing: 12) {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(red: 0.98, green: 0.933, blue: 0.855))
+                .fill(ProjectWorksRevampColors.amberTint)
                 .frame(width: 30, height: 30)
                 .overlay(Image(systemName: "building.2.fill").foregroundStyle(ProjectWorksRevampColors.upcomingAmber))
             VStack(alignment: .leading, spacing: 2) {

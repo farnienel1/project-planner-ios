@@ -1037,7 +1037,7 @@ struct ManageUserRowView: View {
             items.append(.init(label: trade, foreground: ManageUserProfilePalette.textSecondary, background: ProjectWorksRevampColors.grayTint, border: ProjectWorksRevampColors.searchBorder))
         }
         if user.rosterSegment == .inactive {
-            items.append(.init(label: "Inactive", foreground: ManageUserProfilePalette.textSecondary, background: Color(red: 0xEC / 255, green: 0xEC / 255, blue: 0xEF / 255), border: nil))
+            items.append(.init(label: "Inactive", foreground: ManageUserProfilePalette.textSecondary, background: ProjectWorksRevampColors.grayTint, border: nil))
         } else if user.rosterSegment == .pending {
             items.append(.init(label: "Pending invite", foreground: Color(red: 0xE0 / 255, green: 0x86 / 255, blue: 0x00 / 255), background: Color(red: 0xFF / 255, green: 0xF5 / 255, blue: 0xE6 / 255), border: nil))
         } else if user.passwordSet {
@@ -2656,7 +2656,7 @@ struct EditUserView: View {
             }
             .padding(22)
             .frame(maxWidth: 340)
-            .background(Color.white)
+            .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .shadow(color: Color.black.opacity(0.16), radius: 24, y: 10)
             .padding(.horizontal, 28)

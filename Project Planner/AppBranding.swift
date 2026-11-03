@@ -57,9 +57,9 @@ struct AppLaunchSplashView: View {
                 .controlSize(.regular)
             Text("Loading your jobs")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color.black.opacity(0.55))
+                .foregroundStyle(Color.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.white)
+        .background(Color(.systemBackground))
     }
 }

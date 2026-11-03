@@ -286,11 +286,11 @@ struct OrganisationWorkingHoursView: View {
                 .foregroundStyle(Color(red: 0.063, green: 0.725, blue: 0.506))
             Text("Working hours saved. New bookings will use these rules.")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color(red: 0.047, green: 0.459, blue: 0.294))
+                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(red: 0.925, green: 0.992, blue: 0.961))
+        .background(ProjectWorksRevampColors.successTint)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -361,7 +361,7 @@ struct OrganisationWorkingHoursView: View {
                 .padding(.top, 4)
             Text(label)
                 .font(.footnote.weight(.bold))
-                .foregroundStyle(Color(red: 0.2, green: 0.255, blue: 0.333))
+                .foregroundStyle(WorkingHoursPalette.ink)
                 .frame(width: 64, alignment: .leading)
             Text(text)
                 .font(.footnote)
@@ -757,7 +757,7 @@ struct OrganisationWorkingHoursView: View {
                 .accessibilityIdentifier("organisationWorkingHours.save")
                 .buttonStyle(.plain)
                 .foregroundStyle(isDirty ? Color.white : WorkingHoursPalette.muted)
-                .background(isDirty ? WorkingHoursPalette.indigo : Color(red: 0.82, green: 0.84, blue: 0.87))
+                .background(isDirty ? WorkingHoursPalette.indigo : ProjectWorksRevampColors.disabledFill)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: isDirty ? WorkingHoursPalette.indigo.opacity(0.25) : .clear, radius: 4, y: 2)
                 .disabled(!isDirty || !isFormValid || isSaving)
@@ -846,7 +846,7 @@ struct OrganisationWorkingHoursView: View {
 
     private var cardDivider: some View {
         Rectangle()
-            .fill(Color(red: 0.945, green: 0.961, blue: 0.976))
+            .fill(ProjectWorksRevampColors.wellFill)
             .frame(height: 1)
     }
 
@@ -870,11 +870,11 @@ struct OrganisationWorkingHoursView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color(red: 0.973, green: 0.980, blue: 0.988))
+        .background(ProjectWorksRevampColors.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color(red: 0.945, green: 0.961, blue: 0.976), lineWidth: 1)
+                .strokeBorder(ProjectWorksRevampColors.wellFill, lineWidth: 1)
         )
     }
 
@@ -1241,7 +1241,7 @@ private struct WorkingHoursSegmentedPicker: View {
             }
         }
         .padding(3)
-        .background(Color(red: 0.945, green: 0.961, blue: 0.976))
+        .background(ProjectWorksRevampColors.wellFill)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
@@ -1304,7 +1304,7 @@ private struct WorkingHoursStepper: View {
             .accessibilityIdentifier("workingHoursStepper.button2")
             .buttonStyle(.plain)
         }
-        .background(Color(red: 0.945, green: 0.961, blue: 0.976))
+        .background(ProjectWorksRevampColors.wellFill)
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 
@@ -1338,7 +1338,7 @@ private struct WorkingHoursMultiplierField: View {
                 .foregroundStyle(accent)
                 .frame(width: 56)
                 .padding(.vertical, 8)
-                .background(Color(red: 0.973, green: 0.980, blue: 0.988))
+                .background(ProjectWorksRevampColors.canvas)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1375,7 +1375,7 @@ private struct WorkingHoursTimeField: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(red: 0.973, green: 0.980, blue: 0.988))
+        .background(ProjectWorksRevampColors.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 13, style: .continuous)
@@ -1439,7 +1439,7 @@ private struct WorkingHoursDayTimeline: View {
             let breakTo = ManagerScheduleInterval.parseMinutes(breakEnd) ?? start
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(red: 1.0, green: 0.945, blue: 0.812))
+                    .fill(ProjectWorksRevampColors.amberTint)
                 if end > start {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(WorkingHoursPalette.indigo)
@@ -1481,7 +1481,7 @@ private struct WorkingHoursTimelineBar: View {
             let we = ManagerScheduleInterval.parseMinutes(windowEnd) ?? axisEndMinutes
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color(red: 0.945, green: 0.961, blue: 0.976))
+                    .fill(ProjectWorksRevampColors.wellFill)
                 if we > ws {
                     Capsule()
                         .fill(accentColor)

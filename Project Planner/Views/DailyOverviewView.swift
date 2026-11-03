@@ -1604,7 +1604,7 @@ struct ProjectBookingCard: View {
             HStack(alignment: .top, spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(smallWorksFlow ? Color(red: 0.98, green: 0.933, blue: 0.855) : Color(red: 0.882, green: 0.961, blue: 0.933))
+                        .fill(smallWorksFlow ? ProjectWorksRevampColors.amberTint : ProjectWorksRevampColors.greenTint)
                         .frame(width: 32, height: 32)
                     Image(systemName: smallWorksFlow ? "hammer.fill" : "folder.fill")
                         .font(.system(size: 16, weight: .medium))
@@ -1695,12 +1695,12 @@ struct ProjectBookingCard: View {
                 .foregroundStyle(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber.opacity(0.16) : Color(red: 0.882, green: 0.961, blue: 0.933))
+                .background(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber.opacity(0.16) : ProjectWorksRevampColors.greenTint)
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
             if isEditable {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                    .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
             }
         }
         .padding(.vertical, 7)

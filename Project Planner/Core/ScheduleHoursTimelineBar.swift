@@ -120,7 +120,7 @@ struct ScheduleHoursTimelineBar: View {
 
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
+                    .fill(ProjectWorksRevampColors.grayTint)
 
                 ForEach(resolvedIntervals) { interval in
                     intervalLayers(interval, xPos: xPos, height: h)
