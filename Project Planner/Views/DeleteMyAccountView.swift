@@ -164,13 +164,13 @@ struct DeleteMyAccountView: View {
         var orgRow: [String: Any] = ["id": org.firestoreDocumentId]
         if let creator = org.creatorUserId { orgRow["creatorUserId"] = creator }
         if let deletion = OrganizationBillingMap.dictionary(json: org.deletionJSON) { orgRow["deletion"] = deletion }
-        switch CanonicalBusinessEngine.accountDeletionPath(viewer: viewer, roster: roster, org: orgRow) {
+        switch CanonicalBusinessEngine.accountDeletionPath(viewer: viewer, roster: roster, org: orgRow) ?? .delete {
         case .handoverRequired:
             handoverMessage = CanonicalBusinessEngine.accountHandoverRequiredMessage
             showsDeleteButton = false
         case .deleteWithCompany:
             companiesToConfirm = [AccountDeletionClient.CompanyToDelete(orgId: org.firestoreDocumentId, orgName: org.name)]
-        case .delete, .none:
+        case .delete:
             break
         }
     }
