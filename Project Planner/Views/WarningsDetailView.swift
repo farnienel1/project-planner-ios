@@ -72,9 +72,20 @@ struct WarningsDetailView: View {
     @State private var warningPendingDismiss: Warning?
     @State private var isRefreshingWarnings = false
     @State private var refreshMessage: String?
+    /// Which inputs the first scan is still waiting for (`WarningInputsReadiness.waitingMessage`).
+    @State private var loadingInputsMessage: String?
     @State private var operativeUserToEdit: AppUser?
     /// The approved clash whose un-approve is being written.
     @State private var unapprovingKey: String?
+
+    /// Loading until a scan of loaded inputs has published; then the real count (`WarningsDisplayPhase`).
+    private var displayPhase: WarningsDisplayPhase {
+        WarningsDisplayPhase.phase(
+            hasCompletedLiveDetection: warningsService.hasCompletedLiveDetection,
+            incompleteDataMessage: warningsService.incompleteDataMessage,
+            activeCount: warningsService.activeWarnings.count
+        )
+    }
 
     private var organisationSubtitle: String {
         firebaseBackend.currentOrganization?.name ?? "Organisation"
@@ -199,14 +210,18 @@ struct WarningsDetailView: View {
                 .background(PPColor.navy.ignoresSafeArea(edges: .top))
                 .environment(\.colorScheme, .dark)
                 Group {
-                    if warningsService.activeWarnings.isEmpty {
-                        if warningsService.incompleteDataMessage == nil {
+                    // Never "0 active" or an all-clear before a scan of loaded inputs has published.
+                    switch displayPhase {
+                    case .loading:
+                        emptyState
+                    case .incomplete:
+                        Spacer(minLength: 0)
+                    case .ready(let activeCount):
+                        if activeCount == 0 {
                             emptyState
                         } else {
-                            Spacer(minLength: 0)
+                            warningsScroll
                         }
-                    } else {
-                        warningsScroll
                     }
                 }
             }
@@ -230,6 +245,11 @@ struct WarningsDetailView: View {
             }
             .onDisappear {
                 WarningsRefreshHelper.isWarningsSheetVisible = false
+            }
+            // First open: wait for every input, then scan once. Later changes rescan through the live
+            // listeners (`liveWarningInputsDidChange`, booking changes) while this screen is open.
+            .task {
+                await scanWhenInputsHaveLoaded()
             }
             // One fullScreenCover only — a second cover on the same view swallowed
             // "Book labour for this day" and looked like a dead button.
@@ -370,18 +390,19 @@ struct WarningsDetailView: View {
                     .frame(height: PPMetrics.headerBottomPadding)
                     .ppNavyHeader()
                 VStack(spacing: 16) {
-                    if isRefreshingWarnings {
+                    if isRefreshingWarnings || !warningsService.hasCompletedLiveDetection {
                         ProgressView()
                             .controlSize(.large)
                             .padding(.top, 32)
-                        Text("Scanning for warnings…")
+                            .accessibilityIdentifier("warnings.loading")
+                        Text(isRefreshingWarnings ? "Scanning for warnings…" : "Loading warnings…")
                             .font(.system(.title3, design: .rounded).weight(.bold))
-                        Text("Keep this screen open until results appear.")
+                        Text(loadingInputsMessage ?? "Warnings appear once bookings, people, annual leave and settings have loaded.")
                             .font(.subheadline)
                             .foregroundStyle(WarningsUI.textMuted)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
-                    } else if warningsService.hasCompletedLiveDetection {
+                    } else {
                         PPIconTile(symbol: "checkmark", family: .sites, size: 64, lifted: true)
                         Text("No active warnings")
                             .font(.system(.title3, design: .rounded).weight(.bold))
@@ -390,52 +411,6 @@ struct WarningsDetailView: View {
                             .foregroundStyle(WarningsUI.textMuted)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
-                    } else {
-                        Button(action: startManualRefresh) {
-                            PPIconTile(symbol: "arrow.clockwise", family: .system, size: 64, lifted: true)
-                        }
-                        .accessibilityIdentifier("warnings.arrowClockwiseCircle")
-                        .buttonStyle(.plain)
-                        .accessibilityHidden(true)
-                        Text("Check for warnings")
-                            .font(.system(.title3, design: .rounded).weight(.bold))
-                        Text("Tap Refresh now, or the refresh icon at the top right. Results are saved so Home and Weekly Report stay fast.")
-                            .font(.subheadline)
-                            .foregroundStyle(WarningsUI.textMuted)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24)
-                        if let refreshMessage {
-                            Text(refreshMessage)
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(WarningsUI.red)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 24)
-                        }
-                        // Device/TestFlight: `.borderedProminent` in this sheet does not receive taps
-                        // (the top-right plain refresh icon does). Use the same plain control.
-                        Button(action: startManualRefresh) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.body.weight(.semibold))
-                                Text("Refresh now")
-                                    .font(.body.weight(.semibold))
-                            }
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 15)
-                            .background(WarningsUI.blue)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .contentShape(Rectangle())
-                        }
-                        .accessibilityIdentifier("warnings.refresh2")
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, 32)
-                        .padding(.top, 8)
-                        .disabled(isRefreshingWarnings)
-                        .accessibilityLabel("Refresh now")
-                        .highPriorityGesture(TapGesture().onEnded {
-                            startManualRefresh()
-                        })
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -1250,6 +1225,53 @@ struct WarningsDetailView: View {
         }
     }
 
+    private func currentInputsReadiness() -> WarningInputsReadiness {
+        WarningsRefreshHelper.inputsReadiness(
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            projectStore: projectStore,
+            userStore: userStore,
+            managerScheduleStore: managerScheduleStore,
+            holidayStore: holidayStore,
+            firebaseBackend: firebaseBackend
+        )
+    }
+
+    /// Runs while the screen is open and no scan of loaded inputs has published: waits for every input
+    /// (`WarningInputsReadiness`), then scans once. Stops when the list is ready or the screen closes.
+    @MainActor
+    private func scanWhenInputsHaveLoaded() async {
+        guard userStore.canViewStaffWarnings() else { return }
+        var pause: UInt64 = 400_000_000
+        while !Task.isCancelled, !warningsService.hasCompletedLiveDetection {
+            let readiness = currentInputsReadiness()
+            loadingInputsMessage = readiness.waitingMessage
+            if readiness.storeInputsReady, !isRefreshingWarnings {
+                let published = await WarningsRefreshHelper.refreshSharedWarnings(
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    managerScheduleStore: managerScheduleStore,
+                    holidayStore: holidayStore,
+                    firebaseBackend: firebaseBackend,
+                    appSettings: appSettings,
+                    force: true,
+                    // Opening Warnings is the person asking for them (also from Weekly Report, during launch quiet).
+                    manualUserInitiated: true
+                )
+                if published || warningsService.hasCompletedLiveDetection { break }
+                if warningsService.incompleteDataMessage != nil { break }
+                // Settings or payment runs not read yet: say so, then try again a little later.
+                loadingInputsMessage = currentInputsReadiness().waitingMessage
+                    ?? "Waiting for organisation settings and payment runs."
+            }
+            try? await Task.sleep(nanoseconds: pause)
+            pause = min(pause * 2, 5_000_000_000)
+        }
+        loadingInputsMessage = nil
+    }
+
     private func startManualRefresh() {
         Task { @MainActor in
             await refreshWarningsTodayOnly()
@@ -1289,8 +1311,10 @@ struct WarningsDetailView: View {
             let mode = detection.clashLookaheadMode.displayName
             let window = "\(formatter.string(from: start))–\(formatter.string(from: end))"
             refreshMessage = "Updated · \(warningsService.activeWarnings.count) active · \(mode) · \(window)"
+        } else if let waiting = currentInputsReadiness().waitingMessage {
+            refreshMessage = "Still loading. \(waiting)"
         } else {
-            refreshMessage = "Could not refresh yet (still loading). Try again in a few seconds."
+            refreshMessage = "Still loading. Warnings will appear when ready."
         }
         print("🔥🔥🔥 DEBUG: WARNINGS_MANUAL_REFRESH_DONE did=\(did) active=\(warningsService.activeWarnings.count)")
         NotificationCenter.default.post(name: .warningsDidRecompute, object: nil, userInfo: ["count": warningsService.warningCount])

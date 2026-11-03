@@ -204,6 +204,10 @@ class FirebaseBackend: ObservableObject {
     /// While `Date() < launchQuietUntil`, skip heavy post-launch work (warnings, reminder storms).
     /// Set when home-critical bootstrap finishes so Holidays publishing cannot immediately freeze Home.
     var launchQuietUntil: Date?
+    /// The organisation whose `organizations/{orgId}` document (warning detection, payment runs, working hours,
+    /// material cut-off) has been read by the live listener or a server read. Warnings wait for it
+    /// (`WarningInputsReadiness`) so defaults are never scanned or shown as the organisation's settings.
+    @Published private(set) var warningSettingsLoadedOrganizationId: String?
     /// True while the user is moving from one organisation to another. Root shows the login splash.
     @Published var isSwitchingOrganization = false
     /// Bumped when Settings or the deactivated gate asks to switch. Root performs the switch.
@@ -357,6 +361,7 @@ class FirebaseBackend: ObservableObject {
         organizationDocumentListener = nil
         organizationDocumentListenerTarget = nil
         organizationMembersSnapshot = nil
+        warningSettingsLoadedOrganizationId = nil
         stopScheduleLiveListeners()
     }
 
@@ -405,7 +410,13 @@ class FirebaseBackend: ObservableObject {
                 Task { @MainActor in
                     // A snapshot for a company the user has since left is ignored.
                     guard organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
+                    let firstSettings = !organizationIdsMatch(self.warningSettingsLoadedOrganizationId, orgId)
+                    self.warningSettingsLoadedOrganizationId = orgId
                     self.applyOrganizationDocumentSettings(from: data, organizationId: orgId)
+                    if firstSettings {
+                        // The warnings scan was waiting for these settings (`WarningInputsReadiness`).
+                        NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+                    }
                     self.applyOrganizationDocumentBilling(from: data, organizationId: orgId)
                     let members = (data["members"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
                     self.organizationMembersSnapshot = (organizationId: orgId, members: members)
@@ -449,6 +460,13 @@ class FirebaseBackend: ObservableObject {
         }
         if previous.settings.materialCutOff != org.settings.materialCutOff {
             NotificationCenter.default.post(name: .organizationMaterialCutOffDidChange, object: nil)
+        }
+        // RULEBOOK §5: warnings refresh when settings change (detection, payment runs, working hours, cut-off).
+        if previous.settings != org.settings
+            || previous.payrollTimePolicyScheduled != org.payrollTimePolicyScheduled
+            || previous.payrollTimePolicyEffectiveFrom != org.payrollTimePolicyEffectiveFrom
+            || previous.countryCode != org.countryCode {
+            NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
         }
     }
 
@@ -4915,6 +4933,7 @@ class FirebaseBackend: ObservableObject {
         )
         currentOrganization = org
         storeOrganizationLocally(org)
+        warningSettingsLoadedOrganizationId = orgId
         print("🔥🔥🔥 DEBUG: warning scan org refreshed mode=\(org.settings.warningDetection.clashLookaheadMode.rawValue) runs=\(org.settings.invoicing.paymentRunDateRanges.map { "\($0.startDay)-\($0.endDay)" }.joined(separator: ","))")
         return true
     }

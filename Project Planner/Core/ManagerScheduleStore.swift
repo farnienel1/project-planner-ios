@@ -17,6 +17,9 @@ class ManagerScheduleStore: ObservableObject {
     /// The last server read failed and nothing (or only a cached copy) is on screen.
     @Published private(set) var lastLoadFailed = false
     @Published var isOffline = false
+    /// The organisation whose manager bookings load last finished (read, offline copy, or failed).
+    /// Warnings wait for it (`WarningInputsReadiness`).
+    private(set) var finishedLoadOrganizationId: String?
 
     private var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
@@ -95,6 +98,7 @@ class ManagerScheduleStore: ObservableObject {
 
     func discardInMemoryForOrganizationSwitch() {
         managerSiteBookings = []
+        finishedLoadOrganizationId = nil
         lastLoadAt = nil
         errorMessage = nil
     }
@@ -115,6 +119,7 @@ class ManagerScheduleStore: ObservableObject {
 
         if smartCache?.isOnline == false {
             managerSiteBookings = deduplicated(OfflineManagerScheduleLocalStore.load(organizationId: orgId))
+            finishedLoadOrganizationId = orgId
             return
         }
 
@@ -170,6 +175,7 @@ class ManagerScheduleStore: ObservableObject {
                 }
             }
             self.isLoading = false
+            self.finishedLoadOrganizationId = orgId
         }
     }
 

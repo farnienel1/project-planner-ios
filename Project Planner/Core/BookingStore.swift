@@ -22,6 +22,9 @@ class BookingStore: ObservableObject {
     @Published private(set) var lastLoadFailed = false
     /// The live listener reported an error since the last good server snapshot.
     @Published private(set) var listenerFailed = false
+    /// The organisation whose bookings load last finished (read or failed). Warnings wait for it
+    /// (`WarningInputsReadiness`) so an empty list before the first read is never "nobody booked".
+    private(set) var finishedLoadOrganizationId: String?
     
     private let persistenceService: PersistenceService
     private var firebaseBackend: FirebaseBackend?
@@ -137,10 +140,12 @@ class BookingStore: ObservableObject {
         }
         isLoading = true
         errorMessage = nil
+        let loadingOrganizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId
         
         Task { @MainActor in
             defer {
                 self.isLoading = false
+                self.finishedLoadOrganizationId = loadingOrganizationId
                 if self.pendingReloadAfterCurrentLoad {
                     self.pendingReloadAfterCurrentLoad = false
                     if self.firebaseBackend?.hasBootstrappedOrgDataLoad == true,
@@ -711,6 +716,7 @@ class BookingStore: ObservableObject {
 
     func discardInMemoryForOrganizationSwitch() {
         bookings = []
+        finishedLoadOrganizationId = nil
         lastLoadFailed = false
         listenerFailed = false
         isLoading = false

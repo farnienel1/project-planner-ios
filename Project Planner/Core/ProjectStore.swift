@@ -19,6 +19,8 @@ class ProjectStore: ObservableObject {
     @Published var clients: [Client] = []
     @Published var jobTypes: Set<String> = []
     @Published var isLoading: Bool = false
+    /// The organisation whose jobs load last finished (read or failed). Warnings wait for it.
+    private(set) var finishedLoadOrganizationId: String?
     @Published var errorMessage: String?
     @Published var isOffline: Bool = false
     /// True when the latest Firebase read was empty/failed and the list is coming from memory or disk.
@@ -146,6 +148,7 @@ class ProjectStore: ObservableObject {
         pendingReloadAfterCurrentLoad = false
         loadGeneration += 1
         let generation = loadGeneration
+        let loadingOrganizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId
         
         Task {
             // Add timeout to prevent infinite loading
@@ -162,6 +165,7 @@ class ProjectStore: ObservableObject {
                 timeoutTask.cancel()
                 if loadGeneration == generation {
                     isLoading = false
+                    finishedLoadOrganizationId = loadingOrganizationId
                     if pendingReloadAfterCurrentLoad {
                         pendingReloadAfterCurrentLoad = false
                         // Coalesce follow-ups: one delayed reload max, and only after bootstrap finishes.
@@ -573,6 +577,7 @@ class ProjectStore: ObservableObject {
         loadGeneration += 1
         pendingReloadAfterCurrentLoad = false
         isLoading = false
+        finishedLoadOrganizationId = nil
         projects = []
         clients = []
         jobTypes = []

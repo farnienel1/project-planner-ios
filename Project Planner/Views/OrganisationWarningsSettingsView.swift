@@ -43,6 +43,15 @@ struct OrganisationWarningsSettingsView: View {
         return CanonicalBusinessEngine.warningsPaymentRunSummary(invoicing: invoicing)
     }
 
+    /// The payment runs shown are the organisation's own, read from `organizations/{orgId}` (not the defaults
+    /// in memory before that read). Until then the panel says it is loading, never "No payment runs".
+    private var paymentRunsLoaded: Bool {
+        organizationIdsMatch(
+            firebaseBackend.warningSettingsLoadedOrganizationId,
+            firebaseBackend.currentOrganization?.firestoreDocumentId
+        )
+    }
+
     /// The draft's scan window from the script (`coverageWindow`, with its fallback reason).
     private var draftScanWindow: WarningScanWindow? {
         CanonicalBusinessEngine.warningScanWindow(detection: draft, invoicing: invoicingSettings)
@@ -308,57 +317,71 @@ struct OrganisationWarningsSettingsView: View {
     @ViewBuilder
     private var invoicingPeriodPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            switch paymentRunSummary {
-            case .configured(let label, _):
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("YOUR INVOICING SCHEDULE")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color(.tertiarySystemBackground))
-
-                    HStack(alignment: .top) {
-                        Text("Active payment run")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 12)
-                        Text(label)
-                            .font(.subheadline.weight(.medium))
-                            .multilineTextAlignment(.trailing)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
-                .accessibilityIdentifier("organisationWarningsSettings.invoicingSchedule")
-
-                infoBox(text: scanSummary)
-            case .notConfigured:
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("No payment runs are set up for this company, so there is no invoicing period to scan.")
+            if !paymentRunsLoaded {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Loading payment runs…")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    NavigationLink {
-                        OrganisationInvoicingSettingsView()
-                            .environmentObject(firebaseBackend)
-                    } label: {
-                        Text("Set up payment runs")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(PPColor.brand)
-                    }
-                    .accessibilityIdentifier("organisationWarningsSettings.setUpPaymentRuns")
                 }
                 .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(.secondarySystemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            case nil:
-                infoBox(text: scanSummary)
+                .accessibilityIdentifier("organisationWarningsSettings.paymentRunsLoading")
+            } else {
+                switch paymentRunSummary {
+                case .configured(let label, _):
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text("YOUR INVOICING SCHEDULE")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color(.tertiarySystemBackground))
+
+                        HStack(alignment: .top) {
+                            Text("Active payment run")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 12)
+                            Text(label)
+                                .font(.subheadline.weight(.medium))
+                                .multilineTextAlignment(.trailing)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
+                    .accessibilityIdentifier("organisationWarningsSettings.invoicingSchedule")
+
+                    infoBox(text: scanSummary)
+                case .notConfigured:
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("No payment runs are set up for this company, so there is no invoicing period to scan.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        NavigationLink {
+                            OrganisationInvoicingSettingsView()
+                                .environmentObject(firebaseBackend)
+                        } label: {
+                            Text("Set up payment runs")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(PPColor.brand)
+                        }
+                        .accessibilityIdentifier("organisationWarningsSettings.setUpPaymentRuns")
+                    }
+                    .padding(14)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                case nil:
+                    infoBox(text: scanSummary)
+                }
             }
         }
         .padding(.top, 8)

@@ -25,6 +25,8 @@ class OperativeStore: ObservableObject {
     @Published var organizationSkills: [OrganizationSkill] = []
     @Published var qualifications: [Qualification] = []
     @Published var isLoading: Bool = false
+    /// The organisation whose operatives load last finished (read or failed). Warnings wait for it.
+    private(set) var finishedLoadOrganizationId: String?
     @Published var errorMessage: String?
     @Published var isOffline: Bool = false
     
@@ -243,6 +245,7 @@ class OperativeStore: ObservableObject {
         loadGeneration += 1
         pendingReloadAfterCurrentLoad = false
         isLoading = false
+        finishedLoadOrganizationId = nil
         operatives = []
         managers = []
         organizationSkills = []
@@ -265,6 +268,7 @@ class OperativeStore: ObservableObject {
         pendingReloadAfterCurrentLoad = false
         loadGeneration += 1
         let generation = loadGeneration
+        let loadingOrganizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId
         
         Task {
             // Add timeout to prevent infinite loading
@@ -281,6 +285,7 @@ class OperativeStore: ObservableObject {
                 timeoutTask.cancel()
                 if loadGeneration == generation {
                     isLoading = false
+                    finishedLoadOrganizationId = loadingOrganizationId
                     if pendingReloadAfterCurrentLoad {
                         pendingReloadAfterCurrentLoad = false
                         if firebaseBackend?.hasBootstrappedOrgDataLoad == true,

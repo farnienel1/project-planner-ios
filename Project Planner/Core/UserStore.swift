@@ -46,6 +46,9 @@ class UserStore: ObservableObject {
     private var lastSeenAtWriteTime: Date?
     /// Single-flight + short cooldown to prevent duplicate org user roster fetches.
     private var organizationUsersLoadInProgress = false
+    /// The organisation whose roster load last finished (read or failed). Warnings wait for it
+    /// (`WarningInputsReadiness`).
+    private(set) var organizationUsersFinishedLoadOrganizationId: String?
     private var organizationUsersLoadGeneration = 0
     private var organizationUsersLoadOrganizationId: String?
     private var lastOrganizationUsersLoadAt: Date?
@@ -459,6 +462,7 @@ class UserStore: ObservableObject {
             if organizationUsersLoadGeneration == generation {
                 organizationUsersLoadInProgress = false
                 lastOrganizationUsersLoadAt = Date()
+                organizationUsersFinishedLoadOrganizationId = requestedOrganizationId
             }
         }
 
@@ -839,6 +843,7 @@ class UserStore: ObservableObject {
         currentUserListener = nil
         currentUserListenerTarget = nil
         organizationUsers = []
+        organizationUsersFinishedLoadOrganizationId = nil
         organizationUserEmailClaims = nil
         currentUser = nil
         roleTestingPreset = nil

@@ -23,6 +23,9 @@ struct HomeView: View {
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var smartCache: SmartCacheService
     @State private var homeWarningCount: Int = 0
+    /// False until a warnings scan of loaded inputs has published (`WarningsService.hasCompletedLiveDetection`).
+    /// Until then the pill reads "Checking…", never "All clear".
+    @State private var homeWarningsReady = false
     @State private var cachedUpNextSections: [HomeUpNextDaySection] = []
     @State private var cachedOverviewMetrics = HomeOverviewMetrics()
     @State private var showingCreateClient = false
@@ -533,7 +536,8 @@ struct HomeView: View {
         switch mid {
         case .tasksDueTodayPersonal: return "\(tasksDueTodayCount)"
         case .tasksDueWeekPersonal: return "\(tasksDueThisWeekCount)"
-        case .warnings: return "\(homeWarningCount)"
+        case .warnings:
+            return WarningsDisplayPhase.homeMetricValue(hasCompletedLiveDetection: homeWarningsReady, activeCount: homeWarningCount)
         case .operativesOnSite: return "\(peopleOnSiteTodayCount)"
         case .managersOnSite: return "\(managersOnSiteTodayCount)"
         case .operativesOnAL: return "\(operativesOnALTodayCount)"
@@ -579,7 +583,7 @@ struct HomeView: View {
             // first layout commit. Creating the shared service then publishes warning
             // counts and the window stays white. The next turn is after that commit.
             DispatchQueue.main.async {
-                homeWarningCount = WarningsService.shared.warningCount
+                syncHomeWarningBadgeFromCache()
             }
             // Saved Light/Dark is applied after Home is on screen. The launch shell does not touch it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
@@ -610,18 +614,19 @@ struct HomeView: View {
             // and jetsamed Simulator. Badge updates when Home warms warnings or
             // when `.warningsDidRecompute` is posted.
             guard userStore.canViewStaffWarnings() else { return }
-            homeWarningCount = WarningsService.shared.warningCount
+            syncHomeWarningBadgeFromCache()
         }
         .onReceive(NotificationCenter.default.publisher(for: .warningsDidRecompute)) { notification in
             if let count = notification.userInfo?["count"] as? Int {
                 homeWarningCount = count
+                homeWarningsReady = WarningsService.shared.hasCompletedLiveDetection
             } else {
-                homeWarningCount = WarningsService.shared.warningCount
+                syncHomeWarningBadgeFromCache()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .warningsNeedsHomeRefresh)) { _ in
             // REBUILD: no auto Home warm — only sync badge from shared/disk cache.
-            homeWarningCount = WarningsService.shared.warningCount
+            syncHomeWarningBadgeFromCache()
         }
         .onReceive(NotificationCenter.default.publisher(for: .bookingStoreDidChange)) { _ in
             // ContentView owns the debounced warning scan so it still runs on other tabs.
@@ -649,6 +654,7 @@ struct HomeView: View {
     @MainActor
     private func syncHomeWarningBadgeFromCache() {
         homeWarningCount = WarningsService.shared.warningCount
+        homeWarningsReady = WarningsService.shared.hasCompletedLiveDetection
     }
 
 
@@ -849,7 +855,7 @@ struct HomeView: View {
                     iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
                     iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
                     title: "Warnings",
-                    value: homeWarningCount == 0 ? "All clear" : "\(homeWarningCount) active"
+                    value: WarningsDisplayPhase.homePillValue(hasCompletedLiveDetection: homeWarningsReady, activeCount: homeWarningCount)
                 ) {
                     print("🔥🔥🔥 DEBUG: WARNINGS_BUTTON_SYNC")
                     presentWarningsDetail()
@@ -1441,7 +1447,21 @@ struct HomeView: View {
             // Do not auto-run warnings on Home after every store refresh — that used to
             // freeze/crash Simulator. Badge stays at last known count; opening Warnings
             // refreshes off the main actor (and never during bootstrap/quiet).
-            homeWarningCount = WarningsService.shared.warningCount
+            syncHomeWarningBadgeFromCache()
+            if !WarningsService.shared.hasCompletedLiveDetection {
+                // No scan has published yet (a listener may not deliver again): queue the booking scheduler's
+                // readiness-gated scan. It waits for every input to load and never cancels a running scan.
+                WarningsRefreshHelper.requestFirstScanWhenInputsReady(
+                    operativeStore: operativeStore,
+                    bookingStore: bookingStore,
+                    projectStore: projectStore,
+                    userStore: userStore,
+                    managerScheduleStore: managerScheduleStore,
+                    holidayStore: holidayStore,
+                    firebaseBackend: firebaseBackend,
+                    appSettings: appSettings
+                )
+            }
         }
     }
     
