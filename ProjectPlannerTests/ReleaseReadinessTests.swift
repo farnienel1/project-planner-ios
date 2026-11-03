@@ -11,17 +11,19 @@ final class ReleaseReadinessTests: XCTestCase {
 
     // MARK: Forced update
 
+    /// RULEBOOK 1.12.0 §18 `appUpdateRequired`, the cases web `canonical.test.ts` locks.
     func testAnOlderBuildIsBlockedAndAnythingUnknownNeverBlocks() {
-        XCTAssertTrue(ForcedUpdateGate.blocks(running: 10, stored: NSNumber(value: 11)))
-        XCTAssertFalse(ForcedUpdateGate.blocks(running: 11, stored: NSNumber(value: 11)))
-        XCTAssertFalse(ForcedUpdateGate.blocks(running: 12, stored: NSNumber(value: 11)))
-        XCTAssertTrue(ForcedUpdateGate.blocks(running: 10, stored: "11"))
-        XCTAssertFalse(ForcedUpdateGate.blocks(running: 10, stored: nil), "a missing field never blocks")
-        XCTAssertFalse(ForcedUpdateGate.blocks(running: 10, stored: "soon"), "an unreadable field never blocks")
-        XCTAssertFalse(ForcedUpdateGate.blocks(running: 10, stored: NSNumber(value: true)), "a bool is not a build")
-        XCTAssertFalse(ForcedUpdateGate.blocks(running: nil, stored: NSNumber(value: 99)), "an unknown running build never blocks")
+        XCTAssertTrue(ForcedUpdateGate.blocks(running: 119, config: ["minimumIosBuild": 120]))
+        XCTAssertFalse(ForcedUpdateGate.blocks(running: 120, config: ["minimumIosBuild": 120]))
+        XCTAssertFalse(ForcedUpdateGate.blocks(running: 121, config: ["minimumIosBuild": 120]))
+        XCTAssertTrue(ForcedUpdateGate.blocks(running: 10, config: ["minimumIosBuild": "11"]))
+        XCTAssertFalse(ForcedUpdateGate.blocks(running: 1, config: nil), "a missing document never blocks")
+        XCTAssertFalse(ForcedUpdateGate.blocks(running: 1, config: [:]), "a missing field never blocks")
+        XCTAssertFalse(ForcedUpdateGate.blocks(running: 10, config: ["minimumIosBuild": "soon"]), "an unreadable field never blocks")
+        XCTAssertFalse(ForcedUpdateGate.blocks(running: 10, config: ["minimumIosBuild": true]), "a bool is not a build")
+        XCTAssertFalse(ForcedUpdateGate.blocks(running: nil, config: ["minimumIosBuild": 99]), "an unknown running build never blocks")
+        XCTAssertFalse(ForcedUpdateGate.blocks(running: 1, config: ["minimumWebVersion": "9.0.0"]), "the web minimum never blocks iOS")
         XCTAssertEqual(ForcedUpdateGate.documentPath, "platformConfig/app")
-        XCTAssertEqual(ForcedUpdateGate.fieldName, "minimumIosBuild")
     }
 
     // MARK: Privacy manifest
