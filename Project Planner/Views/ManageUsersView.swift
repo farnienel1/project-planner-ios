@@ -253,6 +253,9 @@ struct ManageUsersView: View {
                 if userStore.hasAdminAccess() && !usersMissingLineManager.isEmpty {
                     usersMissingLineManagerNotice
                 }
+                if userStore.hasAdminAccess() && !usersMissingPayRate.isEmpty {
+                    usersMissingPayRateNotice
+                }
                 if userStore.hasAdminAccess() && !usersWithAccountTypeOutOfSync.isEmpty {
                     accountTypeOutOfSyncNotice
                 }
@@ -269,6 +272,44 @@ struct ManageUsersView: View {
     /// requirement (RULEBOOK §8, §11). Their timesheets and requests reach every active admin meanwhile.
     private var usersMissingLineManager: [AppUser] {
         AnnualLeaveApproval.usersMissingLineManager(userStore.organizationUsers)
+    }
+
+    /// RULEBOOK 1.14.0 §8, §11 `usersMissingPayRate`: active self-employed people saved before the pay-rate rule with no
+    /// rate above 0 (a missing employment type reads as self-employed). Admins only, like web.
+    private var usersMissingPayRate: [AppUser] {
+        PayRateRequiredRulebook.usersMissingPayRate(rosterListed(userStore.organizationUsers, segment: .active))
+    }
+
+    private var usersMissingPayRateNotice: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(
+                usersMissingPayRate.count == 1
+                    ? "1 self-employed person needs a pay rate"
+                    : "\(usersMissingPayRate.count) self-employed people need a pay rate",
+                systemImage: "banknote"
+            )
+            .font(.subheadline.weight(.semibold))
+            Text(CanonicalBusinessEngine.payRateRequiredMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(usersMissingPayRate, id: \.id) { person in
+                Button {
+                    selectedUser = person
+                } label: {
+                    Text(person.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? person.email : person.fullName)
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 4)
+        .accessibilityIdentifier("manageUsers.usersMissingPayRate")
     }
 
     /// RULEBOOK 1.12.2 §11 `accountTypeSyncState`: active people whose user type was only partly saved (users
@@ -1438,6 +1479,8 @@ struct EditUserView: View {
     @State private var showingSelfBookOffConfirmation = false
     @State private var selfBookOffConfirmationAccepted = false
     @State private var dayRateText: String
+    /// RULEBOOK 1.14.0 `payRateRequiredError`, shown under the rate field after a refused save.
+    @State private var payRateFieldError: String?
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
     @State private var showingQualificationsEditor = false
     @State private var operativeForQualificationsEditor: Operative?
@@ -1502,6 +1545,7 @@ struct EditUserView: View {
         self._permissionsBaseline = State(initialValue: user.permissions)
         self._isActive = State(initialValue: user.isActive)
         self._selectedAssignedManagerUserId = State(initialValue: user.assignedManagerUserId)
+        // The stored ids until `syncEditUserDraftsFromStore` (onAppear) maps them with `lineManagerSelectedIds`.
         self._selectedLineManagerUserIds = State(initialValue: Set(user.lineManagerUserIds))
         self._hasNoLineManagerDraft = State(initialValue: user.hasNoLineManager)
         self._managerSelfBookDraft = State(initialValue: user.permissions.annualLeaveSelfBook)
@@ -2002,7 +2046,7 @@ struct EditUserView: View {
         let billingChanged = canViewTaxIds && (vatDraft.isDirty || utrDraft.isDirty)
         let payrollRateDirty = isPayrollRateDirty(versus: user)
         let operativeProfileChanged = (permissions.operativeMode || permissions.manager || permissions.adminAccess) && (
-            Set(selectedLineManagerUserIds) != Set(user.lineManagerUserIds) ||
+            LineManagerRulebook.selectionChanged(selectedLineManagerUserIds, from: user, roster: userStore.organizationUsers) ||
             hasNoLineManagerDraft != user.hasNoLineManager ||
             payrollRateDirty
         )
@@ -2330,7 +2374,9 @@ struct EditUserView: View {
         vatDraft.reset(saved: vatDraft.saved)
         utrDraft.reset(saved: utrDraft.saved)
         hasNoLineManagerDraft = u.hasNoLineManager
-        selectedLineManagerUserIds = Set(u.lineManagerUserIds)
+        // RULEBOOK 1.14.0 §11 `lineManagerSelectedIds`: a stored id on the other users document of the same person
+        // selects that person's one picker option.
+        selectedLineManagerUserIds = LineManagerRulebook.selectedIds(for: u, roster: userStore.organizationUsers)
         selectedAssignedManagerUserId = u.assignedManagerUserId
     }
 
@@ -2687,7 +2733,7 @@ struct EditUserView: View {
                 if let fresh = userStore.organizationUsers.first(where: { $0.id == user.id }) {
                     permissions = fresh.permissions
                     permissionsBaseline = fresh.permissions
-                    selectedLineManagerUserIds = Set(fresh.lineManagerUserIds)
+                    selectedLineManagerUserIds = LineManagerRulebook.selectedIds(for: fresh, roster: userStore.organizationUsers)
                     selectedAssignedManagerUserId = fresh.assignedManagerUserId
                     isActive = fresh.isActive
                 }
@@ -2910,6 +2956,7 @@ struct EditUserView: View {
                                 Button(type.title) {
                                     employmentTypeDraft = type
                                     employmentTypeConfirmationAccepted = false
+                                    payRateFieldError = nil
                                 }
                                     .accessibilityIdentifier("editUser.row.\(type.id)")
                             }
@@ -2956,12 +3003,20 @@ struct EditUserView: View {
                 if userStore.canViewPay(of: displayedUser) {
                 ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
                     .onChange(of: dayRateText) { _, newValue in
+                        payRateFieldError = nil
                         guard employmentTypeDraft == .paye else { return }
                         guard parseDayRate(newValue) != nil else { return }
                         guard parseDayRate(newValue) != displayedPayrollRate(for: displayedUser) else { return }
                         pendingPayeDayRateText = newValue
                         showingPayeDayRateWarning = true
                     }
+                if let payRateFieldError {
+                    Text(payRateFieldError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("editUser.payRateRequired")
+                }
                 Text(CanonicalBusinessEngine.payBasisSaveNote)
                     .font(.caption2)
                     .foregroundStyle(ManageUserProfilePalette.textSecondary)
@@ -3208,6 +3263,18 @@ struct EditUserView: View {
         guard after != before else { return }
         if untouchedRate { dayRateText = Self.formatPayrollRateText(user: after) }
         if untouchedType { employmentTypeDraft = after.employmentType }
+    }
+
+    /// `payRateRequiredError` for the person as this save will leave them: the draft employment type and the rate on
+    /// the field (the stored rate when the field is untouched), read with the stored basis. Nil when the writer may
+    /// not set this person's pay (`canChangePersonPay`) or the rule passes.
+    private var payRateRequiredMessageForSave: String? {
+        let subject = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        // The rate field is on the setup card; without it the person could not be given a rate here.
+        guard showOperativeSetupCard, userStore.canViewPay(of: subject), userStore.canChangePay(of: subject) else { return nil }
+        let stored = UserStore.storedPay(of: subject)
+        let amount = isPayrollRateDirty(versus: subject) ? parseDayRate(dayRateText) : stored.amount
+        return PayRateRequiredRulebook.error(employmentType: employmentTypeDraft, payBasis: stored.basis, amount: amount)
     }
 
     private func isPayrollRateDirty(versus user: AppUser) -> Bool {
@@ -3662,6 +3729,16 @@ struct EditUserView: View {
                 }
                 return
             }
+            // RULEBOOK 1.14.0 §8, §11 `payRateRequiredError`: a self-employed person as this save leaves them (including
+            // a change to self-employed, immediate or dated) needs a rate above 0. Only when the writer may set pay.
+            if let payMessage = payRateRequiredMessageForSave {
+                await MainActor.run {
+                    isUpdating = false
+                    payRateFieldError = payMessage
+                    saveErrorMessage = payMessage
+                }
+                return
+            }
             // RULEBOOK 1.12.0 §4.4 `validateLeaveYearMonths`: when this save changes the leave-year months, a year that
             // is not 12 months is refused before anything is written.
             if canEditPermissionsMatrix && annualLeaveEntitlementDirty {
@@ -3819,7 +3896,10 @@ struct EditUserView: View {
         }
 
         var operativeDetailsSuccess = true
-        let managerAssignmentChanged = Set(selectedLineManagerUserIds) != Set(subjectUser.lineManagerUserIds)
+        // Both sides read through `lineManagerSelectedIds`, so an untouched picker never rewrites the stored ids.
+        let managerAssignmentChanged = LineManagerRulebook.selectionChanged(
+            selectedLineManagerUserIds, from: subjectUser, roster: userStore.organizationUsers
+        )
         let hasNoLineManagerChanged = hasNoLineManagerDraft != subjectUser.hasNoLineManager
         let operativeDayRateChanged = isPayrollRateDirty(versus: subjectUser)
         let operativeProfileChanged =

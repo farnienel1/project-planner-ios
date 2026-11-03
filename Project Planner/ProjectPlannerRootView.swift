@@ -315,7 +315,7 @@ struct ProjectPlannerRootView: View {
         } else if let organization = firebaseBackend.currentOrganization,
                   organization.subscriptionAccess(viewer: userStore.currentUser) != .open {
             // RULEBOOK 1.13.0 §19 `subscriptionAccess`: blocked for everyone; iOS has no billing screen, so an admin
-            // (`adminBillingOnly`) sees the same block with `SUBSCRIPTION_LAPSED_ADMIN_NOTE`.
+            // (`adminBillingOnly`) sees the same block and only `SUBSCRIPTION_LAPSED_MESSAGE` (1.14.0 §19).
             SubscriptionLapsedView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)

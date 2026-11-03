@@ -3,7 +3,7 @@
 //  Project Planner
 //
 //  Replaces the main experience while `subscriptionAccess` (RULEBOOK 1.13.0 §19) is not `open`: everyone sees
-//  `SUBSCRIPTION_LAPSED_MESSAGE`, admins also `SUBSCRIPTION_LAPSED_ADMIN_NOTE`. The signed-in session stays; Sign out,
+//  `SUBSCRIPTION_LAPSED_MESSAGE` only, admins included (1.14.0; the admin note is web only). The session stays; Sign out,
 //  Switch organisation and Delete my account remain. Never a link or a price; nothing is deleted.
 //
 

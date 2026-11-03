@@ -351,3 +351,68 @@ extension AppUser {
         permissions.operativeMode || role == .operative
     }
 }
+
+// MARK: - Self-employed pay rate required (RULEBOOK 1.14.0 §8, §11)
+
+extension CanonicalBusinessEngine {
+    /// `PAY_RATE_REQUIRED_MESSAGE`.
+    nonisolated static var payRateRequiredMessage: String {
+        constant("PAY_RATE_REQUIRED_MESSAGE", as: String.self)
+            ?? "Set a day rate or hourly rate — self-employed people are paid from it."
+    }
+
+    /// `payRateRequiredError({ employmentType, payBasis, dayRate, hourlyRate })` for a person as they will be saved
+    /// (`employmentType` is the new type, also for a dated change). Nil when the save may go ahead, or when the script
+    /// did not answer.
+    nonisolated static func payRateRequiredError(
+        employmentType: String?,
+        payBasis: String?,
+        dayRate: Double?,
+        hourlyRate: Double?
+    ) -> String? {
+        let input: [String: Any] = [
+            "employmentType": employmentType ?? NSNull(),
+            "payBasis": payBasis ?? NSNull(),
+            "dayRate": dayRate.map { $0 as Any } ?? NSNull(),
+            "hourlyRate": hourlyRate.map { $0 as Any } ?? NSNull(),
+        ]
+        return callJSON("payRateRequiredError", arguments: [input]) as? String
+    }
+
+    /// `usersMissingPayRate(roster)`: ids of active self-employed people with no rate above 0. Nil when the script
+    /// did not answer.
+    nonisolated static func usersMissingPayRate(roster: [[String: Any]]) -> [String]? {
+        callJSON("usersMissingPayRate", arguments: [roster]) as? [String]
+    }
+}
+
+/// Manage Users inputs for the 1.14.0 pay-rate rule. Swift only maps fields; the rule is `payRateRequiredError` /
+/// `usersMissingPayRate` above.
+@MainActor
+enum PayRateRequiredRulebook {
+    /// `payRateRequiredError` for a person as they will be saved: their employment type (the draft's new type) and
+    /// the rate on the single rate field, read with the stored basis (`readStoredRates`).
+    static func error(employmentType: EmploymentType, payBasis: String, amount: Double?) -> String? {
+        CanonicalBusinessEngine.payRateRequiredError(
+            employmentType: employmentType.rawValue,
+            payBasis: payBasis,
+            dayRate: payBasis == "hourly" ? nil : amount,
+            hourlyRate: payBasis == "hourly" ? amount : nil
+        )
+    }
+
+    /// One `usersMissingPayRate` roster row: the line-manager roster row (ids, email, names, `isActive`) plus the
+    /// stored pay fields.
+    static func row(_ user: AppUser) -> [String: Any] {
+        var row = LineManagerRulebook.row(user)
+        for (key, value) in user.payProfileFieldsJSON { row[key] = value }
+        return row
+    }
+
+    /// `usersMissingPayRate(roster)` as roster users, in roster order. Empty when the script did not answer.
+    static func usersMissingPayRate(_ users: [AppUser]) -> [AppUser] {
+        guard let ids = CanonicalBusinessEngine.usersMissingPayRate(roster: users.map { row($0) }) else { return [] }
+        let missing = Set(ids.map { $0.lowercased() })
+        return users.filter { missing.contains($0.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
+    }
+}

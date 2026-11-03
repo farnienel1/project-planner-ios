@@ -2694,6 +2694,15 @@ class UserStore: ObservableObject {
     /// `canChangePersonPay` for the signed-in account, from its real document (as the security rules see it,
     /// not role testing). `subject` nil is an operative catalogue row with no account.
     func canChangePay(of subject: AppUser?) -> Bool {
+        canChangePay(subjectUserId: subject?.id, subjectIsOperative: subject?.isPaySubjectOperative ?? true)
+    }
+
+    /// `canChangePersonPay` for a person Add User is about to create (no id yet; web passes `''`).
+    func canChangePayOfNewPerson(isOperative: Bool) -> Bool {
+        canChangePay(subjectUserId: "", subjectIsOperative: isOperative)
+    }
+
+    private func canChangePay(subjectUserId: String?, subjectIsOperative: Bool) -> Bool {
         guard let writer = currentUser else { return false }
         return CanonicalBusinessEngine.canChangePersonPay(
             writerUserId: Auth.auth().currentUser?.uid ?? writer.id,
@@ -2703,8 +2712,8 @@ class UserStore: ObservableObject {
             writerIsManager: writer.permissions.manager || writer.role == .manager,
             writerHasOperativesAccess: writer.permissions.operatives,
             writerIsOperativeMode: writer.permissions.operativeMode,
-            subjectUserId: subject?.id,
-            subjectIsOperative: subject?.isPaySubjectOperative ?? true
+            subjectUserId: subjectUserId,
+            subjectIsOperative: subjectIsOperative
         )
     }
 

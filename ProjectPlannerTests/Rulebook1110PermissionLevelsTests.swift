@@ -106,7 +106,7 @@ final class Rulebook1110PermissionLevelsTests: XCTestCase {
         let operative = try XCTUnwrap(CanonicalBusinessEngine.addUserPermissionDefaults(.operative))
         XCTAssertEqual(operative["operativeMode"], true)
         XCTAssertEqual(operative["materials"], false)
-        XCTAssertEqual(operative["siteAudit"], true)
+        XCTAssertEqual(operative["siteAudit"], false, "1.14.0: every toggle the adder can change starts off")
         XCTAssertTrue(UserPermissions().applying(operative).operativeMode)
     }
 
