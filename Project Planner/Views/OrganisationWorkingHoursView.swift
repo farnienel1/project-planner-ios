@@ -433,22 +433,12 @@ struct OrganisationWorkingHoursView: View {
                     .frame(maxWidth: 160)
                 }
 
-                stepperRow(
-                    label: "Break length",
-                    value: Binding(
-                        get: { Double(draft.unpaidBreakMinutes) },
-                        set: { draft.unpaidBreakMinutes = Int($0) }
-                    ),
-                    step: 5,
-                    min: limits?.breakMinutes.min ?? 0,
-                    max: limits?.breakMinutes.max ?? 120,
-                    suffix: " min"
-                )
+                breakLengthRow(label: "Break length", minutes: $draft.unpaidBreakMinutes)
 
                 // The firm sets the break window; it is never moved for them (1.20.0).
                 HStack(spacing: 12) {
-                    timeFieldColumn(label: "Break starts", text: $draft.breakWindowStart)
-                    timeFieldColumn(label: "Break ends", text: $draft.breakWindowEnd)
+                    timeFieldColumn(label: "Break starts", text: $draft.breakWindowStart, step: Self.breakStepMinutes)
+                    timeFieldColumn(label: "Break ends", text: $draft.breakWindowEnd, step: Self.breakStepMinutes)
                 }
 
                 cardDivider
@@ -730,27 +720,20 @@ struct OrganisationWorkingHoursView: View {
             .accessibilityIdentifier("organisationWorkingHours.\(day.rawValue).lunchPaid")
         }
 
-        stepperRow(
-            label: "\(name) break length",
-            value: Binding(
-                get: { Double(current.minutes) },
-                set: { draft[keyPath: keyPath].breakMinutes = Int($0) }
-            ),
-            step: 5,
-            min: limits?.breakMinutes.min ?? 0,
-            max: limits?.breakMinutes.max ?? 120,
-            suffix: " min"
-        )
+        breakLengthRow(label: "\(name) break length", minutes: Binding(
+            get: { current.minutes },
+            set: { draft[keyPath: keyPath].breakMinutes = $0 }
+        ))
 
         HStack(spacing: 12) {
             timeFieldColumn(label: "Break start", text: Binding(
                 get: { current.start },
                 set: { draft[keyPath: keyPath].breakWindowStart = $0.isEmpty ? nil : $0 }
-            ))
+            ), step: Self.breakStepMinutes)
             timeFieldColumn(label: "Break end", text: Binding(
                 get: { current.end },
                 set: { draft[keyPath: keyPath].breakWindowEnd = $0.isEmpty ? nil : $0 }
-            ))
+            ), step: Self.breakStepMinutes)
         }
         .tint(accent)
     }
@@ -959,14 +942,46 @@ struct OrganisationWorkingHoursView: View {
             .frame(height: 1)
     }
 
-    private func timeFieldColumn(label: String, text: Binding<String>) -> some View {
+    private func timeFieldColumn(label: String, text: Binding<String>, step: Int? = nil) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(WorkingHoursPalette.muted)
-            WorkingHoursTimeField(text: text)
+            WorkingHoursTimeField(text: text, step: step ?? CanonicalBusinessEngine.payrollPolicyTimeStepMinutes)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// Owner decision (rulebook 1.20.3, 3 Nov): lunch-break start, end and length are picked in 15-minute steps
+    /// (0, 15, 30, 45 … 120 min; 10:00–10:45 selectable), on Monday–Friday and on each weekend day. RULEBOOK-GAP: the
+    /// packed 1.20.2 script has no constant for it yet; replace with the 1.20.3 constant on the next sync.
+    static let breakStepMinutes = 15
+
+    /// Break length in `breakStepMinutes` steps within `PAYROLL_POLICY_LIMITS.breakMinutes`; a saved length off the
+    /// step (e.g. 20) is kept and listed as "(saved)" until changed.
+    private func breakLengthRow(label: String, minutes: Binding<Int>) -> some View {
+        let low = Int(limits?.breakMinutes.min ?? 0)
+        let high = Int(limits?.breakMinutes.max ?? 120)
+        let choices = Array(stride(from: low, through: high, by: Self.breakStepMinutes))
+        let saved = choices.contains(minutes.wrappedValue) ? nil : minutes.wrappedValue
+        return HStack {
+            Text(label)
+                .font(.subheadline.weight(.medium))
+            Spacer()
+            Menu {
+                if let saved {
+                    Button("\(saved) min (saved)") { minutes.wrappedValue = saved }
+                }
+                ForEach(choices, id: \.self) { value in
+                    Button("\(value) min") { minutes.wrappedValue = value }
+                }
+            } label: {
+                Text(saved == nil ? "\(minutes.wrappedValue) min" : "\(minutes.wrappedValue) min (saved)")
+                    .font(.body.weight(.bold))
+                    .monospacedDigit()
+            }
+            .accessibilityIdentifier("organisationWorkingHours.breakLength")
+        }
     }
 
     private func stepperRow(label: String, value: Binding<Double>, step: Double, min: Double, max: Double, suffix: String) -> some View {
@@ -1544,16 +1559,19 @@ private struct WorkingHoursMultiplierField: View {
 /// off-step time only once it is changed. Break LENGTH is not a clock time and keeps any minutes.
 private struct WorkingHoursTimeField: View {
     @Binding var text: String
+    /// Minutes between choices: 30 for the working day and weekend windows (`PAYROLL_POLICY_TIME_STEP_MINUTES`),
+    /// 15 for lunch-break start / end (owner decision, rulebook 1.20.3).
+    var step: Int = CanonicalBusinessEngine.payrollPolicyTimeStepMinutes
 
-    private static var stepTimes: [String] {
-        let step = max(1, CanonicalBusinessEngine.payrollPolicyTimeStepMinutes)
-        return stride(from: 0, to: 24 * 60, by: step).map { String(format: "%02d:%02d", $0 / 60, $0 % 60) }
+    private var stepTimes: [String] {
+        stride(from: 0, to: 24 * 60, by: max(1, step)).map { String(format: "%02d:%02d", $0 / 60, $0 % 60) }
     }
 
-    /// The picker only offers on-step times, so a current value off the step is the saved one.
+    /// The picker only offers on-step times, so a current value off this field's step is the saved one.
     private var offStepSaved: String? {
-        guard !text.isEmpty, !CanonicalBusinessEngine.payrollPolicyTimeOnStep(text) else { return nil }
-        return text
+        guard !text.isEmpty else { return nil }
+        guard let minutes = ManagerScheduleInterval.parseMinutes(text) else { return text }
+        return minutes % max(1, step) == 0 ? nil : text
     }
 
     private var label: String {
@@ -1566,7 +1584,7 @@ private struct WorkingHoursTimeField: View {
             if let offStepSaved {
                 Button("\(offStepSaved) (saved)") { text = offStepSaved }
             }
-            ForEach(Self.stepTimes, id: \.self) { time in
+            ForEach(stepTimes, id: \.self) { time in
                 Button(time) { text = time }
             }
         } label: {

@@ -294,4 +294,22 @@ final class Rulebook1200Tests: XCTestCase {
         sameAgain.workStartTime = "7:30"
         XCTAssertTrue(CanonicalBusinessEngine.isSameBookingRequest(morning, sameAgain), "ids without case, clock as minutes")
     }
+
+    /// Owner check (3 Nov): the Working hours weekend preview follows Paid ↔ Unpaid. Saturday 07:30–14:00 counting 8h,
+    /// break 12:00–12:30: paid 8h, unpaid 7.5h; Sunday every hour ×2: paid 13h, unpaid 12h. The preview is memoised by
+    /// the whole draft policy, so a changed weekend break is a new answer.
+    func testWeekendPreviewFollowsTheWeekendBreakPaidOrUnpaid() throws {
+        func totals(saturdayPaid: Bool, sundayPaid: Bool) throws -> [Double] {
+            var policy = OrgPayrollTimePolicy.default
+            policy.saturday.customStandardEnd = "14:00"
+            policy.saturday.breakPaid = saturdayPaid
+            policy.sunday.breakPaid = sundayPaid
+            let rows = try XCTUnwrap(CanonicalBusinessEngine.weekendBookingBreakdown(
+                policy: policy, dayKeys: [saturday, "2026-11-08"], start: "07:30", end: "14:00", isBreakRemoved: false, timeZone: zone
+            ))
+            return rows.map(\.paidHoursEquivalent)
+        }
+        XCTAssertEqual(try totals(saturdayPaid: true, sundayPaid: true), [8, 13])
+        XCTAssertEqual(try totals(saturdayPaid: false, sundayPaid: false), [7.5, 12])
+    }
 }
