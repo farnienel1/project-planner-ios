@@ -4990,12 +4990,6 @@ class FirebaseBackend: ObservableObject {
         return PayrollTimePolicyCatalog.payrollPolicyDocument(for: org)
     }
 
-    /// Why a working-hours transaction refused to write.
-    nonisolated private enum PayrollWriteRefusal: Error {
-        case stale(String)
-        case refused(String)
-    }
-
     /// RULEBOOK 1.19.0 §4.3: every working-hours save runs in a Firestore transaction that reads the organisation
     /// document, refuses the save when the working hours changed since the screen loaded them
     /// (`payrollTimePolicySaveConflict(base, live)` → `PAYROLL_POLICY_STALE_SAVE_MESSAGE`), computes the write fields from

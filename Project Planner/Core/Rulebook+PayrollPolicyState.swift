@@ -475,8 +475,8 @@ extension CanonicalBusinessEngine {
     ) -> RulebookWeekendCoverageDay? {
         let key = CoverageDayKey(coverage: coverage, includeWeekends: includeWeekends, policy: policy, weekday: weekday.rawValue)
         return coverageDayMemo.value(for: key) {
-            let policyArgument: Any = policy.flatMap { memoisedPayrollPolicyJSON($0) } ?? NSNull()
-            let coverageArgument: Any = coverage?.asFirestoreDictionary() ?? NSNull()
+            let policyArgument: Any = policy.flatMap { memoisedPayrollPolicyJSON($0) }.map { $0 as Any } ?? NSNull()
+            let coverageArgument: Any = coverage.map { $0.asFirestoreDictionary() as Any } ?? NSNull()
             guard let row = callJSON(
                 "resolveWeekendCoverageDay",
                 arguments: [coverageArgument, includeWeekends, policyArgument, weekday.rawValue]

@@ -1314,7 +1314,7 @@ enum WarningsComputation {
                 "scope": input.warningScope ?? NSNull(),
                 // RULEBOOK 1.19.0 §5: each day under its own working hours, and the weekend "Hours to cover".
                 "payrollPolicy": input.payrollPolicyState ?? NSNull(),
-                "weekendCoverage": input.weekendCoverage?.asFirestoreDictionary() ?? NSNull(),
+                "weekendCoverage": input.weekendCoverage.map { $0.asFirestoreDictionary() as Any } ?? NSNull(),
             ]
         ) else {
             return nil
