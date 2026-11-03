@@ -287,6 +287,7 @@ nonisolated enum JobAccessContext {
         for job in projects { fields[job.documentId.lowercased()] = job.jobAccessFields }
         jobFieldsById = fields
         updateVisibleJobIds(projects.map(\.documentId))
+        BookingJobCollectionContext.update(projects)
     }
 
     /// The refusal message when the signed-in account may not create, edit, cancel or delete this booking
@@ -337,6 +338,7 @@ nonisolated enum JobAccessContext {
     static func resetForOrganizationSwitch() {
         operativeRows = []
         jobFieldsById = [:]
+        BookingJobCollectionContext.reset()
         managers = []
         accounts = []
         ownBookingIds = []

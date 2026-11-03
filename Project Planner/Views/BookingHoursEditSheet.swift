@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 // MARK: - Time helpers
 
@@ -350,6 +351,23 @@ private struct QuarterHourWheel: UIViewRepresentable {
 
         func pickerView(_ pickerView: UIPickerView, rowHeightForComponent component: Int) -> CGFloat { 28 }
 
+        /// The whole wheel is the row, so a narrow minutes column (00 / 15 / 30 / 45) is never cut to "…".
+        func pickerView(_ pickerView: UIPickerView, widthForComponent component: Int) -> CGFloat {
+            max(pickerView.bounds.width, 40)
+        }
+
+        /// A label that shrinks to fit instead of the system title, which truncates in a 56pt column.
+        func pickerView(_ pickerView: UIPickerView, viewForRow row: Int, forComponent component: Int, reusing view: UIView?) -> UIView {
+            let label = (view as? UILabel) ?? UILabel()
+            label.text = values.indices.contains(row) ? String(format: "%02d", values[row]) : nil
+            label.font = .monospacedDigitSystemFont(ofSize: 20, weight: .regular)
+            label.textAlignment = .center
+            label.adjustsFontSizeToFitWidth = true
+            label.minimumScaleFactor = 0.6
+            label.lineBreakMode = .byClipping
+            return label
+        }
+
         func pickerView(_ pickerView: UIPickerView, didSelectRow row: Int, inComponent component: Int) {
             publish(row: row)
         }
@@ -443,7 +461,7 @@ private struct BookingHMTimePickerColumn: View {
 
                 QuarterHourWheel(selection: $minute, values: BookingHMTimePickerSupport.minuteChoices)
                     .accessibilityIdentifier("bookingHMTimePickerColumn.picker2")
-                    .frame(width: 56)
+                    .frame(width: 64)
             }
             .frame(height: 100)
         }

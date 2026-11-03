@@ -273,3 +273,28 @@ enum CustomerLegalPack {
     The platform owner’s console can access organisation and user records needed for support, security and billing. Login emails in that console are masked until revealed, and reveals are audited.
     """
 }
+
+
+extension CanonicalBusinessEngine {
+    /// `legalPackNeedsAcceptance({ policyAccepted, acceptedVersion, currentVersion })`: a person who has not accepted,
+    /// or accepted an older pack, accepts the current one before using the app. Nil when the script did not answer.
+    nonisolated static func legalPackNeedsAcceptance(policyAccepted: Bool, acceptedVersion: String?, currentVersion: String) -> Bool? {
+        callJSON("legalPackNeedsAcceptance", arguments: [[
+            "policyAccepted": policyAccepted,
+            "acceptedVersion": acceptedVersion ?? NSNull(),
+            "currentVersion": currentVersion,
+        ]]) as? Bool
+    }
+}
+
+extension AppUser {
+    /// The legal gate (`legalPackNeedsAcceptance` against `CustomerLegalPack.version`); without the script, the stored
+    /// acceptance flag decides.
+    var needsLegalPackAcceptance: Bool {
+        CanonicalBusinessEngine.legalPackNeedsAcceptance(
+            policyAccepted: policyAccepted,
+            acceptedVersion: legalPackVersion,
+            currentVersion: CustomerLegalPack.version
+        ) ?? !policyAccepted
+    }
+}

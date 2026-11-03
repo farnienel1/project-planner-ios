@@ -257,6 +257,9 @@ class BookingStore: ObservableObject {
     }
 
     func addBooking(_ booking: Booking) async {
+        // RULEBOOK §1: stored at organisation-zone midnight of its day (`BookingDay`), whatever picker made it.
+        var booking = booking
+        booking.date = BookingDay.organizationMidnight(for: booking.date)
         if let refusal = writeRefusal([booking]) {
             errorMessage = refusal
             return
@@ -268,6 +271,12 @@ class BookingStore: ObservableObject {
     /// Append multiple bookings then sync only the new rows (much faster than repeated full saves).
     func addBookings(_ newBookings: [Booking]) async {
         guard !newBookings.isEmpty else { return }
+        // RULEBOOK §1: organisation-zone midnight of each booking's day (`BookingDay`).
+        let newBookings = newBookings.map { booking -> Booking in
+            var booking = booking
+            booking.date = BookingDay.organizationMidnight(for: booking.date)
+            return booking
+        }
         if let refusal = writeRefusal(newBookings) {
             errorMessage = refusal
             return
@@ -278,6 +287,8 @@ class BookingStore: ObservableObject {
     
     /// Saves only the fields that changed against the copy on this device (RULEBOOK §1 partial writes).
     func updateBooking(_ booking: Booking) async {
+        var booking = booking
+        booking.date = BookingDay.organizationMidnight(for: booking.date)
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
             // Both the job it was on and the job it moves to must be the viewer's.
             if let refusal = writeRefusal([bookings[index], booking]) {
@@ -765,7 +776,7 @@ class BookingStore: ObservableObject {
             return
         }
         if remote.count < existing.count {
-            var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+            var byId = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for booking in remote {
                 byId[booking.id] = booking
             }

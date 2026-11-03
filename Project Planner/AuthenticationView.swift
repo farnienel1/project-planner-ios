@@ -293,23 +293,13 @@ struct AuthenticationView: View {
             }
             .padding(.bottom, 20)
 
-            Button(action: { AppBranding.openOrganisationSetup() }) {
-                HStack(spacing: 9) {
-                    Image(systemName: "globe")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text("Set up your organisation on the web")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .foregroundStyle(LoginBrand.cyan)
+            // App Store 3.1.1 / 3.1.3: no link to set up or buy an organisation outside the app.
+            Text("New organisations are set up by your company administrator.")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(LoginBrand.textMuted)
+                .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(LoginBrand.cyan.opacity(0.2), lineWidth: 1)
-                )
-            }
-            .accessibilityIdentifier("signIn.globe")
-            .buttonStyle(.plain)
+                .accessibilityIdentifier("signIn.organisationSetupNote")
 
             HStack(spacing: 20) {
                 Spacer(minLength: 0)

@@ -194,7 +194,8 @@ class ManagerScheduleStore: ObservableObject {
             return
         }
 
-        let normalizedDate = Calendar.current.startOfDay(for: booking.date)
+        // RULEBOOK §1: organisation-zone midnight of the picked day (`BookingDay`), never the phone's midnight.
+        let normalizedDate = BookingDay.organizationMidnight(for: booking.date)
         var normalizedBooking = booking
         normalizedBooking.date = normalizedDate
         normalizedBooking.updatedAt = Date()
@@ -203,7 +204,13 @@ class ManagerScheduleStore: ObservableObject {
         let clashesWithOther = managerSiteBookings.contains { other in
             other.id != normalizedBooking.id && semanticKey(for: other) == key
         }
-        if pendingSemanticKeys.contains(key) || clashesWithOther {
+        if pendingSemanticKeys.contains(key) {
+            // The same booking is already being saved (a double tap): nothing more to do.
+            return
+        }
+        if clashesWithOther {
+            // Said, never silent (launch data audit #12).
+            errorMessage = "This booking is already on the schedule for that day and slot."
             return
         }
         pendingSemanticKeys.insert(key)

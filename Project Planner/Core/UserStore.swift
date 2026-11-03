@@ -926,7 +926,8 @@ class UserStore: ObservableObject {
         // Super admin keeps the Operatives page. Everyone else, including admins, follows the Operatives toggle.
         if u.isSuperAdmin { return true }
         let canHoldTheToggle = u.permissions.manager || u.permissions.adminAccess || u.role == .admin || u.role == .manager
-        return canHoldTheToggle && u.permissions.operatives
+        // RULEBOOK 1.11.0 §11: `effectivePermissions` — admins have Operatives on and locked.
+        return canHoldTheToggle && u.effectivePermissions.operatives
     }
     
     /// Organisation material catalogue (batch upload, CRUD). Admins and managers only — not operatives with project materials access.
@@ -942,7 +943,7 @@ class UserStore: ObservableObject {
         guard let u = displayUser else { return false }
         if u.isSuperAdmin { return true }
         let isStaff = u.permissions.manager || u.permissions.adminAccess || u.role == .admin || u.role == .manager
-        return isStaff && u.permissions.wholesalersOrderHistory
+        return isStaff && u.effectivePermissions.wholesalersOrderHistory
     }
 
     /// Quote and order history follows the same Wholesalers toggle as the page.
@@ -998,7 +999,7 @@ class UserStore: ObservableObject {
 
     func canViewMaterials() -> Bool {
         if isOperativeMode() {
-            return displayUser?.permissions.materials == true
+            return displayUser?.effectivePermissions.materials == true
         }
         return true
     }
@@ -1242,7 +1243,7 @@ class UserStore: ObservableObject {
     func canViewSiteAudit() -> Bool {
         guard let currentUser = displayUser else { return false }
         if currentUser.permissions.operativeMode {
-            return currentUser.permissions.siteAudit
+            return currentUser.effectivePermissions.siteAudit
         }
         return true
     }
@@ -1294,7 +1295,7 @@ class UserStore: ObservableObject {
         if currentUser.isSuperAdmin || currentUser.permissions.adminAccess || currentUser.role == .admin {
             return true
         }
-        return currentUser.permissions.manager && currentUser.permissions.subContractors
+        return currentUser.permissions.manager && currentUser.effectivePermissions.subContractors
     }
 
     /// Add projects or small works (`canCreateJob`, RULEBOOK 1.10.0 §16 round 2): admins and super admins outside
@@ -1312,14 +1313,14 @@ class UserStore: ObservableObject {
         if isOperativeMode() { return false }
         if isHomeProfileLoading { return true }
         guard let u = displayUser else { return false }
-        return u.permissions.weeklyReports
+        return u.effectivePermissions.weeklyReports
     }
 
     func canViewDailyOverview() -> Bool {
         if isOperativeMode() { return false }
         if isHomeProfileLoading { return true }
         guard let u = displayUser else { return false }
-        return u.permissions.dailyOverview
+        return u.effectivePermissions.dailyOverview
     }
 
     /// Flags for `canViewStaffWarnings`, `isStaffAccount`, and `seesEveryJob`. Operative mode is passed through; the script decides it wins.
@@ -1340,8 +1341,8 @@ class UserStore: ObservableObject {
         return CanonicalBusinessEngine.CanonicalNotificationPreferenceAudience(
             role: Self.staffAccountRole(for: user),
             catalogue: CanonicalBusinessEngine.CanonicalWorkCatalogueToggles(
-                projects: user.permissions.projects,
-                smallWorks: user.permissions.smallWorks
+                projects: user.effectivePermissions.projects,
+                smallWorks: user.effectivePermissions.smallWorks
             ),
             canManagePeople: canViewOperatives(),
             canManageClients: !isOperativeMode(),
@@ -1381,7 +1382,7 @@ class UserStore: ObservableObject {
         guard let u = displayUser else { return false }
         if u.permissions.operativeMode { return false }
         if u.isSuperAdmin || u.permissions.adminAccess { return false }
-        return u.permissions.manager && u.permissions.operatives
+        return u.permissions.manager && u.effectivePermissions.operatives
     }
 
     /// Admins and managers with operative management can open the team annual leave directory.
@@ -1389,7 +1390,7 @@ class UserStore: ObservableObject {
         if isOperativeMode() { return false }
         if hasAdminAccess() { return true }
         guard let u = displayUser else { return false }
-        return u.permissions.manager && u.permissions.operatives
+        return u.permissions.manager && u.effectivePermissions.operatives
     }
     
     /// Whether the signed-in user may change permissions for `target` in **Manage / edit user**.
@@ -1564,6 +1565,8 @@ class UserStore: ObservableObject {
             return false
         }
         
+        // Whether the inviter is an admin, from their stored document; nil when it could not be read (the rules decide).
+        var inviterIsAdmin: Bool?
         // Load the actual user document from Firebase to check permissions
         if let firebaseUserData = try? await firebaseBackend.getUserData(userId: currentUserId) {
             print("🔥🔥🔥 DEBUG: Current user (inviter) Firebase document data:")
@@ -1573,6 +1576,7 @@ class UserStore: ObservableObject {
             
             // Check if user has admin permissions in Firebase
             let hasAdmin = firebaseUserData.isSuperAdmin || firebaseUserData.permissions.adminAccess || firebaseUserData.role == .admin
+            inviterIsAdmin = hasAdmin
             let canInviteOperativesAsManager =
                 !hasAdmin &&
                 !firebaseUserData.permissions.operativeMode &&
@@ -1655,7 +1659,8 @@ class UserStore: ObservableObject {
                 timesheetsEnabled: timesheetsEnabled,
                 // Only an admin may set another person's tax fields (`canViewSensitiveProfile`).
                 vatNumber: canViewSensitiveProfile(of: "") ? vatNumber : nil,
-                utrNumber: canViewSensitiveProfile(of: "") ? utrNumber : nil
+                utrNumber: canViewSensitiveProfile(of: "") ? utrNumber : nil,
+                inviterIsAdmin: inviterIsAdmin
             )
             print("🔥🔥🔥 DEBUG: createUserInvitation succeeded")
             
@@ -1664,6 +1669,10 @@ class UserStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: Organization users reloaded")
             
             return true
+        } catch let refusal as InvitationNotOperativeOnlyError {
+            // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused before anything was written.
+            errorMessage = refusal.errorDescription
+            return false
         } catch {
             print("🔥🔥🔥 DEBUG: Error inviting user: \(error)")
             print("🔥🔥🔥 DEBUG: Error type: \(type(of: error))")
@@ -1987,18 +1996,37 @@ class UserStore: ObservableObject {
             return false
         }
 
+        // RULEBOOK 1.12.0 §16: on their own users document a person changes `email` only to their signed-in Auth
+        // email. So a self change asks Firebase Auth first (`sendEmailVerification(beforeUpdatingEmail:)`) and every
+        // document keeps the current email; it moves to the new address only after Auth has changed
+        // (`syncSignedInEmailToProfileIfNeeded` on the next sign-in). A refused request writes nothing.
+        let requestedEmailChange = oldEmailNorm != trimmedEmail
+        let isSelf = Auth.auth().currentUser?.uid == userId
+        var pendingSelfEmail: String?
+        if requestedEmailChange && isSelf {
+            do {
+                try await firebaseBackend.sendVerifyBeforeUpdateEmail(to: trimmedEmail)
+                pendingSelfEmail = trimmedEmail
+            } catch {
+                errorMessage = "Could not change your sign-in email: \(error.localizedDescription)"
+                print("🔥🔥🔥 DEBUG: verifyBeforeUpdateEmail failed: \(error)")
+                return false
+            }
+        }
+        let savedEmail = pendingSelfEmail == nil ? trimmedEmail : oldEmailNorm
+
         updated.firstName = trimmedFirst
         updated.surname = trimmedSurname
-        updated.email = trimmedEmail
+        updated.email = savedEmail
         updated.mobileNumber = mobileOut
 
-        let emailChanged = oldEmailNorm != trimmedEmail
+        let emailChanged = oldEmailNorm != savedEmail
         let orgId = updated.organizationId
         let previousFirst = organizationUsers[index].firstName
         let previousSurname = organizationUsers[index].surname
         var idsToPatch = Set(organizationUsers.filter { person in
             let email = person.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            return email == oldEmailNorm || email == trimmedEmail
+            return email == oldEmailNorm || email == savedEmail
         }.map(\.id))
         idsToPatch.insert(userId)
 
@@ -2009,7 +2037,7 @@ class UserStore: ObservableObject {
                         userId: id,
                         firstName: trimmedFirst,
                         surname: trimmedSurname,
-                        email: trimmedEmail,
+                        email: savedEmail,
                         mobileNumber: mobileOut
                     )
                 } catch {
@@ -2021,7 +2049,7 @@ class UserStore: ObservableObject {
                     organizationId: orgId,
                     userId: userId,
                     oldEmailNormalized: oldEmailNorm,
-                    newEmail: trimmedEmail
+                    newEmail: savedEmail
                 )
             }
 
@@ -2032,7 +2060,7 @@ class UserStore: ObservableObject {
                     var op = opStore.operatives[oi]
                     op.firstName = trimmedFirst
                     op.lastName = trimmedSurname
-                    op.email = trimmedEmail
+                    op.email = savedEmail
                     op.phone = mobileOut
                     op.updatedAt = Date()
                     await opStore.updateOperative(op)
@@ -2041,7 +2069,7 @@ class UserStore: ObservableObject {
                     opStore.managers[$0].email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == oldEmailNorm
                 }
                 for mi in managerIndexes {
-                    opStore.managers[mi].email = trimmedEmail
+                    opStore.managers[mi].email = savedEmail
                     opStore.managers[mi].firstName = trimmedFirst
                     opStore.managers[mi].lastName = trimmedSurname
                     opStore.managers[mi].mobileNumber = mobileOut ?? ""
@@ -2053,7 +2081,7 @@ class UserStore: ObservableObject {
                         previousEmail: oldEmailNorm,
                         firstName: trimmedFirst,
                         lastName: trimmedSurname,
-                        email: trimmedEmail,
+                        email: savedEmail,
                         mobileNumber: mobileOut ?? ""
                     )
                 } catch {
@@ -2065,7 +2093,7 @@ class UserStore: ObservableObject {
             for offset in people.indices where idsToPatch.contains(people[offset].id) {
                 people[offset].firstName = trimmedFirst
                 people[offset].surname = trimmedSurname
-                people[offset].email = trimmedEmail
+                people[offset].email = savedEmail
                 people[offset].mobileNumber = mobileOut
             }
             if people.indices.contains(index) {
@@ -2078,7 +2106,7 @@ class UserStore: ObservableObject {
                 previousSurname: previousSurname,
                 firstName: trimmedFirst,
                 surname: trimmedSurname,
-                email: trimmedEmail,
+                email: savedEmail,
                 mobile: mobileOut,
                 savedAt: Date()
             )
@@ -2088,18 +2116,14 @@ class UserStore: ObservableObject {
             if var cu = currentUser, cu.id == userId {
                 cu.firstName = trimmedFirst
                 cu.surname = trimmedSurname
-                cu.email = trimmedEmail
+                cu.email = savedEmail
                 cu.mobileNumber = mobileOut
                 currentUser = cu
             }
 
-            if emailChanged, Auth.auth().currentUser?.uid == userId {
-                do {
-                    try await firebaseBackend.sendVerifyBeforeUpdateEmail(to: trimmedEmail)
-                } catch {
-                    errorMessage = "Profile saved. Could not send sign-in email verification: \(error.localizedDescription). You can try again later or update the address in Firebase Authentication."
-                    print("🔥🔥🔥 DEBUG: verifyBeforeUpdateEmail failed: \(error)")
-                }
+            if let pendingSelfEmail {
+                // Not an error: Firebase Auth emailed the confirmation link; the profile email moves after it.
+                print("🔥🔥🔥 DEBUG: sign-in email change to \(pendingSelfEmail) waits for confirmation")
             }
 
             return true
@@ -2265,6 +2289,74 @@ class UserStore: ObservableObject {
                      return false
                  }
              }
+
+    /// RULEBOOK 1.11.0 §11: "Change user type" through `accountTypeChangeWrites` — every document that decides the
+    /// type: `users/{uid}` (and same-email documents of this organisation, `updateUserPermissions`), `members.{uid}`
+    /// and `users/{uid}/orgMemberships/{orgId}`. A profile of another company keeps its own document; only the members
+    /// entry and the membership change (`note`). Refused for a Super Admin who would stop being an admin.
+    /// `screenPermissions` are the toggles the sheet set; the plan applies `effectivePermissions` for the new level.
+    func changeAccountType(
+        userId: String,
+        kind: RulebookPermissionLevel,
+        screenPermissions: UserPermissions,
+        holidayStore: HolidayStore? = nil,
+        linkedOperativeUUID: UUID? = nil
+    ) async -> (ok: Bool, note: String?) {
+        errorMessage = nil
+        guard let firebaseBackend,
+              let person = organizationUsers.first(where: { $0.id == userId }) else {
+            errorMessage = "This person is not in the loaded user list. Pull to refresh and try again."
+            return (false, nil)
+        }
+        let orgId = normalizedOrganizationId(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "")
+        var personRow = RulebookPeople.person(person)
+        personRow["role"] = person.role.rawValue
+        personRow["organizationId"] = person.organizationId
+        let roster: [[String: Any]] = organizationUsers.map { ["id": $0.id, "email": $0.email, "organizationId": $0.organizationId] }
+        guard let plan = CanonicalBusinessEngine.accountTypeChangeWrites(
+            person: personRow,
+            kind: kind,
+            organizationId: orgId,
+            roster: roster,
+            permissions: screenPermissions.rulebookMap
+        ) else {
+            errorMessage = "Could not work out the change. Nothing was changed."
+            return (false, nil)
+        }
+        switch plan {
+        case .refused(_, let message):
+            errorMessage = message
+            return (false, nil)
+        case .ok(let role, let effective, let writes, let note):
+            let writesOwnProfile = writes.contains { write in
+                if case .userProfile(let path, _) = write { return path.caseInsensitiveCompare("users/\(userId)") == .orderedSame }
+                return false
+            }
+            if writesOwnProfile {
+                let nextRole: UserRole = role == .admin ? .admin : role == .manager ? .manager : .operative
+                let saved = await updateUserPermissions(
+                    userId: userId,
+                    permissions: screenPermissions.applying(effective),
+                    holidayStore: holidayStore,
+                    linkedOperativeUUID: linkedOperativeUUID,
+                    role: nextRole
+                )
+                guard saved else { return (false, nil) }
+            }
+            do {
+                try await firebaseBackend.applyAccountTypeMembershipWrites(
+                    writes,
+                    organizationId: orgId,
+                    actorUserId: Auth.auth().currentUser?.uid
+                )
+            } catch {
+                NSLog("ACCOUNT_TYPE_MEMBERSHIP_WRITE_FAILED id=%@ %@", userId, error.localizedDescription)
+                errorMessage = "The profile was changed, but the organisation membership could not be updated: \(error.localizedDescription). Try again."
+                return (false, note)
+            }
+            return (true, note)
+        }
+    }
 
     /// Ends every roster load already in flight: its result is ignored when it lands. The next load starts afresh.
     private func invalidateInFlightRosterLoads() {

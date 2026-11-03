@@ -88,7 +88,10 @@ struct PolicyAcceptanceView: View {
                     }
                     .accessibilityIdentifier("policyAcceptance.saving")
                     .disabled(!canWelcome)
-                    .padding(.bottom, 24)
+
+                    // A way out without accepting: another organisation, sign out, or delete the account.
+                    GateAccountActions(idPrefix: "policyAcceptance")
+                        .padding(.bottom, 24)
                 }
                 .padding(16)
             }

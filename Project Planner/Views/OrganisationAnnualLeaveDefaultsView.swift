@@ -110,12 +110,12 @@ struct OrganisationAnnualLeaveDefaultsView: View {
                 SettingsHubChrome.footer("Runs from the first day of the start month through the last day of the end month (e.g. April → March).")
                 SettingsHubChrome.card {
                     HStack(alignment: .bottom, spacing: 10) {
-                        monthMenu("Starts", selection: $startMonth)
+                        monthMenu("Starts", selection: startSelection)
                         Text("→")
                             .font(.body)
                             .foregroundStyle(Color.secondary)
                             .padding(.bottom, 10)
-                        monthMenu("Ends", selection: $endMonth)
+                        monthMenu("Ends", selection: endSelection)
                     }
                     .padding(.top, 12)
                     Text("Leave year: \(leaveYearSummary)")
@@ -244,6 +244,28 @@ struct OrganisationAnnualLeaveDefaultsView: View {
         bankHolidayRegionId = baselineRegionId
     }
 
+    /// RULEBOOK 1.12.0 §4.4: a leave year is 12 months, so the end follows the start (`leaveYearEndMonth`).
+    private var startSelection: Binding<Int> {
+        Binding(
+            get: { startMonth },
+            set: { next in
+                startMonth = next
+                if let end = CanonicalBusinessEngine.leaveYearEndMonth(startMonth: next) { endMonth = end }
+            }
+        )
+    }
+
+    /// Picking the end month moves the start to the month whose `leaveYearEndMonth` it is (12 months either way).
+    private var endSelection: Binding<Int> {
+        Binding(
+            get: { endMonth },
+            set: { next in
+                endMonth = next
+                if let start = CanonicalBusinessEngine.leaveYearStartMonth(endingIn: next) { startMonth = start }
+            }
+        )
+    }
+
     private func monthMenu(_ title: String, selection: Binding<Int>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
@@ -271,6 +293,12 @@ struct OrganisationAnnualLeaveDefaultsView: View {
         let normalized = daysText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
         guard let parsedDays = Double(normalized), parsedDays > 0 else {
             errorMessage = "Enter a valid annual leave allowance (a positive number of days)."
+            return
+        }
+
+        // RULEBOOK 1.12.0 §4.4 `validateAnnualLeaveDefaults`: a leave year that is not 12 months is refused.
+        if let leaveYearError = CanonicalBusinessEngine.annualLeaveDefaultsError(startMonth: startMonth, endMonth: endMonth) {
+            errorMessage = leaveYearError
             return
         }
 

@@ -8,14 +8,18 @@ import UIKit
 
 enum AppBranding {
     static let webAppBaseURL = "https://www.projectplanner.us"
-    static let organisationSetupURL = "\(webAppBaseURL)/setup"
     static let privacyPolicyURL = "https://www.projectplanner.us/privacy"
     static let termsOfServiceURL = "https://www.projectplanner.us/terms"
     static let processorsURL = "https://www.projectplanner.us/processors"
 
-    @MainActor
-    static func openOrganisationSetup() {
-        open(organisationSetupURL)
+    /// The App Store id of this app, once it has one (the forced-update screen links to it). Nil until then: the
+    /// "Update required" screen shows the message only.
+    static let appStoreId: String? = nil
+
+    /// `itms-apps://itunes.apple.com/app/id{appStoreId}`, or nil without an App Store id.
+    static var appStoreUpdateURL: URL? {
+        guard let id = appStoreId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else { return nil }
+        return URL(string: "itms-apps://itunes.apple.com/app/id\(id)")
     }
 
     @MainActor

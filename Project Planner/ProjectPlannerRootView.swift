@@ -249,6 +249,8 @@ struct ProjectPlannerRootView: View {
     @EnvironmentObject private var notificationService: NotificationService
     @EnvironmentObject private var appLock: AppLockService
     @Environment(\.scenePhase) private var scenePhase
+    /// `platformConfig/app.minimumIosBuild`: blocks an outdated build with "Update required". Never blocks on a failed read.
+    @StateObject private var forcedUpdate = ForcedUpdateGate()
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
@@ -314,7 +316,12 @@ struct ProjectPlannerRootView: View {
             SubscriptionLapsedView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
-        } else if let currentUser = userStore.currentUser, !currentUser.policyAccepted {
+        } else if firebaseBackend.sessionHasNoOrganization && firebaseBackend.currentOrganization == nil {
+            NoOrganisationView()
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+        } else if let currentUser = userStore.currentUser, currentUser.needsLegalPackAcceptance {
+            // `legalPackNeedsAcceptance`: not accepted, or an older pack accepted.
             PolicyAcceptanceView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
@@ -358,6 +365,15 @@ struct ProjectPlannerRootView: View {
                 AppLaunchSplashView()
                     .zIndex(1)
             }
+            if forcedUpdate.updateRequired {
+                ForcedUpdateView()
+                    .zIndex(2)
+            }
+        }
+        .task { await forcedUpdate.check() }
+        .onChange(of: firebaseAuthUID) { _, _ in
+            // RULEBOOK 1.12.0 §18: `platformConfig/app` is readable signed out too; check again when the account changes.
+            Task { await forcedUpdate.check() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ProjectWorksRevampColors.canvas)
@@ -377,7 +393,9 @@ struct ProjectPlannerRootView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background: appLock.appDidEnterBackground()
-            case .active: appLock.appDidBecomeActive()
+            case .active:
+                appLock.appDidBecomeActive()
+                Task { await forcedUpdate.check() }
             default: break
             }
         }

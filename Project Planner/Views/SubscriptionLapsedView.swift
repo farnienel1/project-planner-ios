@@ -52,13 +52,9 @@ struct SubscriptionLapsedView: View {
                 .padding(24)
                 .frame(maxWidth: 420)
                 Spacer()
-                Button("Sign Out") {
-                    AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
-                }
-                .accessibilityIdentifier("subscriptionLapsed.signOut")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color.red)
-                .padding(.bottom, 28)
+                // Sign out (asks first) and Delete my account (App Review 5.1.1(v)).
+                GateAccountActions(showsSwitchOrganisation: false, idPrefix: "subscriptionLapsed")
+                    .padding(.bottom, 28)
             }
             .padding(.horizontal, 24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)

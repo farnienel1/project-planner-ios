@@ -285,7 +285,7 @@ nonisolated enum AnnualLeavePolicy {
         carriesOver: Bool,
         calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> String? {
-        let normalized = Dictionary(uniqueKeysWithValues: daySlots.map { (calendar.startOfDay(for: $0.key), $0.value) })
+        let normalized = Dictionary(daySlots.map { (calendar.startOfDay(for: $0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
         guard !normalized.isEmpty else { return nil }
         let buckets = bucketStartOfDaysByLeaveYear(Array(normalized.keys), startMonth: startMonth, endMonth: endMonth, calendar: calendar)
         guard !buckets.isEmpty else {

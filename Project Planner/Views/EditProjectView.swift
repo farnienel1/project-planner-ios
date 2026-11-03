@@ -694,10 +694,16 @@ struct EditProjectView: View {
             )
             updatedProject.createdAt = project.createdAt
             updatedProject.updatedAt = Date()
-            await projectStore.updateProject(updatedProject)
+            projectStore.errorMessage = nil
+            await projectStore.updateProject(updatedProject, editedFrom: project)
             await MainActor.run {
                 isLoading = false
-                dismiss()
+                // A failed cloud save is shown, never closed over silently (launch data audit #10).
+                if let failure = projectStore.errorMessage {
+                    errorMessage = failure
+                } else {
+                    dismiss()
+                }
             }
         }
     }

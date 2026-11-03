@@ -21,4 +21,7 @@ nonisolated struct BookingDecodeReport: Equatable, Sendable {
 extension Notification.Name {
     /// The live bookings listener reported an error; on-screen bookings may be stale.
     static let bookingsListenerFailed = Notification.Name("bookingsListenerFailed")
+    /// A planned listener (bookings, manager bookings, jobs, subcontractor bookings) failed; it is attached again
+    /// with backoff. `userInfo["label"]` names it.
+    static let plannedListenerFailed = Notification.Name("plannedListenerFailed")
 }

@@ -168,6 +168,7 @@ class FirebaseBackend: ObservableObject {
     @Published var errorMessage: String?
     @Published var currentOrganization: Organization? {
         didSet {
+            if currentOrganization != nil { sessionHasNoOrganization = false }
             OrganizationDocumentAbbreviation.update(from: currentOrganization)
             OrganizationRulebookContext.update(from: currentOrganization)
             // Users parsed before the organisation's leave defaults were known (`annualLeaveDefaultsPending` from
@@ -188,6 +189,9 @@ class FirebaseBackend: ObservableObject {
         }
     }
     @Published var userRole: UserRole = .basic
+    /// True when the session chooser answered that the signed-in account belongs to no organisation and recovery did
+    /// not find one. The root shows "You're not a member of an organisation yet" instead of an empty Home.
+    @Published var sessionHasNoOrganization = false
     /// Set after the root shell has kicked off the first org-wide store load (prevents duplicate parallel reloads on launch).
     @Published var hasBootstrappedOrgDataLoad = false
     /// True while `PlannerStoreWiring.bootstrapOrgDataIfNeeded` is in flight (including waiting for org).
@@ -901,7 +905,9 @@ class FirebaseBackend: ObservableObject {
     /// cache (`clearAllCache`, through `.appDidSignOut`).
     func clearDeviceQueuesOnSignOut() {
         OfflineOutboxStore.shared.clearAll()
+        SiteAuditOfflineStore.shared.clearAll()
         TimesheetDraftStore.clearAll()
+        sessionHasNoOrganization = false
         NotificationCenter.default.post(name: .appDidSignOut, object: nil)
     }
 
@@ -909,6 +915,11 @@ class FirebaseBackend: ObservableObject {
     /// `users` document it was written to before Firebase Auth signs out, exactly as `AppSignOut` does. The wait is
     /// bounded (`removeThisDevicePushTokenBeforeSignOut`); sign-out goes ahead either way.
     func forcedSignOutRemovingPushToken() async {
+        let pending = OfflineOutboxStore.shared.pendingCount + SiteAuditOfflineStore.shared.pendingCount
+        if pending > 0 {
+            // A forced sign-out cannot ask; the queued changes are discarded with the session (logged).
+            NSLog("FORCED_SIGN_OUT_DISCARDS_PENDING count=%d", pending)
+        }
         await removeThisDevicePushTokenBeforeSignOut()
         try? auth.signOut()
         clearDeviceQueuesOnSignOut()
@@ -1783,6 +1794,7 @@ class FirebaseBackend: ObservableObject {
             let userData: [String: Any]
             if userDoc.exists, let data = userDoc.data() {
                 userData = data
+                await syncSignedInEmailToProfileIfNeeded(userId: userId, storedData: data)
             } else {
                 print("🔥🔥🔥 DEBUG: ❌ User document missing or empty at users/\(userId) — keeping this device's company")
                 errorMessage = userDoc.exists
@@ -1814,6 +1826,9 @@ class FirebaseBackend: ObservableObject {
                 }
                 errorMessage = "Organization not linked. Attempting recovery..."
                 await attemptToFixMissingOrganization(userId: userId, userData: userData)
+                // Only a definite answer (the chooser ran and found none) shows the no-organisation screen; a
+                // failed read never does.
+                if choice != nil && currentOrganization == nil { sessionHasNoOrganization = true }
                 return
             }
             let organizationId = choice.organizationId
@@ -4225,6 +4240,8 @@ class FirebaseBackend: ObservableObject {
         var emailClaimsLoaded = false
         /// `organizations/{orgId}.creatorUserId`. The creator belongs to the organisation they made.
         var creatorUserId: String?
+        /// `members.{uid}` role values, by member id (RULEBOOK 1.11.0 `organizationLevelFor`).
+        var memberRoles: [String: String] = [:]
     }
 
     private func loadOrgMemberIndex(organizationId: String) async -> OrgMemberIndex {
@@ -4242,6 +4259,9 @@ class FirebaseBackend: ObservableObject {
                 guard !trimmed.isEmpty else { continue }
                 index.memberIds.insert(trimmed)
                 index.indexedUserIds.insert(trimmed)
+            }
+            for (userId, role) in members {
+                if let role = role as? String { index.memberRoles[userId.trimmingCharacters(in: .whitespacesAndNewlines)] = role }
             }
         }
         if let creator = (orgSnap?.data()?["creatorUserId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -4612,6 +4632,22 @@ class FirebaseBackend: ObservableObject {
             var user = Self.parseAppUserDocument(userId: userId, data: data)
             if fieldMissing {
                 user.organizationId = orgId
+            }
+            // RULEBOOK 1.11.0 §11 `organizationLevelFor`: a profile whose `organizationId` is another company is shown
+            // at its level here (membership, else `members` role; the creator is super admin) — never at that
+            // company's flags. The document is not rewritten from this.
+            if !belongsByField && !fieldMissing && !queryAlreadyMatched,
+               memberIndex.memberRoles[userId] != nil || memberIndex.creatorUserId == userId,
+               let level = CanonicalBusinessEngine.organizationLevelFor(
+                   organizationId: orgId,
+                   userId: userId,
+                   user: ["organizationId": docOrganizationId],
+                   membership: nil,
+                   membersRole: memberIndex.memberRoles[userId],
+                   creatorUserId: memberIndex.creatorUserId
+               ),
+               level.source != "users" {
+                user = user.atOrganizationLevel(level)
             }
             if managersRecordUserIds.contains(userId), Self.qualifiesForManagersRecordPlacement(user) {
                 user.placedByManagersRecord = true
@@ -5865,6 +5901,45 @@ class FirebaseBackend: ObservableObject {
             )
         }
         try await user.sendEmailVerification(beforeUpdatingEmail: trimmed, actionCodeSettings: nil)
+        // Remembered on this device only, so the profile follows once Auth has changed (never an admin's edit).
+        UserDefaults.standard.set(trimmed.lowercased(), forKey: Self.pendingSignInEmailKey(uid: user.uid))
+    }
+
+    nonisolated static func pendingSignInEmailKey(uid: String) -> String {
+        "pending_signin_email_\(uid)"
+    }
+
+    /// RULEBOOK 1.12.0 §14, §16: the person's own `users/{uid}.email` changes only to their signed-in Auth email,
+    /// after Firebase Auth has changed it (verify-before-update, then the next sign-in). When this device asked for
+    /// that change and the Auth email is now the requested one, the profile (and the organisation `userEmails`
+    /// claim) take it. Anything else — an admin's edit in Manage Users, a request from another device — is left alone.
+    func syncSignedInEmailToProfileIfNeeded(userId: String, storedData: [String: Any]) async {
+        let key = Self.pendingSignInEmailKey(uid: userId)
+        guard let pending = UserDefaults.standard.string(forKey: key), !pending.isEmpty,
+              let authUser = auth.currentUser, authUser.uid == userId,
+              let authEmail = authUser.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              authEmail == pending else { return }
+        let stored = (storedData["email"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard !stored.isEmpty else { return }
+        guard stored != authEmail else {
+            UserDefaults.standard.removeObject(forKey: key)
+            return
+        }
+        do {
+            try await db.collection("users").document(userId)
+                .updateData(WriteMetadata.stamped(["email": authEmail], userId: userId))
+            UserDefaults.standard.removeObject(forKey: key)
+            if let orgId = organizationIdFromFirestore(storedData["organizationId"]), !orgId.isEmpty {
+                try? await reconcileUserEmailIndex(
+                    organizationId: orgId,
+                    userId: userId,
+                    oldEmailNormalized: stored,
+                    newEmail: authEmail
+                )
+            }
+        } catch {
+            NSLog("SIGN_IN_EMAIL_SYNC_SKIPPED %@", error.localizedDescription)
+        }
     }
     
     /// A photo upload stores the fresh download URL and `profilePhotoUpdatedAt`, which tells every screen
@@ -6749,7 +6824,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil, inviterIsAdmin: Bool? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         guard let lookup = Self.inviteEmailUsersQuery(organizationId: organizationId, email: email) else {
             throw NSError(
@@ -6899,8 +6974,12 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Invitation keys: \(invitationData.keys.sorted().joined(separator: ", "))")
         #endif
         
-        // RULEBOOK 1.9.0 §11: the invitation is created once with `invitationCreateFields`.
-        try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+        // RULEBOOK 1.9.0 §11: the invitation is created once with `invitationCreateFields`. 1.12.0 §11: a manager with
+        // operatives access (not an admin) may write only an operative-only invitation (`invitationIsOperativeOnly`);
+        // anything else is refused here, before any write, instead of as a permission error.
+        let invitationFields = try InvitationDocument.createFields(from: invitationData)
+        try InvitationDocument.requireAllowed(invitationFields, inviterIsAdmin: inviterIsAdmin)
+        try await db.collection("invitations").document(invitationId).setData(invitationFields)
         
         print("🔥🔥🔥 DEBUG: Invitation document created successfully")
         
@@ -7278,6 +7357,8 @@ class FirebaseBackend: ObservableObject {
                !fields.isDisjoint(with: slotGroup) {
                 fields.formUnion(slotGroup)
             }
+            // RULEBOOK 1.11.0: `jobCollection` rides on every edit (`BOOKING_JOB_WRITE_GROUP`); unchanged it writes nothing.
+            fields.insert("jobCollection")
             let next = BookingWritePatch.patch(
                 BookingWritePatch.labourValues(booking, deletesClearedFields: true),
                 fields: fields
@@ -7679,9 +7760,10 @@ class FirebaseBackend: ObservableObject {
         let ref = db.collection("organizations").document(organizationId).collection("managerSiteBookings").document(booking.documentKey)
         let uid = currentUser?.uid
         if let changedFields {
+            // RULEBOOK 1.11.0: `jobCollection` goes with the location group.
             let patch = BookingWritePatch.patch(
                 BookingWritePatch.managerValues(booking, deletesClearedFields: true),
-                fields: changedFields
+                fields: changedFields.union(["jobCollection"])
             )
             guard !patch.isEmpty else { return }
             // RULEBOOK 1.9.0 §1, §2: an edit is `managerSiteBookingUpdateWriteFields` against the stored copy — only
@@ -9642,7 +9724,8 @@ extension FirebaseBackend {
                 status: booking.status.rawValue,
                 bookedContactIds: booking.storedContactIds,
                 bookedOperativeNames: operativeNames ?? booking.storedOperativeNames,
-                createdAt: booking.createdAt
+                createdAt: booking.createdAt,
+                jobCollection: BookingJobCollectionContext.jobCollection(forJobId: booking.storedProjectId)
             ) else {
                 throw CanonicalWriteUnavailableError(function: "subcontractorBookingCreateFields")
             }
@@ -11056,7 +11139,7 @@ extension FirebaseBackend {
     }
 
     private func mergeDeadlinesFirstWriterWins(remote: [DLDeadline], local: [DLDeadline]) -> [DLDeadline] {
-        var byId = Dictionary(uniqueKeysWithValues: remote.map { ($0.id, $0) })
+        var byId = Dictionary(remote.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for item in local where byId[item.id] == nil {
             byId[item.id] = item
         }

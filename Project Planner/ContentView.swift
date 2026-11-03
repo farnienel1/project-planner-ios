@@ -63,6 +63,7 @@ struct ContentView: View {
 
     @State private var selectedTab = 0
     @State private var showMoreMenuSheet = false
+    @State private var showingMenuSignOutConfirmation = false
     @State private var previousTab: Int? = nil
     @State private var hideBottomMenu = false
     @State private var showingHolidaySheet = false
@@ -218,8 +219,18 @@ struct ContentView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .mainMenuSignOut)) { _ in
                 showMoreMenuSheet = false
-                AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
+                // Ask first (and warn about changes still waiting to sync), as Settings does. The menu sheet closes
+                // first, so the alert is shown once it has gone.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    showingMenuSignOutConfirmation = true
+                }
             }
+            .signOutConfirmation(
+                isPresented: $showingMenuSignOutConfirmation,
+                firebaseBackend: firebaseBackend,
+                userStore: userStore,
+                idPrefix: "mainMenu.signOut"
+            )
             .onReceive(NotificationCenter.default.publisher(for: .openWorkCatalogueDetail)) { notification in
                 guard let projectId = notification.userInfo?["projectId"] as? UUID else { return }
                 let isSmallWorks = notification.userInfo?["isSmallWorks"] as? Bool ?? false

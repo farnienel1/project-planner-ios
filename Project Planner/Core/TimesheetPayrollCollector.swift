@@ -34,8 +34,14 @@ struct TimesheetPayrollSummary {
     var baseAmount: Double
     var overtimeAmount: Double
     var lineItems: [TimesheetPayrollLineItem]
+    /// True when a packed-script call (`payrollHoursResult` or `payForHours`) did not answer for some booking: the
+    /// hours or pay shown are incomplete. Screens say "could not calculate" and nothing is signed or invoiced from
+    /// it (money audit #15).
+    var calculationFailed: Bool = false
 
     var workAmount: Double { baseAmount + overtimeAmount }
+
+    static let calculationFailedMessage = "Pay could not be calculated for some bookings. Try again; nothing can be signed or invoiced until it is."
 }
 
 enum TimesheetPayrollCollector {
@@ -69,6 +75,7 @@ enum TimesheetPayrollCollector {
         var overtimeHours = 0.0
         var baseAmount = 0.0
         var overtimeAmount = 0.0
+        var calculationFailed = false
         /// Every paid booking, for `overlappingBookingIds` (web collector `paidBookings`).
         var paidBookings: [CanonicalOverlapBookingInput] = []
         let matchedOperatives = operatives.filter {
@@ -105,6 +112,7 @@ enum TimesheetPayrollCollector {
             )
             // One rulebook result (`payrollHoursResult`): the same fields web's collector reads.
             let hours = PayrollHoursEngine.canonicalResult(booking: probe, day: probe.date, policy: policy)
+            if hours == nil { calculationFailed = true }
             let paidHours = hours?.totalPaidHours ?? 0
             let otHours = hours?.outsideHours ?? 0
             let otMultiplier = hours?.outsideMultiplier ?? 1
@@ -123,7 +131,9 @@ enum TimesheetPayrollCollector {
                 )
             )
 
-            let normalAmount = resolved.payForHours(normalHours, standardDayHours: standardDayHours)
+            let normalPay = resolved.payForHoursIfCalculated(normalHours, standardDayHours: standardDayHours)
+            if normalPay == nil { calculationFailed = true }
+            let normalAmount = normalPay ?? 0
             baseAmount += normalAmount
             lineItems.append(
                 TimesheetPayrollLineItem(
@@ -144,7 +154,9 @@ enum TimesheetPayrollCollector {
             )
 
             if otHours > 0.05 {
-                let otAmount = resolved.payForHours(otHours, standardDayHours: standardDayHours, otMultiplier: otMultiplier)
+                let otPay = resolved.payForHoursIfCalculated(otHours, standardDayHours: standardDayHours, otMultiplier: otMultiplier)
+                if otPay == nil { calculationFailed = true }
+                let otAmount = otPay ?? 0
                 overtimeAmount += otAmount
                 let (otDisplayRate, otDisplayHourly) = overtimeDisplayRates(resolved: resolved, otMultiplier: otMultiplier)
                 lineItems.append(
@@ -233,7 +245,8 @@ enum TimesheetPayrollCollector {
             shiftCount: shiftCount,
             baseAmount: baseAmount,
             overtimeAmount: overtimeAmount,
-            lineItems: sortedItems
+            lineItems: sortedItems,
+            calculationFailed: calculationFailed
         )
     }
 

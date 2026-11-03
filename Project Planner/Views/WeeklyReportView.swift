@@ -843,9 +843,17 @@ struct WeeklyReportView: View {
                 await MainActor.run { isGenerating = false }
                 return
             }
-            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                dayRateHistoryCollection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+            // A failed pay-history read is a failure, never an empty history (`PayInputsLoad`): no report with
+            // pay worked out from rates that did not load.
+            let payInputs = await PayInputsLoad.loadHistory(firebaseBackend)
+            if let blocked = PayInputsLoad.blockMessage(state: payInputs.state, organization: firebaseBackend.currentOrganization) {
+                await MainActor.run {
+                    message = blocked
+                    isGenerating = false
+                }
+                return
             }
+            if let history = payInputs.history { dayRateHistoryCollection = history }
             if logoImage == nil {
                 await loadOrganizationLogo()
             }

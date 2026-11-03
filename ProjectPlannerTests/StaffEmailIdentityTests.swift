@@ -588,8 +588,9 @@ final class StaffEmailIdentityTests: XCTestCase {
         XCTAssertTrue(store.canViewOperatives())
         XCTAssertTrue(store.canAccessWholesalers())
         XCTAssertTrue(store.canViewProjects())
-        XCTAssertFalse(store.canViewWeeklyReports())
-        XCTAssertFalse(store.canViewDailyOverview())
+        // RULEBOOK 1.11.0 §11 `effectivePermissions`: an admin or super admin has every toggle on whatever is stored.
+        XCTAssertTrue(store.canViewWeeklyReports())
+        XCTAssertTrue(store.canViewDailyOverview())
         XCTAssertTrue(store.canManageUsers())
         XCTAssertFalse(store.canManageSkills())
 

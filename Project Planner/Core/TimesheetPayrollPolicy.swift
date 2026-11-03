@@ -183,31 +183,23 @@ enum TimesheetPayrollPolicy {
         return specificMonthPayDate(after: periodEndDay, paymentDays: settings.normalizedPaymentDates, calendar: calendar)
     }
 
-    /// Self-employed users always see My Timesheet. PAYE users keep access until their open period is paid out
-    /// if that period includes self-employed days (e.g. after switching SE → PAYE mid-period).
+    /// RULEBOOK 1.11.0 §8 `showsMyTimesheets(user, period, timeZone)`: My Timesheets exists for the open pay run only
+    /// when the person is self-employed on at least one day of it. A PAYE person never sees My Timesheets. False when
+    /// the script did not answer.
     static func canAccessMyTimesheets(
         user: AppUser,
         settings: OrganizationInvoicingSettings,
         referenceDate: Date = Date(),
         calendar: Calendar = .current
     ) -> Bool {
-        let today = CanonicalBusinessEngine.businessCalendar.startOfDay(for: referenceDate)
-        let isSelfEmployed = user.employmentType(on: referenceDate) == .selfEmployed
-
-        // Self-employed always retain personal timesheet access (sign-off / invoicing).
-        if isSelfEmployed {
-            return true
-        }
-
+        _ = calendar
         let period = payPeriodContaining(referenceDate: referenceDate, settings: settings, calendar: CanonicalBusinessEngine.businessCalendar)
-        let hasSelfEmployedDays = calendarDays(from: period.start, to: period.end, calendar: calendar)
-            .contains { isBillableSelfEmployedDay(user, on: $0, calendar: calendar) }
-        guard hasSelfEmployedDays else { return false }
-
-        guard let payDate = payDate(forPeriodEnding: period.end, settings: settings, calendar: calendar) else {
-            return true
-        }
-        return today <= calendar.startOfDay(for: payDate)
+        return CanonicalBusinessEngine.showsMyTimesheets(
+            person: CanonicalBusinessEngine.timesheetPerson(user),
+            startDayKey: OrganizationRulebookContext.dayKey(period.start),
+            endDayKey: OrganizationRulebookContext.dayKey(period.end),
+            timeZone: OrganizationRulebookContext.timeZoneIdentifier
+        ) ?? false
     }
 
     /// Whether a user should appear on a manager's operative-timesheet roster for a given week.

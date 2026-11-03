@@ -160,7 +160,7 @@ final class MaterialCatalogStore: ObservableObject {
 
         // RULEBOOK 1.8.0 §1: the catalogue after the import, saved with `materialCatalogueWrites` (partial writes of
         // changed items; removals only after a successful load and never to an empty catalogue).
-        var finalById = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+        var finalById = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for id in plan.idsToDelete { finalById.removeValue(forKey: id) }
         for item in plan.itemsToSave { finalById[item.id] = item }
         let finalItems = Array(finalById.values)
@@ -286,7 +286,7 @@ final class MaterialCatalogStore: ObservableObject {
             )
 
         case .updateExisting:
-            var existingById = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+            var existingById = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             var existingByIdentity: [String: MaterialCatalogItem] = [:]
             for item in existing {
                 let key = duplicateKey(name: item.name, code: item.productCode)
@@ -353,7 +353,7 @@ final class MaterialCatalogStore: ObservableObject {
     }
 
     private func applyPlanLocally(_ plan: ImportPlan) {
-        var map = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+        var map = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for id in plan.idsToDelete {
             map.removeValue(forKey: id)
         }

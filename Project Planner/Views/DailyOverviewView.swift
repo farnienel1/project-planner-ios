@@ -197,8 +197,13 @@ struct DailyOverviewView: View {
     }
 
     private var unbookedAllNames: [String] {
+        unbookedAllRows.map(\.name)
+    }
+
+    /// Each unbooked person once, keyed by the rulebook row id (two people can share a name).
+    private var unbookedAllRows: [DailyOverviewUnbookedRow] {
         unbookedLabourRows.map { row in
-            "\(row.operativeName) (missing \(ScheduleCoverageFormat.hours(row.missingHours))h)"
+            DailyOverviewUnbookedRow(id: row.id, name: "\(row.operativeName) (missing \(ScheduleCoverageFormat.hours(row.missingHours))h)")
         }
     }
 
@@ -703,7 +708,8 @@ struct DailyOverviewView: View {
             }
             .padding(14)
 
-            ForEach(unbookedAllNames, id: \.self) { name in
+            ForEach(unbookedAllRows) { entry in
+                let name = entry.name
                 PPRowDivider()
                 HStack(spacing: 13) {
                     Text(PlannerUIInitials.from(name))
@@ -1665,7 +1671,7 @@ struct ProjectBookingCard: View {
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .lineLimit(1)
                 if !row.bookedOperativeNames.isEmpty {
-                    ForEach(row.bookedOperativeNames, id: \.self) { opName in
+                    ForEach(Array(row.bookedOperativeNames.enumerated()), id: \.offset) { _, opName in
                         Text(opName)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
@@ -1772,4 +1778,11 @@ private extension View {
     func ppDailyOverviewCard() -> some View {
         background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
+}
+
+
+/// One unbooked person on Daily Overview, keyed by the rulebook row id (`unbookedLabourRowsOnDay`), not the name.
+struct DailyOverviewUnbookedRow: Identifiable, Hashable {
+    let id: String
+    let name: String
 }

@@ -453,7 +453,7 @@ struct ScheduleOperativeView: View {
                 policy: primarySelectedDatePolicy,
                 excludingBookingIds: excludingBookingIds
             )
-            map[person.operativeId] = Set(rows.filter { $0.kind == .approvedAnnualLeave }.map { Calendar.current.startOfDay(for: $0.date) })
+            map[person.operativeId] = Set(rows.filter { $0.kind == .approvedAnnualLeave }.map { OrganizationRulebookContext.calendar.startOfDay(for: $0.date) })
         }
         return map
     }
@@ -522,7 +522,7 @@ struct ScheduleOperativeView: View {
     
     private func applyPrefillFromEditingBooking(_ booking: Booking) {
         guard booking.projectId == project.id else { return }
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         let day = cal.startOfDay(for: booking.date)
         selectedOperatives = [booking.operativeId]
         selectedDates = [day]
@@ -534,7 +534,7 @@ struct ScheduleOperativeView: View {
     }
 
     private func applyPrefillFromEditingGroup(_ groupId: String) {
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         let inGroup = bookingStore.bookings.filter {
             $0.projectId == project.id &&
                 $0.bookingGroupId == groupId &&
@@ -833,7 +833,7 @@ struct ScheduleOperativeView: View {
                                                 .font(.system(size: 11, weight: .medium))
                                                 .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                                             if let days = personConflictSummary(person)?.effectiveSelectedDates, !days.isEmpty {
-                                                Text(days.map { $0.formatted(date: .abbreviated, time: .omitted) }.joined(separator: ", "))
+                                                Text(days.map { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)) }.joined(separator: ", "))
                                                     .font(.system(size: 10))
                                                     .foregroundStyle(ProjectWorksRevampColors.muted)
                                             }
@@ -948,7 +948,7 @@ struct ScheduleOperativeView: View {
                     Text("Selected dates")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
-                    Text(selectedDates.sorted().map { $0.formatted(date: .abbreviated, time: .omitted) }.joined(separator: ", "))
+                    Text(selectedDates.sorted().map { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)) }.joined(separator: ", "))
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                         .fixedSize(horizontal: false, vertical: true)
@@ -974,7 +974,7 @@ struct ScheduleOperativeView: View {
                                 }
                             }
                             if let days = personConflictSummary(person)?.effectiveSelectedDates, !days.isEmpty {
-                                Text(days.map { $0.formatted(date: .abbreviated, time: .omitted) }.joined(separator: ", "))
+                                Text(days.map { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)) }.joined(separator: ", "))
                                     .font(.system(size: 11))
                                     .foregroundStyle(ProjectWorksRevampColors.muted)
                             }
@@ -1228,7 +1228,7 @@ struct ScheduleOperativeView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            let calendar = Calendar.current
+            let calendar = OrganizationRulebookContext.calendar
             let range = MondayFirstCalendarSupport.gridRange(for: currentMonth, calendar: calendar)
             let days = MondayFirstCalendarSupport.days(from: range.start, through: range.end, calendar: calendar)
             let weeks = days.chunked(into: 7)
@@ -1243,7 +1243,7 @@ struct ScheduleOperativeView: View {
     }
 
     private func calendarDayButtonCompact(for date: Date, isCurrentMonth: Bool) -> some View {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         let normalizedDate = calendar.startOfDay(for: date)
         let isSelected = selectedDates.contains(normalizedDate)
         let isToday = calendar.isDateInToday(date)
@@ -1252,7 +1252,7 @@ struct ScheduleOperativeView: View {
                 toggleDateSelection(date)
             }
         }) {
-            Text("\(Calendar.current.component(.day, from: date))")
+            Text("\(OrganizationRulebookContext.calendar.component(.day, from: date))")
                 .font(.system(size: 11, weight: isSelected ? .bold : (isToday ? .semibold : .regular)))
                 .foregroundColor(
                     isSelected ? .white :
@@ -1343,18 +1343,19 @@ struct ScheduleOperativeView: View {
     
     private var monthYearString: String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "MMMM yyyy"
         return formatter.string(from: currentMonth)
     }
     
     private func changeMonth(by months: Int) {
-        if let newMonth = Calendar.current.date(byAdding: .month, value: months, to: currentMonth) {
+        if let newMonth = OrganizationRulebookContext.calendar.date(byAdding: .month, value: months, to: currentMonth) {
             currentMonth = newMonth
         }
     }
     
     private func toggleDateSelection(_ date: Date) {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         let normalizedDate = calendar.startOfDay(for: date)
         let key = slotKey(for: normalizedDate)
 
@@ -1413,7 +1414,7 @@ struct ScheduleOperativeView: View {
     private func generateDaysInMonth(start: Date, end: Date) -> [Date] {
         var days: [Date] = []
         var currentDate = start
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         
         while currentDate <= end {
             days.append(currentDate)
@@ -1516,7 +1517,7 @@ struct ScheduleOperativeView: View {
             let personIds = labourBookingIds(sameAs: operative.id, operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
             let existingBookings = bookingStore.bookings.filter { booking in
                 personIds.contains(booking.operativeId) &&
-                    Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+                    OrganizationRulebookContext.calendar.isDate(booking.date, inSameDayAs: date) &&
                     booking.occupiesDay
             }
 
@@ -1538,7 +1539,7 @@ struct ScheduleOperativeView: View {
     }
 
     private func slotKey(for date: Date) -> String {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         let normalizedDate = calendar.startOfDay(for: date)
         let components = calendar.dateComponents([.year, .month, .day], from: normalizedDate)
         return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"
@@ -1587,18 +1588,39 @@ struct ScheduleOperativeView: View {
                 guard !dates.isEmpty else { continue }
                 for date in dates {
                     let ovKey = operativeOverrideKey(operative.id, date)
+                    let choice = resolvedChoice(operativeId: operative.id, date: date)
+                    // Replace = one partial update of the existing booking (same id) onto this job and slot — never a
+                    // delete then a create, which offline left both bookings (each paid, RULEBOOK §8) and online could
+                    // leave none when the create failed (launch data audit #7). An update also queues offline.
                     if let rid = replaceBookingOnConfirmByOverrideKey[ovKey],
                        let existing = bookingStore.bookings.first(where: { $0.id == rid }) {
-                        await bookingStore.deleteBooking(existing)
                         replaceBookingOnConfirmByOverrideKey.removeValue(forKey: ovKey)
+                        var replaced = existing
+                        if replaced.projectId != project.id {
+                            replaced.projectId = project.id
+                            replaced.projectKey = nil
+                        }
+                        replaced.date = BookingDay.organizationMidnight(for: date)
+                        replaced.timeSlot = choice.timeSlot
+                        replaced.workStartTime = choice.workStartTime
+                        replaced.workEndTime = choice.workEndTime
+                        replaced.isBreakRemoved = choice.isBreakRemoved
+                        replaced.otMultiplierOverride = choice.otMultiplierOverride
+                        replaced.bookingGroupId = groupId
+                        replaced.status = .confirmed
+                        replaced.updatedAt = Date()
+                        await bookingStore.updateBooking(replaced)
+                        if bookingStore.errorMessage == nil {
+                            createdDatesByOperative[operative.id, default: []].insert(replaced.date)
+                        }
+                        continue
                     }
 
-                    let choice = resolvedChoice(operativeId: operative.id, date: date)
                     let personIds = labourBookingIds(sameAs: operative.id, operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
                     let duplicateExists = bookingStore.bookings.contains { booking in
                         booking.projectId == project.id &&
                             personIds.contains(booking.operativeId) &&
-                            Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+                            OrganizationRulebookContext.calendar.isDate(booking.date, inSameDayAs: date) &&
                             booking.timeSlot == choice.timeSlot &&
                             booking.workStartTime == choice.workStartTime &&
                             booking.workEndTime == choice.workEndTime &&
@@ -1608,7 +1630,7 @@ struct ScheduleOperativeView: View {
                     }
 
                     if !duplicateExists {
-                        let normalizedDate = Calendar.current.startOfDay(for: date)
+                        let normalizedDate = OrganizationRulebookContext.calendar.startOfDay(for: date)
                         var booking = Booking(
                             operativeId: operative.id,
                             projectId: project.id,
@@ -1623,13 +1645,15 @@ struct ScheduleOperativeView: View {
                         )
                         booking.updatedAt = Date()
                         newBookings.append(booking)
-                        createdDatesByOperative[operative.id, default: []].insert(Calendar.current.startOfDay(for: date))
+                        createdDatesByOperative[operative.id, default: []].insert(OrganizationRulebookContext.calendar.startOfDay(for: date))
                     }
                 }
             }
 
             if !newBookings.isEmpty {
                 await bookingStore.addBookings(newBookings)
+            }
+            if !createdDatesByOperative.isEmpty {
                 ScheduleChangeNotifier.postBookingStoreDidChange()
                 let bookedRecipients = createdDatesByOperative.map { (operativeId, dates) in
                     NotificationService.BookedUserRecipient(
@@ -1648,7 +1672,7 @@ struct ScheduleOperativeView: View {
             
             await MainActor.run {
                 isBooking = false
-                showingBookingConfirmation = newBookings.isEmpty ? false : true
+                showingBookingConfirmation = !createdDatesByOperative.isEmpty
                 acknowledgedConflictIds.removeAll()
                 struckConflictIds.removeAll()
                 selectedDates.removeAll()
@@ -1683,7 +1707,7 @@ struct ScheduleOperativeView: View {
         }
         
         private static func dateKey(from date: Date) -> String {
-            let calendar = Calendar.current
+            let calendar = OrganizationRulebookContext.calendar
             let normalizedDate = calendar.startOfDay(for: date)
             let components = calendar.dateComponents([.year, .month, .day], from: normalizedDate)
             return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"

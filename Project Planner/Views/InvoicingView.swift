@@ -1797,6 +1797,12 @@ private struct MyTimesheetView: View {
     /// A server copy of this sheet arrived while an edit sheet was open; it loads when that sheet closes.
     @State private var serverTimesheetChangedWhileEditing = false
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
+    /// Pay-rate history read state: a failed read blocks sign-off, the agreed snapshot, invoices and exports.
+    @State private var payInputsState: PayInputsLoadState = .loading
+    /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
+    private var payInputsBlockMessage: String? {
+        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
+    }
     @State private var showInvoiceUTRWarning = false
     /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
     @State private var includeTaxIds = false
@@ -2147,7 +2153,12 @@ private struct MyTimesheetView: View {
                 .background(Color(red: 0.992, green: 0.918, blue: 0.918))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                if draft.operativeSignedAt == nil {
+                if let blocked = payInputsBlockMessage, draft.operativeSignedAt == nil {
+                    PayInputsFailureBanner(message: blocked) {
+                        Task { await loadDayRateHistory() }
+                    }
+                }
+                if draft.operativeSignedAt == nil && payInputsBlockMessage == nil {
                     NavigationLink {
                         SignTimesheetView(
                             week: week,
@@ -2423,8 +2434,12 @@ private struct MyTimesheetView: View {
         await MainActor.run { isGeneratingInvoice = true; invoiceErrorMessage = nil }
         defer { Task { await MainActor.run { isGeneratingInvoice = false } } }
 
-        if dayRateHistoryCollection.byUserId.isEmpty && dayRateHistoryCollection.byOperativeId.isEmpty {
+        if payInputsState != .loaded {
             await loadDayRateHistory()
+        }
+        if let blocked = payInputsBlockMessage {
+            await MainActor.run { invoiceErrorMessage = blocked }
+            return
         }
 
         let pdfURL = InvoicePDFGenerationSupport.generatePDF(
@@ -2633,6 +2648,11 @@ private struct MyTimesheetView: View {
     }
 
     private func markTimesheetSigned(signatureImageData: Data) {
+        // Nothing is signed (or frozen) until pay can be worked out from loaded inputs.
+        if let blocked = payInputsBlockMessage {
+            saveErrorMessage = blocked
+            return
+        }
         let signedByName = userStore.displayUser?.fullName.isEmpty == false
             ? (userStore.displayUser?.fullName ?? "")
             : (userStore.displayUser?.email ?? "")
@@ -2661,7 +2681,8 @@ private struct MyTimesheetView: View {
     }
 
     private func saveDraft() {
-        if let current = userStore.displayUser {
+        // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
+        if let current = userStore.displayUser, payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
             // The owner's own save: with a line manager it never builds the approved snapshot.
             TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                 to: &draft,
@@ -2744,10 +2765,13 @@ private struct MyTimesheetView: View {
         }
     }
 
+    /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadDayRateHistory() async {
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
-        await MainActor.run { dayRateHistoryCollection = history }
+        let result = await PayInputsLoad.loadHistory(firebaseBackend)
+        await MainActor.run {
+            if let history = result.history { dayRateHistoryCollection = history }
+            payInputsState = result.state
+        }
     }
 
     private func timesheetHoursRateLine(for row: InvoiceLineItem) -> String {
@@ -2797,6 +2821,12 @@ private struct PreviousTimesheetsView: View {
     @State private var selectedRunId: String = ""
     @State private var isLoading = false
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
+    /// Pay-rate history read state: a failed read blocks sign-off, the agreed snapshot, invoices and exports.
+    @State private var payInputsState: PayInputsLoadState = .loading
+    /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
+    private var payInputsBlockMessage: String? {
+        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
+    }
     @State private var showInvoiceUTRWarning = false
     /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
     @State private var includeTaxIds = false
@@ -2949,6 +2979,11 @@ private struct PreviousTimesheetsView: View {
     private func runPendingInvoiceGeneration() async {
         guard let period = pendingInvoicePeriod else { return }
         guard !isGeneratingInvoice else { return }
+        if payInputsState != .loaded { await loadDayRateHistory() }
+        if let blocked = payInputsBlockMessage {
+            invoiceErrorMessage = blocked
+            return
+        }
         isGeneratingInvoice = true
         invoiceErrorMessage = nil
         defer { isGeneratingInvoice = false }
@@ -2974,10 +3009,13 @@ private struct PreviousTimesheetsView: View {
         }
     }
 
+    /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadDayRateHistory() async {
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
-        await MainActor.run { dayRateHistoryCollection = history }
+        let result = await PayInputsLoad.loadHistory(firebaseBackend)
+        await MainActor.run {
+            if let history = result.history { dayRateHistoryCollection = history }
+            payInputsState = result.state
+        }
     }
 
     @ViewBuilder
@@ -3197,6 +3235,12 @@ private struct OperativeTimesheetsView: View {
     @State private var includeTaxIdsInExport = false
     @State private var exportMessage: String?
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
+    /// Pay-rate history read state: a failed read blocks sign-off, the agreed snapshot, invoices and exports.
+    @State private var payInputsState: PayInputsLoadState = .loading
+    /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
+    private var payInputsBlockMessage: String? {
+        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
+    }
     @State private var exportedHistory: [ExportedTimesheetHistoryRow] = []
     @State private var isLoadingExportedHistory = false
     @State private var exportedSearch = ""
@@ -3773,14 +3817,23 @@ private struct OperativeTimesheetsView: View {
         autoOpenReview = TimesheetAutoOpenTarget(userId: userId, weekStart: weekStart)
     }
 
+    /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadDayRateHistory() async {
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
-        await MainActor.run { dayRateHistoryCollection = history }
+        let result = await PayInputsLoad.loadHistory(firebaseBackend)
+        await MainActor.run {
+            if let history = result.history { dayRateHistoryCollection = history }
+            payInputsState = result.state
+        }
     }
 
     private func exportSignedTimesheets() async {
         guard !isExporting else { return }
+        // Nothing is exported (or frozen) until pay can be worked out from loaded inputs.
+        if payInputsState != .loaded { await loadDayRateHistory() }
+        if let blocked = payInputsBlockMessage {
+            exportMessage = blocked
+            return
+        }
         isExporting = true
         exportMessage = nil
         defer { isExporting = false }
@@ -4069,6 +4122,16 @@ private struct OperativeTimesheetReviewView: View {
     @State private var draft = TimesheetDraft()
     @State private var showingManagerSignSheet = false
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
+    /// Pay-rate history read state: a failed read blocks sign-off, the agreed snapshot, invoices and exports.
+    @State private var payInputsState: PayInputsLoadState = .loading
+    /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
+    private var payInputsBlockMessage: String? {
+        if let blocked = PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization) {
+            return blocked
+        }
+        // A script call that did not answer is "could not calculate", never £0 (money audit #15).
+        return payrollSummary.calculationFailed ? TimesheetPayrollSummary.calculationFailedMessage : nil
+    }
     @State private var editingPayrollLineId: String?
     @State private var editingExpenseId: UUID?
     @State private var editingPriceWorkId: UUID?
@@ -4179,6 +4242,11 @@ private struct OperativeTimesheetReviewView: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.red)
                     .accessibilityIdentifier("operativeTimesheetReview.saveError")
+            }
+            if let blocked = payInputsBlockMessage {
+                PayInputsFailureBanner(message: blocked) {
+                    Task { await loadDayRateHistory() }
+                }
             }
         }
         .padding(14)
@@ -4374,6 +4442,11 @@ private struct OperativeTimesheetReviewView: View {
     }
 
     private func handleSignOffTapped() {
+        // Nothing is counter-signed (and frozen) until pay can be worked out from loaded inputs.
+        if let blocked = payInputsBlockMessage {
+            saveErrorMessage = blocked
+            return
+        }
         if TimesheetDraftAdjustments.extrasPendingReview(in: draft)
             && (!draft.expenseEntries.isEmpty || !draft.priceWorkEntries.isEmpty) {
             showExtrasReviewRequiredAlert = true
@@ -4623,6 +4696,8 @@ private struct OperativeTimesheetReviewView: View {
     }
 
     private func saveDraft() {
+        // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
+        if payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
         TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
             to: &draft,
             user: operative,
@@ -4647,6 +4722,7 @@ private struct OperativeTimesheetReviewView: View {
                 )
             }
         )
+        }
         TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let snapshot = draft
@@ -4716,10 +4792,13 @@ private struct OperativeTimesheetReviewView: View {
         }
     }
 
+    /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadDayRateHistory() async {
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let history = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
-        await MainActor.run { dayRateHistoryCollection = history }
+        let result = await PayInputsLoad.loadHistory(firebaseBackend)
+        await MainActor.run {
+            if let history = result.history { dayRateHistoryCollection = history }
+            payInputsState = result.state
+        }
     }
 
     /// The person's approved leave in this period (`timesheetLeaveLines`), for the line manager.
@@ -5667,6 +5746,12 @@ private struct GenerateInvoiceView: View {
     let lockedPeriod: InvoicePeriodOption?
 
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
+    /// Pay-rate history read state: a failed read blocks sign-off, the agreed snapshot, invoices and exports.
+    @State private var payInputsState: PayInputsLoadState = .loading
+    /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
+    private var payInputsBlockMessage: String? {
+        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
+    }
     @State private var selectedPeriodId: String = ""
     @State private var isGenerating = false
     @State private var errorMessage: String?
@@ -5952,9 +6037,11 @@ private struct GenerateInvoiceView: View {
         .shadow(color: Color.black.opacity(0.06), radius: 8, y: 2)
     }
 
+    /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadRateHistory() async {
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        dayRateHistoryCollection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+        let result = await PayInputsLoad.loadHistory(firebaseBackend)
+        if let history = result.history { dayRateHistoryCollection = history }
+        payInputsState = result.state
     }
 
     private func beginInvoiceGeneration() {
@@ -5977,8 +6064,12 @@ private struct GenerateInvoiceView: View {
         errorMessage = nil
         defer { isGenerating = false }
 
-        if dayRateHistoryCollection.byUserId.isEmpty && dayRateHistoryCollection.byOperativeId.isEmpty {
+        if payInputsState != .loaded {
             await loadRateHistory()
+        }
+        if let blocked = payInputsBlockMessage {
+            errorMessage = blocked
+            return
         }
 
         let pdfURL = InvoicePDFGenerationSupport.generatePDF(

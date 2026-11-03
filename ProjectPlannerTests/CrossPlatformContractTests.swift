@@ -2,7 +2,7 @@ import XCTest
 import FirebaseFirestore
 @testable import Project_Planner
 
-/// RULEBOOK 1.10.0 cross-platform contract: web `lib/canonical/cross-platform-contract.json`, mirrored here as
+/// RULEBOOK 1.11.0 cross-platform contract (v2): web `lib/canonical/cross-platform-contract.json`, mirrored here as
 /// `CrossPlatformContract.json` by `scripts/sync-rulebook-from-web.sh` (sha256 in the manifest,
 /// `RulebookParityTests`). Every sample — what web writes and what iOS writes — read through the packed script's
 /// `readCrossPlatformSample` must equal `expected` (the check web's `crossPlatformContract.test.ts` runs), and where
@@ -115,8 +115,11 @@ final class CrossPlatformContractTests: XCTestCase {
                 let data = try XCTUnwrap(firestoreData(sample["data"] ?? [:]) as? [String: Any])
                 let job = try XCTUnwrap(FirebaseBackend.jobs(fromDocuments: [(id: docId, data: data)], smallWorks: smallWorks).first,
                                         "\(collection): the iOS sample is not read by this app")
-                let payload = FirebaseBackend.jobDocumentPayload(job, organizationId: (sample["data"] as? [String: Any])?["organizationId"] as? String ?? "")
+                var payload = FirebaseBackend.jobDocumentPayload(job, organizationId: (sample["data"] as? [String: Any])?["organizationId"] as? String ?? "")
                     .filter { !($0.value is FieldValue) }
+                // `managerUserIds` is written beside `managerIds` by `jobSaveFields` (`jobManagerUserIds` against the
+                // loaded managers and roster, RULEBOOK 1.10.0 §16); the read copy keeps the stored list.
+                if !job.storedManagerUserIds.isEmpty { payload["managerUserIds"] = job.storedManagerUserIds }
                 let stored = try XCTUnwrap(sample["data"] as? [String: Any])
                 // Every field the contract says iOS writes is written, as the same kind of value.
                 for (key, value) in stored {
@@ -129,6 +132,54 @@ final class CrossPlatformContractTests: XCTestCase {
                 // The projects sample is the whole payload; the small works sample is a partial copy (reported to web).
                 if collection == "projects" {
                     XCTAssertEqual(Set(payload.keys), Set(stored.keys), "projects: iOS payload fields differ from the contract's iOS sample")
+                }
+            }
+        }
+    }
+
+    /// 1.11.0 contract v2: an iOS sample with a `builder` is exactly what its rulebook writer produces from the input
+    /// (the writer iOS calls). Runs the packed writer, unwraps `fields` / `set`, turns `timestampKeys` milliseconds
+    /// into `{ seconds, nanoseconds }` and adds `appAdds` — what web's `buildContractSample` does.
+    func testEveryBuilderSampleIsWhatItsPackedWriterProduces() throws {
+        let contract = try loadContract()
+        var built = 0
+        for entry in contract.collections {
+            let id = entry["id"] as? String ?? "?"
+            for sample in entry["samples"] as? [[String: Any]] ?? [] {
+                guard let builder = sample["builder"] as? [String: Any] else { continue }
+                built += 1
+                XCTAssertEqual(sample["platform"] as? String, "ios", "\(id): only iOS samples carry a builder")
+                let writer = try XCTUnwrap(builder["writer"] as? String, id)
+                let input = builder["input"] as? [String: Any] ?? [:]
+                let arguments: [Any]
+                switch writer {
+                case "jobTypesWriteFields": arguments = [input["stored"] ?? NSNull(), input["next"] ?? NSNull()]
+                case "variationTradesWriteFields": arguments = [input["stored"] ?? NSNull(), input["change"] ?? NSNull()]
+                case "tradeTypeInventoryWriteFields": arguments = [input["stored"] ?? NSNull(), input["trades"] ?? NSNull()]
+                default: arguments = [input]
+                }
+                let result = try XCTUnwrap(CanonicalBusinessEngine.callJSON(writer, arguments: arguments) as? [String: Any], "\(id): \(writer) did not answer")
+                XCTAssertNotEqual(result["ok"] as? Bool, false, "\(id): \(writer) refused its sample")
+                var fields = (result["fields"] as? [String: Any]) ?? (result["set"] as? [String: Any]) ?? result
+                for key in builder["timestampKeys"] as? [String] ?? [] {
+                    guard let ms = (fields[key] as? NSNumber)?.int64Value else { continue }
+                    let seconds = Int64((Double(ms) / 1000).rounded(.down))
+                    fields[key] = ["seconds": seconds, "nanoseconds": (ms - seconds * 1000) * 1_000_000]
+                }
+                for (key, value) in builder["appAdds"] as? [String: Any] ?? [:] { fields[key] = value }
+                XCTAssertEqual(canonicalJSON(fields), canonicalJSON(sample["data"] ?? [:]), "\(id) builder")
+            }
+        }
+        XCTAssertGreaterThanOrEqual(built, 8, "the builder samples are in the contract")
+    }
+
+    /// 1.11.0: every booking sample carries `jobCollection`, and iOS labour and subcontractor builders pass it.
+    func testBookingSamplesCarryJobCollection() throws {
+        let contract = try loadContract()
+        for id in ["bookings", "subcontractorBookings"] {
+            for platform in ["web", "ios"] {
+                for sample in samples(contract, collection: id, platform: platform) {
+                    XCTAssertEqual((sample["data"] as? [String: Any])?["jobCollection"] as? String, "projects", "\(id) \(platform)")
                 }
             }
         }

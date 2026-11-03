@@ -366,11 +366,13 @@ struct AddUserView: View {
         stepDetailsWithManagerWithoutManagerPicker
     }
     
+    /// RULEBOOK 1.11.0 §11: `lineManagerSummary(person, roster)`.
     private var lineManagerSummary: String {
-        LineManagerSummaryLabel.text(
+        LineManagerRulebook.summary(
+            for: inviteDraftUserForValidation,
             selectedIds: selectedLineManagerUserIds,
-            roster: userStore.organizationUsers,
-            hasNoLineManager: hasNoLineManager
+            hasNoLineManager: hasNoLineManager,
+            roster: userStore.organizationUsers
         )
     }
 
@@ -379,7 +381,7 @@ struct AddUserView: View {
             id: "invite-draft",
             email: email,
             organizationId: userStore.currentUser?.organizationId ?? "",
-            role: .manager,
+            role: UserRole(rawValue: invitedAccountType.rawValue) ?? .manager,
             permissions: permissions,
             hasNoLineManager: hasNoLineManager
         )
@@ -422,7 +424,7 @@ struct AddUserView: View {
             LineManagersMultiSelectSheet(
                 candidates: lineManagerCandidates,
                 selectedIds: $selectedLineManagerUserIds,
-                allowNoLineManager: !permissions.operativeMode && (permissions.manager || permissions.adminAccess),
+                allowNoLineManager: LineManagerRulebook.allowsNoLineManager(for: inviteDraftUserForValidation),
                 hasNoLineManager: $hasNoLineManager
             )
         }
@@ -569,14 +571,10 @@ struct AddUserView: View {
         }
     }
     
+    /// RULEBOOK 1.11.0 §11: `lineManagerCandidates(person, roster)` — active admins, super admins and managers,
+    /// never an operative, a pending invite, a deleted profile or the person themself.
     private var lineManagerCandidates: [AppUser] {
-        userStore.organizationUsers.filter { u in
-            !u.permissions.operativeMode &&
-            (u.isSuperAdmin || u.permissions.adminAccess || u.permissions.manager) &&
-            u.isActive &&
-            u.passwordSet
-        }
-        .sorted { ($0.fullName.isEmpty ? $0.email : $0.fullName) < ($1.fullName.isEmpty ? $1.email : $1.fullName) }
+        LineManagerRulebook.candidates(for: inviteDraftUserForValidation, roster: userStore.organizationUsers)
     }
     
     private var stepManagerOperativeSummary: some View {
@@ -642,7 +640,9 @@ struct AddUserView: View {
             ? String(Int(defaults.daysPerYear))
             : String(format: "%.1f", defaults.daysPerYear)
         annualLeaveStartMonth = defaults.startMonth
-        annualLeaveEndMonth = defaults.endMonth
+        // RULEBOOK 1.12.0 §4.4: a stored mismatch reads as 12 months from the start (`leaveYearEndMonth`), so an
+        // invite never inherits a year the save would refuse.
+        annualLeaveEndMonth = CanonicalBusinessEngine.leaveYearEndMonth(startMonth: defaults.startMonth) ?? defaults.endMonth
         annualLeaveCarriesOver = defaults.carriesOver
         annualLeaveEnabledInvite = true
         remainingLeaveText = annualLeaveDaysText
@@ -730,144 +730,7 @@ struct AddUserView: View {
                 .foregroundColor(.secondary)
             
             VStack(spacing: 16) {
-                switch invitedAccountType {
-                case .admin:
-                    permissionInviteCard {
-                        VStack(spacing: 0) {
-                            PermissionToggle(
-                                title: "Admin Access",
-                                description: "Full organisation administration (excluding super-admin-only ownership actions).",
-                                isOn: .constant(true),
-                                isDisabled: true,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Operative Management",
-                                description: "Can open the Operatives tab and manage operative profiles.",
-                                isOn: .constant(true),
-                                isDisabled: true,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Manage Qualifications",
-                                description: "Can maintain the organisation qualifications catalogue.",
-                                isOn: .constant(true),
-                                isDisabled: true,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Projects",
-                                description: "Can create and manage projects.",
-                                isOn: .constant(true),
-                                isDisabled: true,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Small Works",
-                                description: "Can create and manage small works.",
-                                isOn: .constant(true),
-                                isDisabled: true,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Operative Mode",
-                                description: "Off for admin accounts.",
-                                isOn: .constant(false),
-                                isDisabled: true,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Annual Leave Management",
-                                description: "Can book their own annual leave. If unselected they will request leave for approval.",
-                                isOn: $permissions.annualLeaveSelfBook,
-                                isDisabled: hasNoLineManager,
-                                style: .plainInset
-                            )
-                        }
-                    }
-                case .manager:
-                    permissionInviteCard {
-                        VStack(spacing: 0) {
-                            PermissionToggle(
-                                title: "Operatives",
-                                description: "Can manage operatives and view their details. If turned off, this user can still assign operatives to projects and small works, but will not see the Operatives tab or full operative profiles.",
-                                isOn: $permissions.operatives,
-                                isDisabled: false,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Annual Leave Management",
-                                description: "Can book their own annual leave. If unselected the manager will need to request annual leave and have this approved.",
-                                isOn: $permissions.annualLeaveSelfBook,
-                                isDisabled: false,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Weekly Report",
-                                description: "Can open Weekly Report from Home. If off, that tile is hidden.",
-                                isOn: $permissions.weeklyReports,
-                                isDisabled: false,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Daily Overview",
-                                description: "Can open Daily Overview from Home. If off, that tile is hidden.",
-                                isOn: $permissions.dailyOverview,
-                                isDisabled: false,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Sub Contractors",
-                                description: "Can add and manage sub contractor records. If off, Sub Contractors is hidden on Home and menus. They can still book existing subcontractors on jobs.",
-                                isOn: $permissions.subContractors,
-                                isDisabled: false,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Manage Qualifications",
-                                description: "When on, this manager can add and edit organisation qualification templates. When off, they only see My Qualifications, and they can still assign templates others have already added.",
-                                isOn: $permissions.qualifications,
-                                isDisabled: false,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Projects",
-                                description: "Can create, edit, and add projects. If off, they still see projects they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit project details.",
-                                isOn: $permissions.projects,
-                                isDisabled: false,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Small Works",
-                                description: "Can create, edit, and add small works. If off, they still see small works they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit small works details.",
-                                isOn: $permissions.smallWorks,
-                                isDisabled: false,
-                                style: .plainInset
-                            )
-                            invitePermissionDivider
-                            PermissionToggle(
-                                title: "Operative Mode",
-                                description: "Off for manager accounts.",
-                                isOn: .constant(false),
-                                isDisabled: true,
-                                style: .plainInset
-                            )
-                        }
-                    }
-                case .operative:
+                if invitedAccountType == .operative {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Operative mode provides very limited access to the platform. It allows access to their schedule, request annual leave and maintain their qualifications.")
                             .font(.subheadline)
@@ -875,27 +738,26 @@ struct AddUserView: View {
                         Text("The below features are additional options, which need to be selected to provide access.")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        permissionInviteCard {
-                            VStack(spacing: 0) {
-                                PermissionToggle(
-                                    title: "Materials",
-                                    description: "Can access material lists in projects and small works. They will not be able to send quotes or place orders.",
-                                    isOn: $permissions.materials,
-                                    isDisabled: false,
-                                    style: .plainInset
-                                )
-                                invitePermissionDivider
-                                PermissionToggle(
-                                    title: "Site Audit",
-                                    description: "Can view and submit site audits.",
-                                    isOn: $permissions.siteAudit,
-                                    isDisabled: false,
-                                    style: .plainInset
-                                )
-                            }
-                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                // RULEBOOK 1.11.0 §11: `permissionToggleRows({ level, user: draft, mode: 'add' })` — the same rows as
+                // the summary and Edit User. Admins: every toggle on and greyed out except Annual Leave Management;
+                // managers: Materials and Site audit on and greyed out; operatives: Materials and Site audit.
+                permissionInviteCard {
+                    VStack(spacing: 0) {
+                        let rows = invitePermissionRows(mode: .add).filter(\.visible)
+                        ForEach(Array(rows.enumerated()), id: \.element.field) { index, row in
+                            if index > 0 { invitePermissionDivider }
+                            PermissionToggle(
+                                title: row.label,
+                                description: row.help,
+                                isOn: invitePermissionBinding(row),
+                                isDisabled: !row.editable || (row.field == "annualLeaveSelfBook" && invitedAccountType == .admin && hasNoLineManager),
+                                style: .plainInset
+                            )
+                        }
+                    }
                 }
                 annualLeaveInvitationSection
             }
@@ -1060,56 +922,38 @@ struct AddUserView: View {
     
     // MARK: - Validation & permissions
     
+    /// RULEBOOK 1.11.0 §11: Add User starts each level with `addUserPermissionDefaults(level)`.
     private func applyPermissionsForInvitedType() {
-        switch invitedAccountType {
-        case .admin:
-            permissions = UserPermissions(
-                adminAccess: true,
-                manager: true,
-                operatives: true,
-                skills: false,
-                qualifications: true,
-                materials: true,
-                projects: true,
-                smallWorks: true,
-                operativeMode: false,
-                annualLeaveSelfBook: false,
-                weeklyReports: true,
-                dailyOverview: true,
-                wholesalersOrderHistory: true
-            )
-        case .manager:
-            permissions = UserPermissions(
-                adminAccess: false,
-                manager: true,
-                operatives: false,
-                skills: false,
-                qualifications: true,
-                materials: true,
-                projects: false,
-                smallWorks: false,
-                operativeMode: false,
-                annualLeaveSelfBook: false,
-                weeklyReports: false,
-                dailyOverview: true,
-                subContractors: false,
-                siteAudit: true,
-                wholesalersOrderHistory: true
-            )
-        case .operative:
-            permissions = UserPermissions(
-                adminAccess: false,
-                manager: false,
-                operatives: false,
-                skills: false,
-                qualifications: false,
-                materials: false,
-                projects: true,
-                smallWorks: true,
-                operativeMode: true,
-                siteAudit: true
-            )
-        }
+        let level = RulebookPermissionLevel(rawValue: invitedAccountType.rawValue) ?? .manager
+        guard let defaults = CanonicalBusinessEngine.addUserPermissionDefaults(level) else { return }
+        permissions = UserPermissions().applying(defaults)
+    }
+
+    /// The Add User draft as the permission rules read it (the chosen level's role).
+    private var invitePermissionDraft: [String: Any] {
+        CanonicalBusinessEngine.permissionSubject(permissions: permissions, role: invitedAccountType.rawValue, isSuperAdmin: false)
+    }
+
+    /// `permissionToggleRows` for the chosen level and the draft.
+    private func invitePermissionRows(mode: RulebookPermissionToggleMode) -> [RulebookPermissionToggleRow] {
+        let level = RulebookPermissionLevel(rawValue: invitedAccountType.rawValue) ?? .manager
+        return CanonicalBusinessEngine.permissionToggleRows(level: level, user: invitePermissionDraft, mode: mode)
+    }
+
+    /// An editable row changes the draft; a locked row shows the rulebook's value.
+    private func invitePermissionBinding(_ row: RulebookPermissionToggleRow) -> Binding<Bool> {
+        guard row.editable else { return .constant(row.value) }
+        return Binding(
+            get: { permissions.flag(row.field) ?? row.value },
+            set: { permissions.setFlag(row.field, $0) }
+        )
+    }
+
+    /// The toggles the invitation stores: `permissionsWriteMap(draft, level)` (an admin's locked toggles on).
+    private var invitePermissionsToWrite: UserPermissions {
+        let level = RulebookPermissionLevel(rawValue: invitedAccountType.rawValue) ?? .manager
+        guard let map = CanonicalBusinessEngine.permissionsWriteMap(invitePermissionDraft, level: level) else { return permissions }
+        return permissions.applying(map)
     }
     
     private var tradeRequiredAndValid: Bool {
@@ -1148,7 +992,7 @@ struct AddUserView: View {
             if annualLeaveEnabledInvite {
                 let months = AnnualLeavePolicy.shortMonthSymbols()
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text("\(parseAnnualLeaveDaysForInvite()) days / year")
+                    Text(verbatim: "\(AnnualLeaveUsageHeroView.formatLeaveDays(parseAnnualLeaveDaysForInvite())) days / year")
                         .fontWeight(.medium)
                     Text("\(months[annualLeaveStartMonth - 1]) → \(months[annualLeaveEndMonth - 1])")
                         .font(.caption)
@@ -1164,22 +1008,12 @@ struct AddUserView: View {
         }
     }
 
+    /// RULEBOOK 1.11.0 §11: the summary rows are `permissionToggleRows(..., mode: 'summary')`, the same set Add User
+    /// showed for this level.
     private var permissionItems: [(title: String, isEnabled: Bool)] {
-        [
-            ("Admin Access", permissions.adminAccess),
-            ("Manager", permissions.manager),
-            ("Operative Management", permissions.operatives),
-            ("Manage Qualifications", permissions.qualifications),
-            ("Materials", permissions.materials),
-            ("Projects", permissions.projects),
-            ("Small Works", permissions.smallWorks),
-            ("Operative Mode", permissions.operativeMode),
-            ("Annual Leave Management", permissions.annualLeaveSelfBook),
-            ("Weekly Reports", permissions.weeklyReports),
-            ("Daily Overview", permissions.dailyOverview),
-            ("Sub Contractors", permissions.subContractors),
-            ("Site Audit", permissions.siteAudit)
-        ]
+        invitePermissionRows(mode: .summary)
+            .filter(\.visible)
+            .map { (title: $0.label, isEnabled: $0.value) }
     }
 
     /// Same flags as `permissionItems`. Allowed and denied are split for the review layout only.
@@ -1244,6 +1078,15 @@ struct AddUserView: View {
             }
         }
 
+        // RULEBOOK 1.12.0 §4.4 `validateLeaveYearMonths`: the invite's leave year must be 12 months.
+        if let leaveYearError = CanonicalBusinessEngine.leaveYearMonthsError(
+            startMonth: annualLeaveStartMonth,
+            endMonth: annualLeaveEndMonth
+        ) {
+            errorMessage = leaveYearError
+            return
+        }
+
         guard !isCreating else { return }
         
         isCreating = true
@@ -1296,7 +1139,7 @@ struct AddUserView: View {
                 surname: surname,
                 email: email,
                 mobileNumber: mobileNumber.isEmpty ? nil : mobileNumber,
-                permissions: permissions,
+                permissions: invitePermissionsToWrite,
                 employmentType: employmentType,
                 assignedManagerUserId: managerIds.first,
                 assignedManagerUserIds: managerIds,

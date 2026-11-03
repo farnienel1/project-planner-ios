@@ -135,7 +135,10 @@ final class Rulebook1100JobAccessTests: XCTestCase {
         let adminPlan = CanonicalBusinessEngine.bookingQueryPlan(admin, visibleJobIds: ["job-1"], ownBookingIds: nil, enforced: true)
         XCTAssertEqual(adminPlan?["readsEveryBooking"] as? Bool, true)
         XCTAssertEqual(queries(adminPlan).count, 3)
-        XCTAssertTrue(CanonicalBusinessEngine.readsEveryBooking(toggleManager, enforced: true))
+        // RULEBOOK 1.11.0 §17: enforced, `readsEveryBooking` is admins only; a toggle manager reads their kind by
+        // `jobCollection` (web staffAccess.ts `readsEveryBooking`).
+        XCTAssertFalse(CanonicalBusinessEngine.readsEveryBooking(toggleManager, enforced: true))
+        XCTAssertTrue(CanonicalBusinessEngine.readsEveryBooking(toggleManager, enforced: false), "every manager reads every booking while enforced reads are off")
         let managerPlan = queries(CanonicalBusinessEngine.bookingQueryPlan(manager, visibleJobIds: ["job-1"], ownBookingIds: ["m1", "OP-1"], enforced: true))
         XCTAssertEqual(managerPlan.map { $0["collection"] as? String },
                        ["bookings", "subcontractorBookings", "managerSiteBookings", "bookings", "managerSiteBookings"])
@@ -164,7 +167,8 @@ final class Rulebook1100JobAccessTests: XCTestCase {
         XCTAssertEqual(restricted["kind"] as? String, "jobs")
         XCTAssertEqual(restricted["personIds"] as? [String], ["op-9"])
         XCTAssertEqual(restricted["unbookedLabour"] as? Bool, false, "unbooked labour needs every booking")
-        XCTAssertEqual(input(toggleManager)["unbookedLabour"] as? Bool, true)
+        // 1.11.0: `unbookedLabour` is `readsEveryBooking`, which (enforced) is admins only.
+        XCTAssertEqual(input(toggleManager)["unbookedLabour"] as? Bool, false)
         XCTAssertTrue(CanonicalBusinessEngine.isJobInWarningScope(restricted, jobId: "JOB-1"))
         XCTAssertFalse(CanonicalBusinessEngine.isJobInWarningScope(restricted, jobId: "job-2"))
     }

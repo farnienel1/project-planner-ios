@@ -16,6 +16,33 @@ struct AnnualLeaveEntitlementEditor: View {
 
     private var monthSymbols: [String] { AnnualLeavePolicy.shortMonthSymbols() }
 
+    /// RULEBOOK 1.12.0 §4.4: a leave year is 12 months, so the end follows the start (`leaveYearEndMonth`).
+    private var startSelection: Binding<Int> {
+        Binding(
+            get: { startMonth },
+            set: { next in
+                startMonth = next
+                if let end = CanonicalBusinessEngine.leaveYearEndMonth(startMonth: next) { endMonth = end }
+            }
+        )
+    }
+
+    /// Picking the end month moves the start to the month whose `leaveYearEndMonth` it is (12 months either way).
+    private var endSelection: Binding<Int> {
+        Binding(
+            get: { endMonth },
+            set: { next in
+                endMonth = next
+                if let start = CanonicalBusinessEngine.leaveYearStartMonth(endingIn: next) { startMonth = start }
+            }
+        )
+    }
+
+    /// `validateLeaveYearMonths` for the months on screen (a stored mismatch shows until it is fixed).
+    private var leaveYearError: String? {
+        CanonicalBusinessEngine.leaveYearMonthsError(startMonth: startMonth, endMonth: endMonth)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
@@ -35,7 +62,7 @@ struct AnnualLeaveEntitlementEditor: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 12) {
-                    Picker("From month", selection: $startMonth) {
+                    Picker("From month", selection: startSelection) {
                         ForEach(1...12, id: \.self) { m in
                             Text(monthSymbols[m - 1]).tag(m)
                         }
@@ -47,7 +74,7 @@ struct AnnualLeaveEntitlementEditor: View {
                     Text("→")
                         .foregroundStyle(.secondary)
 
-                    Picker("To month", selection: $endMonth) {
+                    Picker("To month", selection: endSelection) {
                         ForEach(1...12, id: \.self) { m in
                             Text(monthSymbols[m - 1]).tag(m)
                         }
@@ -55,6 +82,12 @@ struct AnnualLeaveEntitlementEditor: View {
                     .accessibilityIdentifier("annualLeaveEntitlementEditor.toMonth")
                     .pickerStyle(.menu)
                     .disabled(!isEnabled)
+                }
+                if let leaveYearError {
+                    Text(leaveYearError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("annualLeaveEntitlementEditor.leaveYearError")
                 }
             }
 

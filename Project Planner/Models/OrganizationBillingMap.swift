@@ -75,12 +75,13 @@ nonisolated enum OrganizationBillingMap {
     }
 }
 
-/// Words shown when `CanonicalBusinessEngine.hasAccess` is false. Same phrase for every role.
+/// Words shown when `CanonicalBusinessEngine.hasAccess` is false. Same words for every role. App Store 3.1.1 /
+/// 3.1.3: no price, no renewal, no link to buy or renew outside the app.
 enum SubscriptionLapsedCopy {
-    static let phrase = "subscription has run out"
-    static let headline = "Your subscription has run out"
-    static let superAdminDetail = "Renewal is done on the Project Planner web app."
-    static let otherRoleDetail = "Ask the super admin to renew."
+    static let phrase = "subscription is not active"
+    static let headline = "Your organisation's subscription is not active."
+    static let superAdminDetail = "Contact your organisation's administrator."
+    static let otherRoleDetail = "Contact your organisation's administrator."
 
     static func detail(isSuperAdmin: Bool) -> String {
         isSuperAdmin ? superAdminDetail : otherRoleDetail

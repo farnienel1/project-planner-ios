@@ -2834,6 +2834,7 @@ private struct ProjectVisibilitySettingsView: View {
     
     private func toggleVisibility(for user: AppUser) {
         guard var project else { return }
+        let opened = project
         if user.isExcludedFromManagerVisibilityHiding { return }
         if selectedTab == .managers {
             if project.hiddenManagerUserIds.contains(user.id) {
@@ -2848,7 +2849,7 @@ private struct ProjectVisibilitySettingsView: View {
                 project.hiddenOperativeUserIds.insert(user.id)
             }
         }
-        Task { await projectStore.updateProject(project) }
+        Task { await projectStore.updateProject(project, editedFrom: opened) }
     }
 }
 

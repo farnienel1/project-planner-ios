@@ -70,11 +70,9 @@ struct OrganisationSettingsHubView: View {
         userStore.currentUser?.isSuperAdmin == true
     }
 
+    /// App Store 3.1.1 / 3.1.3: no price, renewal or billing route outside the app.
     private var deleteOrganisationAlertMessage: String {
-        if signedInUserIsOrganisationSuperAdmin {
-            return "Project Planner is £149 a month or £1,490 a year. VAT is not charged. After the 30-day free trial the plan renews automatically at that price until cancelled. The organisation super admin turns off renewal in the web app, under Settings → Billing. To delete the organisation entirely, email info@projectplanner.us."
-        }
-        return "Subscriptions can be turned off via the web app. To delete an organisation entirely, please contact info@projectplanner.us"
+        "To delete the organisation entirely, email info@projectplanner.us."
     }
 
     var body: some View {
@@ -240,7 +238,7 @@ struct OrganisationSettingsHubView: View {
                             HStack(spacing: 13) {
                                 PPIconTile(symbol: "trash.fill", family: .alert, size: PPMetrics.menuIcon)
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text("Delete Organisation and Cancel Project Planner Membership")
+                                    Text("Delete Organisation")
                                         .font(.body)
                                         .foregroundStyle(PPColor.danger)
                                         .fixedSize(horizontal: false, vertical: true)
@@ -286,7 +284,7 @@ struct OrganisationSettingsHubView: View {
             CompanyDetailsEditView()
                 .environmentObject(firebaseBackend)
         }
-        .alert("Delete Organisation and Cancel Project Planner Membership", isPresented: $showingDeleteInfo) {
+        .alert("Delete Organisation", isPresented: $showingDeleteInfo) {
             Button("OK", role: .cancel) { }
                 .accessibilityIdentifier("organisationSettingsHub.ok")
         } message: {
