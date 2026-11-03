@@ -229,7 +229,10 @@ struct SmallWorksView: View {
     /// Light sheet: the job cards, or the existing loading / empty states.
     @ViewBuilder
     private var smallWorksSheetContent: some View {
-        if isWaitingForVisibilityData {
+        if userStore.displayJobAccessViewer == nil {
+            // No profile yet: `visibleJobs` has no viewer, so the list is unknown, not empty.
+            WorksProfileLoadingState()
+        } else if isWaitingForVisibilityData {
             ProgressView("Finding jobs assigned to you...")
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 28)

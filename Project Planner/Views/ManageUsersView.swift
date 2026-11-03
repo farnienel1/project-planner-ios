@@ -2167,6 +2167,7 @@ struct EditUserView: View {
                 HolidayReportView(user: user)
                     .environmentObject(holidayStore)
                     .environmentObject(operativeStore)
+                    .environmentObject(userStore)
             }
             .sheet(isPresented: $showingChangeUserType) {
                 changeUserTypeSheet

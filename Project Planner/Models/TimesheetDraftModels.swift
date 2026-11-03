@@ -68,9 +68,6 @@ struct TimesheetDraft: Codable {
     /// from `organizations/{orgId}/settings/timesheet_{userId}_{weekStartUnix}`.
     var weeklyReportOverride: TimesheetWeeklyReportOverride?
 
-    var additionalTotal: Double {
-        expenseEntries.reduce(0) { $0 + $1.amount } + priceWorkEntries.reduce(0) { $0 + $1.amount }
-    }
 }
 
 /// Shared iOS + web contract. Field names match Firestore `weeklyReportOverride`.

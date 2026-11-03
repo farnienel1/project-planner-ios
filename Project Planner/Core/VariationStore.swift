@@ -89,20 +89,24 @@ final class VariationStore: ObservableObject {
         trackerListener = nil
     }
 
+    /// RULEBOOK 1.22.0 §22 `CanonicalBusinessEngine.nextVariationNumber` over every variation, deleted ones included.
+    /// Blank when the script did not answer (the person types the number; the duplicate check still runs).
     func nextVoNumber() -> String {
         VariationNumbering.nextFree(
             existing: variations,
             prefix: tracker.prefix,
             padding: tracker.padding
-        )
+        ) ?? ""
     }
 
+    /// RULEBOOK 1.22.0 §22 `CanonicalBusinessEngine.variationNumberTaken`: a deleted variation still holds its number
+    /// (owner decision), the variation being edited is skipped by id, both without case. True (taken) when the script
+    /// did not answer, so a duplicate is never saved on a guess.
     func voNumberIsDuplicate(_ voNumber: String, excludingId: String?) -> Bool {
-        let needle = voNumber.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return variations.contains {
-            guard !$0.isDeleted else { return false }
-            if let excludingId, $0.id == excludingId { return false }
-            return $0.voNumber.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == needle
-        }
+        CanonicalBusinessEngine.variationNumberTaken(
+            existing: variations.map { (id: $0.id, voNumber: $0.voNumber, isDeleted: $0.isDeleted) },
+            voNumber: voNumber,
+            exceptId: excludingId
+        ) ?? true
     }
 }
