@@ -1080,6 +1080,8 @@ class FirebaseBackend: ObservableObject {
             invitationData["employmentType"] = employmentType
         }
         // RULEBOOK 1.9.0 §11: the invitation is created once with `invitationCreateFields`.
+        // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
+        try RulebookRosterLists.requireInviteLevel(invitationData)
         try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
         let orgName = currentOrganization?.name
         await sendPasswordResetVerificationEmail(email: email, firstName: firstName, surname: surname, verificationCode: invitationId, fromName: orgName)
@@ -4278,6 +4280,9 @@ class FirebaseBackend: ObservableObject {
         parsed.employmentStartDate = row.optionalText("employmentStartDayKey")
         parsed.profilePhotoUpdatedAt = row.date("profilePhotoUpdatedAtMs")
         parsed.operativeModeStored = row.bool("operativeModeStored")
+        // RULEBOOK 1.23.1 §11 (`CanonicalBusinessEngine.userMissingLevel`): the level fields exactly as stored.
+        parsed.storedLevelFlags = RulebookRosterLists.storedLevelFlags(data)
+        parsed.storedRoleText = (data["role"] as? String).flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         parsed.annualLeaveDefaultsPending = row.bool("annualLeaveDefaultsPending")
         parsed.annualLeaveStoredKeys = row.map("annualLeaveStored").filter { !($0.value is NSNull) }.map(\.key).sorted()
         return parsed
@@ -4553,12 +4558,6 @@ class FirebaseBackend: ObservableObject {
         return (try? await query.getDocuments().documents) ?? []
     }
 
-    /// A managers-collection link may place this account on Managers only when the user document has no role flags.
-    private static func qualifiesForManagersRecordPlacement(_ user: AppUser) -> Bool {
-        if user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin { return false }
-        if user.permissions.operativeMode || user.permissions.manager { return false }
-        return true
-    }
 
     /// Live `users where organizationId == orgId`, the query `getOrganizationUsers` starts from (RULEBOOK §1:
     /// the Manage Users roster is live). `onChange` gets the parsed added / modified documents and the ids that
@@ -4677,12 +4676,10 @@ class FirebaseBackend: ObservableObject {
             }
         }
 
-        var managersRecordUserIds = Set<String>()
         var staffResolvedUserIds = Set<String>()
         for link in staffLinks {
             if let matchedId = link.candidateIds.first(where: { documentsById[$0] != nil }) {
                 staffResolvedUserIds.insert(matchedId)
-                if link.fromManagers { managersRecordUserIds.insert(matchedId) }
                 continue
             }
             guard !link.email.isEmpty else { continue }
@@ -4713,9 +4710,6 @@ class FirebaseBackend: ObservableObject {
                 resolvedIds = Array(Set(emailDocs.map(\.documentID).filter { documentsById[$0] != nil }))
             }
             staffResolvedUserIds.formUnion(resolvedIds)
-            if link.fromManagers {
-                managersRecordUserIds.formUnion(resolvedIds)
-            }
         }
 
         print("🔥🔥🔥 DEBUG: Found \(documentsById.count) user documents for organisation \(orgId)")
@@ -4762,9 +4756,6 @@ class FirebaseBackend: ObservableObject {
                ),
                level.source != "users" {
                 user = user.atOrganizationLevel(level)
-            }
-            if managersRecordUserIds.contains(userId), Self.qualifiesForManagersRecordPlacement(user) {
-                user.placedByManagersRecord = true
             }
 
             users.append(user)
@@ -4842,9 +4833,6 @@ class FirebaseBackend: ObservableObject {
             person.formerUserIds = row["formerUserIds"] as? [String] ?? person.formerUserIds
             for folded in person.sameEmailUserIds {
                 guard let other = byId[folded] else { continue }
-                if !person.placedByManagersRecord && other.placedByManagersRecord {
-                    person.placedByManagersRecord = true
-                }
                 if StaffEmailIdentity.reportTrade(for: person) == "General",
                    StaffEmailIdentity.reportTrade(for: other) != "General" {
                     person.tradeTypePreset = other.tradeTypePreset
@@ -4862,9 +4850,6 @@ class FirebaseBackend: ObservableObject {
         let incomingWins = rosterDocumentRank(incoming) > rosterDocumentRank(existing)
         var chosen = incomingWins ? incoming : existing
         let other = incomingWins ? existing : incoming
-        if chosen.placedByManagersRecord == false && other.placedByManagersRecord {
-            chosen.placedByManagersRecord = true
-        }
         var aliases = Set(chosen.sameEmailUserIds)
         aliases.formUnion(other.sameEmailUserIds)
         aliases.insert(other.id)
@@ -7035,6 +7020,11 @@ class FirebaseBackend: ObservableObject {
     
     func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil, inviterIsAdmin: Bool? = nil) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
+        // RULEBOOK 1.23.1 §11 (`CanonicalBusinessEngine` `userMissingLevel`): Add User never writes a profile or an
+        // invitation without a user level (admin, manager or operative).
+        if RulebookRosterLists.inviteHasNoLevel(permissions) {
+            throw NSError(domain: "UserCreationError", code: 400, userInfo: [NSLocalizedDescriptionKey: RulebookRosterLists.inviteMissingLevelMessage])
+        }
         guard let lookup = Self.inviteEmailUsersQuery(organizationId: organizationId, email: email) else {
             throw NSError(
                 domain: "UserCreationError",

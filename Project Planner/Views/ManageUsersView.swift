@@ -259,6 +259,9 @@ struct ManageUsersView: View {
                 if userStore.hasAdminAccess() && !usersWithAccountTypeOutOfSync.isEmpty {
                     accountTypeOutOfSyncNotice
                 }
+                if userStore.hasAdminAccess() && !usersMissingLevel.isEmpty {
+                    usersMissingLevelNotice
+                }
                 manageUsersListHeader
                 manageUsersCardList
             }
@@ -318,6 +321,43 @@ struct ManageUsersView: View {
         rosterListed(userStore.organizationUsers, segment: .active).filter { person in
             person.accountTypeSyncState(in: firebaseBackend)?.inSync == false
         }
+    }
+
+    /// RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `usersMissingLevel(roster)`: people with no user level (web lists
+    /// them in Settings → Data health; iOS has no Data health screen, so admins see them here, where Change user type
+    /// sets the level). Each row opens the person.
+    private var usersMissingLevel: [AppUser] {
+        RulebookRosterLists.usersMissingLevel(userStore.organizationUsers)
+    }
+
+    private var usersMissingLevelNotice: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(
+                usersMissingLevel.count == 1 ? "1 person has no user level" : "\(usersMissingLevel.count) people have no user level",
+                systemImage: "person.crop.circle.badge.questionmark"
+            )
+            .font(.subheadline.weight(.semibold))
+            Text(RulebookRosterLists.missingLevelMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(usersMissingLevel, id: \.id) { person in
+                Button {
+                    selectedUser = person
+                } label: {
+                    Text(person.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? person.email : person.fullName)
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 4)
+        .accessibilityIdentifier("manageUsers.usersMissingLevel")
     }
 
     private var accountTypeOutOfSyncNotice: some View {
@@ -616,11 +656,11 @@ struct ManageUsersView: View {
     private func usersForRoleTab(_ tab: Int) -> [AppUser] {
         switch tab {
         case 0:
-            return userStore.organizationUsers.filter { $0.appearsOnAdminsList }
+            return userStore.rosterList(.admins)
         case 1:
-            return userStore.organizationUsers.filter { $0.appearsOnManagersList }
+            return userStore.rosterList(.managers)
         default:
-            return userStore.organizationUsers.filter { $0.appearsOnOperativesList }
+            return userStore.rosterList(.operatives)
         }
     }
 
@@ -738,7 +778,7 @@ struct ManageUsersView: View {
     
     private var adminsList: some View {
         let admins = rosterListed(
-            userStore.organizationUsers.filter(\.appearsOnAdminsList),
+            userStore.rosterList(.admins),
             segment: rosterSegment
         )
         return List {
@@ -766,7 +806,7 @@ struct ManageUsersView: View {
     
     private var managersList: some View {
         let managers = rosterListed(
-            userStore.organizationUsers.filter(\.appearsOnManagersList),
+            userStore.rosterList(.managers),
             segment: rosterSegment
         )
         return List {
@@ -794,7 +834,7 @@ struct ManageUsersView: View {
     
     private var operativesList: some View {
         let operatives = rosterListed(
-            userStore.organizationUsers.filter(\.appearsOnOperativesList),
+            userStore.rosterList(.operatives),
             segment: rosterSegment
         )
         return List {
@@ -1156,6 +1196,8 @@ struct ManageUserRowView: View {
                 }
                 invitationData["employmentType"] = user.employmentType.rawValue
                 // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+                // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
+                try RulebookRosterLists.requireInviteLevel(invitationData)
                 try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
 
                 let success = await userStore.sendSignUpEmailWithVerification(
@@ -4336,6 +4378,8 @@ struct EditUserView: View {
         
         do {
             // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+            // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
+            try RulebookRosterLists.requireInviteLevel(invitationData)
             try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
 
             await userStore.resendInvitationEmail(
@@ -4414,6 +4458,8 @@ struct EditUserView: View {
                 }
                 invitationData["employmentType"] = user.employmentType.rawValue
                 // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+                // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
+                try RulebookRosterLists.requireInviteLevel(invitationData)
                 try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
 
                 let success = await userStore.sendSignUpEmailWithVerification(

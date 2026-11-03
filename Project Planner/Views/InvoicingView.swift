@@ -1839,7 +1839,7 @@ private struct MyTimesheetView: View {
     /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals`: this sheet's totals as the invoice will have them
     /// — review decisions apply once the line manager has signed (web `draftTimesheetTotals`).
     private var ownerTotals: RulebookTimesheetTotals? {
-        TimesheetTotalsSource.totals(lines: payrollLines, draft: draft, decided: managerHasSigned)
+        TimesheetTotalsSource.totals(lines: payrollLines, draft: draft, decided: managerHasSigned, subject: userStore.displayUser, period: week.start...week.end)
     }
 
     /// The same sheet at the amounts the person entered (`timesheetTotals` in `raw` mode, no labour reviews), for the
@@ -1847,7 +1847,7 @@ private struct MyTimesheetView: View {
     private var submittedTotals: RulebookTimesheetTotals? {
         var unreviewed = draft
         unreviewed.payrollLineReviews = [:]
-        return TimesheetTotalsSource.totals(lines: payrollLines, draft: unreviewed, decided: false)
+        return TimesheetTotalsSource.totals(lines: payrollLines, draft: unreviewed, decided: false, subject: userStore.displayUser, period: week.start...week.end)
     }
 
     private var weekInvoicePeriod: InvoicePeriodOption {
@@ -3179,7 +3179,7 @@ private struct PreviousTimesheetsView: View {
             scheduleOptions: scheduleOptions,
             relatedUsers: userStore.organizationUsers
         )
-        return TimesheetTotalsSource.totals(lines: summary.lineItems, draft: draft, decided: true)
+        return TimesheetTotalsSource.totals(lines: summary.lineItems, draft: draft, decided: true, subject: currentUser, period: week.start...week.end)
     }
 
     private func formatHours(_ value: Double) -> String {
@@ -4067,7 +4067,7 @@ private struct OperativeTimesheetsView: View {
             scheduleOptions: scheduleOptions,
             relatedUsers: userStore.organizationUsers
         )
-        return TimesheetTotalsSource.totals(lines: summary.lineItems, draft: draft, decided: true)
+        return TimesheetTotalsSource.totals(lines: summary.lineItems, draft: draft, decided: true, subject: user, period: range.start...range.end)
     }
 
     private func formatHours(_ value: Double) -> String {
@@ -4174,7 +4174,9 @@ private struct OperativeTimesheetReviewView: View {
             lines: payrollSummary.lineItems,
             draft: draft,
             decided: managerHasSigned || canManagerReview,
-            reviewing: canManagerReview && !managerHasSigned
+            reviewing: canManagerReview && !managerHasSigned,
+            subject: operative,
+            period: week.start...week.end
         )
     }
 
@@ -5662,7 +5664,7 @@ private enum InvoicePDFGenerationSupport {
         )
         // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows` (`raw`, as web's owner invoice): the signed snapshot first, else
         // the live lines; PAYE and leave lines never go on an invoice.
-        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft)
+        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft, period: period.startDate...period.endDate)
         return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
@@ -6104,7 +6106,7 @@ private struct GenerateInvoiceView: View {
         )
         // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows` (`raw`, as web's owner invoice): the signed snapshot first, else
         // the live lines; PAYE and leave lines never go on an invoice.
-        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft)
+        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft, period: period.startDate...period.endDate)
         return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
@@ -6317,14 +6319,21 @@ private enum TimesheetInvoiceRows {
         for user: AppUser,
         summary: TimesheetPayrollSummary,
         draft: TimesheetDraft,
-        extrasMode: ExtrasMode = .raw
+        extrasMode: ExtrasMode = .raw,
+        period: ClosedRange<Date>
     ) -> [InvoiceLineItem] {
-        _ = user
         let sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft))
-        let lines: [[String: Any]] = summary.lineItems.map { ["id": $0.id, "amount": $0.amount, "isPayeDay": $0.isPayeDay] }
+        let lines: [[String: Any]] = summary.lineItems.map(\.rulebookTotalsJSON)
+        var input: [String: Any] = [
+            "sheet": sheet, "payrollLines": lines, "extrasMode": extrasMode.rawValue,
+            "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
+        ]
+        // RULEBOOK 1.11.0 / 1.22.0 §8: `timesheetDays` (`CanonicalBusinessEngine.timesheetDaysForPerson`) leaves out
+        // labour, price work and expenses dated on a PAYE day, as web does (`timesheetDayKeysForPeriod`).
+        if let days = TimesheetTotalsSource.timesheetDays(for: user, period: period) { input["timesheetDays"] = days }
         guard let result = CanonicalBusinessEngine.callJSON(
             "timesheetInvoiceRows",
-            arguments: [["sheet": sheet, "payrollLines": lines, "extrasMode": extrasMode.rawValue]]
+            arguments: [input]
         ) as? [[String: Any]] else {
             // The script did not answer: nothing unchecked is invoiced.
             return []
@@ -7059,7 +7068,7 @@ private enum TimesheetExportHelper {
             relatedUsers: relatedUsers
         )
         // RULEBOOK 1.10.0 §8: an export reads decisions (`extrasMode` `decided`).
-        let rows = TimesheetInvoiceRows.rows(for: user, summary: summary, draft: draft, extrasMode: .decided)
+        let rows = TimesheetInvoiceRows.rows(for: user, summary: summary, draft: draft, extrasMode: .decided, period: week.start...week.end)
         return rows.sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName

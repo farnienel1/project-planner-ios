@@ -124,8 +124,16 @@ struct HolidayReportView: View {
         return "\(text) day\(days == 1 ? "" : "s")"
     }
 
+    /// A leave day key (organisation zone, `CanonicalBusinessEngine.leaveReportRows`) shown in the company's time zone,
+    /// never the phone's, so the day printed is the day the report counted.
     private func dayText(_ key: String) -> String {
-        OrganizationRulebookContext.date(fromDayKey: key)?.formatted(date: .abbreviated, time: .omitted) ?? key
+        guard let date = OrganizationRulebookContext.date(fromDayKey: key) else { return key }
+        let formatter = DateFormatter()
+        formatter.calendar = OrganizationRulebookContext.calendar
+        formatter.timeZone = OrganizationRulebookContext.timeZone
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 
     private var yearPicker: some View {

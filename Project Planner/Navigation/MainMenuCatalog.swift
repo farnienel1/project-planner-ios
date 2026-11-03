@@ -521,16 +521,12 @@ enum MainMenuCatalog {
         }
     }
 
+    /// RULEBOOK 1.23.0 §5 `CanonicalBusinessEngine.qualificationExpiryCount`: the Warnings screen's qualification rows
+    /// (active operatives, organisation day, one calendar month, expired included), never a device 30-day window.
     private static func qualificationsExpiringSoonCount(operativeStore: OperativeStore) -> Int {
-        let today = Calendar.current.startOfDay(for: Date())
-        guard let horizon = Calendar.current.date(byAdding: .day, value: 30, to: today) else { return 0 }
-        var n = 0
-        for op in operativeStore.allOperatives {
-            for (_, exp) in op.qualificationExpiryDates {
-                if exp >= today && exp <= horizon { n += 1 }
-            }
-        }
-        return n
+        CanonicalBusinessEngine.qualificationExpiryCount(
+            operatives: operativeStore.allOperatives.map(\.rulebookQualificationRow)
+        )?.total ?? 0
     }
 
     // MARK: - Emit actions (shell + home)

@@ -365,14 +365,30 @@ enum ScheduleBookingConflictEngine {
 
             rows.append(contentsOf: leaveRows.filter { calendar.isDate($0.date, inSameDayAs: day) })
 
-            let existingProjectBookings = bookingStore.bookings.filter { booking in
+            // RULEBOOK 1.23.0 §5 `CanonicalBusinessEngine.bookingRequestClashIds`: the person's bookings that day (and an
+            // overnight one from the day before) whose slot overlaps this one, both under the booked day's working
+            // hours (`day` = the policy state), never today's.
+            let previousDay = calendar.date(byAdding: .day, value: -1, to: day) ?? day
+            let candidateProjectBookings = bookingStore.bookings.filter { booking in
                 person.owns(booking) &&
-                    calendar.isDate(booking.date, inSameDayAs: day) &&
+                    (calendar.isDate(booking.date, inSameDayAs: day) || calendar.isDate(booking.date, inSameDayAs: previousDay)) &&
                     booking.occupiesDay &&
                     !excludingBookingIds.contains(booking.id)
             }
-            for existing in existingProjectBookings {
-                guard OperativeBookingInterval.bookingsOverlap(probe, existing, policy: policy) else { continue }
+            let candidateManagerBookings: [ManagerSiteBooking] = person.userId.map { uid in
+                managerScheduleStore.managerSiteBookings.filter { booking in
+                    booking.userId == uid &&
+                        (calendar.isDate(booking.date, inSameDayAs: day) || calendar.isDate(booking.date, inSameDayAs: previousDay))
+                }
+            } ?? []
+            let clashIds = Set((CanonicalBusinessEngine.bookingRequestClashIds(
+                request: probe.rulebookClashBooking,
+                existing: candidateProjectBookings.map(\.rulebookClashBooking)
+                    + candidateManagerBookings.map(\.rulebookClashBooking),
+                day: CanonicalBusinessEngine.bookingDayInput(policy: policy)
+            ) ?? (candidateProjectBookings.map(\.id.uuidString) + candidateManagerBookings.map(\.id.uuidString))).map { $0.lowercased() })
+            for existing in candidateProjectBookings {
+                guard clashIds.contains(existing.id.uuidString.lowercased()) else { continue }
                 let existingProject = projectStore.projects.first(where: { $0.id == existing.projectId })
                     ?? projectStore.smallWorks.first(where: { $0.id == existing.projectId })
                 let jobLabel: String = {
@@ -398,13 +414,9 @@ enum ScheduleBookingConflictEngine {
                 )
             }
 
-            if let uid = person.userId {
-                let managerBookings = managerScheduleStore.managerSiteBookings.filter { booking in
-                    booking.userId == uid &&
-                        calendar.isDate(booking.date, inSameDayAs: day)
-                }
-                for msb in managerBookings {
-                    guard managerProbeOverlapsOperativeProbe(msb: msb, probe: probe, policy: policy) else { continue }
+            do {
+                for msb in candidateManagerBookings {
+                    guard clashIds.contains(msb.id.uuidString.lowercased()) else { continue }
                     let location = myScheduleLocationLabel(msb, projectStore: projectStore)
                     let timeLabel = msb.workStartTime.flatMap { s in
                         msb.workEndTime.map { e in "\(s)–\(e)" }
@@ -533,18 +545,6 @@ enum ScheduleBookingConflictEngine {
             if summary?.effectiveSelectedDates.isEmpty == true { return false }
         }
         return !selectedOperativeIds.isEmpty
-    }
-
-    private static func managerProbeOverlapsOperativeProbe(
-        msb: ManagerSiteBooking,
-        probe: Booking,
-        policy: OrgPayrollTimePolicy
-    ) -> Bool {
-        guard let probeIv = OperativeBookingInterval.clashInterval(for: probe, policy: policy),
-              let msbIv = ManagerScheduleInterval.clashInterval(for: msb, policy: policy) else {
-            return true
-        }
-        return OperativeBookingInterval.closedIntervalsOverlap(probeIv, msbIv)
     }
 
     private static func myScheduleLocationLabel(_ booking: ManagerSiteBooking, projectStore: ProjectStore) -> String {

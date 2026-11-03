@@ -35,12 +35,15 @@ enum ManagerScheduleInterval {
         )?.tuple
     }
 
+    /// RULEBOOK 1.23.0 §5 `CanonicalBusinessEngine.bookingRequestClashIds` with the booked day's working hours (see
+    /// `OperativeBookingInterval.bookingsOverlap`). True when the script did not answer.
     static func bookingsOverlap(_ a: ManagerSiteBooking, _ b: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> Bool {
-        guard let ia = clashInterval(for: a, policy: policy),
-              let ib = clashInterval(for: b, policy: policy) else {
-            return legacySlotPairClash(a.timeSlot, b.timeSlot)
-        }
-        return closedIntervalsOverlap(ia, ib)
+        guard let ids = CanonicalBusinessEngine.bookingRequestClashIds(
+            request: a.rulebookClashBooking,
+            existing: [b.rulebookClashBooking],
+            day: CanonicalBusinessEngine.bookingDayInput(policy: policy)
+        ) else { return true }
+        return !ids.isEmpty
     }
 
     /// True when the booking’s clash interval fully covers the org standard day window.
@@ -50,13 +53,6 @@ enum ManagerScheduleInterval {
               let we = parseMinutes(policy.standardDayEnd),
               we > ws else { return false }
         return iv.0 <= ws && iv.1 >= we
-    }
-
-    private static func legacySlotPairClash(_ a: ManagerTimeSlot, _ b: ManagerTimeSlot) -> Bool {
-        if a == .fullDay || b == .fullDay { return true }
-        if a == b { return true }
-        if (a == .morning && b == .afternoon) || (a == .afternoon && b == .morning) { return false }
-        return true
     }
 
     // RULEBOOK 1.22.0 §6: a person's paid hours and cover across several bookings on one day are

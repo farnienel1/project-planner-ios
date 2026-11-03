@@ -1121,32 +1121,22 @@ struct OperativeAnnualLeaveCalendarView: View {
         case approvedHalf
     }
 
+    /// RULEBOOK 1.23.0 §9 `CanonicalBusinessEngine.leaveDayKind`: the record's leave days only (weekends and bank
+    /// holidays inside a multi-day record are blank), rejected never, approved leave with a pending cancellation still
+    /// approved, pendingFull > approvedFull > pendingHalf > approvedHalf — on the organisation day.
     private func dayKind(for day: Date) -> DayKind {
-        let dayStart = calendar.startOfDay(for: day)
-        var pendingHalf: HolidayBooking?
-        var approvedHalf: HolidayBooking?
-        for booking in personBookings {
-            // The record's leave days (`leaveRecordDayKeys`); its slot applies to every one of them (§9).
-            guard LeaveRecordDays.covers(booking, day: dayStart) else { continue }
-            switch booking.status {
-            case .rejected:
-                continue
-            case .pending:
-                if booking.timeSlot == .fullDay {
-                    return .pendingFull
-                }
-                pendingHalf = booking
-            case .approved:
-                if booking.cancellationRequestedAt != nil { continue }
-                if booking.timeSlot == .fullDay {
-                    return .approvedFull
-                }
-                approvedHalf = booking
-            }
+        let kind: RulebookLeaveDayKind = CanonicalBusinessEngine.leaveDayKind(
+            records: personBookings.map(\.rulebookLeaveRecord),
+            dayKey: OrganizationRulebookContext.dayKey(day),
+            nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
+        ) ?? RulebookLeaveDayKind.none
+        switch kind {
+        case .pendingFull: return .pendingFull
+        case .pendingHalf: return .pendingHalf
+        case .approvedFull: return .approvedFull
+        case .approvedHalf: return .approvedHalf
+        case .none: return .none
         }
-        if pendingHalf != nil { return .pendingHalf }
-        if approvedHalf != nil { return .approvedHalf }
-        return .none
     }
 
     private var personBookings: [HolidayBooking] {

@@ -753,9 +753,9 @@ private struct MyTasksRedesignTaskCard: View {
         return MyTasksScreenPalette.blue
     }
 
+    /// RULEBOOK 1.23.0 §23 `CanonicalBusinessEngine.isTaskOverdue`: not completed and due before today, organisation day.
     private var isOverdue: Bool {
-        guard !resolvedTask.isCompleted, let due = resolvedTask.dueDate else { return false }
-        return Calendar.current.startOfDay(for: due) < Calendar.current.startOfDay(for: Date())
+        CanonicalBusinessEngine.isTaskOverdue(status: resolvedTask.status.rawValue, dueDate: resolvedTask.dueDate)
     }
 
     private var dueText: String {

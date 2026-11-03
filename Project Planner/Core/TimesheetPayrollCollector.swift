@@ -235,7 +235,9 @@ enum TimesheetPayrollCollector {
         // organisation's standard day, as web's collector does. Touching times do not overlap.
         let overlapping = CanonicalBusinessEngine.overlappingBookingIds(
             paidBookings,
-            day: CanonicalStandardDayInput(policy: policy)
+            day: CanonicalStandardDayInput(policy: policy),
+            // RULEBOOK 1.23.0 §8: the organisation's working-hours state (each day's own hours), as pay reads them.
+            dayState: organization == nil ? nil : CanonicalBusinessEngine.openOrganizationPayrollPolicyState
         )
         if !overlapping.isEmpty {
             for index in lineItems.indices {
