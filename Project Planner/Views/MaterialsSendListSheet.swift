@@ -129,7 +129,7 @@ struct MaterialsSendListSheet: View {
                     confirmation: conf,
                     wholesalers: wholesalers,
                     selectedContactIds: selectedContactIds,
-                    oneOffRecipients: oneOffRecipients,
+                    oneOffRecipients: effectiveOneOffRecipients,
                     onDone: {
                         sendConfirmation = nil
                         isPresented = false
@@ -366,16 +366,29 @@ struct MaterialsSendListSheet: View {
                     .accessibilityIdentifier("materialsSendList.email")
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
+                if oneOffNeedsName {
+                    // Web parity: an email without a name is not sent until it has one.
+                    Text("Add a name to include this email.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("materialsSendList.oneOffNeedsName")
+                }
+                if oneOffRecipients.count >= CanonicalBusinessEngine.materialOrderTypedRecipientsMax {
+                    Text(CanonicalBusinessEngine.materialOrderTypedRecipientsMessage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 Button("Add") {
-                    let trimmedName = newRecipientName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let trimmed = newEmail.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard trimmed.contains("@") else { return }
-                    guard !trimmedName.isEmpty else { return }
-                    oneOffRecipients.append(OneOffRecipient(name: trimmedName, email: trimmed))
+                    guard let parsed = pendingOneOff else { return }
+                    oneOffRecipients.append(parsed)
                     newRecipientName = ""
                     newEmail = ""
                 }
                 .accessibilityIdentifier("materialsSendList.add")
+                .disabled(pendingOneOff == nil)
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(12)
@@ -428,7 +441,7 @@ struct MaterialsSendListSheet: View {
                 .buttonBorderShape(.capsule)
                 .tint(MaterialsOrderingTheme.success)
             }
-            .disabled(selectedMaterialIds.isEmpty || recipientCount == 0 || isSending)
+            .disabled(selectedMaterialIds.isEmpty || recipientCount == 0 || isSending || !canSendOrders)
             if MaterialWhatsAppRulebook.isAvailable {
                 Button {
                     beginWhatsApp()
@@ -466,7 +479,7 @@ struct MaterialsSendListSheet: View {
                 ))
             }
         }
-        for recipient in oneOffRecipients {
+        for recipient in effectiveOneOffRecipients {
             rows.append(MaterialWhatsAppRulebook.Recipient(
                 id: recipient.id.uuidString,
                 name: recipient.name,
@@ -486,8 +499,36 @@ struct MaterialsSendListSheet: View {
         showingWhatsApp = true
     }
 
+    /// RULEBOOK 1.15.0 §16 `canSendMaterialOrders`: admins and super admins outside operative mode, and managers.
+    private var canSendOrders: Bool {
+        guard let user = userStore.currentUser else { return false }
+        return CanonicalBusinessEngine.canSendMaterialOrders(UserStore.staffAccountRole(for: user))
+    }
+
+    /// A filled-in one-off row (name + email) counts without pressing Add (web parity), while there is room under
+    /// `MATERIAL_ORDER_TYPED_RECIPIENTS_MAX` and it is not already listed.
+    private var pendingOneOff: OneOffRecipient? {
+        let name = newRecipientName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let email = newEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, email.contains("@") else { return nil }
+        guard !oneOffRecipients.contains(where: { $0.email.caseInsensitiveCompare(email) == .orderedSame }) else { return nil }
+        guard oneOffRecipients.count < CanonicalBusinessEngine.materialOrderTypedRecipientsMax else { return nil }
+        return OneOffRecipient(name: name, email: email)
+    }
+
+    /// One-off recipients the send uses: the added rows plus a filled-in row not yet added.
+    private var effectiveOneOffRecipients: [OneOffRecipient] {
+        pendingOneOff.map { oneOffRecipients + [$0] } ?? oneOffRecipients
+    }
+
+    /// An email typed without a name: shown as a hint, not sent.
+    private var oneOffNeedsName: Bool {
+        newEmail.trimmingCharacters(in: .whitespacesAndNewlines).contains("@")
+            && newRecipientName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var recipientCount: Int {
-        selectedContactIds.count + oneOffRecipients.count
+        selectedContactIds.count + effectiveOneOffRecipients.count
     }
 
     private var cutOffLabel: String? {
@@ -507,6 +548,23 @@ struct MaterialsSendListSheet: View {
 
     private func beginSend(type: MaterialOrderRequest.RequestType) {
         guard !selectedMaterialIds.isEmpty, recipientCount > 0 else { return }
+        guard canSendOrders else {
+            sendErrorMessage = "Only admins and managers can send quotes and orders."
+            return
+        }
+        // RULEBOOK 1.15.0 §16 `materialOrderRecipientCheck`: saved wholesaler contacts, the sender's copy, at most 3
+        // typed addresses (also enforced by the email function).
+        let selectedEmails = wholesalers.flatMap(\.contacts)
+            .filter { selectedContactIds.contains($0.id) }
+            .map(\.email)
+        if let check = CanonicalBusinessEngine.materialOrderRecipientCheck(
+            recipients: selectedEmails + effectiveOneOffRecipients.map(\.email),
+            savedContactEmails: wholesalers.flatMap(\.contacts).map(\.email),
+            senderEmail: userStore.currentUser?.email
+        ), !check.ok {
+            sendErrorMessage = check.message ?? "Check the recipients and try again."
+            return
+        }
         if type == .order {
             let wholesalerIds = Set(wholesalers.compactMap { w in
                 w.contacts.contains(where: { selectedContactIds.contains($0.id) }) ? w.id : nil
@@ -552,7 +610,7 @@ struct MaterialsSendListSheet: View {
         isSending = true
         let items = materials.filter { materialIds.contains($0.id) }
         var contacts = wholesalers.flatMap(\.contacts).filter { selectedContactIds.contains($0.id) }
-        for recipient in oneOffRecipients {
+        for recipient in effectiveOneOffRecipients {
             contacts.append(WholesalerContact(name: recipient.name, email: recipient.email))
         }
         let userName = userStore.currentUser?.fullName ?? "Unknown"

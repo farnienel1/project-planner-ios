@@ -58,10 +58,10 @@ nonisolated enum RulebookAccountTypeChange: Sendable {
 
 extension UserPermissions {
     /// `USER_PERMISSION_FIELDS`, in the rulebook's order.
-    static let rulebookFields: [String] = ["adminAccess", "manager", "operatives", "skills", "qualifications", "materials", "projects", "smallWorks", "operativeMode", "siteAudit", "subContractors", "wholesalersOrderHistory", "annualLeaveSelfBook", "weeklyReports", "dailyOverview"]
+    nonisolated static let rulebookFields: [String] = ["adminAccess", "manager", "operatives", "skills", "qualifications", "materials", "projects", "smallWorks", "operativeMode", "siteAudit", "subContractors", "wholesalersOrderHistory", "annualLeaveSelfBook", "weeklyReports", "dailyOverview"]
 
     /// The stored toggle named by a `USER_PERMISSION_FIELDS` key; nil for an unknown key.
-    func flag(_ field: String) -> Bool? {
+    nonisolated func flag(_ field: String) -> Bool? {
         switch field {
         case "adminAccess": return adminAccess
         case "manager": return manager
@@ -83,7 +83,7 @@ extension UserPermissions {
     }
 
     /// Sets the toggle named by a `USER_PERMISSION_FIELDS` key (unknown keys and the retired `skills` are ignored).
-    mutating func setFlag(_ field: String, _ value: Bool) {
+    nonisolated mutating func setFlag(_ field: String, _ value: Bool) {
         switch field {
         case "adminAccess": adminAccess = value
         case "manager": manager = value
@@ -104,7 +104,7 @@ extension UserPermissions {
     }
 
     /// Every toggle as `{ field: Bool }`, the shape the permission rules read.
-    var rulebookMap: [String: Bool] {
+    nonisolated var rulebookMap: [String: Bool] {
         var map: [String: Bool] = [:]
         for field in Self.rulebookFields {
             if let value = flag(field) { map[field] = value }
@@ -113,7 +113,7 @@ extension UserPermissions {
     }
 
     /// `self` with every field the map names set to its value (unnamed fields keep their value).
-    func applying(_ map: [String: Bool]) -> UserPermissions {
+    nonisolated func applying(_ map: [String: Bool]) -> UserPermissions {
         var out = self
         for (field, value) in map { out.setFlag(field, value) }
         out.skills = false
@@ -144,6 +144,22 @@ extension CanonicalBusinessEngine {
             if let bool = flag as? Bool { out[key] = bool }
         }
         return out
+    }
+
+    /// `accountTypeWritePermissions(kind, person, screen)` (RULEBOOK 1.15.0 §11): the toggles a "Change user type" save
+    /// writes — every stored toggle kept (`accountTypePermissions`), only the level flags changed, then the screen's
+    /// values for the toggles the new level can change. Nil when the script did not answer.
+    nonisolated static func accountTypeWritePermissions(
+        kind: RulebookPermissionLevel,
+        person: [String: Any],
+        screen: [String: Bool]
+    ) -> [String: Bool]? {
+        boolMap(callJSON("accountTypeWritePermissions", arguments: [kind.rawValue, person, screen]))
+    }
+
+    /// `accountTypePermissions(kind, previous)` (1.15.0): the stored toggles with only the level flags changed.
+    nonisolated static func accountTypePermissions(kind: RulebookPermissionLevel, previous: [String: Any]) -> [String: Bool]? {
+        boolMap(callJSON("accountTypePermissions", arguments: [kind.rawValue, previous]))
     }
 
     /// `permissionLevelOf(user)`. Nil when the script did not answer.

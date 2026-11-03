@@ -1,0 +1,356 @@
+import XCTest
+@testable import Project_Planner
+
+/// RULEBOOK 1.15.0, 1.16.0 and 1.16.1 behaviour on iOS through `CanonicalBusinessEngine`. Every expected value was
+/// checked in node against the packed `canonical-business.js` (sha256 586f1b0b…5c8).
+@MainActor
+final class Rulebook1160Tests: XCTestCase {
+    // MARK: Health & safety file links (1.16.1)
+
+    /// `mergeHealthSafetyRowCopies`: one row per id (case ignored), the first copy's order, but the copy that still
+    /// has a `fileURL` wins; the rows come back as the native maps passed in.
+    func testMergeHealthSafetyRowCopiesKeepsTheCopyWithALink() throws {
+        let stamp = Date(timeIntervalSince1970: 1_790_000_000)
+        let primary: [[String: Any]] = [
+            ["id": "RAMS-1", "fileURL": "", "title": "Lost link", "uploadedAt": stamp],
+            ["id": "RAMS-2", "fileURL": "https://x/2", "title": "Two"],
+        ]
+        let secondary: [[String: Any]] = [
+            ["id": "rams-1", "fileURL": "https://x/1", "title": "With link"],
+            ["id": "RAMS-3", "title": "Three"],
+        ]
+        let merged = try XCTUnwrap(CanonicalBusinessEngine.mergeHealthSafetyRowCopies(primary: primary, secondary: secondary))
+        XCTAssertEqual(merged.compactMap { $0["id"] as? String }, ["rams-1", "RAMS-2", "RAMS-3"])
+        XCTAssertEqual(merged.first?["fileURL"] as? String, "https://x/1")
+        XCTAssertEqual(merged.first?["title"] as? String, "With link")
+        XCTAssertNil(merged.first?["__hsCopyIndex"], "the position marker never reaches the stored map")
+    }
+
+    /// The two settings copies of a job read as one: the RAMS row keeps the copy with the download link.
+    func testMergedHealthSafetyDocumentsKeepTheDownloadLink() {
+        let settingsCopy: [String: Any] = ["ramsDocuments": [["id": "R1", "title": "RAMS", "fileURL": ""]]]
+        let olderCopy: [String: Any] = ["ramsDocuments": [["id": "r1", "title": "RAMS", "fileURL": "https://x/r1.pdf"]]]
+        let merged = FirebaseBackend.mergedHealthSafetyDocuments([settingsCopy, olderCopy])
+        let rows = merged["ramsDocuments"] as? [[String: Any]] ?? []
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?["fileURL"] as? String, "https://x/r1.pdf")
+    }
+
+    /// `healthSafetyDocumentWriteFields`: a blank `fileURL` / `fileName` never overwrites a stored link.
+    func testBlankFileLinkNeverOverwritesStoredLink() throws {
+        let stored: [String: Any] = [
+            "ramsDocuments": [["id": "d1", "fileURL": "https://x", "fileName": "a.pdf", "title": "A"]],
+        ]
+        let write = try XCTUnwrap(CanonicalBusinessEngine.healthSafetyDocumentWriteFields(
+            stored: stored,
+            next: ["ramsDocuments": [["id": "D1", "fileURL": "", "fileName": "", "title": "B"]]]
+        ))
+        let rows = write.set["ramsDocuments"] as? [[String: Any]] ?? []
+        XCTAssertEqual(rows.first?["fileURL"] as? String, "https://x")
+        XCTAssertEqual(rows.first?["fileName"] as? String, "a.pdf")
+        XCTAssertEqual(rows.first?["title"] as? String, "B")
+    }
+
+    /// Stored file references: a download URL with a token opens as is; `gs://`, bare Storage paths and token-less
+    /// Firebase URLs are resolved through Storage (`fileReportStoragePath`); `file://` and blanks cannot be opened.
+    func testStoredFileTargets() {
+        XCTAssertEqual(
+            StoredFileTarget.target(for: "gs://b.appspot.com/organizations/o/healthSafety/x/rams/a.pdf"),
+            .storage("organizations/o/healthSafety/x/rams/a.pdf")
+        )
+        XCTAssertEqual(StoredFileTarget.target(for: "organizations/o/x.pdf"), .storage("organizations/o/x.pdf"))
+        XCTAssertEqual(
+            StoredFileTarget.target(for: "https://firebasestorage.googleapis.com/v0/b/b.appspot.com/o/organizations%2Fo%2Fx.pdf?alt=media"),
+            .storage("organizations/o/x.pdf")
+        )
+        let tokened = "https://firebasestorage.googleapis.com/v0/b/b.appspot.com/o/organizations%2Fo%2Fx.pdf?alt=media&token=t"
+        XCTAssertEqual(StoredFileTarget.target(for: tokened), .url(URL(string: tokened)!))
+        XCTAssertNil(StoredFileTarget.target(for: "file:///var/x.pdf"))
+        XCTAssertNil(StoredFileTarget.target(for: "  "))
+    }
+
+    // MARK: Notification centre (1.16.0 §13)
+
+    private let roster: [[String: Any]] = [
+        ["id": "MGR-1", "email": "mgr@x.test", "isActive": true, "role": "manager", "passwordSet": true],
+        ["id": "OP-INVITE", "email": "op@x.test", "isActive": true, "role": "operative", "passwordSet": false],
+        ["id": "OP-LIVE", "email": "op@x.test", "isActive": true, "role": "operative", "passwordSet": true],
+    ]
+    private let catalogue: [[String: Any]] = [["id": "CAT-OP-1", "email": "OP@x.test"]]
+
+    /// `bookingCreatedRecipients(bookedIds, booker, roster, catalogue)`: a catalogue id resolves to the signed-up
+    /// account; booking yourself writes nothing; an id the roster cannot resolve is dropped.
+    func testBookingCreatedRecipientsResolveTheAccount() {
+        let booker: [String: Any] = ["id": "MGR-1", "email": "mgr@x.test"]
+        XCTAssertEqual(
+            CanonicalBusinessEngine.bookingCreatedRecipients(bookedIds: ["cat-op-1"], booker: booker, roster: roster, catalogue: catalogue),
+            ["OP-LIVE"]
+        )
+        XCTAssertEqual(
+            CanonicalBusinessEngine.bookingCreatedRecipients(bookedIds: ["MGR-1"], booker: booker, roster: roster, catalogue: catalogue),
+            []
+        )
+        XCTAssertEqual(
+            CanonicalBusinessEngine.bookingCreatedRecipients(bookedIds: ["UNKNOWN"], booker: "MGR-1", roster: roster, catalogue: catalogue),
+            []
+        )
+        XCTAssertEqual(CanonicalBusinessEngine.notificationRecipientAccountId("op-invite", roster: roster), "OP-LIVE")
+    }
+
+    /// The roster payload carries `passwordSet`, which picks the account (`notificationRecipientAccountId`).
+    func testRosterPayloadCarriesPasswordSet() {
+        let user = AppUser(
+            id: "OP-LIVE",
+            email: "op@x.test",
+            organizationId: "TEST-org",
+            role: .operative,
+            firstName: "Olly",
+            surname: "Op",
+            passwordSet: true,
+            permissions: UserPermissions(operativeMode: true)
+        )
+        XCTAssertEqual(RulebookPeople.person(user)["passwordSet"] as? Bool, true)
+    }
+
+    /// `pushPayloadFields`: the one push payload, an unknown catalogue left out.
+    func testPushPayloadFields() {
+        let fields = CanonicalBusinessEngine.pushPayloadFields([
+            "notificationId": "N1", "type": "booking_created", "relatedId": "J1", "dayKey": "2026-11-03",
+            "catalogue": "x", "userId": "U", "organizationId": "ORG-2",
+        ])
+        XCTAssertEqual(fields, [
+            "notificationId": "N1", "type": "booking_created", "relatedId": "J1", "dayKey": "2026-11-03",
+            "userId": "U", "organizationId": "ORG-2",
+        ])
+        XCTAssertEqual(
+            CanonicalBusinessEngine.pushPayloadKeys,
+            ["notificationId", "type", "relatedId", "dayKey", "catalogue", "userId", "organizationId"]
+        )
+        // An in-app tap's `pp_` keys read as the same fields.
+        let info = NotificationDeepLink.userInfo(type: .bookingCreated, relatedIdText: "J1", organizationId: "ORG-2")
+        XCTAssertEqual(NotificationDeepLink.payloadFields(from: info)?["organizationId"], "ORG-2")
+        XCTAssertEqual(NotificationDeepLink.payloadFields(from: info)?["relatedId"], "J1")
+    }
+
+    /// `notificationOrganizationSwitch`: switch only to another company the person belongs to.
+    func testNotificationOrganizationSwitch() {
+        XCTAssertEqual(
+            CanonicalBusinessEngine.notificationOrganizationSwitch(rowOrganizationId: "org-2", openOrganizationId: "ORG-1", membershipIds: ["ORG-1", "ORG-2"]),
+            "org-2"
+        )
+        XCTAssertNil(CanonicalBusinessEngine.notificationOrganizationSwitch(rowOrganizationId: "ORG-3", openOrganizationId: "ORG-1", membershipIds: ["ORG-1", "ORG-2"]))
+        XCTAssertNil(CanonicalBusinessEngine.notificationOrganizationSwitch(rowOrganizationId: "org-1", openOrganizationId: "ORG-1", membershipIds: ["ORG-1"]))
+    }
+
+    /// Due-now rows allow `INBOX_CREATED_AT_SKEW_MS` (5 min) of clock skew; scheduled types wait for `createdAt`.
+    func testInboxVisibilityIsSkewTolerantForDueNowRows() {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let nowMs = now.timeIntervalSince1970 * 1000
+        XCTAssertEqual(CanonicalBusinessEngine.inboxNotificationVisibleToUser(
+            rowUserId: "U", userIds: ["U"], createdAtMs: nowMs + 60_000, now: now, type: "booking_created"
+        ), true)
+        XCTAssertEqual(CanonicalBusinessEngine.inboxNotificationVisibleToUser(
+            rowUserId: "U", userIds: ["U"], createdAtMs: nowMs + 60_000, now: now, type: "deadline_reminder"
+        ), false)
+        XCTAssertEqual(CanonicalBusinessEngine.inboxNotificationVisibleToUser(
+            rowUserId: "U", userIds: ["U"], createdAtMs: nowMs + 600_000, now: now, type: "booking_created"
+        ), false)
+        let rows = [
+            CanonicalBusinessEngine.CanonicalUnreadNotificationRow(userId: "U", isRead: false),
+            CanonicalBusinessEngine.CanonicalUnreadNotificationRow(userId: "U", isRead: false),
+        ]
+        XCTAssertEqual(CanonicalBusinessEngine.unreadNotificationBadgeCount(
+            rows: rows, userIds: ["U"], createdAtMs: [nowMs + 60_000, nowMs + 60_000], now: now,
+            types: ["booking_created", "deadline_due"]
+        ), 1)
+    }
+
+    /// `notificationCreateFields` with `serverTimestamp`: a due-now row is written with the server time; a
+    /// scheduled type keeps its own due instant.
+    func testNotificationCreateFieldsUseServerTimeForDueNowRows() throws {
+        let due = Date(timeIntervalSince1970: 1_790_000_000)
+        func created(_ type: String) throws -> Any? {
+            try XCTUnwrap(CanonicalBusinessEngine.notificationCreateFields(
+                organizationId: "TEST-org", type: type, title: "t", message: "m", userId: "U", actorUserId: "A",
+                relatedId: nil, requiresPermission: nil, deepLinkUserId: nil, deepLinkWeekStart: nil, dayKey: nil,
+                catalogue: nil, createdAt: due, serverTimestamp: "SERVER-TIME", storedExists: false
+            ))["createdAt"]
+        }
+        XCTAssertEqual(try created("booking_created") as? String, "SERVER-TIME")
+        XCTAssertEqual(try created("deadline_reminder") as? Date, due)
+    }
+
+    // MARK: Annual leave when booking (1.16.0 §5, §9)
+
+    private let leaveDay = CanonicalStandardDayInput(
+        standardDayStart: "08:00", standardDayEnd: "16:30", breakWindowStart: "12:00", breakWindowEnd: "12:30"
+    )
+
+    private func leaveInput(slot: String, start: String? = nil, end: String? = nil) -> [String: Any] {
+        var input: [String: Any] = [
+            "people": [["id": "OP-1", "userId": "U1"]],
+            "dayKeys": ["2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07"],
+            "holidays": [
+                ["id": "H1", "userId": "U1", "startDayKey": "2026-11-04", "endDayKey": "2026-11-05", "timeSlot": "AM", "status": "approved"],
+                ["id": "H2", "operativeId": "op-1", "startDayKey": "2026-11-06", "endDayKey": "2026-11-06", "timeSlot": "FULL DAY", "status": "pending"],
+                ["id": "H3", "userId": "U1", "startDayKey": "2026-11-07", "endDayKey": "2026-11-07", "status": "rejected"],
+            ],
+            "timeZone": "Europe/London",
+            "day": [
+                "standardDayStart": leaveDay.standardDayStart ?? "",
+                "standardDayEnd": leaveDay.standardDayEnd ?? "",
+                "breakWindowStart": leaveDay.breakWindowStart ?? "",
+                "breakWindowEnd": leaveDay.breakWindowEnd ?? "",
+            ],
+            "timeSlot": slot,
+        ]
+        if let start { input["workStartTime"] = start }
+        if let end { input["workEndTime"] = end }
+        return input
+    }
+
+    /// Approved and pending leave whose window overlaps the slot; rejected leave never; ids without case.
+    func testBookingLeaveConflictsFollowTheSlot() throws {
+        let fullDay = try XCTUnwrap(CanonicalBusinessEngine.bookingLeaveConflicts(leaveInput(slot: "FULL DAY")))
+        XCTAssertEqual(fullDay.map(\.dayKey), ["2026-11-04", "2026-11-05", "2026-11-06"])
+        XCTAssertEqual(fullDay.map(\.status), ["approved", "approved", "pending"])
+        XCTAssertEqual(fullDay.first?.label, "Annual leave booked")
+        XCTAssertEqual(fullDay.first?.detail, "Annual leave booked · AM")
+        XCTAssertEqual(fullDay.last?.label, "Annual leave requested")
+        XCTAssertEqual(fullDay.last?.detail, "Annual leave requested · Full day")
+
+        let afternoon = try XCTUnwrap(CanonicalBusinessEngine.bookingLeaveConflicts(leaveInput(slot: "PM")))
+        XCTAssertEqual(afternoon.map(\.dayKey), ["2026-11-06"])
+
+        let customMorning = try XCTUnwrap(CanonicalBusinessEngine.bookingLeaveConflicts(
+            leaveInput(slot: "CUSTOM_HOURS", start: "09:00", end: "10:00")
+        ))
+        XCTAssertEqual(customMorning.count, 3)
+        let customAfternoon = try XCTUnwrap(CanonicalBusinessEngine.bookingLeaveConflicts(
+            leaveInput(slot: "CUSTOM_HOURS", start: "14:00", end: "15:00")
+        ))
+        XCTAssertEqual(customAfternoon.map(\.dayKey), ["2026-11-06"])
+        XCTAssertEqual(
+            CanonicalBusinessEngine.bookingConflictsHeading,
+            "Some selected days clash. Tick to confirm, or ✕ to drop that day."
+        )
+    }
+
+    /// Every row must be ticked or dropped; the dropped person-days are what the flow leaves out.
+    func testConflictDecisions() {
+        let row = BookingConflictItem.leave(
+            BookingLeaveConflict(personId: "OP-1", dayKey: "2026-11-04", leaveId: "H1", leaveSlot: "AM", status: "approved", label: "Annual leave booked"),
+            personName: "Olly"
+        )
+        XCTAssertFalse(BookingConflictResolution.resolved([row], decisions: [:]))
+        XCTAssertTrue(BookingConflictResolution.resolved([row], decisions: [row.id: .confirm]))
+        XCTAssertEqual(BookingConflictResolution.droppedPersonDays([row], decisions: [row.id: .confirm]), [])
+        XCTAssertEqual(BookingConflictResolution.droppedPersonDays([row], decisions: [row.id: .drop]), ["OP-1|2026-11-04"])
+    }
+
+    // MARK: 1.15.0 owner decisions
+
+    /// `accountTypeWritePermissions`: a type change keeps the stored toggles; only the level flags change and only
+    /// the new level's editable toggles take the screen's values.
+    func testAccountTypeChangeKeepsSavedToggles() throws {
+        let stored: [String: Any] = [
+            "role": "manager", "manager": true, "adminAccess": false, "operativeMode": false,
+            "projects": true, "smallWorks": false, "weeklyReports": true, "operatives": false, "permissions": [:] as [String: Any],
+        ]
+        let toAdmin = try XCTUnwrap(CanonicalBusinessEngine.accountTypeWritePermissions(
+            kind: .admin, person: stored, screen: ["projects": true, "smallWorks": true, "annualLeaveSelfBook": true]
+        ))
+        XCTAssertEqual(toAdmin["adminAccess"], true)
+        XCTAssertEqual(toAdmin["smallWorks"], false, "an admin's locked toggles never overwrite the stored value")
+        XCTAssertEqual(toAdmin["annualLeaveSelfBook"], true)
+        let backToManager = try XCTUnwrap(CanonicalBusinessEngine.accountTypeWritePermissions(
+            kind: .manager, person: stored, screen: ["smallWorks": true, "materials": false]
+        ))
+        XCTAssertEqual(backToManager["adminAccess"], false)
+        XCTAssertEqual(backToManager["smallWorks"], true)
+        XCTAssertEqual(backToManager["materials"], true, "Materials is locked on for a manager")
+        XCTAssertEqual(backToManager["weeklyReports"], true)
+    }
+
+    /// `canSendMaterialOrders` and `materialOrderRecipientCheck`.
+    func testMaterialOrderAccess() throws {
+        typealias Role = CanonicalBusinessEngine.CanonicalStaffAccountRole
+        XCTAssertTrue(CanonicalBusinessEngine.canSendMaterialOrders(Role(isSuperAdmin: false, isAdmin: true, isManager: false, isOperativeMode: false)))
+        XCTAssertTrue(CanonicalBusinessEngine.canSendMaterialOrders(Role(isSuperAdmin: false, isAdmin: false, isManager: true, isOperativeMode: false)))
+        XCTAssertFalse(CanonicalBusinessEngine.canSendMaterialOrders(Role(isSuperAdmin: false, isAdmin: false, isManager: false, isOperativeMode: true)))
+        XCTAssertFalse(CanonicalBusinessEngine.canSendMaterialOrders(Role(isSuperAdmin: true, isAdmin: true, isManager: false, isOperativeMode: true)))
+        XCTAssertEqual(CanonicalBusinessEngine.materialOrderTypedRecipientsMax, 3)
+
+        let tooMany = try XCTUnwrap(CanonicalBusinessEngine.materialOrderRecipientCheck(
+            recipients: ["a@x.co", "B@x.co", "c@y.co", "d@y.co", "e@y.co", "me@x.co"],
+            savedContactEmails: ["a@x.co"],
+            senderEmail: "me@x.co"
+        ))
+        XCTAssertFalse(tooMany.ok)
+        XCTAssertEqual(tooMany.reason, "too_many_typed")
+        XCTAssertEqual(tooMany.message, CanonicalBusinessEngine.materialOrderTypedRecipientsMessage)
+        let ok = try XCTUnwrap(CanonicalBusinessEngine.materialOrderRecipientCheck(
+            recipients: ["a@x.co", "c@y.co", "Me@x.co"], savedContactEmails: ["A@x.co"], senderEmail: "me@x.co"
+        ))
+        XCTAssertTrue(ok.ok)
+        XCTAssertEqual(ok.saved, ["a@x.co"])
+        XCTAssertEqual(ok.typed, ["c@y.co"])
+        let onlyMe = try XCTUnwrap(CanonicalBusinessEngine.materialOrderRecipientCheck(
+            recipients: ["me@x.co"], savedContactEmails: [], senderEmail: "me@x.co"
+        ))
+        XCTAssertEqual(onlyMe.reason, "none")
+    }
+
+    /// `organizationDeletionState` / `organizationDeletedMessage`.
+    func testOrganizationDeletionState() {
+        let deletion: [String: Any] = [
+            "status": "scheduled",
+            "requestedAt": ["seconds": 1_790_000_000],
+            "requestedBy": "U",
+            "eraseAfter": ["seconds": 1_795_184_000],
+            "restoreBy": "super_admin",
+        ]
+        let state = CanonicalBusinessEngine.organizationDeletionState(
+            deletion: deletion, now: Date(timeIntervalSince1970: 1_790_000_000)
+        )
+        XCTAssertEqual(state, .scheduled(eraseAfterMs: 1_795_184_000_000, due: false, restoreBy: "super_admin"))
+        XCTAssertTrue(state.isLocked)
+        XCTAssertEqual(
+            CanonicalBusinessEngine.organizationDeletedMessage(eraseAfterMs: 1_795_184_000_000, timeZone: "Europe/London"),
+            "This organisation has been deleted and will be erased on 20 November 2026."
+        )
+        XCTAssertEqual(CanonicalBusinessEngine.organizationDeletionState(deletion: ["status": "erased"]), .erased)
+        XCTAssertEqual(CanonicalBusinessEngine.organizationDeletionState(deletion: nil), .active)
+    }
+
+    /// `accountDeletionPath` and `organizationDeleteConfirmationError`.
+    func testAccountDeletionPath() {
+        let org: [String: Any] = ["id": "ORG", "creatorUserId": "SA"]
+        let superAdmin: [String: Any] = ["id": "SA", "email": "sa@x", "isActive": true, "passwordSet": true]
+        let member: [String: Any] = ["id": "M", "email": "m@x", "isActive": true, "passwordSet": true]
+        XCTAssertEqual(CanonicalBusinessEngine.accountDeletionPath(viewer: ["id": "SA", "email": "sa@x"], roster: [superAdmin, member], org: org), .handoverRequired)
+        XCTAssertEqual(CanonicalBusinessEngine.accountDeletionPath(viewer: ["id": "SA", "email": "sa@x"], roster: [superAdmin], org: org), .deleteWithCompany)
+        XCTAssertEqual(CanonicalBusinessEngine.accountDeletionPath(viewer: ["id": "M", "email": "m@x"], roster: [superAdmin, member], org: org), .delete)
+        XCTAssertNil(CanonicalBusinessEngine.organizationDeleteConfirmationError(organizationName: "Acme Ltd", typedName: " acme ltd ", typedConfirmation: "DELETE"))
+        XCTAssertEqual(
+            CanonicalBusinessEngine.organizationDeleteConfirmationError(organizationName: "Acme Ltd", typedName: "acme", typedConfirmation: "DELETE"),
+            "Type the company name exactly as it is shown."
+        )
+    }
+
+    /// The web route's 1.15.0 409 codes.
+    func testAccountDeleteConflictCodes() throws {
+        let handover = try JSONSerialization.data(withJSONObject: ["error": "Hand over first.", "code": "handover_required", "orgName": "Acme"])
+        XCTAssertEqual(AccountDeletionClient.interpret(statusCode: 409, body: handover), .handoverRequired("Hand over first."))
+        XCTAssertTrue(AccountDeletionClient.interpret(statusCode: 409, body: handover).hidesDeleteButton)
+        let company = try JSONSerialization.data(withJSONObject: [
+            "error": "Type the company name.",
+            "code": "company_delete_required",
+            "orgs": [["orgId": "ORG", "orgName": "Acme"]],
+        ] as [String: Any])
+        XCTAssertEqual(
+            AccountDeletionClient.interpret(statusCode: 409, body: company),
+            .companyDeleteRequired("Type the company name.", [AccountDeletionClient.CompanyToDelete(orgId: "ORG", orgName: "Acme")])
+        )
+    }
+}

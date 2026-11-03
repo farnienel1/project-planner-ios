@@ -205,21 +205,52 @@ enum ScheduleBookingConflictEngine {
         }?.id
     }
 
-    static func holidayForPerson(
-        operativeId: UUID,
-        userId: String?,
-        on date: Date,
-        in holidays: [HolidayBooking]
-    ) -> HolidayBooking? {
-        let cal = Calendar.current
-        let day = cal.startOfDay(for: date)
-        return holidays.first { booking in
-            let start = cal.startOfDay(for: booking.startDate)
-            let end = cal.startOfDay(for: booking.endDate)
-            guard day >= start && day <= end else { return false }
-            if booking.operativeId == operativeId { return true }
-            if let userId, booking.userId == userId { return true }
-            return false
+    /// RULEBOOK 1.16.0 §5, §9 `bookingLeaveConflicts`: approved and pending leave on the selected days whose window
+    /// overlaps this booking's slot, as purple rows the booker ticks (keep) or drops. Replaces the old app-side
+    /// holiday match (device calendar, any slot, approved days dropped without asking).
+    static func leaveConflictRows(
+        person: ScheduleBookablePerson,
+        sortedDates: [Date],
+        choice: OperativeDayBookingChoice,
+        holidays: [HolidayBooking],
+        policy: OrgPayrollTimePolicy
+    ) -> [ScheduleConflictRow] {
+        let stored = Booking.storedOperativeId(for: person.operativeId)
+        let others = person.bookingIds
+            .map { Booking.storedOperativeId(for: $0) }
+            .filter { $0 != stored }
+            .sorted()
+        let leavePerson = BookingLeaveConflictInputs.Person(
+            id: stored,
+            userId: person.userId,
+            operativeIds: others,
+            email: person.email
+        )
+        let conflicts = BookingLeaveConflictInputs.conflicts(
+            people: [leavePerson],
+            dates: sortedDates,
+            holidays: holidays,
+            users: RulebookRosterSnapshot.users,
+            policy: policy,
+            timeSlot: choice.timeSlot.rawValue,
+            workStartTime: choice.workStartTime,
+            workEndTime: choice.workEndTime
+        )
+        var dateByKey: [String: Date] = [:]
+        for date in sortedDates { dateByKey[OrganizationRulebookContext.dayKey(date)] = date }
+        return conflicts.compactMap { conflict in
+            guard let date = dateByKey[conflict.dayKey] else { return nil }
+            let day = Calendar.current.startOfDay(for: date)
+            let kind: ScheduleConflictKind = conflict.isPending ? .pendingAnnualLeave : .approvedAnnualLeave
+            return ScheduleConflictRow(
+                id: ScheduleConflictRow.rowId(operativeId: person.operativeId, date: day, kind: kind, suffix: conflict.leaveId),
+                operativeId: person.operativeId,
+                date: day,
+                kind: kind,
+                title: "\(day.formatted(date: .abbreviated, time: .omitted)) — \(conflict.detail)",
+                detail: "Tick to book anyway, or ✕ to drop this day.",
+                requiresAcknowledgement: true
+            )
         }
     }
 
@@ -240,6 +271,13 @@ enum ScheduleBookingConflictEngine {
         var rows: [ScheduleConflictRow] = []
 
         let probeBooker = "Schedule"
+        let leaveRows = leaveConflictRows(
+            person: person,
+            sortedDates: sortedDates,
+            choice: choice,
+            holidays: holidayStore.bookings,
+            policy: policy
+        )
         for date in sortedDates {
             let day = Calendar.current.startOfDay(for: date)
             let probe = choice.bookingProbe(
@@ -249,39 +287,7 @@ enum ScheduleBookingConflictEngine {
                 bookedBy: probeBooker
             )
 
-            if let holiday = holidayForPerson(
-                operativeId: person.operativeId,
-                userId: person.userId,
-                on: day,
-                in: holidayStore.bookings
-            ) {
-                let formatted = day.formatted(date: .abbreviated, time: .omitted)
-                if holiday.status == .approved {
-                    rows.append(
-                        ScheduleConflictRow(
-                            id: ScheduleConflictRow.rowId(operativeId: person.operativeId, date: day, kind: .approvedAnnualLeave),
-                            operativeId: person.operativeId,
-                            date: day,
-                            kind: .approvedAnnualLeave,
-                            title: "\(formatted) — Annual leave (Approved)",
-                            detail: "This day will be dropped from the booking.",
-                            requiresAcknowledgement: false
-                        )
-                    )
-                } else if holiday.status == .pending || holiday.cancellationRequestedAt != nil {
-                    rows.append(
-                        ScheduleConflictRow(
-                            id: ScheduleConflictRow.rowId(operativeId: person.operativeId, date: day, kind: .pendingAnnualLeave, suffix: holiday.id.uuidString),
-                            operativeId: person.operativeId,
-                            date: day,
-                            kind: .pendingAnnualLeave,
-                            title: "\(formatted) — Annual leave (Pending)",
-                            detail: "Acknowledge to include this day, or remove it from the booking.",
-                            requiresAcknowledgement: true
-                        )
-                    )
-                }
-            }
+            rows.append(contentsOf: leaveRows.filter { Calendar.current.isDate($0.date, inSameDayAs: day) })
 
             let existingProjectBookings = bookingStore.bookings.filter { booking in
                 person.owns(booking) &&
@@ -372,8 +378,9 @@ enum ScheduleBookingConflictEngine {
             policy: policy,
             excludingBookingIds: excludingBookingIds
         )
-        let approvedDates = Set(rows.filter { $0.kind == .approvedAnnualLeave }.map { Calendar.current.startOfDay(for: $0.date) })
-        let autoExcluded = approvedDates.union(manuallyExcludedDays)
+        // RULEBOOK 1.16.0: approved leave is no longer dropped without asking; it is a row to tick or drop like the rest.
+        let approvedDates: Set<Date> = []
+        let autoExcluded = manuallyExcludedDays
         let struckDates = Set(
             rows.filter { struckRowIds.contains($0.id) }.map { Calendar.current.startOfDay(for: $0.date) }
         )

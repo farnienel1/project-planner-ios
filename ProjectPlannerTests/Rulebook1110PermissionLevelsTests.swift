@@ -127,7 +127,10 @@ final class Rulebook1110PermissionLevelsTests: XCTestCase {
         let plan = try XCTUnwrap(CanonicalBusinessEngine.accountTypeChangeWrites(person: person, kind: .admin, organizationId: "ORG-1", roster: [], permissions: nil))
         guard case .ok(let role, let permissions, let writes, let note) = plan else { return XCTFail("refused") }
         XCTAssertEqual(role, .admin)
-        XCTAssertEqual(permissions["operatives"], true)
+        // RULEBOOK 1.15.0 §11 `accountTypePermissions`: a type change keeps the stored toggles (Operatives was never
+        // stored, so it stays off underneath; an admin reads it on through `effectivePermissions`). Checked in node.
+        XCTAssertEqual(permissions["adminAccess"], true)
+        XCTAssertEqual(permissions["operatives"], false)
         XCTAssertNil(note)
         var paths: [String] = []
         for write in writes {

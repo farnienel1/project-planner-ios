@@ -1947,6 +1947,31 @@ struct EditUserView: View {
     }
 
     private func applyDraftsForChangeUserTypeSelection() {
+        // RULEBOOK 1.15.0 §11 `accountTypePermissions`: the sheet opens on the person's saved toggles for the new type
+        // (only the level flags change), never a preset.
+        let level: RulebookPermissionLevel = changeUserTypeDraft == .administrator ? .admin
+            : changeUserTypeDraft == .manager ? .manager : .operative
+        let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        if let kept = CanonicalBusinessEngine.accountTypePermissions(
+            kind: level,
+            previous: CanonicalBusinessEngine.permissionSubject(
+                permissions: stored.permissions,
+                role: stored.role.rawValue,
+                isSuperAdmin: stored.isSuperAdmin
+            )
+        ) {
+            managerSelfBookDraft = kept["annualLeaveSelfBook"] ?? managerSelfBookDraft
+            managerTransitionOperatives = kept["operatives"] ?? managerTransitionOperatives
+            managerTransitionQualifications = kept["qualifications"] ?? managerTransitionQualifications
+            managerTransitionWeeklyReports = kept["weeklyReports"] ?? managerTransitionWeeklyReports
+            managerTransitionDailyOverview = kept["dailyOverview"] ?? managerTransitionDailyOverview
+            managerTransitionSubContractors = kept["subContractors"] ?? managerTransitionSubContractors
+            managerTransitionProjects = kept["projects"] ?? managerTransitionProjects
+            managerTransitionSmallWorks = kept["smallWorks"] ?? managerTransitionSmallWorks
+            operativeTransitionMaterials = kept["materials"] ?? operativeTransitionMaterials
+            operativeTransitionSiteAudit = kept["siteAudit"] ?? operativeTransitionSiteAudit
+            return
+        }
         if let m = UserRoleTransitionPolicy.managerConfigForSheet(current: permissions, selectedKind: changeUserTypeDraft) {
             managerSelfBookDraft = m.annualLeaveSelfBook
             managerTransitionOperatives = m.operatives
@@ -2274,6 +2299,54 @@ struct EditUserView: View {
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
         .toolbar { editUserToolbarContent }
+        .safeAreaInset(edge: .bottom) { editUserSaveFooter }
+    }
+
+    /// Why Save will not go through, in red directly above a Save button at the foot of the form (the toolbar Save
+    /// stays): a refused save's message, else the rule refusing this save as it stands (`lineManagerRequiredError`,
+    /// LINE_MANAGER_REQUIRED_MESSAGE), else the pay-rate refusal. Web shows the same message above its Save.
+    private var editUserSaveBlockingMessage: String? {
+        if let saveErrorMessage, !saveErrorMessage.isEmpty { return saveErrorMessage }
+        if let lineManagerRequiredMessage { return lineManagerRequiredMessage }
+        if let payRateFieldError, !payRateFieldError.isEmpty { return payRateFieldError }
+        return nil
+    }
+
+    @ViewBuilder
+    private var editUserSaveFooter: some View {
+        if canEditPermissionsMatrix, hasChanges || editUserSaveBlockingMessage != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                if let message = editUserSaveBlockingMessage {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("editUser.saveBlockingMessage")
+                }
+                Button {
+                    saveChanges()
+                } label: {
+                    Text(isUpdating ? "Saving…" : "Save")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(ManageUserProfilePalette.primaryBlue)
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("editUser.saveFooter")
+                .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline)
+                .opacity((isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline) ? 0.55 : 1)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(ProjectWorksRevampColors.surface)
+            .overlay(alignment: .top) { Divider() }
+        }
     }
 
     @ViewBuilder
@@ -2713,6 +2786,36 @@ struct EditUserView: View {
         // RULEBOOK 1.11.0 §11: `accountTypeChangeWrites` — users/{uid}, members.{uid} and the membership together.
         let level: RulebookPermissionLevel = changeUserTypeDraft == .administrator ? .admin
             : changeUserTypeDraft == .manager ? .manager : .operative
+        // RULEBOOK 1.15.0 §11 `accountTypeWritePermissions`: a type change keeps every saved toggle; only the level
+        // flags change, and only the toggles this sheet shows for the new level take the screen's values. The old
+        // preset (`UserRoleTransitionPolicy`) no longer decides the stored toggles.
+        let screen: [String: Bool]
+        switch changeUserTypeDraft {
+        case .administrator:
+            screen = ["annualLeaveSelfBook": managerSelfBookDraft]
+        case .manager:
+            screen = [
+                "annualLeaveSelfBook": managerSelfBookDraft,
+                "operatives": managerTransitionOperatives,
+                "qualifications": managerTransitionQualifications,
+                "weeklyReports": managerTransitionWeeklyReports,
+                "dailyOverview": managerTransitionDailyOverview,
+                "subContractors": managerTransitionSubContractors,
+                "projects": managerTransitionProjects,
+                "smallWorks": managerTransitionSmallWorks,
+            ]
+        case .operative:
+            screen = ["materials": operativeTransitionMaterials, "siteAudit": operativeTransitionSiteAudit]
+        }
+        let storedPerson = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let storedSubject = CanonicalBusinessEngine.permissionSubject(
+            permissions: storedPerson.permissions,
+            role: storedPerson.role.rawValue,
+            isSuperAdmin: storedPerson.isSuperAdmin
+        )
+        if let kept = CanonicalBusinessEngine.accountTypeWritePermissions(kind: level, person: storedSubject, screen: screen) {
+            newPerms = storedPerson.permissions.applying(kept)
+        }
         let result = await userStore.changeAccountType(
             userId: user.id,
             kind: level,

@@ -43,6 +43,8 @@ struct DailyOverviewView: View {
     @State private var showingPastBookings = false
     @State private var showingBookLabour = false
     @State private var bookingEditTarget: DailyOverviewEditTarget?
+    /// RULEBOOK 1.16.0 `bookingLeaveConflicts`: leave on a changed booking's day is ticked or dropped first.
+    @StateObject private var leaveGate = BookingConflictGate()
     @State private var scheduleRefreshTask: Task<Void, Never>?
     /// When `displayDate` is nil, the user can change the day from the strip (today’s overview sheet).
     @State private var selectedCalendarDay: Date = OrganizationRulebookContext.calendar.startOfDay(for: Date())
@@ -1062,6 +1064,7 @@ struct DailyOverviewView: View {
         .sheet(item: $bookingEditTarget) { target in
             dailyOverviewEditSheet(for: target)
         }
+        .bookingConflictSheet(leaveGate)
     }
 
     private func openCataloguePage(for project: Project) {
@@ -1251,8 +1254,26 @@ private extension DailyOverviewView {
         updated.isBreakRemoved = breakRemoved
         updated.otMultiplierOverride = otMultiplierOverride
         updated.updatedAt = Date()
-        Task {
-            await bookingStore.updateBooking(updated)
+        // RULEBOOK 1.16.0 §5, §9: when the slot or times change, leave on that day is ticked or dropped first.
+        let timesChanged = updated.timeSlot != booking.timeSlot
+            || updated.workStartTime != booking.workStartTime
+            || updated.workEndTime != booking.workEndTime
+        let rows = timesChanged ? BookingLeaveConflictItems.items(
+            for: updated,
+            personName: rosterNameForLabourBooking(
+                operativeId: booking.operativeId,
+                operatives: operativeStore.allOperatives,
+                users: userStore.organizationUsers
+            ),
+            holidays: holidayStore.bookings,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers,
+            policy: firebaseBackend.payrollPolicy(for: updated.date)
+        ) : []
+        leaveGate.runSingle(rows: rows, afterDismiss: true) {
+            Task {
+                await bookingStore.updateBooking(updated)
+            }
         }
     }
 
@@ -1268,8 +1289,21 @@ private extension DailyOverviewView {
         updated.workEndTime = end
         updated.isBreakRemoved = breakRemoved
         updated.updatedAt = Date()
-        Task {
-            await managerScheduleStore.saveBooking(updated)
+        let timesChanged = updated.timeSlot != booking.timeSlot
+            || updated.workStartTime != booking.workStartTime
+            || updated.workEndTime != booking.workEndTime
+        let personName = userStore.organizationUsers.first { $0.id == booking.userId }?.fullName ?? "This person"
+        let rows = timesChanged ? BookingLeaveConflictItems.items(
+            for: updated,
+            personName: personName,
+            holidays: holidayStore.bookings,
+            users: userStore.organizationUsers,
+            policy: firebaseBackend.payrollPolicy(for: updated.date)
+        ) : []
+        leaveGate.runSingle(rows: rows, afterDismiss: true) {
+            Task {
+                await managerScheduleStore.saveBooking(updated)
+            }
         }
     }
 }

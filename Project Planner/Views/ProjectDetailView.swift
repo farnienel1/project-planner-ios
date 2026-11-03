@@ -92,6 +92,8 @@ struct ProjectDetailView: View {
     @State private var expandedSchedulingDayKeys: Set<TimeInterval> = []
     @State private var showingScheduleSubcontractor = false
     @State private var quickAddRequest: QuickAddRequest?
+    /// RULEBOOK 1.16.0 `bookingLeaveConflicts`: annual leave on an edited booking's day is ticked or dropped first.
+    @StateObject private var leaveGate = BookingConflictGate()
     @State private var showingEditProject = false
     @State private var showingMapOptions = false
     @State private var region: MKCoordinateRegion
@@ -230,6 +232,7 @@ struct ProjectDetailView: View {
                 .environmentObject(subcontractorStore)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
+        .bookingConflictSheet(leaveGate)
         .sheet(item: $quickAddRequest) { request in
             let policy = firebaseBackend.payrollPolicy(for: request.day)
             ScheduleQuickAddSheet(
@@ -249,7 +252,26 @@ struct ProjectDetailView: View {
                 onSave: { draft in
                     await commitQuickAdd(request, draft: draft, policy: policy)
                 },
-                onCancel: { quickAddRequest = nil }
+                onCancel: { quickAddRequest = nil },
+                leaveConflicts: { draft in
+                    // RULEBOOK 1.16.0 `bookingLeaveConflicts`: leave on this day for this person and slot.
+                    BookingLeaveConflictItems.items(
+                        booked: [.init(
+                            person: BookingLeaveConflictItems.person(
+                                operativeIds: request.person.operativeIds,
+                                userIds: request.person.userIds
+                            ),
+                            name: request.person.name
+                        )],
+                        dates: [request.day],
+                        holidays: holidayStore.bookings,
+                        users: userStore.organizationUsers,
+                        policy: policy,
+                        timeSlot: draft.timeSlot.rawValue,
+                        workStartTime: draft.workStart,
+                        workEndTime: draft.workEnd
+                    )
+                }
             )
             .environmentObject(bookingStore)
             .environmentObject(managerScheduleStore)
@@ -1561,7 +1583,21 @@ struct ProjectDetailView: View {
                     updated.isBreakRemoved = isBreakRemoved
                     updated.otMultiplierOverride = otMult
                     updated.updatedAt = Date()
-                    Task { await bookingStore.updateBooking(updated) }
+                    // Leave is checked only when the slot or times change (RULEBOOK 1.16.0 §5, §9).
+                    let timesChanged = updated.timeSlot != booking.timeSlot
+                        || updated.workStartTime != booking.workStartTime
+                        || updated.workEndTime != booking.workEndTime
+                    let rows = timesChanged ? BookingLeaveConflictItems.items(
+                        for: updated,
+                        personName: personName,
+                        holidays: holidayStore.bookings,
+                        operatives: operativeStore.allOperatives,
+                        users: userStore.organizationUsers,
+                        policy: firebaseBackend.payrollPolicy(for: updated.date)
+                    ) : []
+                    leaveGate.runSingle(rows: rows, afterDismiss: true) {
+                        Task { await bookingStore.updateBooking(updated) }
+                    }
                 },
                 onCancel: { bookingEditTarget = nil },
                 onDelete: {
@@ -1587,7 +1623,19 @@ struct ProjectDetailView: View {
                     updated.workEndTime = end
                     updated.isBreakRemoved = isBreakRemoved
                     updated.updatedAt = Date()
-                    Task { await managerScheduleStore.saveBooking(updated) }
+                    let timesChanged = updated.timeSlot != booking.timeSlot
+                        || updated.workStartTime != booking.workStartTime
+                        || updated.workEndTime != booking.workEndTime
+                    let rows = timesChanged ? BookingLeaveConflictItems.items(
+                        for: updated,
+                        personName: personName,
+                        holidays: holidayStore.bookings,
+                        users: userStore.organizationUsers,
+                        policy: firebaseBackend.payrollPolicy(for: updated.date)
+                    ) : []
+                    leaveGate.runSingle(rows: rows, afterDismiss: true) {
+                        Task { await managerScheduleStore.saveBooking(updated) }
+                    }
                 },
                 onCancel: { bookingEditTarget = nil },
                 onDelete: {

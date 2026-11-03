@@ -40,8 +40,10 @@ struct Booking: Identifiable, Codable, Hashable {
 
     /// The document id under `organizations/{orgId}/bookings`.
     var documentKey: String { documentId ?? id.uuidString }
-    
-    init(
+
+    /// `nonisolated`: the canonical readers (`FirebaseBackend.booking(fromCanonical:)`) and their tests build bookings
+    /// off the main actor. The init only stores values, so it needs no actor.
+    nonisolated init(
         id: UUID = UUID(),
         operativeId: UUID,
         projectId: UUID,
@@ -164,7 +166,8 @@ struct OperativeDayBookingChoice: Equatable, Hashable {
     }
 }
 
-enum TimeSlot: String, CaseIterable, Identifiable, Codable {
+/// `nonisolated`: a plain value type the canonical booking readers use off the main actor (`fromStored`, `rawValue`).
+nonisolated enum TimeSlot: String, CaseIterable, Identifiable, Codable {
     case morning = "AM"
     case afternoon = "PM"
     case fullDay = "FULL DAY"
@@ -173,7 +176,7 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
     case customHours = "CUSTOM_HOURS"
 
     /// Web and iOS have stored the same day as `FULL DAY` and `FULL_DAY`. Both load.
-    static func fromStored(_ raw: String) -> TimeSlot? {
+    nonisolated static func fromStored(_ raw: String) -> TimeSlot? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if let direct = TimeSlot(rawValue: trimmed) { return direct }
         switch CanonicalBusinessEngine.namedSlotKind(trimmed) {
@@ -262,7 +265,8 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-enum BookingStatus: String, CaseIterable, Identifiable, Codable {
+/// `nonisolated`: a plain value type the canonical booking readers use off the main actor (`init(rawValue:)`).
+nonisolated enum BookingStatus: String, CaseIterable, Identifiable, Codable {
     case confirmed = "Confirmed"
     case tentative = "Tentative"
     case cancelled = "Cancelled"

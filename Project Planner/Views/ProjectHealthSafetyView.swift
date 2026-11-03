@@ -1549,6 +1549,9 @@ struct ProjectHealthSafetyView: View {
             } else {
                 LazyVStack(spacing: HSMetric.rowGap) {
                     ForEach(filteredRamsDocuments, id: \.id) { doc in
+                        // Web PR #227: every document row opens its file (View), or says "No file". The rest of the
+                        // row still opens the details (send for signatures).
+                        HStack(alignment: .center, spacing: 10) {
                         Button {
                             HSHaptic.tap()
                             selectedRamsDocument = doc
@@ -1571,13 +1574,14 @@ struct ProjectHealthSafetyView: View {
                                 }
                                 Spacer(minLength: 6)
                                 HSBadge(text: doc.status.capitalized, tone: .ok)
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(HS.slate2)
                             }
                         }
                         .accessibilityIdentifier("projectHealthSafety.row.\(doc.id).docRichtextFill")
                         .buttonStyle(HSPressStyle())
+                        HSRowFileButton(fileURL: doc.storedFileURL, identifier: "projectHealthSafety.row.\(doc.id).view") { url in
+                            presentDocumentPreview(HSDocumentPreviewItem(title: doc.title, remoteURL: url, noun: "RAMS"))
+                        }
+                        }
                         .hsTappableCard(padding: 14)
                     }
                 }
@@ -1620,6 +1624,7 @@ struct ProjectHealthSafetyView: View {
             } else {
                 LazyVStack(spacing: HSMetric.rowGap) {
                     ForEach(filteredOtherDocuments, id: \.id) { doc in
+                        HStack(alignment: .center, spacing: 10) {
                         Button {
                             HSHaptic.tap()
                             selectedOtherDocument = doc
@@ -1641,13 +1646,14 @@ struct ProjectHealthSafetyView: View {
                                         .hsNoClip(1)
                                 }
                                 Spacer(minLength: 6)
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(HS.slate2)
                             }
                         }
                         .accessibilityIdentifier("projectHealthSafety.row.\(doc.id).folderFill")
                         .buttonStyle(HSPressStyle())
+                        HSRowFileButton(fileURL: doc.storedFileURL, identifier: "projectHealthSafety.row.\(doc.id).view") { url in
+                            presentDocumentPreview(HSDocumentPreviewItem(title: doc.title, remoteURL: url, noun: "document"))
+                        }
+                        }
                         .hsTappableCard(padding: 14)
                     }
                 }

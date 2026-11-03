@@ -35,10 +35,19 @@ extension CanonicalBusinessEngine {
         callJSON("personIdSet", arguments: [person, roster]) as? [String]
     }
 
-    /// `excludeActor(ids, actor, roster)`: `ids` without any id of the actor or inactive roster members.
-    /// `actor` is a person payload or a bare id. Nil when the script did not answer.
-    nonisolated static func excludeActor(ids: [String], actor: Any, roster: [[String: Any]]) -> [String]? {
-        callJSON("excludeActor", arguments: [ids, actor, roster]) as? [String]
+    /// `excludeActor(ids, actor, roster, catalogue)`: `ids` without any id of the actor or inactive roster members.
+    /// `actor` is a person payload or a bare id. RULEBOOK 1.16.0 §13: with a roster every id is first resolved to the
+    /// person's signed-in account (`notificationRecipientAccountId`; `catalogue` for operatives rows), one per person,
+    /// and an id the roster cannot resolve is dropped. Nil when the script did not answer.
+    nonisolated static func excludeActor(
+        ids: [String],
+        actor: Any,
+        roster: [[String: Any]],
+        catalogue: [[String: Any]]? = nil
+    ) -> [String]? {
+        var arguments: [Any] = [ids, actor, roster]
+        if let catalogue { arguments.append(catalogue) }
+        return callJSON("excludeActor", arguments: arguments) as? [String]
     }
 
     /// `timesheetSubmittedRecipients(subject, roster)` (`timesheet_pending_manager_signoff`).
@@ -66,9 +75,18 @@ extension CanonicalBusinessEngine {
         callJSON("holidayDecisionRecipients", arguments: [requester, decider, roster]) as? [String]
     }
 
-    /// `bookingCreatedRecipients(bookedIds, booker, roster)` (`booking_created`).
-    nonisolated static func bookingCreatedRecipients(bookedIds: [String], booker: Any, roster: [[String: Any]]) -> [String]? {
-        callJSON("bookingCreatedRecipients", arguments: [bookedIds, booker, roster]) as? [String]
+    /// `bookingCreatedRecipients(bookedIds, booker, roster, catalogue)` (`booking_created`). RULEBOOK 1.16.0: booked ids
+    /// may be operatives catalogue ids (`catalogue`), former or same-email ids in any case; each resolves to the
+    /// person's account, one per person, never the booker (booking yourself writes nothing).
+    nonisolated static func bookingCreatedRecipients(
+        bookedIds: [String],
+        booker: Any,
+        roster: [[String: Any]],
+        catalogue: [[String: Any]]? = nil
+    ) -> [String]? {
+        var arguments: [Any] = [bookedIds, booker, roster]
+        if let catalogue { arguments.append(catalogue) }
+        return callJSON("bookingCreatedRecipients", arguments: arguments) as? [String]
     }
 
     /// `deadlineAssignedRecipients(addedIds, actor, roster)` (`deadline_assigned`).
@@ -104,14 +122,18 @@ extension CanonicalBusinessEngine {
     /// are not inbox rows. Nil when the script did not answer.
     /// RULEBOOK 1.10.0 §13: with `createdAtMs` and `now`, a row dated after `now` is not listed yet (rows count from
     /// their `createdAt`).
+    /// RULEBOOK 1.16.0: with the row `type`, only a scheduled type (`SCHEDULED_NOTIFICATION_TYPES`) waits for its
+    /// `createdAt`; any other row is listed unless it is more than `INBOX_CREATED_AT_SKEW_MS` ahead of `now`.
     nonisolated static func inboxNotificationVisibleToUser(
         rowUserId: String?,
         userIds: [String],
         createdAtMs: Double? = nil,
-        now: Date? = nil
+        now: Date? = nil,
+        type: String? = nil
     ) -> Bool? {
-        var row: [String: Any] = ["userId": rowUserId ?? NSNull()]
+        var row: [String: Any] = ["userId": rowUserId.map { $0 as Any } ?? NSNull()]
         if let createdAtMs { row["createdAt"] = createdAtMs }
+        if let type { row["type"] = type }
         var arguments: [Any] = [row, userIds]
         if let now { arguments.append(now.timeIntervalSince1970 * 1000) }
         return callJSON("inboxNotificationVisibleToUser", arguments: arguments) as? Bool
@@ -119,15 +141,18 @@ extension CanonicalBusinessEngine {
 
     /// `unreadNotificationBadgeCount(rows, ids)`: unread rows addressed to one of the person's ids.
     /// Nil when the script did not answer.
+    /// RULEBOOK 1.16.0: `types` (per row) makes the count skew-tolerant the same way as the inbox list.
     static func unreadNotificationBadgeCount(
         rows: [CanonicalUnreadNotificationRow],
         userIds: [String],
         createdAtMs: [Double?]? = nil,
-        now: Date? = nil
+        now: Date? = nil,
+        types: [String]? = nil
     ) -> Int? {
         let payload: [[String: Any]] = rows.enumerated().map { index, row in
-            var out: [String: Any] = ["userId": row.userId ?? NSNull(), "isRead": row.isRead]
+            var out: [String: Any] = ["userId": row.userId.map { $0 as Any } ?? NSNull(), "isRead": row.isRead]
             if let list = createdAtMs, index < list.count, let created = list[index] { out["createdAt"] = created }
+            if let types, index < types.count { out["type"] = types[index] }
             return out
         }
         var arguments: [Any] = [payload, userIds]
@@ -162,6 +187,8 @@ enum RulebookPeople {
             "sameEmailUserIds": user.sameEmailUserIds,
             "assignedManagerUserIds": user.assignedManagerUserIds,
             "hasNoLineManager": user.hasNoLineManager,
+            // RULEBOOK 1.16.0 `notificationRecipientAccountId`: the signed-up row is the person's account.
+            "passwordSet": user.passwordSet,
         ]
         if let legacy = user.assignedManagerUserId { row["assignedManagerUserId"] = legacy }
         return row

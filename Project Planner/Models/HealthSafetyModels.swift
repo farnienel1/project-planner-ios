@@ -119,7 +119,10 @@ extension HSToolboxTalk {
     var isCustomUpload: Bool { source == .uploaded }
 
     var storedFileURL: URL? {
-        guard let fileURL, let url = URL(string: fileURL), !fileURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        // `StoredFileTarget`: a download URL, `gs://` URL or Storage path opens (resolved on open); a blank, `file://`
+        // or unknown reference does not.
+        guard let fileURL, StoredFileTarget.canOpen(fileURL),
+              let url = URL(string: fileURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             return nil
         }
         return url
@@ -137,7 +140,10 @@ extension HSToolboxTalk {
 
 extension HSRamsDocument {
     var storedFileURL: URL? {
-        guard let fileURL, let url = URL(string: fileURL), !fileURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        // `StoredFileTarget`: a download URL, `gs://` URL or Storage path opens (resolved on open); a blank, `file://`
+        // or unknown reference does not.
+        guard let fileURL, StoredFileTarget.canOpen(fileURL),
+              let url = URL(string: fileURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             return nil
         }
         return url
@@ -146,7 +152,10 @@ extension HSRamsDocument {
 
 extension HSOtherDocument {
     var storedFileURL: URL? {
-        guard let fileURL, let url = URL(string: fileURL), !fileURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        // `StoredFileTarget`: a download URL, `gs://` URL or Storage path opens (resolved on open); a blank, `file://`
+        // or unknown reference does not.
+        guard let fileURL, StoredFileTarget.canOpen(fileURL),
+              let url = URL(string: fileURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             return nil
         }
         return url

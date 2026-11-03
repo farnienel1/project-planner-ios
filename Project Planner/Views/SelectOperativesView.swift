@@ -62,25 +62,10 @@ struct SelectOperativesView: View {
         )
     }
 
+    /// RULEBOOK 1.16.0 §5, §9: no day is dropped without asking. Approved leave is a purple row (`bookingLeaveConflicts`)
+    /// the booker ticks or drops like every other conflict, so nothing is excluded up front.
     private var manuallyExcludedDaysByOperative: [UUID: Set<Date>] {
-        var map: [UUID: Set<Date>] = [:]
-        for person in people where selectedOperatives.contains(person.operativeId) {
-            let rows = ScheduleBookingConflictEngine.buildConflictRows(
-                person: person,
-                selectedDates: selectedDates,
-                choice: bulkChoice,
-                projectId: projectId,
-                projectStore: projectStore,
-                bookingStore: bookingStore,
-                managerScheduleStore: managerScheduleStore,
-                holidayStore: holidayStore,
-                policy: policy,
-                excludingBookingIds: excludingBookingIds
-            )
-            let approved = Set(rows.filter { $0.kind == .approvedAnnualLeave }.map { Calendar.current.startOfDay(for: $0.date) })
-            map[person.operativeId] = approved
-        }
-        return map
+        [:]
     }
 
     var body: some View {
@@ -345,6 +330,11 @@ private struct SchedulePersonSelectionRow: View {
 
             if isExpanded, let summary {
                 VStack(alignment: .leading, spacing: 6) {
+                    // RULEBOOK 1.16.0 `BOOKING_CONFLICTS_HEADING`: orange double bookings, purple annual leave.
+                    Text(CanonicalBusinessEngine.bookingConflictsHeading)
+                        .font(.caption.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    BookingConflictLegend()
                     ForEach(summary.rows) { row in
                         ScheduleConflictRowView(
                             row: row,

@@ -125,6 +125,8 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
     ) {
         let info = NotificationUserInfoBox(response.notification.request.content.userInfo)
         let type = response.notification.request.content.userInfo[NotificationDeepLink.typeKey] as? String
+            // RULEBOOK 1.16.0 `pushPayloadFields`: a server push names the type under `type`.
+            ?? response.notification.request.content.userInfo["type"] as? String
         DispatchQueue.main.async {
             if type == AppNotification.NotificationType.timesheetSubmissionReminder.rawValue {
                 NotificationCenter.default.post(name: .timesheetSubmissionNoticeFired, object: nil)

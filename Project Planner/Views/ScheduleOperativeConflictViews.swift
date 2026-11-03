@@ -14,20 +14,25 @@ struct ScheduleConflictRowView: View {
 
     private var isApprovedAL: Bool { row.kind == .approvedAnnualLeave }
     private var isPendingAL: Bool { row.kind == .pendingAnnualLeave }
+    private var isLeave: Bool { isApprovedAL || isPendingAL }
     private var needsActions: Bool { row.requiresAcknowledgement }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    if isApprovedAL {
+                    // RULEBOOK 1.16.0: annual leave is purple, double bookings orange.
+                    Circle()
+                        .fill(isLeave ? ProjectWorksRevampColors.leavePurple : ProjectWorksRevampColors.clashOrange)
+                        .frame(width: 8, height: 8)
+                    if isLeave {
                         Image(systemName: "beach.umbrella.fill")
                             .font(.caption2)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(ProjectWorksRevampColors.leavePurple)
                     }
                     Text(row.title)
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(isApprovedAL ? .orange : (isStruck ? .secondary : .primary))
+                        .foregroundStyle(isStruck ? .secondary : (isLeave ? ProjectWorksRevampColors.leavePurple : .primary))
                         .strikethrough(isStruck)
                 }
                 if !row.detail.isEmpty {
@@ -69,7 +74,8 @@ struct ScheduleConflictRowView: View {
     }
 
     private var rowBackground: Color {
-        if isApprovedAL { return Color.orange.opacity(0.1) }
+        if isStruck { return Color(.systemGray6) }
+        if isLeave { return ProjectWorksRevampColors.leavePurpleTint }
         if isAcknowledged { return Color.blue.opacity(0.08) }
         if isStruck { return Color(.systemGray6) }
         return Color(.systemGray6)
@@ -108,6 +114,12 @@ struct ScheduleOperativeMainConflictBlock: View {
             .buttonStyle(.plain)
 
             if isExpanded {
+                // RULEBOOK 1.16.0 `BOOKING_CONFLICTS_HEADING` over the orange double bookings and purple leave rows.
+                Text(CanonicalBusinessEngine.bookingConflictsHeading)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                BookingConflictLegend()
                 ForEach(summary.rows) { row in
                     ScheduleConflictRowView(
                         row: row,

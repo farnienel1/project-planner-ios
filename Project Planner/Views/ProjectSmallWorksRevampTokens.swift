@@ -146,6 +146,26 @@ enum ProjectWorksRevampColors {
         light: AppAdaptiveColor.rgb(0.960, 0.970, 0.990),
         dark: AppAdaptiveColor.rgb(0.118, 0.141, 0.200)
     )
+    /// Annual leave on a booking's conflict list (rulebook 1.16.0 `bookingLeaveConflicts`; double bookings stay
+    /// orange). Text, dot and border colour; lighter in dark mode so it stays readable on the dark card.
+    static let leavePurple = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.486, 0.227, 0.929), // #7C3AED
+        dark: AppAdaptiveColor.rgb(0.769, 0.659, 1.000)   // #C4A8FF
+    )
+    /// Row fill behind an annual leave conflict.
+    static let leavePurpleTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.961, 0.937, 1.000), // #F5EFFF
+        dark: AppAdaptiveColor.rgb(0.180, 0.133, 0.290)   // #2E224A
+    )
+    /// Double booking on the same list (orange), text/dot and row fill.
+    static let clashOrange = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.851, 0.467, 0.024), // #D97706
+        dark: AppAdaptiveColor.rgb(0.984, 0.706, 0.369)   // #FBB45E
+    )
+    static let clashOrangeTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(1.000, 0.969, 0.929), // #FFF7ED
+        dark: AppAdaptiveColor.rgb(0.271, 0.180, 0.078)   // #452E14
+    )
 }
 
 struct WorksListStatusCounts {

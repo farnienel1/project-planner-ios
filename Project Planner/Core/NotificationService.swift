@@ -54,6 +54,13 @@ class NotificationService: ObservableObject {
     private var didLogNotificationAuthorization = false
     /// Sets the app-icon badge to the unread inbox count when the app leaves the foreground (§13).
     private var appBackgroundObserver: NSObjectProtocol?
+    /// Drops the inbox listener and rows when the account signs out (`.appDidSignOut`), as web `reset()` does.
+    private var signOutObserver: NSObjectProtocol?
+    /// True once the ordered inbox query failed with `failed-precondition` (its index is missing): listen to the
+    /// unordered query (`userId ==` only) and sort on the device, rather than show an empty inbox (web 1.16.0).
+    private var inboxUsesUnorderedQuery = false
+    /// The pending listener retry, cancelled on reset so a signed-out or switched session never re-attaches.
+    private var notificationsListenerRetryTask: Task<Void, Never>?
 
     init() {
         #if canImport(UIKit)
@@ -69,6 +76,15 @@ class NotificationService: ObservableObject {
         #endif
         // Leave requests made offline notify their approvers once the outbox confirms them (§2).
         DeferredLeaveNoticeQueue.shared.attach(self)
+        signOutObserver = NotificationCenter.default.addObserver(
+            forName: .appDidSignOut,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.resetInbox()
+            }
+        }
     }
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
@@ -117,9 +133,36 @@ class NotificationService: ObservableObject {
         RulebookPeople.roster(userStore?.organizationUsers ?? [])
     }
 
-    /// `excludeActor(ids, signed-in user, roster)`. Empty when the script did not answer: nothing is written.
+    /// The operatives catalogue for the recipient rules (`NotificationCataloguePayload`): a booked or assigned
+    /// operatives row id resolves to the person's account by its link or email (RULEBOOK 1.16.0 §13).
+    private var recipientCatalogue: [[String: Any]] {
+        NotificationCataloguePayload.rows(operativeStore?.allOperatives ?? [])
+    }
+
+    /// `excludeActor(ids, signed-in user, roster, catalogue)`. RULEBOOK 1.16.0: every id is resolved to the person's
+    /// signed-in account (`notificationRecipientAccountId`) inside the rule; an id the roster cannot resolve is dropped.
+    /// Empty when the script did not answer: nothing is written.
     private func idsWithoutActor(_ ids: [String]) -> [String] {
-        CanonicalBusinessEngine.excludeActor(ids: ids, actor: actorPerson, roster: recipientRoster) ?? []
+        CanonicalBusinessEngine.excludeActor(
+            ids: ids,
+            actor: actorPerson,
+            roster: recipientRoster,
+            catalogue: recipientCatalogue
+        ) ?? []
+    }
+
+    /// Every id of the signed-in person (`personIdSet`), lower case, for "is this row / line manager me" checks.
+    private var myIdKeys: Set<String> {
+        guard let me = userStore?.currentUser else { return [] }
+        var ids = RulebookPeople.ownerIds(for: me, users: userStore?.organizationUsers ?? [])
+        if let uid = Auth.auth().currentUser?.uid, !uid.isEmpty { ids.append(uid) }
+        return Set(ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+    }
+
+    /// True when the row's `userId` is one of the signed-in person's ids (the same test as
+    /// `inboxNotificationVisibleToUser`, without the clock).
+    private func isAddressedToMe(_ rowUserId: String) -> Bool {
+        myIdKeys.contains(rowUserId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
     func refreshDailyMaterialCutOffReminder() async {
@@ -278,7 +321,7 @@ class NotificationService: ObservableObject {
         guard authorized else { return }
         guard deliveryAllowed(type: AppNotification.NotificationType.qualificationExpiry.rawValue) else { return }
 
-        let myCanonicalId = await resolvedRecipientUserIdResolvingStaleIds(currentUser.id)
+        let myIds = myIdKeys
 
         if currentUser.permissions.operativeMode {
             let email = Self.normalizedEmail(currentUser.email)
@@ -294,14 +337,9 @@ class NotificationService: ObservableObject {
             let opEmail = Self.normalizedEmail(op.email)
             guard let linked = orgUsers.first(where: { Self.normalizedEmail($0.email) == opEmail }) else { continue }
             guard linked.hasLineManager else { continue }
-            var isMyDirectReport = false
-            for rawMgr in linked.lineManagerUserIds {
-                let managerCanon = await resolvedRecipientUserIdResolvingStaleIds(rawMgr)
-                if managerCanon == myCanonicalId {
-                    isMyDirectReport = true
-                    break
-                }
-            }
+            // `lineManagerIds(user, roster)`: active line managers with alias ids resolved to the roster row.
+            let managers = RulebookRosterSnapshot.lineManagerIds(linked) ?? linked.lineManagerUserIds
+            let isMyDirectReport = managers.contains { myIds.contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
             guard isMyDirectReport else { continue }
             await scheduleQualificationExpiryReminders(for: op, audience: .lineManager)
         }
@@ -374,41 +412,33 @@ class NotificationService: ObservableObject {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         
-        // Notify the specific operative who was booked
-        if let userStore = userStore, let operativeStore = operativeStore {
-            await userStore.loadOrganizationUsers()
-            
-            // Find the operative by ID
-            if let operative = operativeStore.allOperatives.first(where: { $0.id == operativeId }) {
-                // Find the AppUser for this operative by matching email
-                if let operativeUser = userStore.organizationUsers.first(where: { user in
-                    user.email.lowercased() == operative.email.lowercased() && user.permissions.operativeMode
-                }) {
-                    let resolvedUserId = await resolvedRecipientUserIdResolvingStaleIds(operativeUser.id)
-                    // `bookingCreatedRecipients`: never the person who booked.
-                    guard let canonicalUserId = CanonicalBusinessEngine.bookingCreatedRecipients(
-                        bookedIds: [resolvedUserId],
-                        booker: actorPerson,
-                        roster: recipientRoster
-                    )?.first else { return }
-                    let dedupeId = syntheticNotificationId(from: "bookingCreated|\(bookingId.uuidString)|\(canonicalUserId)")
-                    // Create notification for this specific operative
-                    let notification = AppNotification(
-                        id: dedupeId,
-                        organizationId: organizationId,
-                        type: .bookingCreated,
-                        title: "You've Been Booked",
-                        message: "\(createdBy) booked you for \(projectName) on \(date.formatted(date: .abbreviated, time: .omitted))",
-                        userId: canonicalUserId,
-                        relatedId: projectId ?? bookingId,
-                        requiresPermission: nil,
-                        dayKey: CanonicalBusinessEngine.dayKey(for: date),
-                        catalogue: catalogue
-                    )
-                    await saveNotification(notification)
-                }
-            }
-        }
+        // Notify the specific person who was booked
+        guard let userStore = userStore else { return }
+        await userStore.loadOrganizationUsers()
+        // RULEBOOK 1.16.0 §13 `bookingCreatedRecipients(bookedIds, booker, roster, catalogue)`: the booked id as stored
+        // (an operatives row, a uid or a former id) resolves to the person's account; never the booker, so booking
+        // yourself writes nothing.
+        let storedOperativeId = Booking.storedOperativeId(for: operativeId)
+        guard let canonicalUserId = CanonicalBusinessEngine.bookingCreatedRecipients(
+            bookedIds: [storedOperativeId],
+            booker: actorPerson,
+            roster: recipientRoster,
+            catalogue: recipientCatalogue
+        )?.first else { return }
+        let dedupeId = syntheticNotificationId(from: "bookingCreated|\(bookingId.uuidString)|\(canonicalUserId)")
+        let notification = AppNotification(
+            id: dedupeId,
+            organizationId: organizationId,
+            type: .bookingCreated,
+            title: "You've Been Booked",
+            message: "\(createdBy) booked you for \(projectName) on \(date.formatted(date: .abbreviated, time: .omitted))",
+            userId: canonicalUserId,
+            relatedId: projectId ?? bookingId,
+            requiresPermission: nil,
+            dayKey: CanonicalBusinessEngine.dayKey(for: date),
+            catalogue: catalogue
+        )
+        await saveNotification(notification)
     }
     
     // RULEBOOK 1.10.0 §13: no ownerless "New Booking Created" row (a row without `userId` is not an inbox row).
@@ -431,24 +461,19 @@ class NotificationService: ObservableObject {
             await userStore.loadOrganizationUsers()
         }
         
-        // `resolveBookingPerson`: a person booked under their uid or a former invite id, with no catalogue row, is still told.
-        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+        // RULEBOOK 1.16.0 §13 `bookingCreatedRecipients(bookedIds, booker, roster, catalogue)`: each booked id as
+        // stored (operatives row, uid, former or same-email id) resolves to the person's signed-in account inside the
+        // rule (`notificationRecipientAccountId`); never the booker, so booking yourself writes nothing.
+        _ = operativeStore
         let booker = actorPerson
         let roster = recipientRoster
+        let operativesCatalogue = recipientCatalogue
         for recipient in recipients {
-            let person = people.person(for: recipient.operativeId)
-            let normalizedEmail = (person.operative?.email ?? person.user?.email ?? "")
-                .lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let user = normalizedEmail.isEmpty ? person.user : (userStore.organizationUsers.first(where: {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
-            }) ?? person.user) else { continue }
-            
-            let resolvedUserId = await resolvedRecipientUserIdResolvingStaleIds(user.id)
-            // `bookingCreatedRecipients`: never the person who booked.
             guard let canonicalUserId = CanonicalBusinessEngine.bookingCreatedRecipients(
-                bookedIds: [resolvedUserId],
+                bookedIds: [Booking.storedOperativeId(for: recipient.operativeId)],
                 booker: booker,
-                roster: roster
+                roster: roster,
+                catalogue: operativesCatalogue
             )?.first else { continue }
             let dateText = recipient.dates
                 .sorted()
@@ -604,7 +629,7 @@ class NotificationService: ObservableObject {
                 assignedManagerUserIds: jobManagerUserIds
             )
             if notified {
-                candidates.append(resolvedRecipientUserId(user.id))
+                candidates.append(user.id)
             }
         }
         let recipientIds = idsWithoutActor(candidates)
@@ -641,7 +666,7 @@ class NotificationService: ObservableObject {
             print("🔥🔥🔥 DEBUG: [MATERIAL NOTIFY] materialOrderRecipients did not answer; no notice written (adder=\(addedByUserId ?? "nil"), extra=\(extraRecipientUserIds.count))")
             return
         }
-        let recipientIds = idsWithoutActor(rulebookRecipientUserIds.map(resolvedRecipientUserId))
+        let recipientIds = idsWithoutActor(rulebookRecipientUserIds)
         guard !recipientIds.isEmpty else { return }
         let trimmedMaterial = materialName.trimmingCharacters(in: .whitespacesAndNewlines)
         let detail = trimmedMaterial.isEmpty ? "a material" : trimmedMaterial
@@ -673,7 +698,7 @@ class NotificationService: ObservableObject {
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         // `toolboxTalkRecipients`: the chosen people without the issuer (the signed-in user).
         let recipientIds = CanonicalBusinessEngine.toolboxTalkRecipients(
-            ids: recipientUserIds.map(resolvedRecipientUserId),
+            ids: recipientUserIds,
             issuer: actorPerson,
             roster: recipientRoster
         ) ?? []
@@ -830,9 +855,9 @@ class NotificationService: ObservableObject {
                     if let operativeUser = userStore.organizationUsers.first(where: { user in
                         user.email.lowercased() == operative.email.lowercased() && user.permissions.operativeMode
                     }) {
-                        let resolvedUserId = await resolvedRecipientUserIdResolvingStaleIds(operativeUser.id)
-                        // Catalog `task_created`: `excludeActor` (the assignees without the creator).
-                        guard let canonicalUserId = idsWithoutActor([resolvedUserId]).first else { continue }
+                        // Catalog `task_created`: `excludeActor` (the assignees without the creator; the account resolved
+                        // inside the rule, RULEBOOK 1.16.0).
+                        guard let canonicalUserId = idsWithoutActor([operativeUser.id]).first else { continue }
                         let dedupeId = syntheticNotificationId(from: "taskCreated|\(taskId.uuidString)|\(canonicalUserId)")
                         // Create notification for this specific operative
                         let notification = AppNotification(
@@ -856,8 +881,7 @@ class NotificationService: ObservableObject {
                 if let managerUser = userStore.organizationUsers.first(where: { user in
                     user.email.lowercased() == manager.email.lowercased() && !user.permissions.operativeMode
                 }) {
-                    let resolvedUserId = await resolvedRecipientUserIdResolvingStaleIds(managerUser.id)
-                    guard let canonicalUserId = idsWithoutActor([resolvedUserId]).first else { continue }
+                    guard let canonicalUserId = idsWithoutActor([managerUser.id]).first else { continue }
                     let dedupeId = syntheticNotificationId(from: "taskCreated|\(taskId.uuidString)|\(canonicalUserId)")
                     let notification = AppNotification(
                         id: dedupeId,
@@ -884,13 +908,10 @@ class NotificationService: ObservableObject {
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        var resolvedIds: [String] = []
-        for rawId in assignedUserIds {
-            resolvedIds.append(await resolvedRecipientUserIdResolvingStaleIds(rawId))
-        }
-        // `deadlineAssignedRecipients`: the added assignees without the person who assigned them.
+        // `deadlineAssignedRecipients`: the added assignees without the person who assigned them (each id resolved to
+        // the person's account inside the rule, RULEBOOK 1.16.0).
         let recipients = CanonicalBusinessEngine.deadlineAssignedRecipients(
-            addedIds: resolvedIds,
+            addedIds: assignedUserIds,
             actor: actorPerson,
             roster: recipientRoster
         ) ?? []
@@ -922,8 +943,13 @@ class NotificationService: ObservableObject {
         for item in items {
             guard item.status != .complete else { continue }
             for rawId in item.assigneeUserIds {
-                let canonicalUserId = await resolvedRecipientUserIdResolvingStaleIds(rawId)
-                guard !canonicalUserId.isEmpty else { continue }
+                // Scheduled notice (nobody caused it): `notificationRecipientAccountId` — the assignee's signed-in
+                // account; an id the roster cannot resolve is dropped (RULEBOOK 1.16.0 §13).
+                guard let canonicalUserId = CanonicalBusinessEngine.notificationRecipientAccountId(
+                    rawId,
+                    roster: recipientRoster,
+                    catalogue: recipientCatalogue
+                ) else { continue }
 
                 if let fireAt = DeadlineLocalNotifications.reminderFireDate(for: item) {
                     let notification = AppNotification(
@@ -1055,9 +1081,8 @@ class NotificationService: ObservableObject {
     func notifyHolidayRequestDecisionToUser(userId: String, bookingId: UUID, approved: Bool, decidedByName: String, reason: String = "") async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let resolvedUserId = await resolvedRecipientUserIdResolvingStaleIds(userId)
-        // `holidayDecisionRecipients`: the requester, unless they decided.
-        guard let targetId = holidayDecisionTarget(resolvedUserId) else { return }
+        // `holidayDecisionRecipients`: the requester's account, unless they decided.
+        guard let targetId = holidayDecisionTarget(userId) else { return }
         print("🔥🔥🔥 DEBUG: [HOLIDAY NOTIFY DECISION] bookingId=\(bookingId.uuidString) approved=\(approved) decidedBy=\(decidedByName) target=\(targetId) original=\(userId)")
         let dedupeId = syntheticNotificationId(from: "holidayDecision|\(bookingId.uuidString)|\(targetId)|\(approved)")
         let trimmedReason = CanonicalBusinessEngine.parseHolidayDecisionNote(reason) ?? ""
@@ -1098,7 +1123,7 @@ class NotificationService: ObservableObject {
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        guard let targetId = holidayDecisionTarget(resolvedRecipientUserId(userId)) else { return }
+        guard let targetId = holidayDecisionTarget(userId) else { return }
         let dateText = annualLeaveDateText(for: booking)
         let message = "\(managerName) has cancelled your annual leave request for \(dateText)."
         let dedupeId = syntheticNotificationId(from: "annualLeaveCancelled|\(booking.id.uuidString)|\(targetId)")
@@ -1114,7 +1139,7 @@ class NotificationService: ObservableObject {
             requiresPermission: nil
         )
         await saveNotification(notification)
-        let email = userStore?.organizationUsers.first(where: { resolvedRecipientUserId($0.id) == targetId })?.email
+        let email = userStore?.organizationUsers.first(where: { $0.id == targetId })?.email
             ?? userStore?.organizationUsers.first(where: { $0.id == userId })?.email
         let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmedEmail.isEmpty else { return }
@@ -1145,8 +1170,7 @@ class NotificationService: ObservableObject {
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let resolvedUserId = await resolvedRecipientUserIdResolvingStaleIds(userId)
-        guard let targetId = holidayDecisionTarget(resolvedUserId) else { return }
+        guard let targetId = holidayDecisionTarget(userId) else { return }
         let dateText = annualLeaveDateText(for: booking)
         let when = dateText.isEmpty ? "" : " for \(dateText)"
         let requestedAt = Int((booking.cancellationRequestedAt ?? Date()).timeIntervalSince1970)
@@ -1185,7 +1209,7 @@ class NotificationService: ObservableObject {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         // `holidayDecisionRecipients`: the person whose leave was booked, unless they booked it themselves.
-        guard let targetId = holidayDecisionTarget(resolvedRecipientUserId(userId)) else { return }
+        guard let targetId = holidayDecisionTarget(userId) else { return }
         let dateRange: String
         if OrganizationRulebookContext.calendar.isDate(startDate, inSameDayAs: endDate) {
             dateRange = startDate.formatted(date: .abbreviated, time: .omitted)
@@ -1295,10 +1319,9 @@ class NotificationService: ObservableObject {
         signedByName: String,
         weekStart: Date
     ) async {
-        let resolvedUserId = await resolvedRecipientUserIdResolvingStaleIds(targetUserId)
-        // `timesheetSignedRecipients`: the subject, unless they are the signer (the signed-in user).
+        // `timesheetSignedRecipients`: the subject's account, unless they are the signer (the signed-in user).
         guard let targetId = CanonicalBusinessEngine.timesheetSignedRecipients(
-            subject: resolvedUserId,
+            subject: targetUserId,
             signer: actorPerson,
             roster: recipientRoster
         )?.first else { return }
@@ -1361,9 +1384,20 @@ class NotificationService: ObservableObject {
     // MARK: - Notification Management
 
     func discardForOrganizationSwitch() {
+        resetInbox()
+    }
+
+    /// The inbox for no session (sign-out, organisation switch): listener removed, pending retry cancelled, rows and
+    /// count cleared, the next listen starts from the ordered query again. Another company or account never shows
+    /// the previous inbox's rows (web `notificationStore.reset`).
+    func resetInbox() {
+        notificationsListenerRetryTask?.cancel()
+        notificationsListenerRetryTask = nil
         notificationsListener?.remove()
         notificationsListener = nil
         listenerScopeKey = nil
+        notificationsListenerFailures = 0
+        inboxUsesUnorderedQuery = false
         didPrimeNotificationStream = false
         hasLoadedNotificationsThisSession = false
         notifications = []
@@ -1536,9 +1570,7 @@ class NotificationService: ObservableObject {
         }
         // If notification is targeted to a specific user, only show if it's for them
         if let userId = notification.userId {
-            let targetCanonical = resolvedRecipientUserId(userId)
-            let currentCanonical = resolvedRecipientUserId(user.id)
-            guard targetCanonical == currentCanonical else { return false }
+            guard isAddressedToMe(userId) || userId == user.id else { return false }
         } else if let requiredPermission = notification.requiresPermission {
             switch requiredPermission {
             case "hasAdminAccess":
@@ -1610,9 +1642,7 @@ class NotificationService: ObservableObject {
         guard let currentUser = userStore?.currentUser else { return }
         guard shouldShowNotification(notification, for: currentUser) else { return }
         if let userId = notification.userId {
-            let target = resolvedRecipientUserId(userId)
-            let me = resolvedRecipientUserId(currentUser.id)
-            guard target == me else { return }
+            guard isAddressedToMe(userId) || userId == currentUser.id else { return }
         }
         if notification.createdAt > Date(),
            notification.type == .deadlineReminder || notification.type == .deadlineDue {
@@ -1623,16 +1653,34 @@ class NotificationService: ObservableObject {
 
     /// A Firestore listener stops for good after an error. Drop it and load again after 5, 10 … 60 seconds,
     /// unless the signed-in scope changed in the meantime. `loadNotifications` re-attaches the listener.
-    private func retryNotificationsListener(scopeKey: String) {
+    /// RULEBOOK 1.16.0 (web `notificationStore`): an error is never final. `failed-precondition` on the ordered query
+    /// (missing index) switches to the unordered query at once; any other error keeps the rows already shown and
+    /// listens again after 5, 10 … 60 seconds. A reset (sign-out, organisation switch) cancels the retry.
+    private func retryNotificationsListener(scopeKey: String, error: Error) {
         guard listenerScopeKey == scopeKey else { return }
         notificationsListener?.remove()
         notificationsListener = nil
         listenerScopeKey = nil
+        let nsError = error as NSError
+        if !inboxUsesUnorderedQuery,
+           nsError.domain == "FIRFirestoreErrorDomain",
+           nsError.code == 9 /* failed-precondition: the (userId, createdAt) index is missing */ {
+            inboxUsesUnorderedQuery = true
+            let parts = scopeKey.split(separator: "|", maxSplits: 1).map(String.init)
+            if parts.count == 2 {
+                startNotificationsListenerIfNeeded(organizationId: parts[0], userId: parts[1])
+            }
+            return
+        }
         notificationsListenerFailures += 1
         let delaySeconds = UInt64(min(60, 5 * notificationsListenerFailures))
-        Task { @MainActor [weak self] in
+        notificationsListenerRetryTask?.cancel()
+        notificationsListenerRetryTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: delaySeconds * 1_000_000_000)
-            guard let self, self.listenerScopeKey == nil else { return }
+            guard !Task.isCancelled, let self, self.listenerScopeKey == nil else { return }
+            self.notificationsListenerRetryTask = nil
+            // Each retry starts from the ordered query again (web: `listen(ordered, unordered)`).
+            self.inboxUsesUnorderedQuery = false
             await self.loadNotifications()
         }
     }
@@ -1646,19 +1694,22 @@ class NotificationService: ObservableObject {
         listenerScopeKey = key
         didPrimeNotificationStream = false
 
-        notificationsListener = Firestore.firestore()
+        let scoped = Firestore.firestore()
             .collection("organizations")
             .document(organizationId)
             .collection("notifications")
             .whereField("userId", isEqualTo: userId)
-            // Newest 150 (composite index userId ASC, createdAt DESC is deployed from web).
-            .order(by: "createdAt", descending: true)
-            .limit(to: 150)
+        // Newest 150 (composite index userId ASC, createdAt DESC is deployed from web). Without the index the ordered
+        // query fails with failed-precondition and the unordered one is used (rows sorted by `listedInbox`).
+        let inboxQuery: Query = inboxUsesUnorderedQuery
+            ? scoped
+            : scoped.order(by: "createdAt", descending: true).limit(to: 150)
+        notificationsListener = inboxQuery
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error {
                     print("🔥🔥🔥 DEBUG: Notifications listener error: \(error.localizedDescription)")
                     Task { @MainActor in
-                        self?.retryNotificationsListener(scopeKey: key)
+                        self?.retryNotificationsListener(scopeKey: key, error: error)
                     }
                     return
                 }
@@ -1711,7 +1762,8 @@ class NotificationService: ObservableObject {
     private func parseNotificationDocument(_ doc: QueryDocumentSnapshot) -> AppNotification? {
         FirebaseBackend.appNotification(
             documentId: doc.documentID,
-            data: doc.data(),
+            // RULEBOOK 1.16.0: a row written with the server time reads its local estimate until the server confirms.
+            data: doc.data(with: .estimate),
             organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId
         )
     }
@@ -1858,67 +1910,6 @@ class NotificationService: ObservableObject {
         )?.first
     }
 
-    private func resolvedRecipientUserId(_ userId: String) -> String {
-        guard let userStore else { return userId }
-        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let seed = userStore.organizationUsers.first(where: {
-            $0.id == trimmed || $0.sameEmailUserIds.contains(trimmed)
-        }) else { return userId }
-        let normalizedEmail = seed.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let sameEmail = userStore.organizationUsers.filter {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
-        }
-        if let verifiedActive = sameEmail.first(where: { $0.passwordSet && $0.isActive }) {
-            return verifiedActive.id
-        }
-        if let verified = sameEmail.first(where: { $0.passwordSet }) {
-            return verified.id
-        }
-        return userId
-    }
-
-    /// When `assignedManagerUserId` (or similar) still references a pre-merge `users/{placeholderId}` row,
-    /// that id is absent from `organizationUsers` (deduped to Auth UID). Load the placeholder doc by id,
-    /// match on email, and return the same canonical id `resolvedRecipientUserId` would use for push targeting.
-    private func resolvedRecipientUserIdResolvingStaleIds(_ userId: String) async -> String {
-        let preliminary = resolvedRecipientUserId(userId)
-        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return userId }
-        if let userStore, userStore.organizationUsers.contains(where: { $0.id == trimmed }) {
-            return preliminary
-        }
-        guard let firebaseBackend else { return preliminary }
-        let remote: AppUser?
-        do {
-            remote = try await firebaseBackend.getUserData(userId: trimmed)
-        } catch {
-            print("🔥🔥🔥 DEBUG: [NOTIFY] canonical id lookup failed for \(trimmed): \(error.localizedDescription)")
-            remote = nil
-        }
-        guard let remote, let userStore else { return preliminary }
-        let normalizedEmail = remote.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedEmail.isEmpty else { return preliminary }
-        if userStore.organizationUsers.isEmpty {
-            await userStore.loadOrganizationUsers()
-        }
-        let sameEmail = userStore.organizationUsers.filter {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
-        }
-        if let verifiedActive = sameEmail.first(where: { $0.passwordSet && $0.isActive }) {
-            if verifiedActive.id != trimmed {
-                print("🔥🔥🔥 DEBUG: [NOTIFY] resolved stale userId \(trimmed) → \(verifiedActive.id) via email \(normalizedEmail)")
-            }
-            return verifiedActive.id
-        }
-        if let verified = sameEmail.first(where: { $0.passwordSet }) {
-            if verified.id != trimmed {
-                print("🔥🔥🔥 DEBUG: [NOTIFY] resolved stale userId \(trimmed) → \(verified.id) via email \(normalizedEmail)")
-            }
-            return verified.id
-        }
-        return preliminary
-    }
-
     private func scheduleLocalBookingAlert(message: String, dedupeIdentifier: String) {
         requestLocalNotificationPermissionIfNeeded()
         let content = UNMutableNotificationContent()
@@ -1954,7 +1945,8 @@ class NotificationService: ObservableObject {
             id: notification.id.uuidString,
             type: notification.type,
             relatedId: notification.relatedKey,
-            targetUserId: notification.userId.map { resolvedRecipientUserId($0) },
+            // The banner policy compares against the signed-in id: a row addressed to any of the person's ids counts.
+            targetUserId: notification.userId.map { isAddressedToMe($0) ? (userStore?.currentUser?.id ?? $0) : $0 },
             isRead: notification.isRead,
             isSynthetic: false,
             isFutureScheduledDeadline: isFutureScheduledDeadline(notification)
@@ -1993,7 +1985,7 @@ class NotificationService: ObservableObject {
         guard shouldShowNotification(notification, for: currentUser) else { return }
         loadPersistedLocalAlertDedupKeysIfNeeded()
         let event = localBannerEvent(for: notification)
-        let me = resolvedRecipientUserId(currentUser.id)
+        let me = currentUser.id
         guard LocalNotificationBannerPolicy.shouldScheduleBanner(
             for: event,
             currentUserId: me,
@@ -2150,11 +2142,14 @@ class NotificationService: ObservableObject {
         let now = Date()
         var visibleItems: [AppNotification] = []
         for item in items {
+            // RULEBOOK 1.16.0: with the row type, only a scheduled type waits for its `createdAt`; other rows allow
+            // `INBOX_CREATED_AT_SKEW_MS` of writer clock skew.
             guard let shown = CanonicalBusinessEngine.inboxNotificationVisibleToUser(
                 rowUserId: item.userId,
                 userIds: ownerIds,
                 createdAtMs: item.createdAt.timeIntervalSince1970 * 1000,
-                now: now
+                now: now,
+                type: item.typeText
             ) else { return items }
             if shown { visibleItems.append(item) }
         }
@@ -2191,7 +2186,8 @@ class NotificationService: ObservableObject {
             rows: rows,
             userIds: inboxOwnerIds(for: userId),
             createdAtMs: items.map { $0.createdAt.timeIntervalSince1970 * 1000 },
-            now: Date()
+            now: Date(),
+            types: items.map(\.typeText)
         ) else { return }
         setUnreadCount(count)
     }
@@ -2231,9 +2227,7 @@ class NotificationService: ObservableObject {
 
     private func shouldShowIgnoringSchedule(_ notification: AppNotification, for user: AppUser) -> Bool {
         if let userId = notification.userId {
-            let targetCanonical = resolvedRecipientUserId(userId)
-            let currentCanonical = resolvedRecipientUserId(user.id)
-            return targetCanonical == currentCanonical
+            return isAddressedToMe(userId) || userId == user.id
         }
         return true
     }

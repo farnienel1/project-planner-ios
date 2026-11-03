@@ -16,8 +16,11 @@ struct ScheduleQuickAddSheet: View {
     let showsNotes: Bool
     let onSave: (ScheduleQuickAddDraft) async -> String?
     let onCancel: () -> Void
+    /// RULEBOOK 1.16.0 `bookingLeaveConflicts` for the draft as it stands (purple rows to tick or drop).
+    let leaveConflicts: (ScheduleQuickAddDraft) -> [BookingConflictItem]
 
     @State private var slot: Slot = .fullDay
+    @State private var conflictDecisions: [String: BookingConflictDecision] = [:]
     @State private var customStart: Int
     @State private var customEnd: Int
     @State private var notes = ""
@@ -32,8 +35,10 @@ struct ScheduleQuickAddSheet: View {
         existingPaidHours: Double,
         showsNotes: Bool,
         onSave: @escaping (ScheduleQuickAddDraft) async -> String?,
-        onCancel: @escaping () -> Void
+        onCancel: @escaping () -> Void,
+        leaveConflicts: @escaping (ScheduleQuickAddDraft) -> [BookingConflictItem] = { _ in [] }
     ) {
+        self.leaveConflicts = leaveConflicts
         self.personName = personName
         self.day = day
         self.policy = policy
@@ -77,6 +82,7 @@ struct ScheduleQuickAddSheet: View {
                     if showsNotes {
                         notesField
                     }
+                    leaveConflictSection
                     if let errorMessage {
                         Text(errorMessage)
                             .font(.system(size: 12, weight: .medium))
@@ -268,9 +274,38 @@ struct ScheduleQuickAddSheet: View {
         }
     }
 
+    /// The draft the Save button would send, for the leave check (nil without working hours).
+    private var currentDraft: ScheduleQuickAddDraft? {
+        guard let clocks else { return nil }
+        let range = selectedRange(clocks)
+        return ScheduleQuickAddDraft(timeSlot: selectedTimeSlot, workStart: range.start, workEnd: range.end, notes: nil)
+    }
+
+    private var conflictRows: [BookingConflictItem] {
+        currentDraft.map(leaveConflicts) ?? []
+    }
+
+    @ViewBuilder
+    private var leaveConflictSection: some View {
+        let rows = conflictRows
+        if !rows.isEmpty {
+            InlineBookingConflicts(rows: rows, decisions: $conflictDecisions)
+        }
+    }
+
     private var saveButton: some View {
         Button {
             guard !isSaving else { return }
+            let rows = conflictRows
+            guard BookingConflictResolution.resolved(rows, decisions: conflictDecisions) else {
+                errorMessage = CanonicalBusinessEngine.bookingConflictsHeading
+                return
+            }
+            if !BookingConflictResolution.droppedPersonDays(rows, decisions: conflictDecisions).isEmpty {
+                // The only day was dropped: nothing is booked.
+                onCancel()
+                return
+            }
             guard let clocks else {
                 errorMessage = "Working hours are not available."
                 return

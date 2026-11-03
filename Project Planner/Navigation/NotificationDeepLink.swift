@@ -15,6 +15,12 @@ enum NotificationDeepLink {
     static let dateKey = "pp_date"
     static let dayKeyKey = "pp_dayKey"
     static let catalogueKey = "pp_catalogue"
+    static let organizationIdKey = "pp_organizationId"
+    static let notificationIdKey = "pp_notificationId"
+
+    /// RULEBOOK 1.16.0 §13: a tap on a push or row from another company waits here while the app switches to that
+    /// company (`notificationOrganizationSwitch`), then routes once that organisation has loaded.
+    static var pendingAfterOrganizationSwitch: (organizationId: String, userInfo: [String: Any])?
 
     static func userInfo(for notification: AppNotification) -> [String: Any] {
         let paymentDay = notification.type == .timesheetSubmissionReminder ? notification.dayKey : nil
@@ -25,7 +31,9 @@ enum NotificationDeepLink {
             userId: notification.deepLinkUserId ?? notification.userId,
             weekStart: notification.deepLinkWeekStart,
             dayKey: notification.dayKey,
-            catalogue: notification.catalogue
+            catalogue: notification.catalogue,
+            organizationId: notification.organizationId,
+            notificationId: notification.id.uuidString
         )
     }
 
@@ -36,7 +44,9 @@ enum NotificationDeepLink {
         userId: String? = nil,
         weekStart: Date? = nil,
         dayKey: String? = nil,
-        catalogue: String? = nil
+        catalogue: String? = nil,
+        organizationId: String? = nil,
+        notificationId: String? = nil
     ) -> [String: Any] {
         var info: [String: Any] = [
             typeKey: type.rawValue
@@ -58,7 +68,49 @@ enum NotificationDeepLink {
         if let catalogue, !catalogue.isEmpty {
             info[catalogueKey] = catalogue
         }
+        if let organizationId, !organizationId.isEmpty {
+            info[organizationIdKey] = organizationId
+        }
+        if let notificationId, !notificationId.isEmpty {
+            info[notificationIdKey] = notificationId
+        }
         return info
+    }
+
+    /// The tap's fields through `pushPayloadFields` (RULEBOOK 1.16.0 §13: one payload shape for every platform —
+    /// `notificationId`, `type`, `relatedId`, `dayKey`, `catalogue`, `userId`, `organizationId`). A push carries those
+    /// keys; an in-app row tap carries the `pp_` keys, read as the same fields. Nil when the script did not answer.
+    static func payloadFields(from userInfo: [String: Any]) -> [String: String]? {
+        func value(_ keys: String...) -> Any {
+            for key in keys {
+                if let text = string(from: userInfo[key]) { return text }
+            }
+            return NSNull()
+        }
+        let row: [String: Any] = [
+            "notificationId": value(notificationIdKey, "notificationId"),
+            "type": value(typeKey, "type"),
+            "relatedId": value(relatedIdKey, "relatedId"),
+            "dayKey": value(dayKeyKey, "dayKey"),
+            "catalogue": value(catalogueKey, "catalogue"),
+            "userId": value(userIdKey, "userId", "targetUserId"),
+            "organizationId": value(organizationIdKey, "organizationId"),
+        ]
+        return CanonicalBusinessEngine.pushPayloadFields(row)
+    }
+
+    /// `notificationOrganizationSwitch`: the company to open before routing this tap, or nil to route in the open one.
+    static func organizationToOpen(
+        for userInfo: [String: Any],
+        openOrganizationId: String?,
+        membershipIds: [String]
+    ) -> String? {
+        guard let rowOrganizationId = payloadFields(from: userInfo)?["organizationId"] else { return nil }
+        return CanonicalBusinessEngine.notificationOrganizationSwitch(
+            rowOrganizationId: rowOrganizationId,
+            openOrganizationId: openOrganizationId,
+            membershipIds: membershipIds
+        )
     }
 
     static func userInfo(from raw: [AnyHashable: Any]) -> [String: Any] {
@@ -72,7 +124,9 @@ enum NotificationDeepLink {
     /// Asks the script for a destination, then opens the existing screen for that kind.
     /// A nil script result does not invent a route.
     static func route(userInfo: [String: Any], user: AppUser?) {
-        let typeRaw = (userInfo[typeKey] as? String) ?? (userInfo["type"] as? String) ?? ""
+        // RULEBOOK 1.16.0: the push payload fields (`pushPayloadFields`) route the same way as tapping the row.
+        let fields = payloadFields(from: userInfo)
+        let typeRaw = fields?["type"] ?? (userInfo[typeKey] as? String) ?? (userInfo["type"] as? String) ?? ""
         guard !typeRaw.isEmpty, let user else { return }
         guard let role = CanonicalBusinessEngine.accountKindFromFlags(
             isSuperAdmin: user.isSuperAdmin,
@@ -82,10 +136,10 @@ enum NotificationDeepLink {
             operativeMode: user.permissions.operativeMode
         ) else { return }
 
-        let related = string(from: userInfo[relatedIdKey] ?? userInfo["relatedId"])
-        let dayKey = string(from: userInfo[dayKeyKey] ?? userInfo["dayKey"])
-        let catalogue = string(from: userInfo[catalogueKey] ?? userInfo["catalogue"])
-        let targetUserId = string(from: userInfo[userIdKey] ?? userInfo["targetUserId"])
+        let related = fields.map { $0["relatedId"] } ?? string(from: userInfo[relatedIdKey] ?? userInfo["relatedId"])
+        let dayKey = fields.map { $0["dayKey"] } ?? string(from: userInfo[dayKeyKey] ?? userInfo["dayKey"])
+        let catalogue = fields.map { $0["catalogue"] } ?? string(from: userInfo[catalogueKey] ?? userInfo["catalogue"])
+        let targetUserId = fields.map { $0["userId"] } ?? string(from: userInfo[userIdKey] ?? userInfo["targetUserId"])
         guard let destination = CanonicalBusinessEngine.notificationDestination(
             type: typeRaw,
             relatedId: related,

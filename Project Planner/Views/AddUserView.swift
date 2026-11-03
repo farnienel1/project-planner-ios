@@ -107,13 +107,6 @@ struct AddUserView: View {
                         }
                         wizardFooter
                     }
-                    if let errorMessage = errorMessage {
-                        Text(errorMessage)
-                            .foregroundStyle(.red)
-                            .font(.footnote)
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 8)
-                    }
                 }
             }
             .navigationBarHidden(true)
@@ -204,9 +197,33 @@ struct AddUserView: View {
                     .padding(.top, 8)
                     .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
             }
+            // Why the button will not go on, directly above it (red): the refused save's message, else the
+            // rule refusing this step (`lineManagerRequiredError`, LINE_MANAGER_REQUIRED_MESSAGE).
+            if let blockingMessage = footerBlockingMessage {
+                Text(blockingMessage)
+                    .foregroundStyle(.red)
+                    .font(.footnote)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("addUser.blockingMessage")
+            }
             wizardFooterButtons
         }
         .background(ProjectWorksRevampColors.surface)
+    }
+
+    /// The message shown above Next / Create User: a refused create first, else the line-manager rule on the
+    /// details step once the rest of the step is filled in.
+    private var footerBlockingMessage: String? {
+        if let errorMessage, !errorMessage.isEmpty { return errorMessage }
+        guard currentStep == 2,
+              invitedAccountType == .operative || invitedAccountType == .manager || invitedAccountType == .admin,
+              !firstName.isEmpty, !surname.isEmpty, !email.isEmpty else { return nil }
+        var draft = inviteDraftUserForValidation
+        draft.setLineManagerUserIds(Array(selectedLineManagerUserIds).sorted())
+        return AnnualLeaveApproval.lineManagerRequiredError(for: draft, users: userStore.organizationUsers)
     }
 
     private var wizardFooterButtons: some View {

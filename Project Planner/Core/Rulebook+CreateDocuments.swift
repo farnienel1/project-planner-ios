@@ -141,7 +141,7 @@ extension CanonicalBusinessEngine {
 
     /// `notificationCreateFields(input, stored)`: the new inbox row (`set`), or nil when a row with this id is already
     /// stored (created once; its read state is never reset), when there is no `userId` (not an inbox row) or no type,
-    /// or when the script did not answer. `createdAt` / `deepLinkWeekStart` are native values.
+    /// or when the script did not answer. `createdAt` / `deepLinkWeekStart` / `serverTimestamp` are native values.
     nonisolated static func notificationCreateFields(
         organizationId: String,
         type: String,
@@ -156,6 +156,7 @@ extension CanonicalBusinessEngine {
         dayKey: String?,
         catalogue: String?,
         createdAt: Any,
+        serverTimestamp: Any? = nil,
         storedExists: Bool
     ) -> [String: Any]? {
         var placeholders = ScriptPlaceholders()
@@ -175,6 +176,9 @@ extension CanonicalBusinessEngine {
             "createdAt": placeholders.token("createdAt", createdAt),
         ]
         if let deepLinkWeekStart { input["deepLinkWeekStart"] = placeholders.token("deepLinkWeekStart", deepLinkWeekStart) }
+        // RULEBOOK 1.16.0 §13: a due-now row carries the server time (`FieldValue.serverTimestamp()`); only a scheduled
+        // type (`SCHEDULED_NOTIFICATION_TYPES`) keeps its own `createdAt` (`notificationCreatedAtIsServerTime`).
+        if let serverTimestamp { input["serverTimestamp"] = placeholders.token("serverTimestamp", serverTimestamp) }
         let stored: Any = storedExists ? (["exists": true] as [String: Any]) as Any : NSNull() as Any
         guard let result = callJSON("notificationCreateFields", arguments: [input, stored]) as? [String: Any],
               let set = result["set"] as? [String: Any] else { return nil }

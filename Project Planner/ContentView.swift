@@ -181,15 +181,31 @@ struct ContentView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .openNotificationDeepLink)) { notification in
                 let info = NotificationDeepLink.userInfo(from: notification.userInfo ?? [:])
-                showMoreMenuSheet = false
-                showingHolidaySheet = false
-                selectTab(0)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    NotificationDeepLink.route(
-                        userInfo: info,
-                        user: userStore.currentUser
-                    )
+                Task { @MainActor in
+                    // RULEBOOK 1.16.0 §13 `notificationOrganizationSwitch`: a row from another company the person
+                    // belongs to (`sessionMembershipIds`) opens that company first (`chooseSessionOrganization` runs
+                    // inside the switch), then routes once it has loaded.
+                    let openId = firebaseBackend.currentOrganization?.firestoreDocumentId
+                    var target: String?
+                    if let rowOrg = NotificationDeepLink.payloadFields(from: info)?["organizationId"],
+                       !organizationIdsMatch(rowOrg, openId) {
+                        let memberships = await firebaseBackend.fetchOrganizationsForCurrentUser().map(\.id)
+                        target = NotificationDeepLink.organizationToOpen(
+                            for: info,
+                            openOrganizationId: openId,
+                            membershipIds: memberships
+                        )
+                    }
+                    if let target {
+                        NotificationDeepLink.pendingAfterOrganizationSwitch = (target, info)
+                        firebaseBackend.queueOrganizationSwitch(to: target)
+                        return
+                    }
+                    routeNotificationTap(info)
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .organizationDidLoad)) { _ in
+                routePendingNotificationTapIfReady()
             }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("navigateToTimesheetReview"))) { notification in
                 let payload = notification.userInfo
@@ -324,6 +340,10 @@ struct ContentView: View {
         }
         .onAppear {
             syncMovableTabOrderWithCurrentPermissions()
+            // A notification tap that switched company may finish while this view was rebuilt.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                routePendingNotificationTapIfReady()
+            }
             print("🔥🔥🔥 DEBUG: Connecting Firebase backend to stores in ContentView...")
             projectStore.setFirebaseBackend(firebaseBackend)
             operativeStore.setFirebaseBackend(firebaseBackend)
@@ -894,6 +914,29 @@ extension ContentView {
         }
     }
     
+    /// Opens the screen a tapped notification names (`NotificationDeepLink.route`).
+    private func routeNotificationTap(_ info: [String: Any]) {
+        showMoreMenuSheet = false
+        showingHolidaySheet = false
+        selectTab(0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            NotificationDeepLink.route(
+                userInfo: info,
+                user: userStore.currentUser
+            )
+        }
+    }
+
+    /// A tap that switched company routes once that company is open (RULEBOOK 1.16.0 `notificationOrganizationSwitch`).
+    private func routePendingNotificationTapIfReady() {
+        guard let pending = NotificationDeepLink.pendingAfterOrganizationSwitch,
+              organizationIdsMatch(pending.organizationId, firebaseBackend.currentOrganization?.firestoreDocumentId) else {
+            return
+        }
+        NotificationDeepLink.pendingAfterOrganizationSwitch = nil
+        routeNotificationTap(pending.userInfo)
+    }
+
     private func selectTab(_ tag: Int) {
         let tag = isValidTabTag(tag) ? tag : 0
         // Prevent infinite loops - don't process if already on this tab (unless it's home)
