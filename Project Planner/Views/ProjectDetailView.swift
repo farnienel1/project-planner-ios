@@ -1014,7 +1014,7 @@ struct ProjectDetailView: View {
             let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let hours = booking.paidBookedHours(policy: policy)
             paid += hours
-            overtime += booking.overtimeHoursBeyondPaidStandard(policy: policy)
+            overtime += booking.payrollHoursResult(policy: policy).paidOvertimeHours
             count += 1
             slot = booking.timeSlot
             if hours >= bestPaid {
@@ -1026,7 +1026,7 @@ struct ProjectDetailView: View {
             let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let hours = booking.paidBookedHours(policy: policy)
             paid += hours
-            overtime += booking.overtimeHoursBeyondPaidStandard(policy: policy)
+            overtime += booking.payrollHoursResult(policy: policy).paidOvertimeHours
             count += 1
             if operativeBooking == nil {
                 slot = {
@@ -1093,7 +1093,7 @@ struct ProjectDetailView: View {
                     let p = firebaseBackend.payrollPolicy(for: booking.date)
                     let cell = SchedulingV2CellKindBuilder.fromBooking(
                         paidHours: booking.paidBookedHours(policy: p),
-                        overtimeHours: booking.overtimeHoursBeyondPaidStandard(policy: p),
+                        overtimeHours: booking.payrollHoursResult(policy: p).paidOvertimeHours,
                         timeSlot: booking.timeSlot
                     )
                     return SchedulingGridDayCell(
@@ -1125,7 +1125,7 @@ struct ProjectDetailView: View {
                     }()
                     let cell = SchedulingV2CellKindBuilder.fromBooking(
                         paidHours: booking.paidBookedHours(policy: p),
-                        overtimeHours: booking.overtimeHoursBeyondPaidStandard(policy: p),
+                        overtimeHours: booking.payrollHoursResult(policy: p).paidOvertimeHours,
                         timeSlot: mappedSlot
                     )
                     return SchedulingGridDayCell(
@@ -1150,7 +1150,7 @@ struct ProjectDetailView: View {
                     let p = firebaseBackend.payrollPolicy(for: booking.date)
                     let cell = SchedulingV2CellKindBuilder.fromBooking(
                         paidHours: mirror.paidBookedHours(policy: p),
-                        overtimeHours: mirror.overtimeHoursBeyondPaidStandard(policy: p),
+                        overtimeHours: mirror.payrollHoursResult(policy: p).paidOvertimeHours,
                         timeSlot: booking.timeSlot
                     )
                     return SchedulingGridDayCell(

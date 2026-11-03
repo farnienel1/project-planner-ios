@@ -51,6 +51,9 @@ enum SchedulingV2CellKind: Equatable {
 
 enum SchedulingV2CellKindBuilder {
     /// Maps existing booking hours / slot into a display cell. Display-only — does not change booking logic.
+    /// `paidHours` is `payrollHoursResult.totalPaidHours` and `overtimeHours` the paid hours of its multiplied segments
+    /// (`PayrollHoursResult.paidOvertimeHours`), so a cell shows the pay rule's hours for the day, never the clock
+    /// duration (Sunday 07:30–14:00 every hour ×2 → 13h OT; a Saturday window counting 8h → 8h).
     static func fromBooking(
         paidHours: Double,
         overtimeHours: Double,

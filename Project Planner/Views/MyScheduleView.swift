@@ -66,7 +66,8 @@ fileprivate func segmentHoursForOperative(_ b: Booking, day: Date, policy: OrgPa
 }
 
 fileprivate struct DayHoursSegmentTotals {
-    /// Hours worked shown in the day summary: `payrollHoursResult.workedHours` summed (as web's total card).
+    /// Hours shown in the day summary: `payrollHoursResult.totalPaidHours` summed — the pay rule's hours for that day
+    /// (a Saturday window counting 8h is 8h; Sunday every hour ×2 is 13h), never the clock duration.
     var totalPaidHours: Double
     var early: Double
     var mid: Double
@@ -88,7 +89,7 @@ fileprivate func mergedDaySegments(
         late += s.late
         // Same figures as web and Daily Overview: `workedHoursSplit(payrollHoursResult)` (never multiplied).
         let split = b.workedHoursSplit(policy: policy)
-        paidSum += split?.workedHours ?? 0
+        paidSum += b.payrollHoursResult(policy: policy).totalPaidHours
         ot += split?.outsideWorkedHours ?? 0
     }
     for b in operative {
@@ -98,7 +99,7 @@ fileprivate func mergedDaySegments(
         late += s.late
         // Same figures as web and Daily Overview: `workedHoursSplit(payrollHoursResult)` (never multiplied).
         let split = b.workedHoursSplit(policy: policy)
-        paidSum += split?.workedHours ?? 0
+        paidSum += b.payrollHoursResult(policy: policy).totalPaidHours
         ot += split?.outsideWorkedHours ?? 0
     }
     return DayHoursSegmentTotals(totalPaidHours: paidSum, early: early, mid: mid, late: late, otReported: ot)
@@ -183,7 +184,8 @@ fileprivate func managerBookingClockSubtitle(_ b: ManagerSiteBooking, day: Date,
         start = f.string(from: block.start)
         end = f.string(from: block.end)
     }
-    return "\(start) – \(end) · \(ScheduleCoverageFormat.hours(b.paidBookedHours(policy: policy))) hrs"
+    // Hours from the pay rule for that day (`payrollHoursResult`), never the clock duration.
+    return "\(start) – \(end) · \(b.payrollHoursResult(policy: policy).paidHoursLabel)"
 }
 
 fileprivate func operativeBookingOtChipText(_ b: Booking, policy: OrgPayrollTimePolicy) -> String? {
@@ -206,7 +208,8 @@ fileprivate func operativeBookingClockSubtitle(_ b: Booking, day: Date, policy: 
         start = f.string(from: block.start)
         end = f.string(from: block.end)
     }
-    return "\(start) – \(end) · \(ScheduleCoverageFormat.hours(b.paidBookedHours(policy: policy))) hrs"
+    // Hours from the pay rule for that day (`payrollHoursResult`), never the clock duration.
+    return "\(start) – \(end) · \(b.payrollHoursResult(policy: policy).paidHoursLabel)"
 }
 
 fileprivate struct MyScheduleBookingStripeRow: View {

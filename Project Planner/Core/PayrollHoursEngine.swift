@@ -39,6 +39,27 @@ struct PayrollHoursResult: Equatable {
     /// RULEBOOK 1.19.0: the unpaid break taken off (`payrollHoursResult.unpaidBreakHours`), 0 when none.
     var unpaidBreakHours: Double = 0
 
+    /// The paid hours of the multiplied segments (outside the window, or every hour at N×), as the pay rule prices
+    /// them: Sunday 07:30–14:00 every hour ×2 → 13; a weekday 06:30–16:30 → 3 (2h × 1.5).
+    var paidOvertimeHours: Double {
+        segments.filter { $0.kind != .standardWindow }.reduce(0) { $0 + $1.paidHours }
+    }
+
+    /// The booking's hours as the pay rule gives them (`payrollHoursResult` for its day under the policy in effect),
+    /// never the clock duration: a Saturday window 07:30–14:00 counting 8h → "8h"; Sunday every hour ×2 → "13h (6.5h × 2)";
+    /// a weekday with overtime → "10.25h (7.25h + 2h × 1.5)". A display mapping of the script's segments only.
+    var paidHoursLabel: String {
+        let total = ScheduleCoverageFormat.hours(totalPaidHours) + "h"
+        guard segments.contains(where: { abs($0.multiplier - 1) > 0.001 }) else { return total }
+        let parts = segments.map { segment -> String in
+            if abs(segment.multiplier - 1) > 0.001 {
+                return "\(ScheduleCoverageFormat.hours(segment.baseHours))h × \(segment.multiplierLabel)"
+            }
+            return "\(ScheduleCoverageFormat.hours(segment.paidHours))h"
+        }
+        return "\(total) (\(parts.joined(separator: " + ")))"
+    }
+
     var breakdownSummary: String {
         guard !segments.isEmpty else { return ScheduleCoverageFormat.hours(totalPaidHours) + "h" }
         let parts = segments.map { segment -> String in

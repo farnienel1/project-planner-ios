@@ -208,4 +208,27 @@ final class Rulebook1200Tests: XCTestCase {
         XCTAssertEqual(row.missing.map(\.start), [645])
         XCTAssertEqual(row.missing.map(\.end), [660])
     }
+
+    // MARK: Hours shown are the pay rule's, never the clock duration (owner report, PR #163)
+
+    func testWeekendBookingHoursAreThePayRulesNotTheClockDuration() throws {
+        var policy = OrgPayrollTimePolicy.default
+        policy.saturday.customStandardEnd = "14:00" // Saturday 07:30–14:00 counts as 8h; Sunday every hour ×2 (default).
+        let sat = try XCTUnwrap(OrganizationRulebookContext.date(fromDayKey: saturday))
+        let sun = try XCTUnwrap(OrganizationRulebookContext.date(fromDayKey: "2026-11-08"))
+        let saturdayBooking = LogicFixtures.booking(on: sat, slot: .customHours, start: "07:30", end: "14:00")
+        let sundayBooking = LogicFixtures.booking(on: sun, slot: .customHours, start: "07:30", end: "14:00")
+        XCTAssertEqual(saturdayBooking.payrollHoursResult(policy: policy).paidHoursLabel, "8h")
+        XCTAssertEqual(sundayBooking.payrollHoursResult(policy: policy).paidHoursLabel, "13h (6.5h × 2)")
+        XCTAssertEqual(sundayBooking.payrollHoursResult(policy: policy).paidOvertimeHours, 13, accuracy: 0.001)
+    }
+
+    func testWeekdayOvertimeLabelAndQuarterHoursAreNotRounded() throws {
+        let mon = try XCTUnwrap(OrganizationRulebookContext.date(fromDayKey: monday))
+        let booking = LogicFixtures.booking(on: mon, slot: .customHours, start: "06:30", end: "16:30")
+        XCTAssertEqual(booking.payrollHoursResult(policy: ownerPolicy(derived: true)).paidHoursLabel, "10.25h (7.25h + 2h × 1.5)")
+        XCTAssertEqual(ScheduleCoverageFormat.hours(7.25), "7.25")
+        XCTAssertEqual(ScheduleCoverageFormat.hours(8), "8")
+        XCTAssertEqual(ScheduleCoverageFormat.hours(3.5), "3.5")
+    }
 }

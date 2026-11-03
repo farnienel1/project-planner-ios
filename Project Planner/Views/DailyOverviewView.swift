@@ -249,9 +249,20 @@ struct DailyOverviewView: View {
         return splits
     }
 
-    /// Hours worked on job sites (`payrollHoursResult.workedHours`, never multiplied), as web's headline.
+    /// Hours on job sites from the pay rule (`payrollHoursResult.totalPaidHours` for each booking under the policy in
+    /// effect that day), never the clock duration: a Saturday window counting 8h adds 8h, Sunday every hour ×2 adds 13h.
     private var dayJobSiteLabourHours: Double {
-        dayJobSiteHourSplits.reduce(0) { $0 + $1.workedHours }
+        let p = payrollTimePolicy
+        let cal = CanonicalBusinessEngine.businessCalendar
+        var total = dayBookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: p) }
+        for b in managerScheduleStore.managerSiteBookings
+        where cal.isDate(b.date, inSameDayAs: overviewDate) && (b.locationType == .project || b.locationType == .smallWork) {
+            total += b.paidBookedHours(policy: p)
+        }
+        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+            total += b.payrollMirrorBooking().paidBookedHours(policy: p)
+        }
+        return total
     }
 
     /// Hours worked outside the standard window (`workedHoursSplit.outsideWorkedHours`).
@@ -1568,9 +1579,10 @@ struct ProjectBookingCard: View {
         return t
     }
 
-    /// Per-person pill: `payrollHoursResult.workedHours` (through `workedHoursSplit`), as web's Daily Overview.
-    private static func workedHoursPill(_ split: CanonicalWorkedHoursSplit?) -> String {
-        ScheduleCoverageFormat.hours(split?.workedHours ?? 0) + "h"
+    /// Per-person pill: the pay rule's hours for that day (`payrollHoursResult`), never the clock duration —
+    /// "8h" for a Saturday window counting 8h, "13h (6.5h × 2)" for Sunday every hour ×2.
+    private static func paidHoursPill(_ result: PayrollHoursResult) -> String {
+        result.paidHoursLabel
     }
 
     private var mergedPersonRows: [ProjectDayPersonRow] {
@@ -1588,7 +1600,7 @@ struct ProjectBookingCard: View {
                 name: personName,
                 subtitle: sub.text,
                 subtitleOvertime: sub.emphasizedOvertime,
-                pillText: Self.workedHoursPill(b.workedHoursSplit(policy: p)),
+                pillText: Self.paidHoursPill(b.payrollHoursResult(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
                 initials: PlannerUIInitials.from(personName),
                 gradientPair: initialsGradient(for: personName),
@@ -1605,7 +1617,7 @@ struct ProjectBookingCard: View {
                 name: managerName(userId: b.userId),
                 subtitle: sub.text,
                 subtitleOvertime: sub.emphasizedOvertime,
-                pillText: Self.workedHoursPill(b.workedHoursSplit(policy: p)),
+                pillText: Self.paidHoursPill(b.payrollHoursResult(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
                 initials: PlannerUIInitials.from(managerName(userId: b.userId)),
                 gradientPair: initialsGradient(for: managerName(userId: b.userId)),
@@ -1627,7 +1639,7 @@ struct ProjectBookingCard: View {
                 bookedOperativeNames: b.bookedOperativeNames(subcontractor: firm),
                 subtitle: sub.text,
                 subtitleOvertime: sub.emphasizedOvertime,
-                pillText: Self.workedHoursPill(mirror.workedHoursSplit(policy: p)),
+                pillText: Self.paidHoursPill(mirror.payrollHoursResult(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
                 initials: PlannerUIInitials.from(baseName),
                 gradientPair: initialsGradient(for: baseName),

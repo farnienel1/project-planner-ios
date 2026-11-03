@@ -1619,7 +1619,10 @@ struct BookLabourFlowView: View {
                 slot: slot,
                 locationType: locationType,
                 locationId: locationId,
-                custom: customLocationName
+                custom: customLocationName,
+                workStart: workStart,
+                workEnd: workEnd,
+                breakRemoved: breakRemoved
             ) { continue }
             if managerWouldClash(
                 userId: person.user.id,
@@ -1750,7 +1753,10 @@ struct BookLabourFlowView: View {
                         slot: slot,
                         locationType: locationType,
                         locationId: locationId,
-                        custom: customLocationName
+                        custom: customLocationName,
+                        workStart: workStart,
+                        workEnd: workEnd,
+                        breakRemoved: breakRemoved
                     ) {
                         continue
                     }
@@ -1909,18 +1915,27 @@ struct BookLabourFlowView: View {
         }
     }
 
+    /// The same booking already saved: same person, day, slot, place AND the same start, finish and break. Two custom
+    /// hours bookings at one place on one day (e.g. a weekend morning and afternoon) are different bookings — before
+    /// this compared only the slot and place, so the second was skipped and never saved.
     private func duplicateManagerBooking(
         userId: String,
         slot: ManagerTimeSlot,
         locationType: ManagerLocationType,
         locationId: UUID?,
-        custom: String?
+        custom: String?,
+        workStart: String?,
+        workEnd: String?,
+        breakRemoved: Bool
     ) -> Bool {
         managerScheduleStore.bookings(for: userId, on: day).contains { existing in
             existing.timeSlot == slot &&
                 existing.locationType == locationType &&
                 existing.locationId == locationId &&
-                (existing.customLocationName ?? "") == (custom ?? "")
+                (existing.customLocationName ?? "") == (custom ?? "") &&
+                (existing.workStartTime ?? "") == (workStart ?? "") &&
+                (existing.workEndTime ?? "") == (workEnd ?? "") &&
+                existing.isBreakRemoved == breakRemoved
         }
     }
 
