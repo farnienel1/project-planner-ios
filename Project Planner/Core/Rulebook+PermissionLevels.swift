@@ -58,10 +58,10 @@ nonisolated enum RulebookAccountTypeChange: Sendable {
 
 extension UserPermissions {
     /// `USER_PERMISSION_FIELDS`, in the rulebook's order.
-    static let rulebookFields: [String] = ["adminAccess", "manager", "operatives", "skills", "qualifications", "materials", "projects", "smallWorks", "operativeMode", "siteAudit", "subContractors", "wholesalersOrderHistory", "annualLeaveSelfBook", "weeklyReports", "dailyOverview"]
+    nonisolated static let rulebookFields: [String] = ["adminAccess", "manager", "operatives", "skills", "qualifications", "materials", "projects", "smallWorks", "operativeMode", "siteAudit", "subContractors", "wholesalersOrderHistory", "annualLeaveSelfBook", "weeklyReports", "dailyOverview"]
 
     /// The stored toggle named by a `USER_PERMISSION_FIELDS` key; nil for an unknown key.
-    func flag(_ field: String) -> Bool? {
+    nonisolated func flag(_ field: String) -> Bool? {
         switch field {
         case "adminAccess": return adminAccess
         case "manager": return manager
@@ -83,7 +83,7 @@ extension UserPermissions {
     }
 
     /// Sets the toggle named by a `USER_PERMISSION_FIELDS` key (unknown keys and the retired `skills` are ignored).
-    mutating func setFlag(_ field: String, _ value: Bool) {
+    nonisolated mutating func setFlag(_ field: String, _ value: Bool) {
         switch field {
         case "adminAccess": adminAccess = value
         case "manager": manager = value
@@ -104,7 +104,7 @@ extension UserPermissions {
     }
 
     /// Every toggle as `{ field: Bool }`, the shape the permission rules read.
-    var rulebookMap: [String: Bool] {
+    nonisolated var rulebookMap: [String: Bool] {
         var map: [String: Bool] = [:]
         for field in Self.rulebookFields {
             if let value = flag(field) { map[field] = value }
@@ -113,7 +113,7 @@ extension UserPermissions {
     }
 
     /// `self` with every field the map names set to its value (unnamed fields keep their value).
-    func applying(_ map: [String: Bool]) -> UserPermissions {
+    nonisolated func applying(_ map: [String: Bool]) -> UserPermissions {
         var out = self
         for (field, value) in map { out.setFlag(field, value) }
         out.skills = false
