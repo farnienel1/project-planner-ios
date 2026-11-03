@@ -102,9 +102,48 @@ enum PayrollTimePolicyCatalog {
         return (state.current, state.prior, nextEffective, nextScheduled)
     }
 
-    /// The raw-document shape of an organisation's four payroll fields, for the script.
+    /// RULEBOOK 1.19.0: the stored working-hours fields of an organisation document (the policy state the script reads:
+    /// `parsePayrollTimePolicyState`). `payrollTimePolicyHistory` and `payrollTimePolicyRevision` are kept as stored.
+    nonisolated static let payrollStateFieldNames: [String] = [
+        "payrollTimePolicy",
+        "payrollTimePolicyPrior",
+        "payrollTimePolicyEffectiveFrom",
+        "payrollTimePolicyScheduled",
+        "payrollTimePolicyHistory",
+        "payrollTimePolicyRevision",
+    ]
+
+    /// The stored working-hours fields of `data` (an `organizations/{orgId}` document) as JSON values.
+    nonisolated static func payrollStateDocument(fromOrganizationData data: [String: Any]) -> [String: Any] {
+        var out: [String: Any] = [:]
+        for key in payrollStateFieldNames {
+            guard let value = data[key] else { continue }
+            out[key] = FirebaseBackend.firestoreJSON(value)
+        }
+        return out
+    }
+
+    /// `payrollStateDocument` as sorted-key JSON text (stable, so an unchanged document compares equal).
+    nonisolated static func payrollStateJSON(fromOrganizationData data: [String: Any]) -> String? {
+        let document = payrollStateDocument(fromOrganizationData: data)
+        guard JSONSerialization.isValidJSONObject(document),
+              let bytes = try? JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]) else { return nil }
+        return String(data: bytes, encoding: .utf8)
+    }
+
+    /// `Organization.payrollPolicyStateJSON` read back. Nil when absent or not a JSON object.
+    nonisolated static func payrollStateDocument(json: String?) -> [String: Any]? {
+        guard let json, let bytes = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return nil }
+        return object
+    }
+
+    /// The organisation's policy STATE in the raw-document shape the script reads (1.19.0: with
+    /// `payrollTimePolicyHistory` and `payrollTimePolicyRevision`, exactly as stored). Before any document was read
+    /// (a cached company from an older build) it is built from the four typed fields.
     static func payrollPolicyDocument(for org: Organization) -> [String: Any] {
-        CanonicalBusinessEngine.payrollPolicyDocument(
+        if let stored = payrollStateDocument(json: org.payrollPolicyStateJSON) { return stored }
+        return CanonicalBusinessEngine.payrollPolicyDocument(
             current: org.settings.payrollTimePolicy,
             prior: org.payrollTimePolicyPrior,
             effectiveFromDayKey: org.payrollTimePolicyEffectiveFrom.map { dayKey($0) },
@@ -127,6 +166,7 @@ enum PayrollTimePolicyCatalog {
         hasher.combine(org.payrollTimePolicyPrior)
         hasher.combine(org.payrollTimePolicyEffectiveFrom)
         hasher.combine(org.payrollTimePolicyScheduled)
+        hasher.combine(org.payrollPolicyStateJSON)
         hasher.combine(OrganizationRulebookContext.timeZoneIdentifier)
         let cacheKey = "\(hasher.finalize())|\(key)"
         if let cached = effectivePolicyCache[cacheKey] { return cached }
@@ -171,8 +211,29 @@ enum PayrollTimePolicyCatalog {
         return policy.saturday.equivalentForBatchBooking(policy.sunday, fallbackCountsAs: policy.standardPaidHours)
     }
 
+    /// The bands an hours timeline draws for `day` (RULEBOOK 1.19.0 §4.3 `payrollDayWindows`: the weekday standard day,
+    /// a set-window weekend day's window, none on an every-hour day). The multiplier is the policy's own value for that
+    /// day. Falls back to the stored fields only when the script did not answer.
     static func timelinePolicy(for day: Date, policy: OrgPayrollTimePolicy) -> DayTimelinePolicy {
         let wd = CanonicalBusinessEngine.businessCalendar.component(.weekday, from: day)
+        if let windows = CanonicalBusinessEngine.payrollDayWindows(policy: policy, dayKey: dayKey(day)) {
+            let kind: DayTimelinePolicy.DayKind = wd == 7 ? .saturday : (wd == 1 ? .sunday : .weekday)
+            let outside: Double
+            if let all = windows.allHoursMultiplier {
+                outside = all
+            } else if kind == .weekday {
+                outside = policy.weekdayOutsideStandardMultiplier
+            } else {
+                outside = weekendSettings(for: day, policy: policy).outsideStandardWindowMultiplier
+            }
+            return DayTimelinePolicy(
+                dayKind: kind,
+                standardWindowStart: windows.paidWindow.map { ManagerScheduleInterval.formatMinutes($0.start) },
+                standardWindowEnd: windows.paidWindow.map { ManagerScheduleInterval.formatMinutes($0.end) },
+                allHoursAtMultiplier: windows.allHoursMultiplier != nil,
+                outsideMultiplier: outside
+            )
+        }
         if wd >= 2 && wd <= 6 {
             return DayTimelinePolicy(
                 dayKind: .weekday,
@@ -231,7 +292,8 @@ enum PayrollTimePolicyCatalog {
             timeSlot: .customHours,
             workStartTime: start,
             workEndTime: end,
-            isBreakRemoved: true,
+            // 1.19.0: the unpaid break starts on, as web; it only matters when that day's own break is unpaid.
+            isBreakRemoved: false,
             otMultiplierOverride: nil
         )
     }

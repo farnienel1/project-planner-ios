@@ -22,12 +22,16 @@ nonisolated enum OrganizationRulebookContext {
     /// The open organisation's document id (trimmed), or nil before one is loaded. Device caches that hold one
     /// company's data (timesheet drafts) put it in their keys so another company never reads them (§1).
     nonisolated(unsafe) private(set) static var organizationId: String? = nil
-    /// The open organisation's four stored working-hours fields (`payrollTimePolicy`, `payrollTimePolicyPrior`,
-    /// `payrollTimePolicyEffectiveFrom`, `payrollTimePolicyScheduled`) in the raw document shape the script reads
+    /// The open organisation's stored working-hours fields (`payrollTimePolicy`, `payrollTimePolicyPrior`,
+    /// `payrollTimePolicyEffectiveFrom`, `payrollTimePolicyScheduled`, 1.19.0 `payrollTimePolicyHistory` and
+    /// `payrollTimePolicyRevision`) in the raw document shape the script reads
     /// (`CanonicalBusinessEngine.payrollPolicyDocument`), so a
     /// booking picker can ask for the rules in effect on each selected day (web `livePayrollState`). Nil until an
     /// organisation is loaded.
     nonisolated(unsafe) private(set) static var payrollPolicyDocument: [String: Any]? = nil
+    /// `payrollPolicyDocument` as sorted-key JSON text: the memo key for answers read from it (RULEBOOK 1.19.0 history
+    /// and revision included). Nil until an organisation is loaded.
+    nonisolated(unsafe) private(set) static var payrollPolicyDocumentKey: String? = nil
 
     @MainActor static func update(from org: Organization?) {
         let country = org?.countryCode ?? "GB"
@@ -41,6 +45,11 @@ nonisolated enum OrganizationRulebookContext {
         let orgId = org?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         organizationId = orgId.isEmpty ? nil : orgId
         payrollPolicyDocument = org.map { PayrollTimePolicyCatalog.payrollPolicyDocument(for: $0) }
+        payrollPolicyDocumentKey = payrollPolicyDocument.flatMap { document in
+            guard JSONSerialization.isValidJSONObject(document),
+                  let bytes = try? JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]) else { return nil }
+            return "\(timeZoneIdentifier)|" + (String(data: bytes, encoding: .utf8) ?? "")
+        }
     }
 
     static var timeZone: TimeZone {

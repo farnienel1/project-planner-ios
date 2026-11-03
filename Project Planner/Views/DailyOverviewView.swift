@@ -194,7 +194,8 @@ struct DailyOverviewView: View {
             holidays: holidayStore.bookings,
             policy: payrollTimePolicy,
             includeWeekends: detection.includeWeekendsForUnbookedLabour,
-            excludedUserIds: detection.excludedUserIdsFromUnbookedWarnings
+            excludedUserIds: detection.excludedUserIdsFromUnbookedWarnings,
+            weekendCoverage: detection.weekendCoverage
         )
     }
 

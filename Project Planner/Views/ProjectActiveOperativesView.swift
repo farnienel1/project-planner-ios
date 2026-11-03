@@ -41,6 +41,11 @@ struct ProjectActiveOperativesView: View {
         firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
     }
 
+    /// RULEBOOK 1.19.0 §4.3: the working hours in effect on that booking's day (history first), never today's.
+    private func dayPolicy(_ date: Date) -> OrgPayrollTimePolicy {
+        PayrollTimePolicyCatalog.policy(for: date, organization: firebaseBackend.currentOrganization)
+    }
+
     private var summaries: [ProjectBookedPersonSummary] {
         var rows: [ProjectBookedPersonSummary] = []
         rows.append(contentsOf: operativeSummaries)
@@ -67,7 +72,7 @@ struct ProjectActiveOperativesView: View {
                 users: userStore.organizationUsers
             )
             let sorted = bookings.sorted { $0.date < $1.date }
-            let hours = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: payrollPolicy) }
+            let hours = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: dayPolicy($1.date)) }
             return ProjectBookedPersonSummary(
                 id: "op-\(operativeId.uuidString)",
                 kind: .operative,
@@ -95,7 +100,7 @@ struct ProjectActiveOperativesView: View {
             let user = userStore.organizationUsers.first(where: { $0.id == userId })
             let name = user?.fullName.isEmpty == false ? (user?.fullName ?? userId) : (user?.email ?? "Staff member")
             let sorted = bookings.sorted { $0.date < $1.date }
-            let hours = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: payrollPolicy) }
+            let hours = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: dayPolicy($1.date)) }
             return ProjectBookedPersonSummary(
                 id: "staff-\(userId)",
                 kind: .staff,
@@ -124,7 +129,7 @@ struct ProjectActiveOperativesView: View {
         return grouped.compactMap { subcontractorId, bookings -> ProjectBookedPersonSummary? in
             guard let sub = subcontractorStore.subcontractors.first(where: { $0.id == subcontractorId }) else { return nil }
             let sorted = bookings.sorted { $0.date < $1.date }
-            let hours = bookings.reduce(0.0) { $0 + $1.payrollMirrorBooking().paidBookedHours(policy: payrollPolicy) }
+            let hours = bookings.reduce(0.0) { $0 + $1.payrollMirrorBooking().paidBookedHours(policy: dayPolicy($1.date)) }
             return ProjectBookedPersonSummary(
                 id: "sub-\(subcontractorId.uuidString)",
                 kind: .subcontractor,
@@ -268,6 +273,11 @@ private struct ProjectBookedPersonHistoryView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
 
+    /// RULEBOOK 1.19.0 §4.3: each row under the working hours in effect on its own day (history first).
+    private func dayPolicy(_ date: Date) -> OrgPayrollTimePolicy {
+        CanonicalBusinessEngine.payrollPolicyInEffect(on: date, fallback: payrollPolicy)
+    }
+
     private struct DayRow: Identifiable {
         let id: String
         let date: Date
@@ -287,8 +297,8 @@ private struct ProjectBookedPersonHistoryView: View {
                     DayRow(
                         id: $0.id.uuidString,
                         date: $0.date,
-                        scheduleLabel: $0.scheduleLabel(policy: payrollPolicy),
-                        hours: $0.paidBookedHours(policy: payrollPolicy)
+                        scheduleLabel: $0.scheduleLabel(policy: dayPolicy($0.date)),
+                        hours: $0.paidBookedHours(policy: dayPolicy($0.date))
                     )
                 }
         case .staff:
@@ -304,8 +314,8 @@ private struct ProjectBookedPersonHistoryView: View {
                     DayRow(
                         id: $0.id.uuidString,
                         date: $0.date,
-                        scheduleLabel: $0.scheduleLabel(policy: payrollPolicy),
-                        hours: $0.paidBookedHours(policy: payrollPolicy)
+                        scheduleLabel: $0.scheduleLabel(policy: dayPolicy($0.date)),
+                        hours: $0.paidBookedHours(policy: dayPolicy($0.date))
                     )
                 }
         case .subcontractor:
@@ -322,8 +332,8 @@ private struct ProjectBookedPersonHistoryView: View {
                     return DayRow(
                         id: $0.id.uuidString,
                         date: $0.date,
-                        scheduleLabel: mirror.scheduleLabel(policy: payrollPolicy),
-                        hours: mirror.paidBookedHours(policy: payrollPolicy)
+                        scheduleLabel: mirror.scheduleLabel(policy: dayPolicy($0.date)),
+                        hours: mirror.paidBookedHours(policy: dayPolicy($0.date))
                     )
                 }
         }

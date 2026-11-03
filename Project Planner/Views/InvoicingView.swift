@@ -4208,6 +4208,7 @@ private struct OperativeTimesheetReviewView: View {
                 week: week,
                 payrollLines: payrollSummary.lineItems,
                 policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
+                organization: firebaseBackend.currentOrganization,
                 bookingStore: bookingStore,
                 managerScheduleStore: managerScheduleStore,
                 editingPayrollLineId: $editingPayrollLineId,
@@ -4855,6 +4856,8 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
     let week: WeekRange
     let payrollLines: [TimesheetPayrollLineItem]
     let policy: OrgPayrollTimePolicy
+    /// RULEBOOK 1.19.0 §4.3/§8: a line is reviewed under the working hours in effect on ITS day (history first).
+    let organization: Organization?
     let bookingStore: BookingStore
     let managerScheduleStore: ManagerScheduleStore
     @Binding var editingPayrollLineId: String?
@@ -4966,15 +4969,16 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
             let bookingId = TimesheetPayrollLineBookingLookup.bookingId(from: lineId)
             let operativeBooking = bookingId.flatMap { id in bookingStore.bookings.first(where: { $0.id == id }) }
             let managerBooking = bookingId.flatMap { id in managerScheduleStore.managerSiteBookings.first(where: { $0.id == id }) }
+            let linePolicy = organization.map { PayrollTimePolicyCatalog.policy(for: row.date, organization: $0) } ?? policy
             let initialChoice = TimesheetPayrollLineBookingLookup.initialChoice(
                 for: row,
                 operativeBooking: operativeBooking,
                 managerBooking: managerBooking,
-                policy: policy
+                policy: linePolicy
             )
             TimesheetPayrollLineEditHoursSheet(
                 row: row,
-                policy: policy,
+                policy: linePolicy,
                 initialChoice: initialChoice,
                 onSave: { value in
                     applyPayrollReviewSave(lineId: lineId, row: row, revisedAmount: value)

@@ -70,9 +70,9 @@ struct BookingEditHoursBreakdown {
         let ot = max(0, result.segments
             .filter { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }
             .reduce(0.0) { $0 + $1.baseHours })
-        let breakH = (breakIncluded && PayrollTimePolicyCatalog.isWeekday(day) && policy.standardUnpaidBreakHours > 0.05)
-            ? policy.standardUnpaidBreakHours
-            : 0
+        // RULEBOOK 1.19.0: the break exactly as pay takes it (`payrollHoursResult.unpaidBreakHours`) — weekdays and,
+        // when that day's break is unpaid, Saturday / Sunday — never a Swift weekday check.
+        let breakH = breakIncluded ? result.unpaidBreakHours : 0
         let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
         let otMult = timeline.allHoursAtMultiplier
             ? timeline.outsideMultiplier
@@ -514,6 +514,11 @@ struct OperativeCustomHoursSheet: View {
     @State private var timeValidationBanner: String?
     @State private var bannerDismissTask: Task<Void, Never>?
     @State private var confirmDelete = false
+    /// RULEBOOK 1.19.0 §4.3 `unpaidBreakAppliesOnDay`: any booked day takes an unpaid break off (Mon–Fri the organisation
+    /// break, Saturday / Sunday that day's own). The "Unpaid break" toggle and `customHoursBreakWarning` only then.
+    private let breakApplies: Bool
+    /// That day's break length in minutes (`payrollBreakOnDay`), for the toggle's caption.
+    private let dayBreakMinutes: Int
     /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): shown before saving hours that cover the unpaid break.
     @State private var breakWarningMessage: String?
     /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for `noteDays` at the times on screen; empty on weekdays. Worked
@@ -521,7 +526,7 @@ struct OperativeCustomHoursSheet: View {
     @State private var weekendBreakdownLines: [String] = []
 
     init(
-        policy: OrgPayrollTimePolicy,
+        policy callerPolicy: OrgPayrollTimePolicy,
         referenceDay: Date = Date(),
         noteDays: [Date]? = nil,
         title: String = "Edit booking",
@@ -539,6 +544,9 @@ struct OperativeCustomHoursSheet: View {
         onCancel: @escaping () -> Void,
         onDelete: (() -> Void)? = nil
     ) {
+        // RULEBOOK 1.19.0 §4.3: the working hours in effect on the booking day (history first), whatever policy the
+        // caller had at hand; `policy` is the fallback before an organisation is loaded.
+        let policy = CanonicalBusinessEngine.payrollPolicyInEffect(on: referenceDay, fallback: callerPolicy)
         self.policy = policy
         self.referenceDay = Calendar.current.startOfDay(for: referenceDay)
         self.rulebookDay = referenceDay
@@ -561,6 +569,19 @@ struct OperativeCustomHoursSheet: View {
         self.onSave = onSave
         self.onCancel = onCancel
         self.onDelete = onDelete
+
+        let bookedDays = (noteDays?.isEmpty == false ? noteDays : nil) ?? [referenceDay]
+        let applies = bookedDays.contains { day in
+            CanonicalBusinessEngine.unpaidBreakAppliesOnDay(
+                policy: CanonicalBusinessEngine.payrollPolicyInEffect(on: day, fallback: policy),
+                dayKey: CanonicalBusinessEngine.bookingDayKey(day)
+            )
+        }
+        self.breakApplies = applies
+        self.dayBreakMinutes = CanonicalBusinessEngine.payrollBreakOnDay(
+            policy: policy,
+            dayKey: CanonicalBusinessEngine.bookingDayKey(referenceDay)
+        )?.minutes ?? policy.unpaidBreakMinutes
 
         let ic = initialChoice
         let startHM: (Int, Int)
@@ -617,7 +638,9 @@ struct OperativeCustomHoursSheet: View {
                 fallbackHour: 16,
                 fallbackMinute: 30
             )
-            included = showsBreakControls && PayrollTimePolicyCatalog.isWeekday(referenceDay)
+            // A new booking starts with the unpaid break on, as web (`breakRemoved` false); it only matters on a day whose
+            // break is unpaid (`unpaidBreakAppliesOnDay`).
+            included = showsBreakControls
         }
 
         _startHour = State(initialValue: startHM.0)
@@ -706,7 +729,7 @@ struct OperativeCustomHoursSheet: View {
                             .padding(.horizontal, 4)
                     }
                     hoursCard
-                    if showsBreakControls {
+                    if showsBreakControls && (breakApplies || allowsOtMultiplierOverride) {
                         breakToggleCard
                     }
                     if showsBreakdown {
@@ -975,6 +998,7 @@ struct OperativeCustomHoursSheet: View {
 
     private var breakToggleCard: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if breakApplies {
             HStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -990,7 +1014,7 @@ struct OperativeCustomHoursSheet: View {
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                     Text(
                         breakIncluded
-                            ? "\(policy.unpaidBreakMinutes) mins deducted around midday"
+                            ? "\(dayBreakMinutes) mins deducted around midday"
                             : "Removed · full hours in total"
                     )
                     .font(.system(size: 10))
@@ -1001,9 +1025,12 @@ struct OperativeCustomHoursSheet: View {
                     .accessibilityIdentifier("operativeCustomHours.toggle")
                     .labelsHidden()
             }
+            }
 
             if allowsOtMultiplierOverride {
-                Divider().overlay(ProjectWorksRevampColors.border)
+                if breakApplies {
+                    Divider().overlay(ProjectWorksRevampColors.border)
+                }
                 let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: referenceDay, policy: policy)
                 let defaultMult = timeline.outsideMultiplier
                 let windowLabel: String = {
@@ -1043,11 +1070,11 @@ struct OperativeCustomHoursSheet: View {
         "\(startText)|\(endText)|\(breakIncluded)|\(otMultText)"
     }
 
-    /// RULEBOOK 1.18.0 §4.3 `weekendBookingBreakdown`: per-day rows for a selection with a Saturday or Sunday. Not used
-    /// when an overtime multiplier override is typed (the rule prices the organisation's multiplier) or the times are
-    /// not a valid same-day window; the standard breakdown shows then.
+    /// RULEBOOK 1.18.0 §4.3 `weekendBookingBreakdown`: per-day rows for a selection with a Saturday or Sunday (not when
+    /// the times are not a valid same-day window). `weekendBookingBreakdown` takes no overtime multiplier override, so
+    /// with one typed the rows stay (priced at the organisation's multiplier) and `overrideNote` says so.
     private func refreshWeekendBreakdown() {
-        guard endMinutes > startMinutes, resolvedOtMultiplierOverride == nil else {
+        guard endMinutes > startMinutes else {
             weekendBreakdownLines = []
             return
         }
@@ -1067,7 +1094,17 @@ struct OperativeCustomHoursSheet: View {
         if weekendBreakdownLines.isEmpty {
             standardBreakdownCard
         } else {
-            WeekendBookingBreakdownView(lines: weekendBreakdownLines, title: "Breakdown")
+            VStack(alignment: .leading, spacing: 6) {
+                WeekendBookingBreakdownView(lines: weekendBreakdownLines, title: "Breakdown")
+                if let override = resolvedOtMultiplierOverride {
+                    // 1.18 gap: the per-day rows are the organisation's rule; the typed rate applies to this booking.
+                    Text("Rows show the organisation rate. This booking's overtime hours are paid at ×\(ScheduleCoverageFormat.hours(override)) instead.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("operativeCustomHours.overrideNote")
+                }
+            }
         }
     }
 
@@ -1174,7 +1211,7 @@ struct OperativeCustomHoursSheet: View {
         }
         // RULEBOOK 1.13.0 §8 `customHoursBreakWarning`: confirm before saving custom hours that cover the unpaid break
         // while Unpaid break is on. Pay is unchanged either way.
-        if showsBreakControls && !breakWarningConfirmed,
+        if showsBreakControls && breakApplies && !breakWarningConfirmed,
            let warning = CanonicalBusinessEngine.customHoursBreakWarning(
                on: rulebookDay,
                policy: policy,

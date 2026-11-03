@@ -217,6 +217,16 @@ struct WarningsComputationSnapshot: Sendable {
     var clashDayKeys: Set<String>? = nil
     /// `warningScopeFor(...)` as JSON (RULEBOOK 1.10.0 §17). Nil is everything.
     var warningScopeJSON: Data? = nil
+    /// RULEBOOK 1.19.0 §5: the organisation's working-hours policy STATE (`payrollTimePolicyTimeline`, history first) as
+    /// JSON, passed as `payrollPolicy` to `unbookedLabourRows` so each day of the window uses its own rules.
+    var payrollPolicyStateJSON: Data? = nil
+    /// RULEBOOK 1.19.0 §4.6 / §5: `warningDetection.weekendCoverage` (Saturday / Sunday toggles and "Hours to cover").
+    var weekendCoverage: OrgWeekendCoverage? = nil
+
+    /// The policy state object for a rulebook payload, or nil.
+    nonisolated var payrollPolicyState: Any? {
+        payrollPolicyStateJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) }
+    }
 
     /// The scope object for a rulebook payload, or nil.
     nonisolated var warningScope: Any? {
@@ -430,7 +440,11 @@ enum WarningsComputation {
             materialCutOffBookings: materialCutOffBookings,
             materialSendRecords: materialSendRecords,
             clashDayKeys: input.clashDayKeys.map { Set($0) },
-            warningScopeJSON: input.warningScopeJSON
+            warningScopeJSON: input.warningScopeJSON,
+            payrollPolicyStateJSON: CanonicalBusinessEngine.openOrganizationPayrollPolicyState.flatMap {
+                try? JSONSerialization.data(withJSONObject: $0)
+            },
+            weekendCoverage: input.warningDetection.weekendCoverage
         )
     }
 
@@ -1006,7 +1020,9 @@ enum WarningsComputation {
         holidays: [HolidayBooking],
         policy: OrgPayrollTimePolicy,
         includeWeekends: Bool,
-        excludedUserIds: [String]
+        excludedUserIds: [String],
+        weekendCoverage: OrgWeekendCoverage? = nil,
+        policyState: [String: Any]? = CanonicalBusinessEngine.openOrganizationPayrollPolicyState
     ) -> [CanonicalUnbookedLabourRow] {
         let calendar = CanonicalBusinessEngine.businessCalendar
         let dayStart = calendar.startOfDay(for: day)
@@ -1108,18 +1124,23 @@ enum WarningsComputation {
             holidays: shared.holidays.compactMap(unbookedHoliday)
         )
         // RULEBOOK 1.10.0 §17: a restricted viewer's Daily Overview covers only their jobs (`warningScopeFor`, passed
-        // as `scope`). With no restriction the typed call is used as before.
+        // as `scope`). RULEBOOK 1.19.0 §5/§6: the day is read under its own working hours (`payrollPolicy`: the
+        // organisation's policy state) and a Saturday / Sunday against its "Hours to cover" (`weekendCoverage`).
+        guard let encoded = try? JSONEncoder().encode(input),
+              var payload = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any] else {
+            return CanonicalBusinessEngine.unbookedLabourRowsOnDay(input) ?? []
+        }
         if let scope = WarningScopeSupport.scope(
             bookings: operativeBookings, managerBookings: managerBookings, users: users, operatives: operatives
-        ), let encoded = try? JSONEncoder().encode(input),
-           var payload = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any] {
+        ) {
             payload["scope"] = scope
-            guard let raw = CanonicalBusinessEngine.callJSON("unbookedLabourRowsOnDay", arguments: [payload]),
-                  let data = try? JSONSerialization.data(withJSONObject: raw),
-                  let rows = try? JSONDecoder().decode([CanonicalUnbookedLabourRow].self, from: data) else { return [] }
-            return rows
         }
-        return CanonicalBusinessEngine.unbookedLabourRowsOnDay(input) ?? []
+        if let policyState { payload["payrollPolicy"] = policyState }
+        if let weekendCoverage { payload["weekendCoverage"] = weekendCoverage.asFirestoreDictionary() }
+        guard let raw = CanonicalBusinessEngine.callJSON("unbookedLabourRowsOnDay", arguments: [payload]),
+              let data = try? JSONSerialization.data(withJSONObject: raw),
+              let rows = try? JSONDecoder().decode([CanonicalUnbookedLabourRow].self, from: data) else { return [] }
+        return rows
     }
 
     nonisolated private static func unbookedText(_ value: Any?) -> String {
@@ -1291,6 +1312,9 @@ enum WarningsComputation {
                 "bookings": shared.bookings,
                 "holidays": shared.holidays,
                 "scope": input.warningScope ?? NSNull(),
+                // RULEBOOK 1.19.0 §5: each day under its own working hours, and the weekend "Hours to cover".
+                "payrollPolicy": input.payrollPolicyState ?? NSNull(),
+                "weekendCoverage": input.weekendCoverage?.asFirestoreDictionary() ?? NSNull(),
             ]
         ) else {
             return nil

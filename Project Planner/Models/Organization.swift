@@ -71,6 +71,13 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
     var payrollTimePolicyEffectiveFrom: Date?
     /// Queued future working-hours change (replaces any prior pending schedule on save).
     var payrollTimePolicyScheduled: OrgPayrollTimePolicyScheduledChange?
+    /// RULEBOOK 1.19.0 §1/§4.3: JSON text of the organisation's stored working-hours fields exactly as read
+    /// (`payrollTimePolicy`, `payrollTimePolicyPrior`, `payrollTimePolicyEffectiveFrom`, `payrollTimePolicyScheduled`,
+    /// `payrollTimePolicyHistory`, `payrollTimePolicyRevision`), Firestore values made JSON (`FirebaseBackend.firestoreJSON`).
+    /// This is the policy STATE every pricing call passes to the script (`PayrollTimePolicyCatalog.payrollPolicyDocument`),
+    /// so each day is read under its own history entry, and the base document of the two-admin save guard
+    /// (`payrollTimePolicySaveConflict`). Nil before a document was read (the typed fields above are used then).
+    var payrollPolicyStateJSON: String? = nil
     /// JSON text of `organizations/{id}.billing`, or nil when that nested map is absent.
     var billingJSON: String?
     /// JSON text of `organizations/{id}.deletion` (RULEBOOK 1.15.0 §20), or nil when the organisation is not being
@@ -100,7 +107,8 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         payrollTimePolicyScheduled: OrgPayrollTimePolicyScheduledChange? = nil,
         billingJSON: String? = nil,
         billingResolved: Bool = false,
-        deletionJSON: String? = nil
+        deletionJSON: String? = nil,
+        payrollPolicyStateJSON: String? = nil
     ) {
         self.id = id
         if let fid = firestoreDocumentId, !fid.isEmpty {
@@ -129,13 +137,14 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         self.billingJSON = billingJSON
         self.billingResolved = billingResolved
         self.deletionJSON = deletionJSON
+        self.payrollPolicyStateJSON = payrollPolicyStateJSON
     }
 
     enum CodingKeys: String, CodingKey {
         case id, firestoreDocumentId, name, settings, officeAddressLine1, officeAddressLine2, officeCity, officeCounty, officePostcode
         case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, documentAbbreviation, createdAt, updatedAt, creatorUserId
         case payrollTimePolicyPrior, payrollTimePolicyEffectiveFrom, payrollTimePolicyScheduled
-        case billingJSON, billingResolved, deletionJSON
+        case billingJSON, billingResolved, deletionJSON, payrollPolicyStateJSON
     }
 
     init(from decoder: Decoder) throws {
@@ -163,6 +172,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         billingJSON = try c.decodeIfPresent(String.self, forKey: .billingJSON)
         billingResolved = try c.decodeIfPresent(Bool.self, forKey: .billingResolved) ?? false
         deletionJSON = try c.decodeIfPresent(String.self, forKey: .deletionJSON)
+        payrollPolicyStateJSON = try c.decodeIfPresent(String.self, forKey: .payrollPolicyStateJSON)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -190,6 +200,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(billingJSON, forKey: .billingJSON)
         try c.encode(billingResolved, forKey: .billingResolved)
         try c.encodeIfPresent(deletionJSON, forKey: .deletionJSON)
+        try c.encodeIfPresent(payrollPolicyStateJSON, forKey: .payrollPolicyStateJSON)
     }
 
     /// Script result for this company's nested billing map. A missing map stays open. A script failure stays open.

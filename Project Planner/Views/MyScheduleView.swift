@@ -470,12 +470,16 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                     centerLabel: paidSum > 0.05 ? "\(ScheduleCoverageFormat.hours(paidSum))h" : nil
                 )
                 hourTicks
-                if policy.unpaidBreakMinutes > 0, !policy.breakPaid, workIntervals.contains(where: { !$0.breakRemoved }) {
+                // RULEBOOK 1.19.0: that day's unpaid break (`unpaidBreakAppliesOnDay`, `payrollBreakOnDay`) — weekdays and a
+                // weekend day whose own break is unpaid.
+                if workIntervals.contains(where: { !$0.breakRemoved }),
+                   CanonicalBusinessEngine.unpaidBreakAppliesOnDay(policy: policy, dayKey: CanonicalBusinessEngine.bookingDayKey(day)),
+                   let dayBreak = CanonicalBusinessEngine.payrollBreakOnDay(policy: policy, dayKey: CanonicalBusinessEngine.bookingDayKey(day)) {
                     HStack(spacing: 6) {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(Color(red: 0.98, green: 0.65, blue: 0.15))
                             .frame(width: 14, height: 4)
-                        Text("\(policy.unpaidBreakMinutes)-minute unpaid break (\(policy.breakWindowStart)–\(policy.breakWindowEnd))")
+                        Text("\(dayBreak.minutes)-minute unpaid break (\(ManagerScheduleInterval.formatMinutes(dayBreak.start))–\(ManagerScheduleInterval.formatMinutes(dayBreak.end)))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -501,10 +505,20 @@ fileprivate struct ManagerCustomHoursSheet: View {
     @State private var breakWarningMessage: String?
     /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for the request's days, worked out when the times change.
     @State private var weekendBreakdownLines: [String] = []
+    /// RULEBOOK 1.19.0 `unpaidBreakAppliesOnDay`: the "No break" toggle only when a booked day takes an unpaid break off.
+    private let breakApplies: Bool
 
     init(context: CustomHoursEditorContext, policy: OrgPayrollTimePolicy, onSave: @escaping (String, String, Bool) -> Void, onCancel: @escaping () -> Void) {
         self.context = context
         self.policy = policy
+        self.breakApplies = context.days.isEmpty
+            ? !policy.breakPaid
+            : context.days.contains { day in
+                CanonicalBusinessEngine.unpaidBreakAppliesOnDay(
+                    policy: CanonicalBusinessEngine.payrollPolicyInEffect(on: day, fallback: policy),
+                    dayKey: CanonicalBusinessEngine.bookingDayKey(day)
+                )
+            }
         self.onSave = onSave
         self.onCancel = onCancel
         let seedS = context.seedStart?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -532,8 +546,10 @@ fileprivate struct ManagerCustomHoursSheet: View {
                     TextField("End (HH:mm)", text: $endText)
                         .accessibilityIdentifier("managerCustomHours.endHHMm")
                         .keyboardType(.numbersAndPunctuation)
-                    Toggle("No break (on this booking)", isOn: $breakRemoved)
-                        .accessibilityIdentifier("managerCustomHours.noBreakOnThisBooking")
+                    if breakApplies {
+                        Toggle("No break (on this booking)", isOn: $breakRemoved)
+                            .accessibilityIdentifier("managerCustomHours.noBreakOnThisBooking")
+                    }
                     if !context.days.isEmpty {
                         WeekendBookingNoteView(days: context.days, policy: policy)
                     }

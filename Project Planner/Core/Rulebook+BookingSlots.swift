@@ -210,15 +210,16 @@ extension CanonicalBusinessEngine {
 
 extension OperativeDayBookingChoice {
     /// RULEBOOK 1.13.1 §4.3: a new Saturday or Sunday booking is custom hours, prefilled with that day's window
-    /// (`weekendCustomHoursDefault`), else the standard day. The break flag is what the weekend editor always started
-    /// with on iOS (removed); pay comes from `payrollHoursResult` at the weekend rule either way.
+    /// (`weekendCustomHoursDefault`), else the standard day. 1.19.0: the unpaid break starts on (`isBreakRemoved` false,
+    /// as web's pickers start), so a weekend day whose own break is unpaid takes it off as pay does; on a day whose break
+    /// is paid the flag changes nothing (`payrollHoursResult`).
     static func weekendCustomHours(on day: Date, policy: OrgPayrollTimePolicy) -> OperativeDayBookingChoice {
         let prefill = CanonicalBusinessEngine.customHoursPrefill(on: day, policy: policy)
         return OperativeDayBookingChoice(
             timeSlot: .customHours,
             workStartTime: prefill.start,
             workEndTime: prefill.end,
-            isBreakRemoved: true,
+            isBreakRemoved: false,
             otMultiplierOverride: nil
         )
     }

@@ -124,7 +124,8 @@ extension CanonicalBusinessEngine {
         ranges: [(startDay: Int, endDay: Int)],
         recurringRunStartDay: String,
         recurringRunEndDay: String,
-        includeWeekends: Bool
+        includeWeekends: Bool,
+        weekendCoverage: OrgWeekendCoverage? = nil
     ) -> CanonicalClashScanDays? {
         var payload = coverageWindowPayload(
             reference: reference,
@@ -137,6 +138,8 @@ extension CanonicalBusinessEngine {
             recurringRunEndDay: recurringRunEndDay
         )
         payload["includeWeekends"] = includeWeekends
+        // RULEBOOK 1.19.0 §5: a Saturday or Sunday whose `weekendCoverage` toggle is off is not scanned.
+        if let weekendCoverage { payload["weekendCoverage"] = weekendCoverage.asFirestoreDictionary() }
         guard let row = callJSON("unbookedScanDays", arguments: [payload]) as? [String: Any],
               let start = row["startDayKey"] as? String, !start.isEmpty,
               let end = row["endDayKey"] as? String, !end.isEmpty else { return nil }
@@ -196,7 +199,8 @@ extension CanonicalBusinessEngine {
             ranges: ranges,
             recurringRunStartDay: invoicing.recurringRunStartDay.rawValue,
             recurringRunEndDay: invoicing.recurringRunEndDay.rawValue,
-            includeWeekends: detection.includeWeekendsForUnbookedLabour
+            includeWeekends: detection.includeWeekendsForUnbookedLabour,
+            weekendCoverage: detection.weekendCoverage
         )
         let unbookedEnd = unbooked.flatMap { date(fromDayKey: $0.endDayKey, calendar: calendar) } ?? end
         return WarningScanWindow(

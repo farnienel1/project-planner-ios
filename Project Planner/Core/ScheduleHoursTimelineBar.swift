@@ -39,15 +39,16 @@ enum ScheduleHoursTimelineSupport {
         workEnd: Int,
         breakIncluded: Bool
     ) -> (Int, Int)? {
+        // RULEBOOK 1.19.0 §4.3 `payrollDayWindows`: the day's unpaid break band, only when an unpaid break applies that
+        // day (`unpaidBreakAppliesOnDay`: Mon–Fri the organisation break; Saturday / Sunday that day's own break).
         guard breakIncluded,
-              !policy.breakPaid,
-              policy.unpaidBreakMinutes > 0,
-              PayrollTimePolicyCatalog.isWeekday(day),
-              let bws = ManagerScheduleInterval.parseMinutes(policy.breakWindowStart),
-              let bwe = ManagerScheduleInterval.parseMinutes(policy.breakWindowEnd),
-              bwe > bws else { return nil }
-        let b0 = max(workStart, bws)
-        let b1 = min(workEnd, bwe)
+              let band = CanonicalBusinessEngine.payrollDayWindows(
+                policy: policy,
+                dayKey: OrganizationRulebookContext.dayKey(day)
+              )?.unpaidBreak,
+              band.end > band.start else { return nil }
+        let b0 = max(workStart, band.start)
+        let b1 = min(workEnd, band.end)
         guard b1 > b0 else { return nil }
         return (b0, b1)
     }

@@ -49,8 +49,9 @@ extension CanonicalBusinessEngine {
     // MARK: - Working hours over time (payrollPolicySchedule.ts)
 
     /// The script's own policy shape (`parsePayrollPolicy`) for a Swift policy.
+    /// Memoised by the policy (`memoisedPayrollPolicyJSON`); 1.19.0 carries each weekend day's own lunch break.
     nonisolated static func payrollPolicyJSON(_ policy: OrgPayrollTimePolicy) -> [String: Any]? {
-        callJSON("parsePayrollPolicy", arguments: [policy.asFirestoreDictionary()]) as? [String: Any]
+        memoisedPayrollPolicyJSON(policy)
     }
 
     /// A policy the script returned (its own shape or the stored one) as the Swift model.

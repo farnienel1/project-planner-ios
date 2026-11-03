@@ -63,6 +63,10 @@ struct OrganisationWorkingHoursView: View {
     @State private var scheduleEffectiveDate = Self.firstSchedulableDay
     @State private var saveSucceeded = false
     @State private var showingCancelScheduledConfirm = false
+    /// RULEBOOK 1.19.0 §4.3 (two admins): the stored working-hours state this draft was taken from
+    /// (`Organization.payrollPolicyStateJSON`). Every save is refused with `PAYROLL_POLICY_STALE_SAVE_MESSAGE` when the
+    /// server's working hours moved since (`payrollTimePolicySaveConflict`).
+    @State private var baseStateJSON: String?
 
     /// A scheduled change must start after today (`payrollTimePolicyScheduleDateError`).
     private static var firstSchedulableDay: Date {
@@ -189,6 +193,11 @@ struct OrganisationWorkingHoursView: View {
         .task { loadDraft() }
         .onChange(of: firebaseBackend.currentOrganization?.settings.payrollTimePolicy) { _, _ in
             // §4: keep an unsaved draft; follow the server only while nothing has been changed here.
+            guard !isDirty, !isSaving else { return }
+            loadDraft()
+        }
+        .onChange(of: firebaseBackend.currentOrganization?.payrollPolicyStateJSON) { _, _ in
+            // 1.19.0: the base of the two-admin guard follows the server only while the draft is unchanged.
             guard !isDirty, !isSaving else { return }
             loadDraft()
         }
@@ -331,12 +340,17 @@ struct OrganisationWorkingHoursView: View {
     private var saturdayGlanceText: String {
         let sat = draft.saturday
         if sat.allHoursAtMultiplierMode {
-            return "Every hour worked  ·  \(formatMultiplier(sat.allHoursMultiplier))x"
+            return "Every hour worked  ·  \(formatMultiplier(sat.allHoursMultiplier))x\(lunchGlanceSuffix(sat))"
         }
         let start = sat.customStandardStart ?? draft.standardDayStart
         let end = sat.customStandardEnd ?? "13:00"
         let flat = sat.resolvedCountsAsHours(fallback: draft.standardPaidHours)
-        return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  \(formatMultiplier(sat.outsideStandardWindowMultiplier))x"
+        return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  \(formatMultiplier(sat.outsideStandardWindowMultiplier))x\(lunchGlanceSuffix(sat))"
+    }
+
+    /// RULEBOOK 1.19.0: a weekend day whose own lunch break is unpaid (`breakPaid == false`).
+    private func lunchGlanceSuffix(_ settings: OrgWeekendDayPayrollSettings) -> String {
+        settings.breakPaid == false ? "  ·  unpaid lunch" : ""
     }
 
     private var sundayGlanceText: String {
@@ -345,12 +359,12 @@ struct OrganisationWorkingHoursView: View {
         }
         let sun = draft.sunday
         if sun.allHoursAtMultiplierMode {
-            return "Every hour worked  ·  \(formatMultiplier(sun.allHoursMultiplier))x"
+            return "Every hour worked  ·  \(formatMultiplier(sun.allHoursMultiplier))x\(lunchGlanceSuffix(sun))"
         }
         let start = sun.customStandardStart ?? draft.standardDayStart
         let end = sun.customStandardEnd ?? "13:00"
         let flat = sun.resolvedCountsAsHours(fallback: draft.standardPaidHours)
-        return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  \(formatMultiplier(sun.outsideStandardWindowMultiplier))x"
+        return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  \(formatMultiplier(sun.outsideStandardWindowMultiplier))x\(lunchGlanceSuffix(sun))"
     }
 
     private func glanceRow(label: String, color: Color, text: String) -> some View {
@@ -565,6 +579,11 @@ struct OrganisationWorkingHoursView: View {
                 } else {
                     saturdayWindowContent(settings: $draft.saturday, title: "Saturday")
                 }
+
+                cardDivider
+                weekendLunchBreakContent(keyPath: \.saturday, day: .saturday, accent: WorkingHoursPalette.amber)
+                cardDivider
+                WorkingHoursWeekendPreview(policy: draft, day: .saturday, accent: WorkingHoursPalette.amber)
             }
         }
     }
@@ -583,7 +602,9 @@ struct OrganisationWorkingHoursView: View {
         }
 
         tintedInfoBox(
-            text: "No break is deducted inside this window. A shift covering \(settings.wrappedValue.customStandardStart ?? draft.standardDayStart)–\(settings.wrappedValue.customStandardEnd ?? "13:00") (\(formatHoursDisplay(saturdayWindowSpanHours(settings.wrappedValue)))) is simply paid as a flat day — set how many hours that day counts as below.",
+            text: settings.wrappedValue.breakPaid == false
+                ? "A shift covering \(settings.wrappedValue.customStandardStart ?? draft.standardDayStart)–\(settings.wrappedValue.customStandardEnd ?? "13:00") (\(formatHoursDisplay(saturdayWindowSpanHours(settings.wrappedValue)))) is paid as a flat day, less the unpaid lunch break it covers — set how many hours that day counts as below."
+                : "A shift covering \(settings.wrappedValue.customStandardStart ?? draft.standardDayStart)–\(settings.wrappedValue.customStandardEnd ?? "13:00") (\(formatHoursDisplay(saturdayWindowSpanHours(settings.wrappedValue)))) is simply paid as a flat day — set how many hours that day counts as below.",
             tint: WorkingHoursPalette.amber
         )
 
@@ -646,9 +667,77 @@ struct OrganisationWorkingHoursView: View {
         )
 
         tintedInfoBox(
-            text: "No fixed window — whatever hours are booked on a Saturday are paid at \(formatMultiplier(settings.wrappedValue.allHoursMultiplier))x, with no unpaid break deducted.",
+            text: settings.wrappedValue.breakPaid == false
+                ? "No fixed window — the hours booked on a Saturday, less the unpaid lunch break, are paid at \(formatMultiplier(settings.wrappedValue.allHoursMultiplier))x."
+                : "No fixed window — whatever hours are booked on a Saturday are paid at \(formatMultiplier(settings.wrappedValue.allHoursMultiplier))x.",
             tint: WorkingHoursPalette.amber
         )
+    }
+
+    // MARK: - Weekend lunch break (RULEBOOK 1.19.0 §4.3)
+
+    /// That day's break as the rule reads it (`weekendBreakFor`: each missing field the weekday break). The controls show
+    /// it, so an untouched day is prefilled from the weekday lunch and stays unset until changed.
+    private func weekendBreak(_ day: RulebookWeekendDay) -> RulebookWeekendBreak {
+        CanonicalBusinessEngine.weekendBreakFor(policy: draft, weekday: day)
+            ?? RulebookWeekendBreak(paid: true, minutes: draft.unpaidBreakMinutes, start: draft.breakWindowStart, end: draft.breakWindowEnd)
+    }
+
+    @ViewBuilder
+    private func weekendLunchBreakContent(
+        keyPath: WritableKeyPath<OrgPayrollTimePolicy, OrgWeekendDayPayrollSettings>,
+        day: RulebookWeekendDay,
+        accent: Color
+    ) -> some View {
+        let current = weekendBreak(day)
+        let copy = CanonicalBusinessEngine.weekendLunchBreakCopy(policy: draft, weekday: day)
+        let name = day == .saturday ? "Saturday" : "Sunday"
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(copy?.title ?? "Lunch break on \(name)")
+                    .font(.body.weight(.semibold))
+                if let detail = copy?.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            WorkingHoursSegmentedPicker(
+                selection: Binding(
+                    get: { current.paid ? 1 : 0 },
+                    set: { draft[keyPath: keyPath].breakPaid = $0 == 1 }
+                ),
+                options: [(1, "Paid"), (0, "Unpaid")]
+            )
+            .frame(maxWidth: 160)
+            .accessibilityIdentifier("organisationWorkingHours.\(day.rawValue).lunchPaid")
+        }
+
+        stepperRow(
+            label: "\(name) break length",
+            value: Binding(
+                get: { Double(current.minutes) },
+                set: { draft[keyPath: keyPath].breakMinutes = Int($0) }
+            ),
+            step: 5,
+            min: limits?.breakMinutes.min ?? 0,
+            max: limits?.breakMinutes.max ?? 120,
+            suffix: " min"
+        )
+
+        HStack(spacing: 12) {
+            timeFieldColumn(label: "Break start", text: Binding(
+                get: { current.start },
+                set: { draft[keyPath: keyPath].breakWindowStart = $0.isEmpty ? nil : $0 }
+            ))
+            timeFieldColumn(label: "Break end", text: Binding(
+                get: { current.end },
+                set: { draft[keyPath: keyPath].breakWindowEnd = $0.isEmpty ? nil : $0 }
+            ))
+        }
+        .tint(accent)
     }
 
     // MARK: - Sunday
@@ -682,7 +771,15 @@ struct OrganisationWorkingHoursView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    WorkingHoursToggle(isOn: $draft.sundaySameAsSaturday)
+                    WorkingHoursToggle(isOn: Binding(
+                        get: { draft.sundaySameAsSaturday },
+                        set: { same in
+                            // RULEBOOK 1.19.0 §4.3: "Sunday same as Saturday" copies Saturday's rules, lunch break
+                            // included (web `patchWeekend('sunday', { ...draft.saturday, sameAsSaturday: true })`).
+                            if same { draft.sunday = draft.saturday }
+                            draft.sundaySameAsSaturday = same
+                        }
+                    ))
                 }
 
                 if draft.sundaySameAsSaturday {
@@ -706,7 +803,13 @@ struct OrganisationWorkingHoursView: View {
                     } else {
                         saturdayWindowContent(settings: $draft.sunday, title: "Sunday")
                     }
+
+                    cardDivider
+                    weekendLunchBreakContent(keyPath: \.sunday, day: .sunday, accent: WorkingHoursPalette.rose)
                 }
+
+                cardDivider
+                WorkingHoursWeekendPreview(policy: draft, day: .sunday, accent: WorkingHoursPalette.rose)
             }
         }
     }
@@ -715,20 +818,11 @@ struct OrganisationWorkingHoursView: View {
     private func sundayAllHoursContent(settings: Binding<OrgWeekendDayPayrollSettings>) -> some View {
         multiplierRow(
             title: "Multiplier on every hour worked",
-            subtitle: "No unpaid break applied",
+            subtitle: settings.wrappedValue.breakPaid == false ? "Hours worked less the unpaid lunch break" : "Every hour worked",
             value: Binding(
                 get: { settings.wrappedValue.allHoursMultiplier },
                 set: { settings.wrappedValue.allHoursMultiplier = $0 }
             ),
-            accent: WorkingHoursPalette.rose
-        )
-
-        gradientSummaryCard(
-            topColor: WorkingHoursPalette.roseGradientTop,
-            bottomColor: WorkingHoursPalette.roseGradientBottom,
-            rows: [],
-            footerLabel: "Example: a 6 hour Sunday pays",
-            footerValue: formatHoursDisplay(6 * settings.wrappedValue.allHoursMultiplier),
             accent: WorkingHoursPalette.rose
         )
     }
@@ -1015,6 +1109,7 @@ struct OrganisationWorkingHoursView: View {
         loaded = sanitizePolicy(loaded)
         draft = loaded
         baselineDraft = loaded
+        baseStateJSON = firebaseBackend.currentOrganization?.payrollPolicyStateJSON
         syncBreakWindowPlacement()
     }
 
@@ -1042,6 +1137,11 @@ struct OrganisationWorkingHoursView: View {
         out.outsideStandardWindowMultiplier = clampMultiplier(out.outsideStandardWindowMultiplier)
         if let start = out.customStandardStart, !isValidHM(start) { out.customStandardStart = nil }
         if let end = out.customStandardEnd, !isValidHM(end) { out.customStandardEnd = nil }
+        if let minutes = out.breakMinutes {
+            out.breakMinutes = Swift.max(Int(limits?.breakMinutes.min ?? 0), Swift.min(Int(limits?.breakMinutes.max ?? 120), minutes))
+        }
+        if let start = out.breakWindowStart, !isValidHM(start) { out.breakWindowStart = nil }
+        if let end = out.breakWindowEnd, !isValidHM(end) { out.breakWindowEnd = nil }
         if let counts = out.countsAsHours {
             out.countsAsHours = Swift.max(limits?.paidHours.min ?? 1, Swift.min(limits?.paidHours.max ?? 12, counts))
         }
@@ -1082,19 +1182,11 @@ struct OrganisationWorkingHoursView: View {
         isSaving = true
         errorMessage = nil
         saveSucceeded = false
-        let priorPolicy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        // Organisation-zone today (§1), not the device day.
-        let effectiveDay = OrganizationRulebookContext.date(fromDayKey: OrganizationRulebookContext.dayKey(Date()))
-            ?? CanonicalBusinessEngine.businessCalendar.startOfDay(for: Date())
+        // RULEBOOK 1.19.0 §4.3/§8: a working-hours change never rewrites stored bookings or signed sheets. Each day is
+        // priced under the policy in effect on it (history first), so today's bookings are not re-timed here (the
+        // former `PayrollPolicyBookingRecalibrator` pass rewrote them, which web never does).
         do {
-            try await firebaseBackend.applyOrganizationPayrollTimePolicyImmediately(draft)
-            await PayrollPolicyBookingRecalibrator.apply(
-                effectiveDay: effectiveDay,
-                priorPolicy: priorPolicy,
-                newPolicy: draft,
-                bookingStore: bookingStore,
-                managerScheduleStore: managerScheduleStore
-            )
+            try await firebaseBackend.applyOrganizationPayrollTimePolicyImmediately(draft, baseStateJSON: baseStateJSON)
             await MainActor.run {
                 isSaving = false
                 baselineDraft = draft
@@ -1115,7 +1207,11 @@ struct OrganisationWorkingHoursView: View {
         isSaving = true
         errorMessage = nil
         do {
-            try await firebaseBackend.scheduleOrganizationPayrollTimePolicyChange(draft, effectiveFrom: scheduleEffectiveDate)
+            try await firebaseBackend.scheduleOrganizationPayrollTimePolicyChange(
+                draft,
+                effectiveFrom: scheduleEffectiveDate,
+                baseStateJSON: baseStateJSON
+            )
             await MainActor.run {
                 isSaving = false
                 baselineDraft = draft
@@ -1139,7 +1235,9 @@ struct OrganisationWorkingHoursView: View {
         isSaving = true
         errorMessage = nil
         do {
-            try await firebaseBackend.cancelScheduledOrganizationPayrollTimePolicyChange()
+            try await firebaseBackend.cancelScheduledOrganizationPayrollTimePolicyChange(
+                baseStateJSON: firebaseBackend.currentOrganization?.payrollPolicyStateJSON
+            )
             isSaving = false
             if !isDirty { loadDraft() }
         } catch {
@@ -1212,6 +1310,113 @@ private extension OrgPayrollTimePolicy {
             hours = max(0, hours - standardUnpaidBreakHours)
         }
         return hours
+    }
+}
+
+// MARK: - Weekend live calculation (RULEBOOK 1.19.0 §4.3, web `WeekendDayPreview`)
+
+/// One weekend day's preview for a draft policy: the example span, the bands and the per-day rows. Memoised by the
+/// draft so a redraw never runs the script again.
+nonisolated private struct WorkingHoursWeekendPreviewModel: Sendable {
+    let summary: String
+    let title: String
+    let rows: [RulebookBookingDayBreakdownRow]
+
+    nonisolated struct Key: Hashable, Sendable {
+        let policy: OrgPayrollTimePolicy
+        let day: String
+    }
+
+    private static let memo = RulebookAnswerMemo<Key, WorkingHoursWeekendPreviewModel>(limit: 64)
+    /// Web's fixed preview days (a Saturday and a Sunday), read in Europe/London as web does.
+    private static let previewDay: [RulebookWeekendDay: String] = [.saturday: "2026-01-03", .sunday: "2026-01-04"]
+    private static let previewZone = "Europe/London"
+
+    /// Priced only by `weekendBookingBreakdown` (`payrollHoursResult`); the span is `weekendCustomHoursDefault`, else the
+    /// standard day (`halfDayWindows(policy).day`); the bands are `payrollDayWindows` and `payrollBreakOnDay`.
+    @MainActor static func make(policy: OrgPayrollTimePolicy, day: RulebookWeekendDay) -> WorkingHoursWeekendPreviewModel? {
+        guard let dayKey = previewDay[day] else { return nil }
+        return memo.value(for: Key(policy: policy, day: day.rawValue)) {
+            let span: (start: String, end: String)
+            if let window = CanonicalBusinessEngine.weekendCustomHoursDefault(policy: policy, dayKey: dayKey, timeZone: previewZone) {
+                span = window
+            } else if let standard = CanonicalBusinessEngine.halfDayWindows(CanonicalStandardDayInput(policy: policy))?.day {
+                span = (ManagerScheduleInterval.formatMinutes(standard.start), ManagerScheduleInterval.formatMinutes(standard.end))
+            } else {
+                return nil
+            }
+            guard let rows = CanonicalBusinessEngine.weekendBookingBreakdown(
+                policy: policy, dayKeys: [dayKey], start: span.start, end: span.end, isBreakRemoved: false, timeZone: previewZone
+            ), !rows.isEmpty else { return nil }
+            let bands = CanonicalBusinessEngine.payrollDayWindows(policy: policy, dayKey: dayKey, timeZone: previewZone)
+            let dayBreak = CanonicalBusinessEngine.payrollBreakOnDay(policy: policy, dayKey: dayKey, timeZone: previewZone)
+            var summary: String
+            if let all = bands?.allHoursMultiplier {
+                summary = "Every hour at ×\(ScheduleCoverageFormat.hours(all))"
+            } else {
+                summary = "\(span.start)–\(span.end) counts as set hours"
+            }
+            if let dayBreak {
+                summary += " · \(dayBreak.paid ? "Paid" : "Unpaid") break "
+                    + "\(ManagerScheduleInterval.formatMinutes(dayBreak.start))–\(ManagerScheduleInterval.formatMinutes(dayBreak.end))"
+                    + " (\(dayBreak.minutes) min)"
+            }
+            let name = day == .saturday ? "Saturday" : "Sunday"
+            return WorkingHoursWeekendPreviewModel(
+                summary: summary,
+                title: "\(name) example · \(span.start)–\(span.end)",
+                rows: rows
+            )
+        }
+    }
+}
+
+/// The live calculation under Saturday and Sunday, as Monday–Friday has. No figure is computed here.
+private struct WorkingHoursWeekendPreview: View {
+    let policy: OrgPayrollTimePolicy
+    let day: RulebookWeekendDay
+    let accent: Color
+
+    var body: some View {
+        if let model = WorkingHoursWeekendPreviewModel.make(policy: policy, day: day) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(model.summary)
+                    .font(.footnote)
+                    .foregroundStyle(WorkingHoursPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(model.title.uppercased())
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(accent)
+                        .tracking(0.8)
+                    ForEach(model.rows) { row in
+                        if row.lines.isEmpty {
+                            Text(row.line)
+                                .font(.footnote.weight(.semibold))
+                                .monospacedDigit()
+                        } else {
+                            ForEach(Array(row.lines.enumerated()), id: \.offset) { _, line in
+                                HStack {
+                                    Text(line.label)
+                                        .font(line.kind == "total" ? .subheadline.weight(.semibold) : .subheadline)
+                                        .foregroundStyle(line.kind == "total" ? accent : WorkingHoursPalette.muted)
+                                    Spacer()
+                                    Text(line.value)
+                                        .font(line.kind == "total" ? .body.weight(.heavy) : .body.weight(.bold))
+                                        .monospacedDigit()
+                                        .foregroundStyle(line.kind == "total" ? accent : WorkingHoursPalette.ink)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(14)
+                .background(accent.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("organisationWorkingHours.\(day.rawValue).preview")
+        }
     }
 }
 
