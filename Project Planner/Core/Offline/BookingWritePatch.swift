@@ -45,6 +45,10 @@ enum BookingWritePatch {
         optional("workEndTime", nonEmpty(booking.workEndTime))
         optional("otMultiplierOverride", booking.otMultiplierOverride)
         optional("bookingGroupId", nonEmpty(booking.bookingGroupId))
+        // RULEBOOK 1.11.0 §16, §17: `bookingJobCollectionFields` — the job's collection, when the job is loaded.
+        for (key, value) in BookingJobCollectionContext.fields(collection: "bookings", jobId: booking.storedProjectId) {
+            data[key] = value
+        }
         return data
     }
 
@@ -93,6 +97,15 @@ enum BookingWritePatch {
         optional("workStartTime", nonEmpty(booking.workStartTime))
         optional("workEndTime", nonEmpty(booking.workEndTime))
         optional("bookingGroupId", nonEmpty(booking.bookingGroupId))
+        // RULEBOOK 1.11.0: a job-linked manager site booking carries `jobCollection` (from the loaded job, else its
+        // `locationType`); office, home, survey and custom never do.
+        for (key, value) in BookingJobCollectionContext.fields(
+            collection: "managerSiteBookings",
+            jobId: booking.storedLocationId,
+            locationType: booking.locationType.rawValue
+        ) {
+            data[key] = value
+        }
         return data
     }
 

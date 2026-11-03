@@ -154,9 +154,10 @@ extension CanonicalBusinessEngine {
         status: String,
         bookedContactIds: [String],
         bookedOperativeNames: [String],
-        createdAt: Date
+        createdAt: Date,
+        jobCollection: String? = nil
     ) -> [String: Any]? {
-        let input: [String: Any] = [
+        var input: [String: Any] = [
             "id": id,
             "subcontractorId": subcontractorId,
             "projectId": projectId,
@@ -171,6 +172,8 @@ extension CanonicalBusinessEngine {
             "bookedOperativeNames": bookedOperativeNames,
             "createdAtMs": createdAt.timeIntervalSince1970 * 1000,
         ]
+        // RULEBOOK 1.11.0: the job's collection (`bookingJobCollectionFields` inside the writer).
+        if let jobCollection { input["jobCollection"] = jobCollection }
         guard let result = callJSON("subcontractorBookingCreateFields", arguments: [input]) as? [String: Any],
               (result["ok"] as? Bool) == true,
               let fields = result["fields"] as? [String: Any] else { return nil }

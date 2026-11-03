@@ -4225,6 +4225,8 @@ class FirebaseBackend: ObservableObject {
         var emailClaimsLoaded = false
         /// `organizations/{orgId}.creatorUserId`. The creator belongs to the organisation they made.
         var creatorUserId: String?
+        /// `members.{uid}` role values, by member id (RULEBOOK 1.11.0 `organizationLevelFor`).
+        var memberRoles: [String: String] = [:]
     }
 
     private func loadOrgMemberIndex(organizationId: String) async -> OrgMemberIndex {
@@ -4242,6 +4244,9 @@ class FirebaseBackend: ObservableObject {
                 guard !trimmed.isEmpty else { continue }
                 index.memberIds.insert(trimmed)
                 index.indexedUserIds.insert(trimmed)
+            }
+            for (userId, role) in members {
+                if let role = role as? String { index.memberRoles[userId.trimmingCharacters(in: .whitespacesAndNewlines)] = role }
             }
         }
         if let creator = (orgSnap?.data()?["creatorUserId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -4612,6 +4617,22 @@ class FirebaseBackend: ObservableObject {
             var user = Self.parseAppUserDocument(userId: userId, data: data)
             if fieldMissing {
                 user.organizationId = orgId
+            }
+            // RULEBOOK 1.11.0 §11 `organizationLevelFor`: a profile whose `organizationId` is another company is shown
+            // at its level here (membership, else `members` role; the creator is super admin) — never at that
+            // company's flags. The document is not rewritten from this.
+            if !belongsByField && !fieldMissing && !queryAlreadyMatched,
+               memberIndex.memberRoles[userId] != nil || memberIndex.creatorUserId == userId,
+               let level = CanonicalBusinessEngine.organizationLevelFor(
+                   organizationId: orgId,
+                   userId: userId,
+                   user: ["organizationId": docOrganizationId],
+                   membership: nil,
+                   membersRole: memberIndex.memberRoles[userId],
+                   creatorUserId: memberIndex.creatorUserId
+               ),
+               level.source != "users" {
+                user = user.atOrganizationLevel(level)
             }
             if managersRecordUserIds.contains(userId), Self.qualifiesForManagersRecordPlacement(user) {
                 user.placedByManagersRecord = true
@@ -7278,6 +7299,8 @@ class FirebaseBackend: ObservableObject {
                !fields.isDisjoint(with: slotGroup) {
                 fields.formUnion(slotGroup)
             }
+            // RULEBOOK 1.11.0: `jobCollection` rides on every edit (`BOOKING_JOB_WRITE_GROUP`); unchanged it writes nothing.
+            fields.insert("jobCollection")
             let next = BookingWritePatch.patch(
                 BookingWritePatch.labourValues(booking, deletesClearedFields: true),
                 fields: fields
@@ -7679,9 +7702,10 @@ class FirebaseBackend: ObservableObject {
         let ref = db.collection("organizations").document(organizationId).collection("managerSiteBookings").document(booking.documentKey)
         let uid = currentUser?.uid
         if let changedFields {
+            // RULEBOOK 1.11.0: `jobCollection` goes with the location group.
             let patch = BookingWritePatch.patch(
                 BookingWritePatch.managerValues(booking, deletesClearedFields: true),
-                fields: changedFields
+                fields: changedFields.union(["jobCollection"])
             )
             guard !patch.isEmpty else { return }
             // RULEBOOK 1.9.0 §1, §2: an edit is `managerSiteBookingUpdateWriteFields` against the stored copy — only
@@ -9642,7 +9666,8 @@ extension FirebaseBackend {
                 status: booking.status.rawValue,
                 bookedContactIds: booking.storedContactIds,
                 bookedOperativeNames: operativeNames ?? booking.storedOperativeNames,
-                createdAt: booking.createdAt
+                createdAt: booking.createdAt,
+                jobCollection: BookingJobCollectionContext.jobCollection(forJobId: booking.storedProjectId)
             ) else {
                 throw CanonicalWriteUnavailableError(function: "subcontractorBookingCreateFields")
             }

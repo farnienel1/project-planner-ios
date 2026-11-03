@@ -328,3 +328,38 @@ extension CanonicalBusinessEngine {
         return CanonicalDocumentWrite(callJSON("timesheetChangedFields", arguments: [baseJSON, peopleDocumentJSON(next)]))
     }
 }
+
+// MARK: - Rulebook 1.11.0 §8: PAYE days never make a timesheet
+
+extension CanonicalBusinessEngine {
+    /// `TimesheetPerson` for `timesheetDaysForPerson` / `showsMyTimesheets`.
+    @MainActor static func timesheetPerson(_ user: AppUser) -> [String: Any] {
+        [
+            "isActive": user.isActive,
+            "email": user.email,
+            "name": user.fullName,
+            "employmentType": user.employmentType.rawValue,
+            "employmentTypeTransitionFrom": user.employmentTypeTransitionFrom?.rawValue ?? NSNull(),
+            "employmentTypeEffectiveAt": user.employmentTypeEffectiveAt.map { $0.timeIntervalSince1970 * 1000 } ?? NSNull(),
+            "operativeMode": user.permissions.operativeMode,
+        ]
+    }
+
+    /// `timesheetDaysForPerson(user, { startDayKey, endDayKey }, timeZone)`: the organisation-zone days of the period on
+    /// which the person is self-employed — the only days that count on their timesheet. Nil when the script did not answer.
+    nonisolated static func timesheetDaysForPerson(person: [String: Any], startDayKey: String, endDayKey: String, timeZone: String) -> [String]? {
+        callJSON(
+            "timesheetDaysForPerson",
+            arguments: [person, ["startDayKey": startDayKey, "endDayKey": endDayKey], timeZone]
+        ) as? [String]
+    }
+
+    /// `showsMyTimesheets(user, period, timeZone)`: a My Timesheets sheet exists for the period only when the person is
+    /// self-employed on at least one day of it. A PAYE person never sees My Timesheets. Nil when the script did not answer.
+    nonisolated static func showsMyTimesheets(person: [String: Any], startDayKey: String, endDayKey: String, timeZone: String) -> Bool? {
+        callJSON(
+            "showsMyTimesheets",
+            arguments: [person, ["startDayKey": startDayKey, "endDayKey": endDayKey], timeZone]
+        ) as? Bool
+    }
+}

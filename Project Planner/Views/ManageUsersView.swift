@@ -1401,6 +1401,8 @@ struct EditUserView: View {
     @State private var editMobile: String
     @State private var didSyncIdentityDrafts = false
     @State private var showingAdminAccessLockedMessage = false
+    /// The message for a locked permission row (`ADMIN_LOCKED_PERMISSION_MESSAGE` for an admin's locked toggles).
+    @State private var lockedPermissionMessage = UserRoleTransitionPolicy.adminAccessLockedUntilAccountTypeChanges
     @State private var showingProfilePhotoSourcePicker = false
     @State private var profilePhotoPickerSource: UIImagePickerController.SourceType = .photoLibrary
     @State private var showingProfileImagePicker = false
@@ -1746,10 +1748,12 @@ struct EditUserView: View {
 
     private var lineManagerSummary: String {
         guard permissions.operativeMode || permissions.manager || permissions.adminAccess else { return "" }
-        return LineManagerSummaryLabel.text(
+        // RULEBOOK 1.11.0 §11: `lineManagerSummary(person, roster)`.
+        return LineManagerRulebook.summary(
+            for: draftUserForAnnualLeaveValidation,
             selectedIds: selectedLineManagerUserIds,
-            roster: userStore.organizationUsers,
-            hasNoLineManager: hasNoLineManagerDraft
+            hasNoLineManager: hasNoLineManagerDraft,
+            roster: userStore.organizationUsers
         )
     }
 
@@ -1974,16 +1978,9 @@ struct EditUserView: View {
             && !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: draftUserForAnnualLeaveValidation, users: roster)
     }
 
+    /// RULEBOOK 1.11.0 §11: `lineManagerCandidates(person, roster)`.
     private var lineManagerCandidates: [AppUser] {
-        userStore.organizationUsers
-            .filter { candidate in
-                candidate.id != user.id &&
-                !candidate.permissions.operativeMode &&
-                (candidate.isSuperAdmin || candidate.permissions.adminAccess || candidate.permissions.manager) &&
-                candidate.isActive &&
-                candidate.passwordSet
-            }
-            .sorted { ($0.fullName.isEmpty ? $0.email : $0.fullName) < ($1.fullName.isEmpty ? $1.email : $1.fullName) }
+        LineManagerRulebook.candidates(for: draftUserForAnnualLeaveValidation, roster: userStore.organizationUsers)
     }
     
     var body: some View {
@@ -2103,7 +2100,7 @@ struct EditUserView: View {
             Button("OK", role: .cancel) { }
                 .accessibilityIdentifier("editUser.ok")
         } message: {
-            Text(UserRoleTransitionPolicy.adminAccessLockedUntilAccountTypeChanges)
+            Text(lockedPermissionMessage)
         }
         .background(PPColor.page.ignoresSafeArea())
         .navigationTitle(editNavigationTitle)
@@ -2543,14 +2540,22 @@ struct EditUserView: View {
         case .manager: nextRole = .manager
         case .administrator: nextRole = .admin
         }
-        let ok = await userStore.updateUserPermissions(
+        _ = nextRole
+        // RULEBOOK 1.11.0 §11: `accountTypeChangeWrites` — users/{uid}, members.{uid} and the membership together.
+        let level: RulebookPermissionLevel = changeUserTypeDraft == .administrator ? .admin
+            : changeUserTypeDraft == .manager ? .manager : .operative
+        let result = await userStore.changeAccountType(
             userId: user.id,
-            permissions: newPerms,
+            kind: level,
+            screenPermissions: newPerms,
             holidayStore: holidayStore,
-            linkedOperativeUUID: linkedOperativeForUser?.id,
-            role: nextRole
+            linkedOperativeUUID: linkedOperativeForUser?.id
         )
-        await MainActor.run { isApplyingUserType = false }
+        let ok = result.ok
+        await MainActor.run {
+            isApplyingUserType = false
+            if let note = result.note { userTypeChangeMessage = note }
+        }
         if ok {
             // `updateUserPermissions` read the saved document back from the server; this screen shows that copy.
             await userStore.loadOrganizationUsers(forceRefresh: true)
@@ -2830,7 +2835,7 @@ struct EditUserView: View {
                         pendingPayeDayRateText = newValue
                         showingPayeDayRateWarning = true
                     }
-                Text("Day rate and hourly rate are both kept on the account. Saving one does not remove the other.")
+                Text(CanonicalBusinessEngine.payBasisSaveNote)
                     .font(.caption2)
                     .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2942,7 +2947,7 @@ struct EditUserView: View {
             LineManagersMultiSelectSheet(
                 candidates: lineManagerCandidates.filter { $0.id != user.id },
                 selectedIds: $selectedLineManagerUserIds,
-                allowNoLineManager: !permissions.operativeMode && (permissions.manager || permissions.adminAccess),
+                allowNoLineManager: LineManagerRulebook.allowsNoLineManager(for: draftUserForAnnualLeaveValidation),
                 hasNoLineManager: $hasNoLineManagerDraft
             )
         }
@@ -3397,169 +3402,114 @@ struct EditUserView: View {
         }
     }
 
-    private var operativeMaterialsAndSiteAuditRows: some View {
-        VStack(spacing: 0) {
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "shippingbox.fill",
-                iconBackground: ManageUserProfilePalette.chipAmberBg,
-                iconForeground: ManageUserProfilePalette.chipAmberFg,
-                title: "Materials",
-                description: "Can access material lists in projects and small works. They will not be able to send quotes or place orders.",
-                isOn: $permissions.materials
-            )
-            ManageUserCardDivider()
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "checklist",
-                iconBackground: ManageUserProfilePalette.chipTealBg,
-                iconForeground: ManageUserProfilePalette.chipTealFg,
-                title: "Site audit",
-                description: "Can view and submit site audits.",
-                isOn: $permissions.siteAudit
-            )
+    /// The level the Edit User rows are shown for: `permissionLevelOf` the draft (its role and flags).
+    private var editPermissionLevel: RulebookPermissionLevel {
+        draftUserForAnnualLeaveValidation.permissionLevel
+    }
+
+    /// RULEBOOK 1.11.0 §11: `permissionToggleRows({ level, user: draft, mode: 'edit' })` — the rows Add User and its
+    /// summary show for this level. Admins and super admins: every toggle on and greyed out except Annual Leave
+    /// Management; managers: Materials and Site audit on and greyed out; operatives: Materials and Site audit.
+    private func editPermissionRows(level: RulebookPermissionLevel) -> [RulebookPermissionToggleRow] {
+        CanonicalBusinessEngine.permissionToggleRows(
+            level: level,
+            user: draftUserForAnnualLeaveValidation.permissionSubject,
+            mode: .edit
+        )
+        .filter(\.visible)
+        .filter { !(suppressAdminAccessToggle && $0.field == "adminAccess") }
+    }
+
+    private func editPermissionBinding(_ row: RulebookPermissionToggleRow) -> Binding<Bool> {
+        guard row.editable else { return .constant(row.value) }
+        return Binding(
+            get: { permissions.flag(row.field) ?? row.value },
+            set: { permissions.setFlag(row.field, $0) }
+        )
+    }
+
+    private static func permissionIcon(_ field: String) -> (name: String, background: Color, foreground: Color) {
+        switch field {
+        case "adminAccess": return ("person.badge.key.fill", ManageUserProfilePalette.chipPurpleBg, ManageUserProfilePalette.chipPurpleFg)
+        case "projects": return ("folder.fill", ManageUserProfilePalette.chipBlueBg, ManageUserProfilePalette.chipBlueFg)
+        case "smallWorks": return ("hammer.fill", ManageUserProfilePalette.chipBlueBg, ManageUserProfilePalette.chipBlueFg)
+        case "weeklyReports": return ("doc.text.fill", ManageUserProfilePalette.chipTealBg, ManageUserProfilePalette.chipTealFg)
+        case "dailyOverview": return ("calendar.badge.clock", ManageUserProfilePalette.chipTealBg, ManageUserProfilePalette.chipTealFg)
+        case "subContractors": return ("person.2.wave.2.fill", ManageUserProfilePalette.chipTealBg, ManageUserProfilePalette.chipTealFg)
+        case "annualLeaveSelfBook": return ("beach.umbrella.fill", ManageUserProfilePalette.chipBlueBg, ManageUserProfilePalette.chipBlueFg)
+        case "operatives": return ("person.crop.rectangle.stack.fill", ManageUserProfilePalette.chipPurpleBg, ManageUserProfilePalette.chipPurpleFg)
+        case "qualifications": return ("rosette", ManageUserProfilePalette.chipPinkBg, ManageUserProfilePalette.chipPinkFg)
+        case "wholesalersOrderHistory": return ("building.2.fill", ManageUserProfilePalette.chipAmberBg, ManageUserProfilePalette.chipAmberFg)
+        case "materials": return ("shippingbox.fill", ManageUserProfilePalette.chipAmberBg, ManageUserProfilePalette.chipAmberFg)
+        case "siteAudit": return ("checklist", ManageUserProfilePalette.chipTealBg, ManageUserProfilePalette.chipTealFg)
+        default: return ("switch.2", ManageUserProfilePalette.chipBlueBg, ManageUserProfilePalette.chipBlueFg)
         }
     }
 
-    /// Core admin / manager flags (shown for every non–super-admin editable user). Materials & site audit for non-operatives are separate.
-    private var adminAndManagerCapabilityPermissionRows: some View {
-        Group {
-            if !suppressAdminAccessToggle {
-                Group {
+    @ViewBuilder
+    private func editPermissionRowsView(level: RulebookPermissionLevel) -> some View {
+        let rows = editPermissionRows(level: level)
+        VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.element.field) { index, row in
+                if index > 0 { ManageUserCardDivider() }
+                let icon = Self.permissionIcon(row.field)
+                if row.field == "annualLeaveSelfBook" {
                     ManageUserExpandablePermissionToggleRow(
-                        iconName: "person.badge.key.fill",
-                        iconBackground: ManageUserProfilePalette.chipPurpleBg,
-                        iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                        title: "Admin Access",
-                        description: "Gives Manage Users.",
-                        isOn: $permissions.adminAccess,
-                        isDisabled: isManagerLevelAccount,
-                        onDisabledTap: {
-                            showingAdminAccessLockedMessage = true
+                        iconName: icon.name,
+                        iconBackground: icon.background,
+                        iconForeground: icon.foreground,
+                        title: row.label,
+                        description: row.help,
+                        isOn: editPermissionBinding(row),
+                        isDisabled: !row.editable || hasNoLineManagerDraft
+                    )
+                    .onChange(of: permissions.annualLeaveSelfBook) { oldValue, newValue in
+                        if oldValue && !newValue && !hasNoLineManagerDraft {
+                            selfBookOffConfirmationAccepted = false
                         }
+                    }
+                    if hasNoLineManagerDraft {
+                        Text("No line manager is selected, so this user books their own annual leave without approval routing.")
+                            .font(.caption)
+                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 8)
+                    }
+                } else {
+                    ManageUserExpandablePermissionToggleRow(
+                        iconName: icon.name,
+                        iconBackground: icon.background,
+                        iconForeground: icon.foreground,
+                        title: row.label,
+                        description: row.help,
+                        isOn: editPermissionBinding(row),
+                        isDisabled: !row.editable,
+                        onDisabledTap: lockedPermissionTap(row, level: level)
                     )
                 }
-
-                ManageUserCardDivider()
             }
-
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "folder.fill",
-                iconBackground: ManageUserProfilePalette.chipBlueBg,
-                iconForeground: ManageUserProfilePalette.chipBlueFg,
-                title: "Projects",
-                description: "Can create, edit, and add projects. If off, they still see projects they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit project details.",
-                isOn: $permissions.projects,
-                isDisabled: false
-            )
-
-            ManageUserCardDivider()
-
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "hammer.fill",
-                iconBackground: ManageUserProfilePalette.chipBlueBg,
-                iconForeground: ManageUserProfilePalette.chipBlueFg,
-                title: "Small Works",
-                description: "Can create, edit, and add small works. If off, they still see small works they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit small works details.",
-                isOn: $permissions.smallWorks,
-                isDisabled: false
-            )
-
-            ManageUserCardDivider()
-
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "doc.text.fill",
-                iconBackground: ManageUserProfilePalette.chipTealBg,
-                iconForeground: ManageUserProfilePalette.chipTealFg,
-                title: "Weekly Report",
-                description: "Can open Weekly Report from Home. If off, that tile is hidden.",
-                isOn: $permissions.weeklyReports,
-                isDisabled: false
-            )
-
-            ManageUserCardDivider()
-
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "calendar.badge.clock",
-                iconBackground: ManageUserProfilePalette.chipTealBg,
-                iconForeground: ManageUserProfilePalette.chipTealFg,
-                title: "Daily Overview",
-                description: "Can open Daily Overview from Home. If off, that tile is hidden.",
-                isOn: $permissions.dailyOverview,
-                isDisabled: false
-            )
-
-            ManageUserCardDivider()
-
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "person.2.wave.2.fill",
-                iconBackground: ManageUserProfilePalette.chipTealBg,
-                iconForeground: ManageUserProfilePalette.chipTealFg,
-                title: "Sub Contractors",
-                description: "Can add and manage sub contractor records. If off, Sub Contractors is hidden on Home and menus. They can still book existing subcontractors on jobs.",
-                isOn: $permissions.subContractors,
-                isDisabled: false
-            )
-
-            if (permissions.manager || permissions.adminAccess) && !permissions.operativeMode {
-                ManageUserCardDivider()
-                ManageUserExpandablePermissionToggleRow(
-                    iconName: "beach.umbrella.fill",
-                    iconBackground: ManageUserProfilePalette.chipBlueBg,
-                    iconForeground: ManageUserProfilePalette.chipBlueFg,
-                    title: "Annual Leave Management",
-                    description: "Can book their own annual leave. If off, this user requests leave for approval.",
-                    isOn: $permissions.annualLeaveSelfBook,
-                    isDisabled: hasNoLineManagerDraft
-                )
-                .onChange(of: permissions.annualLeaveSelfBook) { oldValue, newValue in
-                    if oldValue && !newValue && !hasNoLineManagerDraft {
-                        selfBookOffConfirmationAccepted = false
-                    }
-                }
-                if hasNoLineManagerDraft {
-                    Text("No line manager is selected, so this user books their own annual leave without approval routing.")
-                        .font(.caption)
-                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 8)
-                }
-            }
-
-            ManageUserCardDivider()
-
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "person.crop.rectangle.stack.fill",
-                iconBackground: ManageUserProfilePalette.chipPurpleBg,
-                iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                title: "Operatives",
-                description: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Manage Operatives screen or full operative profiles.",
-                isOn: $permissions.operatives,
-                isDisabled: false
-            )
-
-            ManageUserCardDivider()
-
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "rosette",
-                iconBackground: ManageUserProfilePalette.chipPinkBg,
-                iconForeground: ManageUserProfilePalette.chipPinkFg,
-                title: "Manage Qualifications",
-                description: "When on, this manager can add and edit organisational qualification templates. When off, qualifications shows only My Qualifications, and they can still assign templates others have already added.",
-                isOn: $permissions.qualifications,
-                isDisabled: false
-            )
-
-            ManageUserCardDivider()
-
-            ManageUserExpandablePermissionToggleRow(
-                iconName: "building.2.fill",
-                iconBackground: ManageUserProfilePalette.chipAmberBg,
-                iconForeground: ManageUserProfilePalette.chipAmberFg,
-                title: "Wholesalers",
-                description: "Can view and manage the Wholesalers page, including quote and order history. If off, that page is not available.",
-                isOn: $permissions.wholesalersOrderHistory,
-                isDisabled: false
-            )
         }
+    }
+
+    /// A locked row explains why it cannot be changed.
+    private func lockedPermissionTap(_ row: RulebookPermissionToggleRow, level: RulebookPermissionLevel) -> (() -> Void)? {
+        guard !row.editable else { return nil }
+        let message = level == .admin
+            ? CanonicalBusinessEngine.adminLockedPermissionMessage
+            : "\(row.label) is always on for managers."
+        return {
+            lockedPermissionMessage = message
+            showingAdminAccessLockedMessage = true
+        }
+    }
+
+    private var operativeMaterialsAndSiteAuditRows: some View {
+        editPermissionRowsView(level: .operative)
+    }
+
+    /// Every row for an admin or manager (`permissionToggleRows`), in the rulebook's order.
+    private var adminAndManagerCapabilityPermissionRows: some View {
+        editPermissionRowsView(level: editPermissionLevel == .operative ? .manager : editPermissionLevel)
     }
 
     private func saveChanges() {

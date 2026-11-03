@@ -926,7 +926,8 @@ class UserStore: ObservableObject {
         // Super admin keeps the Operatives page. Everyone else, including admins, follows the Operatives toggle.
         if u.isSuperAdmin { return true }
         let canHoldTheToggle = u.permissions.manager || u.permissions.adminAccess || u.role == .admin || u.role == .manager
-        return canHoldTheToggle && u.permissions.operatives
+        // RULEBOOK 1.11.0 §11: `effectivePermissions` — admins have Operatives on and locked.
+        return canHoldTheToggle && u.effectivePermissions.operatives
     }
     
     /// Organisation material catalogue (batch upload, CRUD). Admins and managers only — not operatives with project materials access.
@@ -942,7 +943,7 @@ class UserStore: ObservableObject {
         guard let u = displayUser else { return false }
         if u.isSuperAdmin { return true }
         let isStaff = u.permissions.manager || u.permissions.adminAccess || u.role == .admin || u.role == .manager
-        return isStaff && u.permissions.wholesalersOrderHistory
+        return isStaff && u.effectivePermissions.wholesalersOrderHistory
     }
 
     /// Quote and order history follows the same Wholesalers toggle as the page.
@@ -998,7 +999,7 @@ class UserStore: ObservableObject {
 
     func canViewMaterials() -> Bool {
         if isOperativeMode() {
-            return displayUser?.permissions.materials == true
+            return displayUser?.effectivePermissions.materials == true
         }
         return true
     }
@@ -1242,7 +1243,7 @@ class UserStore: ObservableObject {
     func canViewSiteAudit() -> Bool {
         guard let currentUser = displayUser else { return false }
         if currentUser.permissions.operativeMode {
-            return currentUser.permissions.siteAudit
+            return currentUser.effectivePermissions.siteAudit
         }
         return true
     }
@@ -1294,7 +1295,7 @@ class UserStore: ObservableObject {
         if currentUser.isSuperAdmin || currentUser.permissions.adminAccess || currentUser.role == .admin {
             return true
         }
-        return currentUser.permissions.manager && currentUser.permissions.subContractors
+        return currentUser.permissions.manager && currentUser.effectivePermissions.subContractors
     }
 
     /// Add projects or small works (`canCreateJob`, RULEBOOK 1.10.0 §16 round 2): admins and super admins outside
@@ -1312,14 +1313,14 @@ class UserStore: ObservableObject {
         if isOperativeMode() { return false }
         if isHomeProfileLoading { return true }
         guard let u = displayUser else { return false }
-        return u.permissions.weeklyReports
+        return u.effectivePermissions.weeklyReports
     }
 
     func canViewDailyOverview() -> Bool {
         if isOperativeMode() { return false }
         if isHomeProfileLoading { return true }
         guard let u = displayUser else { return false }
-        return u.permissions.dailyOverview
+        return u.effectivePermissions.dailyOverview
     }
 
     /// Flags for `canViewStaffWarnings`, `isStaffAccount`, and `seesEveryJob`. Operative mode is passed through; the script decides it wins.
@@ -1340,8 +1341,8 @@ class UserStore: ObservableObject {
         return CanonicalBusinessEngine.CanonicalNotificationPreferenceAudience(
             role: Self.staffAccountRole(for: user),
             catalogue: CanonicalBusinessEngine.CanonicalWorkCatalogueToggles(
-                projects: user.permissions.projects,
-                smallWorks: user.permissions.smallWorks
+                projects: user.effectivePermissions.projects,
+                smallWorks: user.effectivePermissions.smallWorks
             ),
             canManagePeople: canViewOperatives(),
             canManageClients: !isOperativeMode(),
@@ -1381,7 +1382,7 @@ class UserStore: ObservableObject {
         guard let u = displayUser else { return false }
         if u.permissions.operativeMode { return false }
         if u.isSuperAdmin || u.permissions.adminAccess { return false }
-        return u.permissions.manager && u.permissions.operatives
+        return u.permissions.manager && u.effectivePermissions.operatives
     }
 
     /// Admins and managers with operative management can open the team annual leave directory.
@@ -1389,7 +1390,7 @@ class UserStore: ObservableObject {
         if isOperativeMode() { return false }
         if hasAdminAccess() { return true }
         guard let u = displayUser else { return false }
-        return u.permissions.manager && u.permissions.operatives
+        return u.permissions.manager && u.effectivePermissions.operatives
     }
     
     /// Whether the signed-in user may change permissions for `target` in **Manage / edit user**.
@@ -2265,6 +2266,74 @@ class UserStore: ObservableObject {
                      return false
                  }
              }
+
+    /// RULEBOOK 1.11.0 §11: "Change user type" through `accountTypeChangeWrites` — every document that decides the
+    /// type: `users/{uid}` (and same-email documents of this organisation, `updateUserPermissions`), `members.{uid}`
+    /// and `users/{uid}/orgMemberships/{orgId}`. A profile of another company keeps its own document; only the members
+    /// entry and the membership change (`note`). Refused for a Super Admin who would stop being an admin.
+    /// `screenPermissions` are the toggles the sheet set; the plan applies `effectivePermissions` for the new level.
+    func changeAccountType(
+        userId: String,
+        kind: RulebookPermissionLevel,
+        screenPermissions: UserPermissions,
+        holidayStore: HolidayStore? = nil,
+        linkedOperativeUUID: UUID? = nil
+    ) async -> (ok: Bool, note: String?) {
+        errorMessage = nil
+        guard let firebaseBackend,
+              let person = organizationUsers.first(where: { $0.id == userId }) else {
+            errorMessage = "This person is not in the loaded user list. Pull to refresh and try again."
+            return (false, nil)
+        }
+        let orgId = normalizedOrganizationId(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "")
+        var personRow = RulebookPeople.person(person)
+        personRow["role"] = person.role.rawValue
+        personRow["organizationId"] = person.organizationId
+        let roster: [[String: Any]] = organizationUsers.map { ["id": $0.id, "email": $0.email, "organizationId": $0.organizationId] }
+        guard let plan = CanonicalBusinessEngine.accountTypeChangeWrites(
+            person: personRow,
+            kind: kind,
+            organizationId: orgId,
+            roster: roster,
+            permissions: screenPermissions.rulebookMap
+        ) else {
+            errorMessage = "Could not work out the change. Nothing was changed."
+            return (false, nil)
+        }
+        switch plan {
+        case .refused(_, let message):
+            errorMessage = message
+            return (false, nil)
+        case .ok(let role, let effective, let writes, let note):
+            let writesOwnProfile = writes.contains { write in
+                if case .userProfile(let path, _) = write { return path.caseInsensitiveCompare("users/\(userId)") == .orderedSame }
+                return false
+            }
+            if writesOwnProfile {
+                let nextRole: UserRole = role == .admin ? .admin : role == .manager ? .manager : .operative
+                let saved = await updateUserPermissions(
+                    userId: userId,
+                    permissions: screenPermissions.applying(effective),
+                    holidayStore: holidayStore,
+                    linkedOperativeUUID: linkedOperativeUUID,
+                    role: nextRole
+                )
+                guard saved else { return (false, nil) }
+            }
+            do {
+                try await firebaseBackend.applyAccountTypeMembershipWrites(
+                    writes,
+                    organizationId: orgId,
+                    actorUserId: Auth.auth().currentUser?.uid
+                )
+            } catch {
+                NSLog("ACCOUNT_TYPE_MEMBERSHIP_WRITE_FAILED id=%@ %@", userId, error.localizedDescription)
+                errorMessage = "The profile was changed, but the organisation membership could not be updated: \(error.localizedDescription). Try again."
+                return (false, note)
+            }
+            return (true, note)
+        }
+    }
 
     /// Ends every roster load already in flight: its result is ignored when it lands. The next load starts afresh.
     private func invalidateInFlightRosterLoads() {

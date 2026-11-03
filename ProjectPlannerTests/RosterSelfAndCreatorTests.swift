@@ -105,34 +105,30 @@ final class RosterSelfAndCreatorTests: XCTestCase {
         RosterRetention.untombstone(["GONE"], organizationId: org)
     }
 
-    // MARK: Line-manager label
+    // MARK: Line-manager label (RULEBOOK 1.11.0 `lineManagerSummary`)
+
+    private func label(_ ids: Set<String>, roster: [AppUser], hasNoLineManager: Bool = false) -> String {
+        LineManagerRulebook.summary(
+            for: manager(id: "SUBJECT"),
+            selectedIds: ids,
+            hasNoLineManager: hasNoLineManager,
+            roster: roster
+        )
+    }
 
     func testALineManagerIdThatResolvesToNobodyIsUnknownPersonNotMinusOne() {
-        let label = LineManagerSummaryLabel.text(selectedIds: ["SUPER-UID"], roster: [manager()], hasNoLineManager: false)
-        XCTAssertEqual(label, "Unknown person")
-        XCTAssertFalse(label.contains("-1"))
+        let text = label(["SUPER-UID"], roster: [manager()])
+        XCTAssertEqual(text, "Unknown person")
+        XCTAssertFalse(text.contains("-1"))
     }
 
     func testLineManagerLabelNamesEveryoneAndCountsTheRest() {
         let roster = [superAdmin(organizationId: orgA), manager()]
-        XCTAssertEqual(
-            LineManagerSummaryLabel.text(selectedIds: ["SUPER-UID"], roster: roster, hasNoLineManager: false),
-            "Olive Owner"
-        )
-        XCTAssertEqual(
-            LineManagerSummaryLabel.text(selectedIds: ["super-uid", "MGR-1"], roster: roster, hasNoLineManager: false),
-            "Mo Manager +1 more",
-            "ids compare without case"
-        )
-        XCTAssertEqual(
-            LineManagerSummaryLabel.text(selectedIds: ["MGR-1", "MISSING"], roster: roster, hasNoLineManager: false),
-            "Mo Manager +1 more"
-        )
-        XCTAssertEqual(
-            LineManagerSummaryLabel.text(selectedIds: ["A", "B"], roster: [], hasNoLineManager: false),
-            "Unknown person +1 more"
-        )
-        XCTAssertEqual(LineManagerSummaryLabel.text(selectedIds: [], roster: roster, hasNoLineManager: false), "Select manager(s)…")
-        XCTAssertEqual(LineManagerSummaryLabel.text(selectedIds: ["MGR-1"], roster: roster, hasNoLineManager: true), "No line manager")
+        XCTAssertEqual(label(["SUPER-UID"], roster: roster), "Olive Owner")
+        XCTAssertEqual(label(["super-uid", "MGR-1"], roster: roster), "Mo Manager +1 more", "ids compare without case")
+        XCTAssertEqual(label(["MGR-1", "MISSING"], roster: roster), "Mo Manager +1 more")
+        XCTAssertEqual(label(["A", "B"], roster: []), "Unknown person +1 more")
+        XCTAssertEqual(label([], roster: roster), "Not set")
+        XCTAssertEqual(label(["MGR-1"], roster: roster, hasNoLineManager: true), "No line manager")
     }
 }
