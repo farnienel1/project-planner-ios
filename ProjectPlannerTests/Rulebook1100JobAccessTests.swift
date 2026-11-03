@@ -138,7 +138,7 @@ final class Rulebook1100JobAccessTests: XCTestCase {
         // RULEBOOK 1.11.0 §17: enforced, `readsEveryBooking` is admins only; a toggle manager reads their kind by
         // `jobCollection` (web staffAccess.ts `readsEveryBooking`).
         XCTAssertFalse(CanonicalBusinessEngine.readsEveryBooking(toggleManager, enforced: true))
-        XCTAssertFalse(CanonicalBusinessEngine.readsEveryBooking(toggleManager, enforced: false), "every manager reads every booking while enforced reads are off")
+        XCTAssertTrue(CanonicalBusinessEngine.readsEveryBooking(toggleManager, enforced: false), "every manager reads every booking while enforced reads are off")
         let managerPlan = queries(CanonicalBusinessEngine.bookingQueryPlan(manager, visibleJobIds: ["job-1"], ownBookingIds: ["m1", "OP-1"], enforced: true))
         XCTAssertEqual(managerPlan.map { $0["collection"] as? String },
                        ["bookings", "subcontractorBookings", "managerSiteBookings", "bookings", "managerSiteBookings"])

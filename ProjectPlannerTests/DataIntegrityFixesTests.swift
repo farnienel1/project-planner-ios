@@ -14,7 +14,9 @@ final class DataIntegrityFixesTests: XCTestCase {
         XCTAssertEqual(stored, CanonicalBusinessEngine.organizationDayStart("2026-11-04"))
         // An organisation midnight is kept; any other instant is its organisation-zone day.
         XCTAssertEqual(BookingDay.organizationMidnight(for: stored, phoneCalendar: phone), stored)
-        let afternoon = stored.addingTimeInterval(15 * 3600)
+        // 10:00 organisation time (19:00 in Tokyo): not a phone midnight, so the organisation day decides. (+15h would be
+        // exactly Tokyo midnight of the next day, which the helper rightly reads as that picked day.)
+        let afternoon = stored.addingTimeInterval(10 * 3600)
         XCTAssertEqual(BookingDay.organizationMidnight(for: afternoon, phoneCalendar: phone), stored)
     }
 
