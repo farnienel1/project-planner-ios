@@ -41,11 +41,12 @@ enum ScheduleWeekAccountRole: String, Equatable {
     }
 
     static func from(account user: AppUser) -> ScheduleWeekAccountRole {
-        if user.isRosterAdmin { return .admin }
-        if user.permissions.manager || user.role == .manager || user.placedByManagersRecord {
-            return .manager
+        // RULEBOOK 1.23.0 §11: the person's list (`CanonicalBusinessEngine.rosterListKind`); a `managers` row never decides it.
+        switch user.rosterListKind {
+        case .admins: return .admin
+        case .managers: return .manager
+        case .operatives: return .operative
         }
-        return .operative
     }
 }
 
@@ -300,9 +301,8 @@ enum ScheduleWeekGrid {
         if let user = StaffEmailIdentity.preferredUser(admins) {
             return (.admin, user)
         }
-        let managers = users.filter {
-            $0.permissions.manager || $0.role == .manager || $0.placedByManagersRecord
-        }
+        // `CanonicalBusinessEngine.rosterListKind`: the Managers list by level, never a `managers` row.
+        let managers = users.filter { $0.rosterListKind == .managers }
         if let user = StaffEmailIdentity.preferredUser(managers) {
             return (.manager, user)
         }

@@ -146,11 +146,29 @@ enum TimesheetTotalsSource {
         return sheet
     }
 
+    /// RULEBOOK 1.11.0 §8 `CanonicalBusinessEngine.timesheetDaysForPerson(user, period, timeZone)`: the organisation-zone
+    /// days of the period on which the person is self-employed (web `timesheetDayKeysForPeriod`), passed as
+    /// `timesheetDays` so totals and invoices leave out a PAYE day's rows. Memoised by person and period.
+    static func timesheetDays(for user: AppUser, period: ClosedRange<Date>) -> [String]? {
+        let person = CanonicalBusinessEngine.timesheetPerson(user)
+        let start = OrganizationRulebookContext.dayKey(period.lowerBound)
+        let end = OrganizationRulebookContext.dayKey(period.upperBound)
+        let zone = OrganizationRulebookContext.timeZoneIdentifier
+        guard let key = CanonicalBusinessEngine.rulebookMemoKey([person, start, end, zone] as [Any]) else { return nil }
+        return daysMemo.value(for: key) {
+            CanonicalBusinessEngine.timesheetDaysForPerson(person: person, startDayKey: start, endDayKey: end, timeZone: zone)
+        }
+    }
+
+    private static let daysMemo = RulebookAnswerMemo<String, [String]>(limit: 256)
+
     static func totals(
         lines: [TimesheetPayrollLineItem],
         draft: TimesheetDraft,
         decided: Bool,
-        reviewing: Bool = false
+        reviewing: Bool = false,
+        subject: AppUser? = nil,
+        period: ClosedRange<Date>? = nil
     ) -> RulebookTimesheetTotals? {
         var input: [String: Any] = [
             "sheet": sheetJSON(draft, reviewing: reviewing),
@@ -159,6 +177,9 @@ enum TimesheetTotalsSource {
             "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
         ]
         input["applyLabourReviews"] = reviewing ? (true as Any) : (NSNull() as Any)
+        if let subject, let period, let days = timesheetDays(for: subject, period: period) {
+            input["timesheetDays"] = days
+        }
         return CanonicalBusinessEngine.timesheetTotals(input)
     }
 }

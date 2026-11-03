@@ -609,7 +609,6 @@ class UserStore: ObservableObject {
                 continue
             }
             if let existing = byId[user.id] {
-                user.placedByManagersRecord = existing.placedByManagersRecord
                 user.sameEmailUserIds = existing.sameEmailUserIds
             } else {
                 order.append(user.id)
@@ -803,11 +802,7 @@ class UserStore: ObservableObject {
             switch LaunchStartupPolicy.rosterAbsenceDecision(read, anchored: anchoredIds.contains(id)) {
             case .keep:
                 if case .present(let user) = probe {
-                    var kept = user
-                    if byId[id]?.placedByManagersRecord == true {
-                        kept.placedByManagersRecord = true
-                    }
-                    byId[id] = kept
+                    byId[id] = user
                 } else {
                     print("🔥🔥🔥 DEBUG: ROSTER_KEPT \(byId[id]?.email ?? id) — this fetch missed them and their document was not confirmed gone")
                 }
@@ -2218,7 +2213,6 @@ class UserStore: ObservableObject {
                              switch await firebaseBackend.probeOrganizationUser(userId: userId, organizationId: orgId) {
                              case .present(let stored):
                                  var confirmed = stored
-                                 confirmed.placedByManagersRecord = updatedUser.placedByManagersRecord
                                  confirmed.sameEmailUserIds = updatedUser.sameEmailUserIds
                                  if !UserTypeChangeReadBack.landed(
                                      expectedRole: isSelfSave ? nil : role,

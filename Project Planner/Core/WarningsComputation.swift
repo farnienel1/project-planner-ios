@@ -498,11 +498,20 @@ enum WarningsComputation {
         let projectById = keyedByUUID(input.projects, id: \.id)
         let operativesById = keyedByUUID(input.operatives, id: \.id)
         let usersById = keyedByString(input.users, id: \.id)
-        let managerOrAdminUsers = input.users.filter { user in
-            user.isActive &&
-                (user.isManager || user.hasAdminAccess || user.isAdminRole || user.isSuperAdmin)
+        // RULEBOOK 1.23.0 §5 `CanonicalBusinessEngine` `clashManagerIds(roster)`: active admins and manager-flag people
+        // (Medium clashes); everyone else's clashes are operative (High) clashes.
+        let clashRosterRows: [[String: Any]] = input.users.map { user in
+            var row: [String: Any] = [
+                "id": user.id,
+                "isActive": user.isActive,
+                "isSuperAdmin": user.isSuperAdmin,
+                "adminAccess": user.hasAdminAccess,
+                "manager": user.isManager,
+            ]
+            if user.isAdminRole { row["role"] = "admin" }
+            return row
         }
-        let managerAdminUserIds = Set(managerOrAdminUsers.map(\.id))
+        let managerAdminUserIds = Set(RulebookRosterLists.clashManagerIds(clashRosterRows) ?? [])
 
         let scheduleIndex = WarningsScheduleIndex(calendar: cal)
 
@@ -1458,7 +1467,8 @@ enum WarningsComputation {
             leave: leave,
             bookings: bookings
         )
-        guard let rows = CanonicalBusinessEngine.leaveCoverageRows(inputPayload) else { return nil }
+        // RULEBOOK 1.23.0 §5, §9: each day under its own working hours (`day` = the policy state, `standardDayOn`).
+        guard let rows = CanonicalBusinessEngine.leaveCoverageRows(inputPayload, day: input.payrollPolicyState) else { return nil }
         return rows.compactMap { row in
             guard let date = CanonicalBusinessEngine.date(fromDayKey: row.dayKey, calendar: calendar) else { return nil }
             let severity: Warning.WarningSeverity = row.kind == "leave_clash" || row.severity == "high" ? .high : .medium
@@ -1775,7 +1785,10 @@ private struct WarningsScheduleIndex {
                 },
                 "operatives": input.operatives.map { ["id": Booking.storedOperativeId(for: $0.id), "email": $0.emailLowercased] }
             ],
-            "day": [
+            // RULEBOOK 1.23.0 §5: the working-hours state (`standardDayOn` / `bookingStandardDayOn` in
+            // `CanonicalBusinessEngine` `operativeClashGroups` / `managerClashGroups`), so each booking's named slot is
+            // read under its own day's hours; the one policy only when no state was captured.
+            "day": input.payrollPolicyState ?? [
                 "standardDayStart": policy.standardDayStart,
                 "standardDayEnd": policy.standardDayEnd,
                 "breakWindowStart": policy.breakWindowStart,

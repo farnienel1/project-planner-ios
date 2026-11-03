@@ -144,7 +144,8 @@ extension CanonicalBusinessEngine {
     /// script did not answer.
     nonisolated static func overlappingBookingIds(
         _ bookings: [CanonicalOverlapBookingInput],
-        day: CanonicalStandardDayInput
+        day: CanonicalStandardDayInput,
+        dayState: Any? = nil
     ) -> Set<String> {
         let rows: [[String: Any]] = bookings.map { booking in
             var row: [String: Any] = [
@@ -161,7 +162,9 @@ extension CanonicalBusinessEngine {
         if let value = day.standardDayEnd { dayObject["standardDayEnd"] = value }
         if let value = day.breakWindowStart { dayObject["breakWindowStart"] = value }
         if let value = day.breakWindowEnd { dayObject["breakWindowEnd"] = value }
-        let ids = callJSON("overlappingBookingIds", arguments: [rows, dayObject]) as? [String] ?? []
+        // RULEBOOK 1.23.0 §8: with the working-hours state each line's named slot is read under its own day's hours.
+        let dayArgument: Any = dayState ?? dayObject
+        let ids = callJSON("overlappingBookingIds", arguments: [rows, dayArgument]) as? [String] ?? []
         return Set(ids)
     }
 

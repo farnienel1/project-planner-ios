@@ -268,26 +268,27 @@ struct DLDeadline: Identifiable, Hashable {
 
 extension DLDeadline {
 
-    private var cal: Calendar { Calendar.current }
-
-    /// Whole days from `now` to `due`. Negative means overdue.
+    /// RULEBOOK 1.23.0 §23 `CanonicalBusinessEngine.deadlineDaysRemaining`: whole organisation-zone days from today to
+    /// the due day. Negative means overdue.
     func daysRemaining(now: Date = Date()) -> Int {
-        let a = cal.startOfDay(for: now)
-        let b = cal.startOfDay(for: due)
-        return cal.dateComponents([.day], from: a, to: b).day ?? 0
+        CanonicalBusinessEngine.deadlineDaysRemaining(due: due, now: now) ?? 0
     }
 
+    /// RULEBOOK 1.23.0 §23 `CanonicalBusinessEngine.deadlineUrgency` on the organisation day (memoised per status, due
+    /// day and today). `later(0)` only when the script did not answer.
     func urgency(now: Date = Date()) -> DLUrgency {
-        if status == .complete { return .complete }
-        let d = daysRemaining(now: now)
-        if d < 0 { return .overdue(days: -d) }
-        if status == .blocked { return .blocked }
-        switch d {
-        case 0:      return .today
-        case 1:      return .tomorrow
-        case 2...3:  return .soon(days: d)
-        case 4...7:  return .thisWeek(days: d)
-        default:     return .later(days: d)
+        guard let answer = CanonicalBusinessEngine.deadlineUrgency(status: status.rawValue, due: due, now: now) else {
+            return .later(days: 0)
+        }
+        switch answer.kind {
+        case "complete": return .complete
+        case "blocked": return .blocked
+        case "overdue": return .overdue(days: answer.days)
+        case "today": return .today
+        case "tomorrow": return .tomorrow
+        case "soon": return .soon(days: answer.days)
+        case "thisWeek": return .thisWeek(days: answer.days)
+        default: return .later(days: answer.days)
         }
     }
 

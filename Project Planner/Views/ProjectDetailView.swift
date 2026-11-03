@@ -417,13 +417,34 @@ struct ProjectDetailView: View {
         }
     }
 
-    private var schedulingAttentionCount: Int {
-        bookingStore.bookings.filter { $0.projectId == project.id && $0.status == .tentative }.count
+    /// RULEBOOK 1.23.0 §21 `CanonicalBusinessEngine.jobTileBadges`: Scheduling (Tentative bookings), Tasks (not
+    /// completed) and Active users (people booked on the job, each once under all their ids, plus subcontractor firms
+    /// with an open booking). Memoised by its input.
+    private var tileBadges: RulebookJobTileBadges {
+        let jobId = project.id.uuidString
+        let people: [[String: Any]] = userStore.organizationUsers.map(RulebookRosterLists.levelRow)
+            + operativeStore.allOperatives.map { ["id": Booking.storedOperativeId(for: $0.id), "email": $0.email] as [String: Any] }
+            + operativeStore.allManagers.map { ["id": $0.id.uuidString, "email": $0.email] as [String: Any] }
+        let input: [String: Any] = [
+            "jobId": jobId,
+            "bookings": bookingStore.bookings.filter { $0.projectId == project.id }.map { booking -> [String: Any] in
+                ["projectId": jobId, "operativeId": Booking.storedOperativeId(for: booking.operativeId), "status": booking.status.rawValue]
+            },
+            "managerSiteBookings": managerScheduleStore.managerSiteBookings.filter { $0.locationId == project.id }.map { booking -> [String: Any] in
+                ["userId": booking.userId, "locationId": jobId, "locationType": booking.locationType.rawValue]
+            },
+            "subcontractorBookings": subcontractorStore.bookings.filter { $0.projectId == project.id }.map { booking -> [String: Any] in
+                ["projectId": jobId, "subcontractorId": booking.subcontractorId.uuidString, "status": booking.status.rawValue]
+            },
+            "tasks": taskStore.tasks.filter { $0.projectId == project.id }.map { ["projectId": jobId, "status": $0.status.rawValue] as [String: Any] },
+            "people": people,
+        ]
+        return CanonicalBusinessEngine.jobTileBadges(input) ?? RulebookJobTileBadges(tentativeBookings: 0, openTasks: 0, activeUsers: 0)
     }
 
-    private var openTasksCount: Int {
-        taskStore.tasks.filter { $0.projectId == project.id && $0.status != .completed }.count
-    }
+    private var schedulingAttentionCount: Int { tileBadges.tentativeBookings }
+
+    private var openTasksCount: Int { tileBadges.openTasks }
 
     private func refreshOpenVariationCount() async {
         guard canAccessVariations,
@@ -550,30 +571,7 @@ struct ProjectDetailView: View {
         }
     }
 
-    private var activeBookedPeopleCount: Int {
-        let operativeIds = Set(
-            bookingStore.bookings
-                .filter { $0.projectId == project.id && $0.status != .cancelled }
-                .map(\.operativeId)
-        )
-        let staffIds = Set(
-            managerScheduleStore.managerSiteBookings
-                .filter {
-                    $0.locationId == project.id &&
-                    ($0.locationType == .project || $0.locationType == .smallWork)
-                }
-                .map(\.userId)
-        )
-        let subIds = Set(
-            subcontractorStore.bookings
-                .filter {
-                    $0.projectId == project.id &&
-                    ($0.status.occupiesDay)
-                }
-                .map(\.subcontractorId)
-        )
-        return operativeIds.count + staffIds.count + subIds.count
-    }
+    private var activeBookedPeopleCount: Int { tileBadges.activeUsers }
 
     private func manageTileBadgeColor(for tile: DetailTile) -> Color {
         switch tile {

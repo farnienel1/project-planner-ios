@@ -26,12 +26,19 @@ enum OperativeBookingInterval {
         a.0 < b.1 && b.0 < a.1
     }
 
+    /// RULEBOOK 1.23.0 §5 `CanonicalBusinessEngine.bookingRequestClashIds`: `a` (the booking being made) clashes with
+    /// `b` when their `slotInterval`s overlap under the working hours in effect on the booked day (a weekend named slot
+    /// on that day's own window, `bookingStandardDayOn`; an overnight `b` from the day before reaches that morning).
+    /// True when the script did not answer, so the booker is asked rather than a clash missed.
     static func bookingsOverlap(_ a: Booking, _ b: Booking, policy: OrgPayrollTimePolicy) -> Bool {
-        guard let ia = clashInterval(for: a, policy: policy),
-              let ib = clashInterval(for: b, policy: policy) else {
-            return legacyOperativeSlotClash(a.timeSlot, b.timeSlot)
-        }
-        return closedIntervalsOverlap(ia, ib)
+        var existing = b.rulebookClashBooking
+        existing.status = "Confirmed"
+        guard let ids = CanonicalBusinessEngine.bookingRequestClashIds(
+            request: a.rulebookClashBooking,
+            existing: [existing],
+            day: CanonicalBusinessEngine.bookingDayInput(policy: policy)
+        ) else { return true }
+        return !ids.isEmpty
     }
 
     /// Wall-clock hours overlapping the org standard day window for the booking's calendar day.
@@ -53,12 +60,6 @@ enum OperativeBookingInterval {
               let ws = timeline.standardWindowStartMinutes,
               let we = timeline.standardWindowEndMinutes else { return false }
         return iv.0 <= ws && iv.1 >= we
-    }
-
-    private static func legacyOperativeSlotClash(_ a: TimeSlot, _ b: TimeSlot) -> Bool {
-        if a == .fullDay || b == .fullDay { return true }
-        if a == b { return true }
-        return false
     }
 
     // Timesheet pay: every booking is paid on its own (rulebook §6). Overlaps are only flagged, with

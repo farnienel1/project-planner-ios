@@ -7,6 +7,7 @@ struct OrgSitesMapView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedDate: Date = Date()
@@ -200,18 +201,39 @@ struct OrgSitesMapView: View {
             }
         }
 
+        // RULEBOOK 1.23.0 §21 `CanonicalBusinessEngine.siteMapPins`: the organisation day, bookings that occupy it
+        // (cancelled never), manager site bookings on the job, each person once; jobs that are not inactive.
+        let dayKey = OrganizationRulebookContext.dayKey(targetDate)
         let dayBookings = bookingStore.bookings.filter {
-            Calendar.current.isDate($0.date, inSameDayAs: targetDate)
-                && $0.status != .cancelled
+            OrganizationRulebookContext.dayKey($0.date) == dayKey && $0.occupiesDay
         }
-
-        let allProjects = ProjectWorksMerge.uniqueWorks(projectStore.projects).filter(\.isLive)
+        let works = ProjectWorksMerge.uniqueWorks(projectStore.projects)
+        let people: [[String: Any]] = userStore.organizationUsers.map(RulebookRosterLists.levelRow)
+            + operativeStore.allOperatives.map { ["id": Booking.storedOperativeId(for: $0.id), "email": $0.email] as [String: Any] }
+            + operativeStore.allManagers.map { ["id": $0.id.uuidString, "email": $0.email] as [String: Any] }
+        let pinInput: [String: Any] = [
+            "jobs": works.map { ["id": $0.id.uuidString, "isLive": $0.isLive] as [String: Any] },
+            "bookings": bookingStore.bookings.map { booking -> [String: Any] in
+                ["projectId": booking.projectId.uuidString, "operativeId": Booking.storedOperativeId(for: booking.operativeId),
+                 "dayKey": OrganizationRulebookContext.dayKey(booking.date), "status": booking.status.rawValue]
+            },
+            "managerSiteBookings": managerScheduleStore.managerSiteBookings.map { booking -> [String: Any] in
+                ["userId": booking.userId, "locationId": booking.locationId.map { $0.uuidString as Any } ?? NSNull(),
+                 "locationType": booking.locationType.rawValue, "dayKey": OrganizationRulebookContext.dayKey(booking.date)]
+            },
+            "dayKey": dayKey,
+            "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
+            "people": people,
+        ]
+        let scriptPins = CanonicalBusinessEngine.siteMapPins(pinInput) ?? []
+        let pinByJob = Dictionary(scriptPins.map { ($0.jobId.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
+        let allProjects = works.filter { pinByJob[$0.id.uuidString.lowercased()] != nil }
 
         var builtPins: [SiteMapPin] = []
         for project in allProjects {
             guard let coordinate = await GeocodingCacheService.shared.coordinate(for: project.siteAddress) else { continue }
             let siteBookings = dayBookings.filter { $0.projectId == project.id }
-            let operativeCount = Set(siteBookings.map(\.operativeId)).count
+            let operativeCount = pinByJob[project.id.uuidString.lowercased()]?.peopleCount ?? 0
             let rows = siteBookings
                 .sorted { $0.timeSlot.displayName < $1.timeSlot.displayName }
                 .map { booking -> String in
