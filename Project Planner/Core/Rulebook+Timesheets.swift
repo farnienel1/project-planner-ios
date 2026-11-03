@@ -173,7 +173,7 @@ extension CanonicalBusinessEngine {
     /// `timesheetLeaveLines(records, period, timeZone, nonWorkingDayKeys)`: one information row per
     /// approved leave day inside the period. Empty when the script did not answer. 1.20.0: the script's `dayPolicy`
     /// argument is a function, which cannot cross the bridge; callers set `timeRange` from `leaveHalfDayWindows` of the
-    /// day's policy (`withLeaveTimeRanges`).
+    /// day's policy (`withLeaveTimeRange`).
     nonisolated static func timesheetLeaveLines(
         _ records: [CanonicalTimesheetLeaveRecord],
         startDayKey: String,
