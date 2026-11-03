@@ -50,12 +50,14 @@ final class Rulebook1130Tests: XCTestCase {
     }
 
     func testWeekendDaysOfferCustomHoursOnly() throws {
-        XCTAssertEqual(CanonicalBusinessEngine.allowedTimeSlotsOnDay("2026-11-04", timeZone: "Europe/London"), [.fullDay, .am, .pm, .custom])
+        // RULEBOOK 1.20.0 §4.3: Monday–Friday offers Full day and Custom only (`WEEKDAY_TIME_SLOTS`).
+        XCTAssertEqual(CanonicalBusinessEngine.allowedTimeSlotsOnDay("2026-11-04", timeZone: "Europe/London"), [.fullDay, .custom])
         XCTAssertEqual(CanonicalBusinessEngine.allowedTimeSlotsOnDay("2026-11-07", timeZone: "Europe/London"), [.custom])
         XCTAssertEqual(CanonicalBusinessEngine.allowedTimeSlotsOnDay("2026-11-08", timeZone: "Europe/London"), [.custom])
         XCTAssertFalse(CanonicalBusinessEngine.timeSlotAllowedOnDay("FULL DAY", dayKey: "2026-11-07", timeZone: "Europe/London"))
         XCTAssertTrue(CanonicalBusinessEngine.timeSlotAllowedOnDay("CUSTOM_HOURS", dayKey: "2026-11-07", timeZone: "Europe/London"))
-        XCTAssertTrue(CanonicalBusinessEngine.timeSlotAllowedOnDay("AM", dayKey: "2026-11-04", timeZone: "Europe/London"))
+        XCTAssertFalse(CanonicalBusinessEngine.timeSlotAllowedOnDay("AM", dayKey: "2026-11-04", timeZone: "Europe/London"))
+        XCTAssertTrue(CanonicalBusinessEngine.timeSlotAllowedOnDay("FULL DAY", dayKey: "2026-11-04", timeZone: "Europe/London"))
         // A stored weekend FULL DAY still shows its own slot when edited.
         let saturday = try day("2026-11-07")
         XCTAssertTrue(CanonicalBusinessEngine.slotOffered(.fullDay, on: saturday, storedTimeSlot: "FULL DAY"))

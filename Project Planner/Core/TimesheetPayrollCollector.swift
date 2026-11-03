@@ -101,7 +101,7 @@ enum TimesheetPayrollCollector {
             operative: Operative?
         ) {
             let policy = dayPolicy(for: day)
-            let standardDayHours = max(policy.standardPaidHours, 0.01)
+            let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
             shiftCount += 1
             let resolved = PayrollRateResolver.resolveForTimesheetDay(
                 user: user,
@@ -117,8 +117,11 @@ enum TimesheetPayrollCollector {
             let otHours = hours?.outsideHours ?? 0
             let otMultiplier = hours?.outsideMultiplier ?? 1
             let normalHours = max(0, hours?.standardHours ?? 0)
+            // RULEBOOK 1.20.3 / 1.20.4: hours at the multiplier as clock hours, with any unpaid break as plain hours
+            // (`CanonicalBusinessEngine.payrollMultipliedHours`). Display only; pay below stays `otHours × otMultiplier`.
+            let multiplied = PayrollHoursEngine.compute(booking: probe, day: probe.date, policy: policy).multipliedHours
             totalHours += paidHours
-            overtimeHours += otHours
+            overtimeHours += multiplied?.clockHours ?? otHours
             let isPaye = user.employmentType(on: day) == .paye
             let lineBookingId = "\(idPrefix)-\(bookingId.uuidString)"
             paidBookings.append(
@@ -165,7 +168,9 @@ enum TimesheetPayrollCollector {
                         date: day,
                         jobNumber: labels.jobNumber,
                         projectName: "\(labels.siteName) (Overtime)",
-                        details: "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: otHours, multiplier: otMultiplier))",
+                        // Web `timesheetPayrollCollector`: "OT 6.5h × 2 − 0.5h break = 12.5h" when a break came off the
+                        // multiplied hours (`multipliedHoursText`), else "OT {clock hours}h".
+                        details: Self.overtimeDetails(multiplied: multiplied, otHours: otHours),
                         paidHours: otHours,
                         payrollBasis: resolved.basis,
                         dayRate: otDisplayRate,
@@ -280,6 +285,13 @@ enum TimesheetPayrollCollector {
         )
     }
 
+    /// RULEBOOK 1.20.4: an overtime line's text — `multipliedHoursText` when an unpaid break came off the multiplied
+    /// hours (`CanonicalBusinessEngine.multipliedHoursText`), else the clock hours at the multiplier. Never "6.25h".
+    static func overtimeDetails(multiplied: RulebookMultipliedHours?, otHours: Double) -> String {
+        if let multiplied, multiplied.breakHours > 0 { return "OT \(multiplied.text)" }
+        return "OT \(ScheduleCoverageFormat.hours(multiplied?.clockHours ?? otHours))h"
+    }
+
     /// Approved annual leave inside the period (`timesheetLeaveLines`): information rows with no hours,
     /// no pay and no edit control, for the person and their line manager. Never on an invoice.
     /// Records are this account's (`bookingIdsForAccount`: uid, former and same-email ids, and
@@ -288,7 +300,8 @@ enum TimesheetPayrollCollector {
         for user: AppUser,
         in range: ClosedRange<Date>,
         holidays: [HolidayBooking],
-        operatives: [Operative]
+        operatives: [Operative],
+        organization: Organization? = nil
     ) -> [CanonicalTimesheetLeaveLine] {
         let account = CanonicalBusinessEngine.CanonicalBookingPersonAccount(
             id: user.id, email: user.email, formerIds: user.formerUserIds, aliasIds: user.sameEmailUserIds
@@ -313,12 +326,18 @@ enum TimesheetPayrollCollector {
             )
         }
         guard !records.isEmpty else { return [] }
-        return CanonicalBusinessEngine.timesheetLeaveLines(
+        let lines = CanonicalBusinessEngine.timesheetLeaveLines(
             records,
             startDayKey: OrganizationRulebookContext.dayKey(range.lowerBound),
             endDayKey: OrganizationRulebookContext.dayKey(range.upperBound),
             nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
         )
+        // RULEBOOK 1.20.0 §8/§9 (`timeRange`): each line's clock range under the working day in effect that day.
+        guard let organization else { return lines }
+        return lines.map { line in
+            guard let day = OrganizationRulebookContext.date(fromDayKey: line.dayKey) else { return line }
+            return line.withLeaveTimeRange(policy: PayrollTimePolicyCatalog.policy(for: day, organization: organization))
+        }
     }
 
     static func projectLabel(

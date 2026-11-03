@@ -921,7 +921,7 @@ struct BookLabourFlowView: View {
             let existingPaidHours = existingPaidHoursForOperative(op.id)
             let newPaidHours = paidHours(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
             let combinedPaidHours = existingPaidHours + newPaidHours
-            let remainingHours = max(0, max(dayPayrollPolicy.standardPaidHours, 0) - combinedPaidHours)
+            let remainingHours = max(0, max(CanonicalBusinessEngine.weekdayPaidHours(dayPayrollPolicy), 0) - combinedPaidHours)
             // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a Saturday or Sunday shows the new booking as the pay rule
             // prices it that day (memoised by input in the wrapper); empty on a weekday.
             let weekendLines = CanonicalBusinessEngine.collapsedBreakdownLines(
@@ -1554,17 +1554,25 @@ struct BookLabourFlowView: View {
         breakRemoved: Bool,
         otMultiplierOverride: Double?
     ) -> Bool {
+        // RULEBOOK 1.20.2 §2 `isSameBookingRequest`: same person, day, slot, job and — for custom hours — the same
+        // start, finish and break. Never skipped on person|day|slot|place alone.
         let personIds = samePersonIds(operativeId)
+        let person = operativeId.uuidString
+        let request = RulebookBookingRequest(
+            personId: person,
+            dayKey: OrganizationRulebookContext.dayKey(day),
+            timeSlot: slot.rawValue,
+            locationId: projectId.uuidString,
+            workStartTime: workStart,
+            workEndTime: workEnd,
+            isBreakRemoved: breakRemoved
+        )
         return bookingStore.bookings.contains {
             personIds.contains($0.operativeId) &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
-                $0.projectId == projectId &&
-                $0.timeSlot == slot &&
-                $0.workStartTime == workStart &&
-                $0.workEndTime == workEnd &&
-                $0.isBreakRemoved == breakRemoved &&
+                $0.status != .cancelled &&
                 $0.otMultiplierOverride == otMultiplierOverride &&
-                $0.status != .cancelled
+                CanonicalBusinessEngine.isSameBookingRequest($0.bookingRequest(personId: person), request)
         }
     }
 
@@ -1619,7 +1627,10 @@ struct BookLabourFlowView: View {
                 slot: slot,
                 locationType: locationType,
                 locationId: locationId,
-                custom: customLocationName
+                custom: customLocationName,
+                workStart: workStart,
+                workEnd: workEnd,
+                breakRemoved: breakRemoved
             ) { continue }
             if managerWouldClash(
                 userId: person.user.id,
@@ -1750,7 +1761,10 @@ struct BookLabourFlowView: View {
                         slot: slot,
                         locationType: locationType,
                         locationId: locationId,
-                        custom: customLocationName
+                        custom: customLocationName,
+                        workStart: workStart,
+                        workEnd: workEnd,
+                        breakRemoved: breakRemoved
                     ) {
                         continue
                     }
@@ -1909,18 +1923,34 @@ struct BookLabourFlowView: View {
         }
     }
 
+    /// RULEBOOK 1.20.2 §2 `isSameBookingRequest`: the same booking already saved — same person, day, slot, place AND,
+    /// for custom hours, the same start, finish and break. Two custom-hours bookings at one place on one day (e.g. a
+    /// weekend morning and afternoon) are different bookings; before, the second was skipped and never saved.
     private func duplicateManagerBooking(
         userId: String,
         slot: ManagerTimeSlot,
         locationType: ManagerLocationType,
         locationId: UUID?,
-        custom: String?
+        custom: String?,
+        workStart: String?,
+        workEnd: String?,
+        breakRemoved: Bool
     ) -> Bool {
-        managerScheduleStore.bookings(for: userId, on: day).contains { existing in
-            existing.timeSlot == slot &&
-                existing.locationType == locationType &&
-                existing.locationId == locationId &&
-                (existing.customLocationName ?? "") == (custom ?? "")
+        let request = RulebookBookingRequest(
+            personId: userId,
+            dayKey: OrganizationRulebookContext.dayKey(day),
+            timeSlot: slot.rawValue,
+            locationType: locationType.rawValue,
+            locationId: locationId?.uuidString,
+            customLocationName: custom,
+            workStartTime: workStart,
+            workEndTime: workEnd,
+            isBreakRemoved: breakRemoved
+        )
+        return managerScheduleStore.bookings(for: userId, on: day).contains { existing in
+            var stored = existing.bookingRequest
+            stored.personId = userId // `bookings(for:on:)` already matched the person under every id.
+            return CanonicalBusinessEngine.isSameBookingRequest(stored, request)
         }
     }
 

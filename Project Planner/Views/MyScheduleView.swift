@@ -66,7 +66,8 @@ fileprivate func segmentHoursForOperative(_ b: Booking, day: Date, policy: OrgPa
 }
 
 fileprivate struct DayHoursSegmentTotals {
-    /// Hours worked shown in the day summary: `payrollHoursResult.workedHours` summed (as web's total card).
+    /// Hours shown in the day summary: `payrollHoursResult.totalPaidHours` summed — the pay rule's hours for that day
+    /// (a Saturday window counting 8h is 8h; Sunday every hour ×2 is 13h), never the clock duration.
     var totalPaidHours: Double
     var early: Double
     var mid: Double
@@ -88,7 +89,7 @@ fileprivate func mergedDaySegments(
         late += s.late
         // Same figures as web and Daily Overview: `workedHoursSplit(payrollHoursResult)` (never multiplied).
         let split = b.workedHoursSplit(policy: policy)
-        paidSum += split?.workedHours ?? 0
+        paidSum += b.payrollHoursResult(policy: policy).totalPaidHours
         ot += split?.outsideWorkedHours ?? 0
     }
     for b in operative {
@@ -98,7 +99,7 @@ fileprivate func mergedDaySegments(
         late += s.late
         // Same figures as web and Daily Overview: `workedHoursSplit(payrollHoursResult)` (never multiplied).
         let split = b.workedHoursSplit(policy: policy)
-        paidSum += split?.workedHours ?? 0
+        paidSum += b.payrollHoursResult(policy: policy).totalPaidHours
         ot += split?.outsideWorkedHours ?? 0
     }
     return DayHoursSegmentTotals(totalPaidHours: paidSum, early: early, mid: mid, late: late, otReported: ot)
@@ -163,10 +164,9 @@ fileprivate extension View {
 }
 
 fileprivate func managerBookingOtChipText(_ b: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> String? {
-    let ot = b.overtimeHoursBeyondPaidStandard(policy: policy)
-    guard ot > 0.05 else { return nil }
-    let m = PayrollTimePolicyCatalog.effectiveMultiplier(for: b, policy: policy)
-    return "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: ot, multiplier: m))"
+    // RULEBOOK 1.20.4 `multipliedHoursText` over `payrollMultipliedHours`: "OT 6.5h × 2 − 0.5h break = 12.5h".
+    guard let multiplied = b.payrollHoursResult(policy: policy).multipliedHours, multiplied.clockHours > 0.05 else { return nil }
+    return "OT \(multiplied.text)"
 }
 
 /// Clock range plus paid hours (break deducted for standard window bookings).
@@ -183,14 +183,14 @@ fileprivate func managerBookingClockSubtitle(_ b: ManagerSiteBooking, day: Date,
         start = f.string(from: block.start)
         end = f.string(from: block.end)
     }
-    return "\(start) – \(end) · \(ScheduleCoverageFormat.hours(b.paidBookedHours(policy: policy))) hrs"
+    // Hours from the pay rule for that day (`payrollHoursResult`), never the clock duration.
+    return "\(start) – \(end) · \(b.payrollHoursResult(policy: policy).paidHoursLabel)"
 }
 
 fileprivate func operativeBookingOtChipText(_ b: Booking, policy: OrgPayrollTimePolicy) -> String? {
-    let ot = b.overtimeHoursBeyondPaidStandard(policy: policy)
-    guard ot > 0.05 else { return nil }
-    let m = b.effectiveWeekdayOtMultiplier(policy: policy)
-    return "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: ot, multiplier: m))"
+    // RULEBOOK 1.20.4 `multipliedHoursText` over `payrollMultipliedHours`: "OT 6.5h × 2 − 0.5h break = 12.5h".
+    guard let multiplied = b.payrollHoursResult(policy: policy).multipliedHours, multiplied.clockHours > 0.05 else { return nil }
+    return "OT \(multiplied.text)"
 }
 
 fileprivate func operativeBookingClockSubtitle(_ b: Booking, day: Date, policy: OrgPayrollTimePolicy) -> String {
@@ -206,7 +206,8 @@ fileprivate func operativeBookingClockSubtitle(_ b: Booking, day: Date, policy: 
         start = f.string(from: block.start)
         end = f.string(from: block.end)
     }
-    return "\(start) – \(end) · \(ScheduleCoverageFormat.hours(b.paidBookedHours(policy: policy))) hrs"
+    // Hours from the pay rule for that day (`payrollHoursResult`), never the clock duration.
+    return "\(start) – \(end) · \(b.payrollHoursResult(policy: policy).paidHoursLabel)"
 }
 
 fileprivate struct MyScheduleBookingStripeRow: View {
@@ -430,7 +431,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
         } else {
             let ot = segments.otReported
             let paidSum = segments.totalPaidHours
-            let paidStd = policy.standardPaidHours
+            let paidStd = CanonicalBusinessEngine.weekdayPaidHours(policy)
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 13) {
                     PPIconTile(symbol: "clock.fill", family: .plan, size: PPMetrics.menuIcon)
@@ -861,6 +862,19 @@ struct ManagerScheduleContentView: View {
         }
     }
 
+    /// RULEBOOK 1.20.0 §9 (web `myScheduleAnnualLeaveLabel`): "Full Day", or a half with its clock range from
+    /// `leaveHalfDayWindows` (the exact middle of the working day in effect that day), e.g. "AM (06:30–10:30)".
+    static func leaveSlotText(_ timeSlot: HolidayTimeSlot, policy: OrgPayrollTimePolicy) -> String {
+        let half: String
+        switch timeSlot {
+        case .fullDay: return "Full Day"
+        case .morning: half = "AM"
+        case .afternoon: half = "PM"
+        }
+        guard let range = CanonicalBusinessEngine.leaveSlotClockRange(timeSlot: half, policy: policy) else { return half }
+        return "\(half) (\(range))"
+    }
+
     private func payrollPolicy(for day: Date) -> OrgPayrollTimePolicy {
         firebaseBackend.payrollPolicy(for: day)
     }
@@ -921,15 +935,7 @@ struct ManagerScheduleContentView: View {
     private func annualLeaveDisplayLabel(on day: Date) -> String? {
         let bookings = myHolidayBookings(on: day)
         guard let holiday = bookings.first(where: { $0.status == .approved }) ?? bookings.first else { return nil }
-        let slot: String
-        switch holiday.timeSlot {
-        case .fullDay:
-            slot = "Full Day"
-        case .morning:
-            slot = "AM"
-        case .afternoon:
-            slot = "PM"
-        }
+        let slot = Self.leaveSlotText(holiday.timeSlot, policy: payrollPolicy(for: day))
         return holiday.status == .pending ? "Pending Annual Leave - \(slot)" : "Annual Leave - \(slot)"
     }
 
@@ -1228,16 +1234,25 @@ struct ManagerScheduleContentView: View {
         customLocationName: String?,
         ignoringBookingId: UUID? = nil
     ) -> Bool {
-        mySiteBookings(on: day)
+        // RULEBOOK 1.20.2 §2 `isSameBookingRequest`: same slot, place and — for custom hours — the same start, finish
+        // and break. `mySiteBookings` are already this person's, so the person is the same on both sides.
+        let request = RulebookBookingRequest(
+            personId: "me",
+            dayKey: OrganizationRulebookContext.dayKey(day),
+            timeSlot: timeSlot.rawValue,
+            locationType: locationType.rawValue,
+            locationId: locationId?.uuidString,
+            customLocationName: customLocationName,
+            workStartTime: workStart,
+            workEndTime: workEnd,
+            isBreakRemoved: breakRemoved
+        )
+        return mySiteBookings(on: day)
             .filter { $0.id != ignoringBookingId }
             .contains { existing in
-                existing.timeSlot == timeSlot &&
-                    existing.locationType == locationType &&
-                    existing.locationId == locationId &&
-                    (existing.customLocationName ?? "") == (customLocationName ?? "") &&
-                    existing.workStartTime == workStart &&
-                    existing.workEndTime == workEnd &&
-                    existing.isBreakRemoved == breakRemoved
+                var stored = existing.bookingRequest
+                stored.personId = "me"
+                return CanonicalBusinessEngine.isSameBookingRequest(stored, request)
             }
     }
 
@@ -2574,8 +2589,22 @@ struct ManagerBookingSheet: View {
         return "\(p.jobNumber) \(p.siteName)"
     }
 
+    /// RULEBOOK 1.20.2 §2 `isSameBookingRequest`: this sheet's request carries no clock times, so a custom-hours
+    /// booking with times never counts as "already booked" here.
     private var alreadyBooked: Bool {
-        existingBookings.contains { $0.timeSlot == timeSlot && $0.locationType == locationType && $0.locationId == locationId }
+        let request = RulebookBookingRequest(
+            personId: "me",
+            dayKey: OrganizationRulebookContext.dayKey(date),
+            timeSlot: timeSlot.rawValue,
+            locationType: locationType.rawValue,
+            locationId: locationId?.uuidString
+        )
+        return existingBookings.contains { existing in
+            var stored = existing.bookingRequest
+            stored.personId = "me"
+            stored.customLocationName = nil
+            return CanonicalBusinessEngine.isSameBookingRequest(stored, request)
+        }
     }
 
     var body: some View {
@@ -2724,12 +2753,7 @@ struct OperativeScheduleContentView: View {
 
     private func approvedHolidayLabel(on date: Date) -> String? {
         guard let leave = holiday(on: date) else { return nil }
-        let slot: String
-        switch leave.timeSlot {
-        case .fullDay: slot = "Full Day"
-        case .morning: slot = "AM"
-        case .afternoon: slot = "PM"
-        }
+        let slot = ManagerScheduleContentView.leaveSlotText(leave.timeSlot, policy: payrollPolicy(for: date))
         return leave.status == .pending ? "Pending Annual Leave - \(slot)" : "Annual Leave - \(slot)"
     }
 

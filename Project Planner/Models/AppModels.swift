@@ -1437,6 +1437,10 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
     var sunday: OrgWeekendDayPayrollSettings
     /// When `true`, Sunday uses Saturday’s weekend rules in settings UI and payroll.
     var sundaySameAsSaturday: Bool
+    /// RULEBOOK 1.20.0 §4.3: `true` on a policy saved from 1.20.0 — its Monday–Friday paid day is derived from start,
+    /// finish and the unpaid break (`weekdayPaidHours`). Nil (missing) on a policy saved earlier, which keeps its stored
+    /// `standardPaidHours`. Never set in Swift: a save gets it from `withDerivedWeekdayPaidHours` in the write fields.
+    var paidHoursDerived: Bool? = nil
 
     /// Unpaid break length in hours (from `unpaidBreakMinutes`). Used when deducting break from elapsed clock time.
     var standardUnpaidBreakHours: Double {
@@ -1459,7 +1463,7 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
 
     /// Firestore `organizations/{id}.payrollTimePolicy` map.
     nonisolated func asFirestoreDictionary() -> [String: Any] {
-        [
+        var out: [String: Any] = [
             "standardDayStart": standardDayStart,
             "standardDayEnd": standardDayEnd,
             "unpaidBreakMinutes": unpaidBreakMinutes,
@@ -1472,6 +1476,9 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
             "sunday": sunday.asFirestoreDictionary(),
             "sundaySameAsSaturday": sundaySameAsSaturday,
         ]
+        // RULEBOOK 1.20.0 (`payrollPolicyToFirestore`): the flag only when set, so a pre-1.20.0 policy reads unchanged.
+        if paidHoursDerived == true { out["paidHoursDerived"] = true }
+        return out
     }
 
     /// Merges Firestore map with defaults (partial documents are OK).
@@ -1500,7 +1507,9 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
             // (`DEFAULT_SATURDAY_PAYROLL`, `DEFAULT_SUNDAY_PAYROLL`), not an empty map's 07:30–16:00 at 1.5×.
             saturday: data["saturday"] is [String: Any] ? OrgWeekendDayPayrollSettings.fromFirestore(satDict) : .defaultSaturday,
             sunday: data["sunday"] is [String: Any] ? OrgWeekendDayPayrollSettings.fromFirestore(sunDict) : .defaultSunday,
-            sundaySameAsSaturday: sundaySame
+            sundaySameAsSaturday: sundaySame,
+            // RULEBOOK 1.20.0 `parsePayrollPolicy`: only a stored `true` marks a derived policy.
+            paidHoursDerived: (data["paidHoursDerived"] as? Bool) == true ? true : nil
         )
     }
 

@@ -77,7 +77,8 @@ struct OperativeProfileView: View {
     }
 
     private var dayRateValue: String {
-        let standardHours = firebaseBackend.currentOrganization?.settings.payrollTimePolicy.standardPaidHours ?? 8
+        // RULEBOOK 1.20.0 §8: today's weekday paid day (`weekdayPaidHours` of the policy in effect today).
+        let standardHours = CanonicalBusinessEngine.weekdayPaidHours(firebaseBackend.payrollPolicy(for: Date()))
         let resolved = PayrollRateResolver.resolveCurrentProfileRate(
             user: displayedUser,
             operative: linkedOperative,
@@ -90,7 +91,8 @@ struct OperativeProfileView: View {
     }
 
     private var dayRateLabel: String {
-        let standardHours = firebaseBackend.currentOrganization?.settings.payrollTimePolicy.standardPaidHours ?? 8
+        // RULEBOOK 1.20.0 §8: today's weekday paid day (`weekdayPaidHours` of the policy in effect today).
+        let standardHours = CanonicalBusinessEngine.weekdayPaidHours(firebaseBackend.payrollPolicy(for: Date()))
         let resolved = PayrollRateResolver.resolveCurrentProfileRate(
             user: displayedUser,
             operative: linkedOperative,

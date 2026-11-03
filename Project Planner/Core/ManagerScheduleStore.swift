@@ -347,7 +347,15 @@ class ManagerScheduleStore: ObservableObject {
         }
     }
 
+    /// RULEBOOK 1.20.2 §2: two stored bookings are the same booking only by `bookingRequestIdentity` (same person,
+    /// day, slot, place and — for custom hours — the same start, finish and break). The stored-field key below is the
+    /// fallback when the script did not answer.
     private func semanticKey(for booking: ManagerSiteBooking) -> String {
+        if let identity = CanonicalBusinessEngine.bookingRequestIdentity(booking.bookingRequest) { return identity }
+        return legacySemanticKey(for: booking)
+    }
+
+    private func legacySemanticKey(for booking: ManagerSiteBooking) -> String {
         let day = OrganizationRulebookContext.calendar.startOfDay(for: booking.date).timeIntervalSince1970
         let locationKey = booking.locationId?.uuidString ?? (booking.customLocationName?.lowercased() ?? booking.locationType.rawValue)
         let ws = booking.workStartTime ?? ""

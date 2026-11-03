@@ -283,6 +283,8 @@ private struct ProjectBookedPersonHistoryView: View {
         let date: Date
         let scheduleLabel: String
         let hours: Double
+        /// RULEBOOK 1.20.2 `bookingHoursLabel`: e.g. "13h (6.5h × 2)".
+        let hoursLabel: String
     }
 
     private var dayRows: [DayRow] {
@@ -298,7 +300,8 @@ private struct ProjectBookedPersonHistoryView: View {
                         id: $0.id.uuidString,
                         date: $0.date,
                         scheduleLabel: $0.scheduleLabel(policy: dayPolicy($0.date)),
-                        hours: $0.paidBookedHours(policy: dayPolicy($0.date))
+                        hours: $0.paidBookedHours(policy: dayPolicy($0.date)),
+                        hoursLabel: $0.payrollHoursResult(policy: dayPolicy($0.date)).paidHoursLabel
                     )
                 }
         case .staff:
@@ -315,7 +318,8 @@ private struct ProjectBookedPersonHistoryView: View {
                         id: $0.id.uuidString,
                         date: $0.date,
                         scheduleLabel: $0.scheduleLabel(policy: dayPolicy($0.date)),
-                        hours: $0.paidBookedHours(policy: dayPolicy($0.date))
+                        hours: $0.paidBookedHours(policy: dayPolicy($0.date)),
+                        hoursLabel: $0.payrollHoursResult(policy: dayPolicy($0.date)).paidHoursLabel
                     )
                 }
         case .subcontractor:
@@ -333,7 +337,8 @@ private struct ProjectBookedPersonHistoryView: View {
                         id: $0.id.uuidString,
                         date: $0.date,
                         scheduleLabel: mirror.scheduleLabel(policy: dayPolicy($0.date)),
-                        hours: mirror.paidBookedHours(policy: dayPolicy($0.date))
+                        hours: mirror.paidBookedHours(policy: dayPolicy($0.date)),
+                        hoursLabel: mirror.payrollHoursResult(policy: dayPolicy($0.date)).paidHoursLabel
                     )
                 }
         }
@@ -378,7 +383,7 @@ private struct ProjectBookedPersonHistoryView: View {
                             Text(row.scheduleLabel)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text("\(formatHours(row.hours))h")
+                            Text(row.hoursLabel)
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(PPColor.brand)
                         }

@@ -408,7 +408,7 @@ enum WarningsComputation {
             managerSiteBookings: managerSiteBookings,
             holidayBookings: holidayBookings,
             payrollTimePolicy: .init(
-                standardPaidHours: input.payrollTimePolicy.standardPaidHours,
+                standardPaidHours: CanonicalBusinessEngine.weekdayPaidHours(input.payrollTimePolicy),
                 standardDayStart: input.payrollTimePolicy.standardDayStart,
                 standardDayEnd: input.payrollTimePolicy.standardDayEnd,
                 breakWindowStart: input.payrollTimePolicy.breakWindowStart,
@@ -1110,7 +1110,7 @@ enum WarningsComputation {
             dayKey: dayKey,
             includeWeekends: includeWeekends,
             excludedUserIds: storedExcludedUserIds(excluded),
-            standardPaidHours: policy.standardPaidHours,
+            standardPaidHours: CanonicalBusinessEngine.weekdayPaidHours(policy),
             saturdayCountsAsHours: policy.saturday.resolvedCountsAsHours(fallback: policy.standardPaidHours),
             sundayCountsAsHours: PayrollTimePolicyCatalog.resolvedSundaySettings(from: policy)
                 .resolvedCountsAsHours(fallback: policy.standardPaidHours),

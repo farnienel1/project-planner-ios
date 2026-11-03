@@ -1941,7 +1941,8 @@ private struct HomeProfileCardSheet: View {
         let resolved = PayrollRateResolver.resolveCurrentProfileRate(
             user: user,
             operative: operative,
-            standardDayHours: 8
+            // RULEBOOK 1.20.0 §8: today's weekday paid day, not a fixed 8h.
+            standardDayHours: max(CanonicalBusinessEngine.weekdayPaidHours(firebaseBackend.payrollPolicy(for: Date())), 0.01)
         )
         if let label = resolved.displayRateLabel() {
             return label.replacingOccurrences(of: "/day", with: "").replacingOccurrences(of: "/hr", with: " per hour")

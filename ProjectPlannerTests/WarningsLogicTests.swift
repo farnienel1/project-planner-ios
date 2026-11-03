@@ -178,8 +178,9 @@ final class WarningsLogicTests: XCTestCase {
         )
     }
 
-    /// Web fixture: PM leave plus a 07:30–09:30 custom booking is one leave_cover row
-    /// (09:30–12:00 still open, 2.5 hours). An AM booking against that PM leave is silent.
+    /// Web fixture: PM leave plus a 07:30–09:30 custom booking is one leave_cover row. RULEBOOK 1.20.0 §9: the leave
+    /// halves split 07:30–16:00 at its exact middle (11:45), so 09:30–11:45 is still open (2.25 hours). An AM booking
+    /// against that PM leave is silent.
     func testLeaveCoverageMatchesTheSharedFixture() throws {
         let calendar = CanonicalBusinessEngine.businessCalendar
         let monday = try XCTUnwrap(CanonicalBusinessEngine.date(fromDayKey: "2026-10-05", calendar: calendar))
@@ -197,8 +198,8 @@ final class WarningsLogicTests: XCTestCase {
         XCTAssertEqual(row.title, "Half-day leave not covered")
         XCTAssertEqual(row.severity, .medium)
         XCTAssertEqual(row.annualLeave?.kind, "leave_cover")
-        XCTAssertEqual(row.annualLeave?.missingRanges, ["09:30–12:00"])
-        XCTAssertEqual(row.annualLeave?.missingHours ?? -1, 2.5, accuracy: 0.001)
+        XCTAssertEqual(row.annualLeave?.missingRanges, ["09:30–11:45"])
+        XCTAssertEqual(row.annualLeave?.missingHours ?? -1, 2.25, accuracy: 0.001)
         XCTAssertTrue(row.message.contains("Ada Lovelace"))
 
         let silent = warnings(

@@ -18,15 +18,6 @@ enum ManagerScheduleInterval {
         return h * 60 + m
     }
 
-    /// Minutes from midnight. An end that is earlier than the start is the next morning.
-    /// Swift-only overnight wall hours for `Booking.totalBookedHours`; the clash, sort, and
-    /// calendar-export path uses the canonical `slotInterval`, which does not extend overnight.
-    nonisolated static func clockSpanMinutes(start: String, end: String) -> (Int, Int)? {
-        guard let sm = parseMinutes(start), let em = parseMinutes(end), sm != em else { return nil }
-        if em > sm { return (sm, em) }
-        return (sm, em + 24 * 60)
-    }
-
     /// Closed intervals [start, end] in minutes from midnight; touching endpoints do not overlap.
     static func closedIntervalsOverlap(_ a: (Int, Int), _ b: (Int, Int)) -> Bool {
         a.0 < b.1 && b.0 < a.1
@@ -90,7 +81,7 @@ enum ManagerScheduleInterval {
     ) -> Double {
         guard !bookings.isEmpty else { return 0 }
         if bookings.contains(where: { $0.timeSlot == .fullDay && ($0.workStartTime ?? "").isEmpty && ($0.workEndTime ?? "").isEmpty }) {
-            return max(policy.standardPaidHours, 0)
+            return max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0)
         }
 
         var intervals: [(Int, Int)] = []
@@ -111,7 +102,7 @@ enum ManagerScheduleInterval {
             let unionStart = merged.map(\.0).min() ?? ws
             let unionEnd = merged.map(\.1).max() ?? we
             if unionStart <= ws && unionEnd >= we {
-                return max(policy.standardPaidHours, 0)
+                return max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0)
             }
         }
 
@@ -119,40 +110,6 @@ enum ManagerScheduleInterval {
         var wallHours = Double(totalMinutes) / 60.0
         if !bookings.contains(where: \.isBreakRemoved) {
             wallHours = max(0, wallHours - policy.standardUnpaidBreakHours)
-        }
-        return wallHours
-    }
-
-    /// Snapshot-friendly variant for warnings computation (uses precomputed clash intervals).
-    nonisolated static func combinedPaidHoursFromIntervals(
-        intervals: [(Int, Int)],
-        anyBreakRemoved: Bool,
-        includesLegacyFullDay: Bool,
-        standardPaidHours: Double,
-        standardDayStart: String,
-        standardDayEnd: String,
-        standardUnpaidBreakHours: Double
-    ) -> Double {
-        if includesLegacyFullDay {
-            return max(standardPaidHours, 0)
-        }
-        guard !intervals.isEmpty else { return 0 }
-
-        let merged = mergeIntervals(intervals)
-        if let ws = parseMinutes(standardDayStart),
-           let we = parseMinutes(standardDayEnd),
-           we > ws {
-            let unionStart = merged.map(\.0).min() ?? ws
-            let unionEnd = merged.map(\.1).max() ?? we
-            if unionStart <= ws && unionEnd >= we {
-                return max(standardPaidHours, 0)
-            }
-        }
-
-        let totalMinutes = merged.reduce(0) { $0 + max(0, $1.1 - $1.0) }
-        var wallHours = Double(totalMinutes) / 60.0
-        if !anyBreakRemoved {
-            wallHours = max(0, wallHours - standardUnpaidBreakHours)
         }
         return wallHours
     }
@@ -223,7 +180,7 @@ extension ManagerSiteBooking {
     func reportDayValue(policy: OrgPayrollTimePolicy = .default) -> Double {
         let paidHrs = paidBookedHours(policy: policy)
         // Nil only when the script did not run; bookings are then unreadable too.
-        return CanonicalBusinessEngine.reportDayValue(totalPaidHours: paidHrs, standardPaidHours: policy.standardPaidHours) ?? 0
+        return CanonicalBusinessEngine.reportDayValue(totalPaidHours: paidHrs, standardPaidHours: CanonicalBusinessEngine.weekdayPaidHours(policy)) ?? 0
     }
 
     /// Start/end instants on the booking’s calendar day (for Calendar export and reminders).
@@ -240,11 +197,11 @@ extension ManagerSiteBooking {
         return (start, end)
     }
 
+    /// Clock hours this booking occupies: the length of its `slotInterval` (the rulebook's interval for the stored slot
+    /// and clock times, `CanonicalBusinessEngine.slotInterval`). 0 when the script did not answer — no Swift fallback.
     func totalBookedHours(policy: OrgPayrollTimePolicy = .default) -> Double {
-        if let iv = ManagerScheduleInterval.clashInterval(for: self, policy: policy) {
-            return Double(iv.1 - iv.0) / 60.0
-        }
-        return max(policy.standardPaidHours, 0)
+        guard let iv = ManagerScheduleInterval.clashInterval(for: self, policy: policy) else { return 0 }
+        return Double(max(0, iv.1 - iv.0)) / 60.0
     }
 
     func overtimeHoursBeyondPaidStandard(policy: OrgPayrollTimePolicy = .default) -> Double {

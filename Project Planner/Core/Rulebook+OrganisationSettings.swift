@@ -165,10 +165,17 @@ extension CanonicalBusinessEngine {
         return value as? String
     }
 
-    /// `validatePayrollTimePolicy`. Nil when the policy can be saved.
-    nonisolated static func validatePayrollTimePolicy(_ policy: OrgPayrollTimePolicy) -> String? {
-        guard let policyJSON = payrollPolicyJSON(policy),
-              let value = callJSON("validatePayrollTimePolicy", arguments: [policyJSON]) else {
+    /// `validatePayrollTimePolicy(policy, previous)`. Nil when the policy can be saved. RULEBOOK 1.20.2: `previous` is
+    /// the saved policy, so a clock time stored off the 30-minute step passes until it is changed. Answered by the
+    /// packed script through `CanonicalBusinessEngine.callJSON`.
+    nonisolated static func validatePayrollTimePolicy(_ policy: OrgPayrollTimePolicy, previous: OrgPayrollTimePolicy? = nil) -> String? {
+        guard let policyJSON = payrollPolicyJSON(policy) else { return "Could not check these working hours." }
+        var arguments: [Any] = [policyJSON]
+        if let previous {
+            guard let previousJSON = payrollPolicyJSON(previous) else { return "Could not check these working hours." }
+            arguments.append(previousJSON)
+        }
+        guard let value = callJSON("validatePayrollTimePolicy", arguments: arguments) else {
             return "Could not check these working hours."
         }
         return value as? String

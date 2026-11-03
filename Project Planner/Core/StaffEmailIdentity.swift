@@ -306,7 +306,7 @@ enum BookLabourCandidateSelection {
         guard includeThisDay else { return [] }
         let users = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceUsers) ?? sourceUsers
         let operatives = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceOperatives) ?? sourceOperatives
-        let required = max(policy.standardPaidHours, 0)
+        let required = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0)
 
         func focused(_ user: AppUser, operative: Operative?) -> Bool {
             if focusedIds.contains(user.id) { return true }
@@ -414,7 +414,7 @@ enum LabourDayCoverage {
     ) -> [String] {
         let users = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceUsers) ?? sourceUsers
         let operatives = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceOperatives) ?? sourceOperatives
-        let required = max(policy.standardPaidHours, 0)
+        let required = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0)
         let operativeOnly = StaffEmailIdentity.oneAccountPerEmail(
             users.filter {
                 $0.isActive && $0.passwordSet && $0.permissions.operativeMode

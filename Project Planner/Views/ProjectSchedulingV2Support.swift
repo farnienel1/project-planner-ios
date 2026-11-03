@@ -51,6 +51,9 @@ enum SchedulingV2CellKind: Equatable {
 
 enum SchedulingV2CellKindBuilder {
     /// Maps existing booking hours / slot into a display cell. Display-only — does not change booking logic.
+    /// `paidHours` is `payrollHoursResult.totalPaidHours` and `overtimeHours` the paid hours of its multiplied segments
+    /// (`PayrollHoursResult.paidOvertimeHours`), so a cell shows the pay rule's hours for the day, never the clock
+    /// duration (Sunday 07:30–14:00 every hour ×2 → 13h OT; a Saturday window counting 8h → 8h).
     static func fromBooking(
         paidHours: Double,
         overtimeHours: Double,
@@ -85,16 +88,14 @@ enum SchedulingV2CellKindBuilder {
         return .empty
     }
 
+    /// RULEBOOK 1.20.0: hours as the pay rule gives them (to the hundredth), never snapped to a half hour — a derived
+    /// weekday day is often a quarter hour (owner example 7.25h).
     private static func roundHalf(_ value: Double) -> Double {
-        (value * 2).rounded() / 2
+        (value * 100).rounded() / 100
     }
 
     static func hoursLabel(_ value: Double) -> String {
-        let rounded = roundHalf(value)
-        if abs(rounded - rounded.rounded(.towardZero)) < 0.01 {
-            return String(format: "%.0fh", rounded)
-        }
-        return String(format: "%.1fh", rounded)
+        ScheduleCoverageFormat.hours(value) + "h"
     }
 }
 

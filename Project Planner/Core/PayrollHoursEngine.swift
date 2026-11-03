@@ -19,7 +19,11 @@ struct PayrollHoursSegment: Equatable {
     var clockEnd: String?
     var baseHours: Double
     var multiplier: Double
+    /// RULEBOOK 1.20.3: the unpaid break taken off this segment as plain hours (`payrollHoursResult` segment
+    /// `unpaidBreakHours`), 0 when none. On a multiplied segment `baseHours` is clock − break / N.
+    var unpaidBreakHours: Double = 0
 
+    /// RULEBOOK 1.20.3: clock × N − break, which equals `baseHours × multiplier` (the script's `paidHours`).
     var paidHours: Double { baseHours * multiplier }
 
     var multiplierLabel: String {
@@ -31,6 +35,17 @@ struct PayrollHoursSegment: Equatable {
     }
 }
 
+extension PayrollHoursSegment.Kind {
+    /// The script's segment kind name (`payrollHoursResult.segments[].kind`).
+    var scriptName: String {
+        switch self {
+        case .standardWindow: return "standardWindow"
+        case .outsideWindow: return "outsideWindow"
+        case .allHoursMultiplier: return "allHoursMultiplier"
+        }
+    }
+}
+
 struct PayrollHoursResult: Equatable {
     var totalPaidHours: Double
     var segments: [PayrollHoursSegment]
@@ -38,6 +53,48 @@ struct PayrollHoursResult: Equatable {
     var outsideMultiplier: Double = 1
     /// RULEBOOK 1.19.0: the unpaid break taken off (`payrollHoursResult.unpaidBreakHours`), 0 when none.
     var unpaidBreakHours: Double = 0
+    /// `payrollHoursResult.standardHours` / `outsideHours` (1.20.2 `bookingHoursLabel` reads them).
+    var standardHours: Double = 0
+    var outsideHours: Double = 0
+
+    /// RULEBOOK 1.20.3 / 1.20.4 `payrollMultipliedHours(result)`: the clock hours at the multiplier with the unpaid
+    /// break as plain hours, and `text` ("6.5h × 2 − 0.5h break = 12.5h"). Nil with no hours at a multiplier. Display
+    /// only — pay stays `outsideHours × outsideMultiplier`. Memoised in the wrapper.
+    var multipliedHours: RulebookMultipliedHours? {
+        CanonicalBusinessEngine.payrollMultipliedHours(RulebookMultipliedHoursInput(
+            segments: scriptSegments,
+            outsideMultiplier: outsideMultiplier
+        ))
+    }
+
+    /// The segments in the script's shape (`payrollHoursResult.segments`): a mapping, not a calculation.
+    private var scriptSegments: [RulebookMultipliedHoursInput.Segment] {
+        segments.map {
+            RulebookMultipliedHoursInput.Segment(
+                kind: $0.kind.scriptName, baseHours: $0.baseHours, multiplier: $0.multiplier, unpaidBreakHours: $0.unpaidBreakHours
+            )
+        }
+    }
+
+    /// The paid hours of the multiplied segments (outside the window, or every hour at N×), as the pay rule prices
+    /// them: Sunday 07:30–14:00 every hour ×2 → 13; a weekday 06:30–16:30 → 3 (2h × 1.5).
+    var paidOvertimeHours: Double {
+        segments.filter { $0.kind != .standardWindow }.reduce(0) { $0 + $1.paidHours }
+    }
+
+    /// RULEBOOK 1.20.2 §6/§10 `bookingHoursLabel`: the booking's hours as the pay rule gives them for its day (never
+    /// the clock duration), with the multiplier sum — Saturday 07:30–14:00 on an 8h window → "8h"; Sunday every hour
+    /// ×2 → "13h (6.5h × 2)"; a weekday with overtime → "10.25h (7.25h + 2h × 1.5)". Memoised in the wrapper.
+    var paidHoursLabel: String {
+        CanonicalBusinessEngine.bookingHoursLabel(RulebookBookingHoursInput(
+            totalPaidHours: totalPaidHours,
+            standardHours: standardHours,
+            outsideHours: outsideHours,
+            outsideMultiplier: outsideMultiplier,
+            // 1.20.3: the script needs the segments to show clock hours × N − break, not the back-calculated hours.
+            segments: scriptSegments
+        ))
+    }
 
     var breakdownSummary: String {
         guard !segments.isEmpty else { return ScheduleCoverageFormat.hours(totalPaidHours) + "h" }
@@ -107,17 +164,20 @@ enum PayrollHoursEngine {
         let result = answer.hours
         return PayrollHoursResult(
             totalPaidHours: result.totalPaidHours,
-            segments: result.segments.map { segment in
+            segments: result.segments.enumerated().map { index, segment in
                 PayrollHoursSegment(
                     kind: segmentKind(segment.kind),
                     clockStart: segment.clockStart,
                     clockEnd: segment.clockEnd,
                     baseHours: segment.baseHours,
-                    multiplier: segment.multiplier
+                    multiplier: segment.multiplier,
+                    unpaidBreakHours: index < answer.segmentUnpaidBreakHours.count ? answer.segmentUnpaidBreakHours[index] : 0
                 )
             },
             outsideMultiplier: result.outsideMultiplier,
-            unpaidBreakHours: answer.unpaidBreakHours
+            unpaidBreakHours: answer.unpaidBreakHours,
+            standardHours: result.standardHours,
+            outsideHours: result.outsideHours
         )
     }
 

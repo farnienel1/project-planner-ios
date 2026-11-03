@@ -4922,7 +4922,9 @@ class FirebaseBackend: ObservableObject {
         if let defaultLongitude {
             payload["defaultLongitude"] = defaultLongitude
         }
-        payload["payrollTimePolicy"] = OrgPayrollTimePolicy.default.asFirestoreDictionary()
+        // RULEBOOK 1.20.0 §4.3: a new company's first working hours are a derived policy
+        // (`withDerivedWeekdayPaidHours`: `paidHoursDerived: true`, `standardPaidHours` = finish − start − unpaid break).
+        payload["payrollTimePolicy"] = (CanonicalBusinessEngine.withDerivedWeekdayPaidHours(.default) ?? .default).asFirestoreDictionary()
         payload["invoicing"] = Self.invoicingFirestoreMap(OrganizationInvoicingSettings.default)
         payload["annualLeaveDefaults"] = [
             "daysPerYear": OrganizationAnnualLeaveDefaults.default.daysPerYear,
@@ -5080,11 +5082,22 @@ class FirebaseBackend: ObservableObject {
     /// policy is the one in force yesterday; a future scheduled change is kept, a due one is consumed.
     /// 1.19.0: appends today's entry to `payrollTimePolicyHistory`, bumps `payrollTimePolicyRevision`, and is refused
     /// with `PAYROLL_POLICY_STALE_SAVE_MESSAGE` when the working hours changed since `baseStateJSON` was loaded.
-    func applyOrganizationPayrollTimePolicyImmediately(_ policy: OrgPayrollTimePolicy, baseStateJSON: String? = nil) async throws {
+    /// 1.20.2: `previous` is the policy the screen loaded (else the open organisation's), so a time saved off the
+    /// 30-minute step passes until it is changed (`validatePayrollTimePolicy(policy, previous)`).
+    func applyOrganizationPayrollTimePolicyImmediately(
+        _ policy: OrgPayrollTimePolicy,
+        baseStateJSON: String? = nil,
+        previous: OrgPayrollTimePolicy? = nil
+    ) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
         }
-        if let message = CanonicalBusinessEngine.validatePayrollTimePolicy(policy) {
+        // RULEBOOK 1.20.0 §4.3: the policy is checked as it will be saved (`withDerivedWeekdayPaidHours`); the write
+        // fields derive it themselves.
+        if let message = CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(
+            policy,
+            previous: previous ?? currentOrganization?.settings.payrollTimePolicy
+        ) {
             throw Self.payrollWriteError(message)
         }
         let merged = try await Self.runPayrollPolicyTransaction(
@@ -5113,12 +5126,18 @@ class FirebaseBackend: ObservableObject {
     func scheduleOrganizationPayrollTimePolicyChange(
         _ policy: OrgPayrollTimePolicy,
         effectiveFrom: Date,
-        baseStateJSON: String? = nil
+        baseStateJSON: String? = nil,
+        previous: OrgPayrollTimePolicy? = nil
     ) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(domain: "FirebaseBackend", code: 0, userInfo: [NSLocalizedDescriptionKey: "No organization loaded"])
         }
-        if let message = CanonicalBusinessEngine.validatePayrollTimePolicy(policy) {
+        // RULEBOOK 1.20.0 §4.3: the policy is checked as it will be saved (`withDerivedWeekdayPaidHours`); the write
+        // fields derive it themselves.
+        if let message = CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(
+            policy,
+            previous: previous ?? currentOrganization?.settings.payrollTimePolicy
+        ) {
             throw Self.payrollWriteError(message)
         }
         let picked = Calendar.current.dateComponents([.year, .month, .day], from: effectiveFrom)
