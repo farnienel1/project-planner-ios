@@ -83,9 +83,10 @@ enum SubscriptionLapsedCopy {
     /// RULEBOOK 1.13.0 §19 `SUBSCRIPTION_LAPSED_MESSAGE`, shown to everyone.
     static var headline: String { CanonicalBusinessEngine.subscriptionLapsedMessage }
 
-    /// `SUBSCRIPTION_LAPSED_ADMIN_NOTE` for admins, nothing for anyone else. Never a link or a price.
+    /// Nothing extra on iOS, admins included (owner decision, App Store 3.1.3): the web-only
+    /// `SUBSCRIPTION_LAPSED_ADMIN_NOTE` points at web billing, so the iPhone never shows it. Never a link or a price.
     static func detail(isAdmin: Bool) -> String? {
-        isAdmin ? CanonicalBusinessEngine.subscriptionLapsedAdminNote : nil
+        nil
     }
 
     static func visibleText(isAdmin: Bool) -> String {

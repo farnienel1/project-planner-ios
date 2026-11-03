@@ -42,9 +42,10 @@ final class SubscriptionHasAccessTests: XCTestCase {
     func testVisibleCopyIsTheRulebookLapsedMessage() {
         let admin = SubscriptionLapsedCopy.visibleText(isAdmin: true)
         let otherRole = SubscriptionLapsedCopy.visibleText(isAdmin: false)
-        // RULEBOOK 1.13.0 §19: `SUBSCRIPTION_LAPSED_MESSAGE` for everyone, `SUBSCRIPTION_LAPSED_ADMIN_NOTE` for admins.
+        // RULEBOOK §19: `SUBSCRIPTION_LAPSED_MESSAGE` for everyone; on iOS admins see the same text (no web billing note).
         XCTAssertEqual(otherRole, "The organisation's Project Planner subscription has lapsed. Please contact your system administrator and ask them to renew.")
-        XCTAssertEqual(admin, otherRole + "\nYou are an admin: renew the subscription in Settings → Billing.")
+        XCTAssertEqual(admin, otherRole)
+        XCTAssertFalse(admin.contains("Billing"))
         for text in [admin, otherRole] {
             XCTAssertFalse(text.lowercased().contains("web app"))
             XCTAssertFalse(text.contains("£"))
