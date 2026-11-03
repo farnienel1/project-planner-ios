@@ -26,50 +26,149 @@ struct WeeklyReportTimesheetFeed {
     }
 
     var weeks: [ApprovedWeek]
+    /// Script answers for these weeks, memoised (one call per user and day / per range, never per render).
+    private let cache = FeedAnswerCache()
+
+    init(weeks: [ApprovedWeek]) {
+        self.weeks = weeks
+    }
 
     static let empty = WeeklyReportTimesheetFeed(weeks: [])
 
-    func covers(userId: String?, day: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> Bool {
-        guard let userId, !userId.isEmpty else { return false }
-        let dayStart = calendar.startOfDay(for: day)
-        return weeks.contains { week in
-            let ids = week.coveredUserIds.isEmpty ? [week.userId] : week.coveredUserIds
-            return ids.contains(userId)
-                && dayStart >= calendar.startOfDay(for: week.weekStart)
-                && dayStart <= calendar.startOfDay(for: week.weekEnd)
-        }
-    }
-
-    func labourLines(in range: ClosedRange<Date>, calendar: Calendar = OrganizationRulebookContext.calendar) -> [(week: ApprovedWeek, line: TimesheetWeeklyReportLabourLine)] {
-        let start = calendar.startOfDay(for: range.lowerBound)
-        let end = calendar.startOfDay(for: range.upperBound)
-        var out: [(ApprovedWeek, TimesheetWeeklyReportLabourLine)] = []
-        for week in weeks {
-            for line in week.override.lines where line.decision != .declined {
-                let day = calendar.startOfDay(for: line.date)
-                guard day >= start && day <= end else { continue }
-                out.append((week, line))
+    /// RULEBOOK 1.22.0 §7 `CanonicalBusinessEngine.timesheetFeedCovers`: an approved week of this user id covers the
+    /// organisation-zone day. A merged week covers every account it was merged from (`coveredUserIds`).
+    func covers(userId: String?, day: Date) -> Bool {
+        guard let userId, !userId.isEmpty, !weeks.isEmpty else { return false }
+        let dayKey = OrganizationRulebookContext.dayKey(day)
+        let weeks = self.weeks
+        return cache.covers(key: "\(userId)|\(dayKey)") {
+            let rows: [[String: Any]] = weeks.flatMap { week -> [[String: Any]] in
+                let ids = week.coveredUserIds.isEmpty ? [week.userId] : week.coveredUserIds.sorted()
+                return ids.map { id in
+                    [
+                        "userId": id,
+                        "weekStart": OrganizationRulebookContext.dayKey(week.weekStart),
+                        "weekEnd": OrganizationRulebookContext.dayKey(week.weekEnd),
+                        "override": ["lines": [Any](), "priceWork": [Any](), "expenses": [Any]()],
+                    ] as [String: Any]
+                }
             }
+            return CanonicalBusinessEngine.timesheetFeedCovers(
+                weeks: rows,
+                userIds: [userId],
+                dayKey: dayKey,
+                timeZone: OrganizationRulebookContext.timeZoneIdentifier
+            ) ?? false
         }
-        return out
     }
 
+    /// RULEBOOK 1.22.0 §7 `CanonicalBusinessEngine.timesheetFeedLabourLines`: labour lines in the range, declined out.
+    func labourLines(in range: ClosedRange<Date>) -> [(week: ApprovedWeek, line: TimesheetWeeklyReportLabourLine)] {
+        let (start, end) = Self.rangeKeys(range)
+        let weeks = self.weeks
+        let picked = cache.lines(key: "labour|\(start)|\(end)") {
+            CanonicalBusinessEngine.timesheetFeedLabourLines(
+                weeks: Self.weeksJSON(weeks), startDayKey: start, endDayKey: end,
+                timeZone: OrganizationRulebookContext.timeZoneIdentifier
+            ).map(Self.pickedIndexes) ?? []
+        }
+        return picked.compactMap { w, l in
+            guard weeks.indices.contains(w), weeks[w].override.lines.indices.contains(l) else { return nil }
+            return (weeks[w], weeks[w].override.lines[l])
+        }
+    }
+
+    /// RULEBOOK 1.22.0 §7 `CanonicalBusinessEngine.timesheetFeedMoneyLines`: price work or expenses in the range,
+    /// declined and amounts of 0.0001 or less out.
     func moneyLines(
         _ keyPath: KeyPath<TimesheetWeeklyReportOverride, [TimesheetWeeklyReportMoneyLine]>,
-        in range: ClosedRange<Date>,
-        calendar: Calendar = OrganizationRulebookContext.calendar
+        in range: ClosedRange<Date>
     ) -> [(week: ApprovedWeek, line: TimesheetWeeklyReportMoneyLine)] {
-        let start = calendar.startOfDay(for: range.lowerBound)
-        let end = calendar.startOfDay(for: range.upperBound)
-        var out: [(ApprovedWeek, TimesheetWeeklyReportMoneyLine)] = []
-        for week in weeks {
-            for line in week.override[keyPath: keyPath] where line.decision != .declined && line.amount > 0.0001 {
-                let day = calendar.startOfDay(for: line.date)
-                guard day >= start && day <= end else { continue }
-                out.append((week, line))
-            }
+        let kind = keyPath == \TimesheetWeeklyReportOverride.priceWork ? "priceWork" : "expenses"
+        let (start, end) = Self.rangeKeys(range)
+        let weeks = self.weeks
+        let picked = cache.lines(key: "\(kind)|\(start)|\(end)") {
+            CanonicalBusinessEngine.timesheetFeedMoneyLines(
+                weeks: Self.weeksJSON(weeks), kind: kind, startDayKey: start, endDayKey: end,
+                timeZone: OrganizationRulebookContext.timeZoneIdentifier
+            ).map(Self.pickedIndexes) ?? []
         }
+        return picked.compactMap { w, l in
+            let lines = weeks.indices.contains(w) ? weeks[w].override[keyPath: keyPath] : []
+            guard lines.indices.contains(l) else { return nil }
+            return (weeks[w], lines[l])
+        }
+    }
+
+    private static func rangeKeys(_ range: ClosedRange<Date>) -> (String, String) {
+        (OrganizationRulebookContext.dayKey(range.lowerBound), OrganizationRulebookContext.dayKey(range.upperBound))
+    }
+
+    /// `[{ weekIndex, line: { _l } }]` → (week index, line index).
+    private static func pickedIndexes(_ rows: [[String: Any]]) -> [(Int, Int)] {
+        rows.compactMap { row in
+            guard let w = (row["weekIndex"] as? NSNumber)?.intValue,
+                  let line = row["line"] as? [String: Any],
+                  let l = (line["_l"] as? NSNumber)?.intValue else { return nil }
+            return (w, l)
+        }
+    }
+
+    /// Weeks as `FeedWeek` rows: organisation-zone day keys, each line tagged with its index (`_l`) so an answer maps
+    /// back to the Swift value. `extra` adds fields per week (the merge tags).
+    fileprivate static func weeksJSON(_ weeks: [ApprovedWeek], extra: ((Int, ApprovedWeek) -> [String: Any])? = nil) -> [[String: Any]] {
+        weeks.enumerated().map { index, week in
+            var row: [String: Any] = [
+                "userId": week.userId,
+                "weekStart": OrganizationRulebookContext.dayKey(week.weekStart),
+                "weekEnd": OrganizationRulebookContext.dayKey(week.weekEnd),
+                "override": [
+                    "lines": week.override.lines.enumerated().map { tagged(labourJSON($1, index: $0), week: index) },
+                    "priceWork": week.override.priceWork.enumerated().map { tagged(moneyJSON($1, index: $0), week: index) },
+                    "expenses": week.override.expenses.enumerated().map { tagged(moneyJSON($1, index: $0), week: index) },
+                ] as [String: Any],
+            ]
+            if let extra { row.merge(extra(index, week)) { _, new in new } }
+            return row
+        }
+    }
+
+    /// `_s`: the index of the week a line came from (in the list sent), so a merged line maps back.
+    private static func tagged(_ row: [String: Any], week: Int) -> [String: Any] {
+        var out = row
+        out["_s"] = week
         return out
+    }
+
+    fileprivate static func labourJSON(_ line: TimesheetWeeklyReportLabourLine, index: Int) -> [String: Any] {
+        [
+            "_l": index,
+            "id": line.id,
+            "bookingId": line.bookingId.map { $0 as Any } ?? NSNull(),
+            "date": OrganizationRulebookContext.dayKey(line.date),
+            "locationKind": line.locationKind,
+            "jobNumber": line.jobNumber,
+            "projectName": line.projectName,
+            "paidHours": line.paidHours,
+            "days": line.days,
+            "amount": line.amount,
+            "isOvertime": line.isOvertime,
+            "details": line.details,
+            "decision": line.decision.rawValue,
+        ]
+    }
+
+    fileprivate static func moneyJSON(_ line: TimesheetWeeklyReportMoneyLine, index: Int) -> [String: Any] {
+        [
+            "_l": index,
+            "id": line.id,
+            "date": OrganizationRulebookContext.dayKey(line.date),
+            "jobNumber": line.jobNumber,
+            "title": line.title,
+            "amount": line.amount,
+            "details": line.details,
+            "decision": line.decision.rawValue,
+        ]
     }
 
     @MainActor
@@ -177,83 +276,85 @@ struct WeeklyReportTimesheetFeed {
         return WeeklyReportTimesheetFeed(weeks: mergeApprovedWeeks(weeks, users: users))
     }
 
-    /// One approved week per email. Shared booking ids count once. A booking that exists on only one draft stays.
-    static func mergeApprovedWeeks(_ weeks: [ApprovedWeek], users: [AppUser], calendar: Calendar = OrganizationRulebookContext.calendar) -> [ApprovedWeek] {
-        var groups: [String: [ApprovedWeek]] = [:]
-        for week in weeks {
-            let email = StaffEmailIdentity.emailKey(users.first { $0.id == week.userId }?.email)
-            let day = calendar.startOfDay(for: week.weekStart).timeIntervalSince1970
-            let key = email.isEmpty ? "id:\(week.userId)|\(day)" : "email:\(email)|\(day)"
-            groups[key, default: []].append(week)
+    /// RULEBOOK 1.22.0 §7 `CanonicalBusinessEngine.mergeTimesheetFeedWeeks`: one approved week per person (email, else
+    /// user id) and week start; a shared booking counts once and lines only one account has stay. The preferred
+    /// account's week goes first so the script keeps it as the primary (its name, role and trade). Each week carries a
+    /// marker line (`bookingId` `__feed-week-{n}`, unique, so the union keeps it) only to learn which weeks were merged
+    /// into which — its `coveredUserIds` are their union; the markers are removed again. Empty when the script did
+    /// not answer, so the report falls back to live bookings rather than counting a sheet twice.
+    static func mergeApprovedWeeks(_ weeks: [ApprovedWeek], users: [AppUser]) -> [ApprovedWeek] {
+        guard !weeks.isEmpty else { return [] }
+        let weekUserIds = Set(weeks.map(\.userId))
+        func preferredId(for userId: String) -> String? {
+            let email = StaffEmailIdentity.emailKey(users.first { $0.id == userId }?.email)
+            guard !email.isEmpty else { return userId }
+            let accounts = users.filter { weekUserIds.contains($0.id) && StaffEmailIdentity.emailKey($0.email) == email }
+            return StaffEmailIdentity.preferredUser(accounts)?.id
         }
-        return groups.values.map { @MainActor group in
-            guard group.count > 1, let first = group.first else { return group[0] }
-            let groupUsers = group.compactMap { week in users.first { $0.id == week.userId } }
-            let preferredId = StaffEmailIdentity.preferredUser(groupUsers)?.id
-            let display = group.first { $0.userId == preferredId } ?? first
-            var merged = display
-            merged.coveredUserIds = Set(group.flatMap { week -> [String] in
-                week.coveredUserIds.isEmpty ? [week.userId] : Array(week.coveredUserIds)
+        let order = weeks.indices.sorted { a, b in
+            let pa = preferredId(for: weeks[a].userId) == weeks[a].userId ? 0 : 1
+            let pb = preferredId(for: weeks[b].userId) == weeks[b].userId ? 0 : 1
+            return pa == pb ? a < b : pa < pb
+        }
+        let ordered = order.map { weeks[$0] }
+        var input = weeksJSON(ordered) { index, _ in ["_w": index] }
+        for index in input.indices {
+            var override = input[index]["override"] as? [String: Any] ?? [:]
+            var lines = override["lines"] as? [[String: Any]] ?? []
+            lines.append(["_m": index, "bookingId": "__feed-week-\(index)", "date": input[index]["weekStart"] ?? ""])
+            override["lines"] = lines
+            input[index]["override"] = override
+        }
+        let people: [[String: Any]] = users.map { ["id": $0.id, "email": $0.email] }
+        guard let merged = CanonicalBusinessEngine.mergeTimesheetFeedWeeks(
+            weeks: input, people: people, timeZone: OrganizationRulebookContext.timeZoneIdentifier
+        ) else { return [] }
+
+        return merged.compactMap { row -> ApprovedWeek? in
+            guard let primaryIndex = (row["_w"] as? NSNumber)?.intValue, ordered.indices.contains(primaryIndex) else { return nil }
+            let override = row["override"] as? [String: Any] ?? [:]
+            let lineRows = override["lines"] as? [[String: Any]] ?? []
+            let members = lineRows.compactMap { ($0["_m"] as? NSNumber)?.intValue }.filter { ordered.indices.contains($0) }
+            guard members.count > 1 else { return ordered[primaryIndex] }
+            // Each kept line names its source week (`_s`) and its index there (`_l`).
+            func lines<Line>(_ rows: [[String: Any]], _ pick: (ApprovedWeek) -> [Line]) -> [Line] {
+                rows.compactMap { line -> Line? in
+                    guard let source = (line["_s"] as? NSNumber)?.intValue,
+                          let l = (line["_l"] as? NSNumber)?.intValue,
+                          ordered.indices.contains(source) else { return nil }
+                    let all = pick(ordered[source])
+                    return all.indices.contains(l) ? all[l] : nil
+                }
+            }
+            var week = ordered[primaryIndex]
+            week.coveredUserIds = Set(members.flatMap { index -> [String] in
+                let member = ordered[index]
+                return member.coveredUserIds.isEmpty ? [member.userId] : Array(member.coveredUserIds)
             })
-            merged.override.lines = unionLines(group.map { $0.override.lines }, identity: labourIdentity)
-            merged.override.priceWork = unionLines(group.map { $0.override.priceWork }, identity: moneyIdentity)
-            merged.override.expenses = unionLines(group.map { $0.override.expenses }, identity: moneyIdentity)
-            return merged
+            week.override.lines = lines(lineRows.filter { $0["_m"] == nil }) { $0.override.lines }
+            week.override.priceWork = lines(override["priceWork"] as? [[String: Any]] ?? []) { $0.override.priceWork }
+            week.override.expenses = lines(override["expenses"] as? [[String: Any]] ?? []) { $0.override.expenses }
+            return week
         }
     }
+}
 
-    private static func unionLines<Line>(_ groups: [[Line]], identity: @MainActor (Line) -> String) -> [Line] {
-        var bestCount: [String: Int] = [:]
-        var sample: [String: Line] = [:]
-        for lines in groups {
-            var local: [String: Int] = [:]
-            for line in lines {
-                let key = identity(line)
-                local[key, default: 0] += 1
-                if sample[key] == nil { sample[key] = line }
-            }
-            for (key, count) in local {
-                bestCount[key] = max(bestCount[key] ?? 0, count)
-            }
-        }
-        var out: [Line] = []
-        for (key, count) in bestCount {
-            guard let line = sample[key] else { continue }
-            for _ in 0..<count { out.append(line) }
-        }
-        return out
+/// Memoised script answers for one loaded feed (a reference, so the value-type feed in `@State` shares it).
+private final class FeedAnswerCache {
+    private var coverage: [String: Bool] = [:]
+    private var picked: [String: [(Int, Int)]] = [:]
+
+    func covers(key: String, compute: () -> Bool) -> Bool {
+        if let hit = coverage[key] { return hit }
+        let value = compute()
+        coverage[key] = value
+        return value
     }
 
-    private static func labourIdentity(_ line: TimesheetWeeklyReportLabourLine) -> String {
-        let bookingId = line.bookingId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !bookingId.isEmpty {
-            return "booking:\(bookingId)|\(line.isOvertime)"
-        }
-        let day = OrganizationRulebookContext.calendar.startOfDay(for: line.date).timeIntervalSince1970
-        return [
-            "content",
-            String(day),
-            line.jobNumber,
-            line.projectName,
-            line.locationKind,
-            line.details,
-            String(format: "%.4f", line.paidHours),
-            String(format: "%.4f", line.days),
-            String(format: "%.2f", line.amount),
-            line.isOvertime ? "ot" : "std",
-            line.decision.rawValue
-        ].joined(separator: "|")
-    }
-
-    private static func moneyIdentity(_ line: TimesheetWeeklyReportMoneyLine) -> String {
-        let day = OrganizationRulebookContext.calendar.startOfDay(for: line.date).timeIntervalSince1970
-        return [
-            line.title,
-            line.jobNumber,
-            line.details,
-            String(day),
-            String(format: "%.2f", line.amount),
-            line.decision.rawValue
-        ].joined(separator: "|")
+    func lines(key: String, compute: () -> [(Int, Int)]) -> [(Int, Int)] {
+        if let hit = picked[key] { return hit }
+        let value = compute()
+        picked[key] = value
+        return value
     }
 }

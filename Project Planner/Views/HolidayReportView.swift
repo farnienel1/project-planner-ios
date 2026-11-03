@@ -4,15 +4,15 @@ struct HolidayReportView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var userStore: UserStore
 
     let user: AppUser
 
-    @State private var selectedYear: Int
+    /// The chosen leave year's start day key; nil = the current leave year.
+    @State private var selectedYearStart: String?
 
     init(user: AppUser) {
         self.user = user
-        let currentYear = Calendar.current.component(.year, from: Date())
-        _selectedYear = State(initialValue: currentYear)
     }
 
     var body: some View {
@@ -67,80 +67,94 @@ struct HolidayReportView: View {
         return user.createdAt
     }
 
-    private var availableYears: [Int] {
-        let cal = Calendar.current
-        let startYear = cal.component(.year, from: joinDate)
-        let endYear = cal.component(.year, from: Date())
-        guard startYear <= endYear else { return [endYear] }
-        return Array(startYear...endYear)
+    /// RULEBOOK 1.22.0 §9 `CanonicalBusinessEngine.leaveReportYears`: the person's leave years (their leave-year start
+    /// month), from their start date to today, newest first.
+    private var availableYears: [RulebookLeaveYear] {
+        CanonicalBusinessEngine.leaveReportYears(
+            firstDayKey: OrganizationRulebookContext.dayKey(joinDate),
+            todayDayKey: OrganizationRulebookContext.dayKey(Date()),
+            startMonth: user.annualLeaveYearStartMonth
+        ) ?? []
+    }
+
+    private var selectedYear: RulebookLeaveYear? {
+        let years = availableYears
+        return years.first { $0.startDayKey == selectedYearStart } ?? years.first
+    }
+
+    /// "2026" for a calendar leave year, else "2026/27".
+    private func yearTitle(_ year: RulebookLeaveYear) -> String {
+        let start = String(year.startDayKey.prefix(4))
+        if year.startDayKey.hasSuffix("-01-01") { return start }
+        return "\(start)/\(year.endDayKey.dropFirst(2).prefix(2))"
+    }
+
+    /// RULEBOOK 1.22.0 §9 `CanonicalBusinessEngine.leaveReportRows`: approved leave in the leave year, matched under
+    /// every id the person goes by (`personIdSet` plus operative ids on their email), weekends and bank holidays out of
+    /// multi-day records and half days 0.5 — the count `annualLeaveBalance` takes.
+    private var report: RulebookLeaveReport? {
+        guard let year = selectedYear else { return nil }
+        let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let operativeIds = operativeStore.allOperatives
+            .filter { !email.isEmpty && $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == email }
+            .map(\.id.uuidString)
+        let personIds = RulebookPeople.ownerIds(for: user, users: userStore.organizationUsers) + operativeIds
+        let records = holidayStore.bookings.map { booking in
+            RulebookLeaveReportRecord(
+                id: booking.documentId,
+                userId: booking.userId,
+                operativeId: booking.operativeIdRaw ?? booking.operativeId?.uuidString,
+                startDayKey: booking.startDayKey,
+                endDayKey: booking.endDayKey,
+                timeSlot: booking.timeSlot.rawValue,
+                status: booking.status.rawValue
+            )
+        }
+        return CanonicalBusinessEngine.leaveReportRows(
+            records: records,
+            personIds: personIds,
+            onDayKey: year.startDayKey,
+            startMonth: user.annualLeaveYearStartMonth,
+            nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
+        )
+    }
+
+    private func formatDays(_ days: Double) -> String {
+        let text = days == days.rounded() ? String(Int(days)) : String(format: "%.1f", days)
+        return "\(text) day\(days == 1 ? "" : "s")"
+    }
+
+    private func dayText(_ key: String) -> String {
+        OrganizationRulebookContext.date(fromDayKey: key)?.formatted(date: .abbreviated, time: .omitted) ?? key
     }
 
     private var yearPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(availableYears, id: \.self) { year in
+                    let isSelected = selectedYear == year
                     Button {
-                        selectedYear = year
+                        selectedYearStart = year.startDayKey
                     } label: {
-                        Text("\(year)")
+                        Text(yearTitle(year))
                             .font(.system(.subheadline, design: .rounded))
                             .fontWeight(.bold)
                             .monospacedDigit()
-                            .foregroundStyle(selectedYear == year ? PPColor.navy : Color.white)
+                            .foregroundStyle(isSelected ? PPColor.navy : Color.white)
                             .padding(.horizontal, 16)
                             .frame(height: 34)
                             .background(
-                                Capsule().fill(selectedYear == year ? Color.white : PPColor.onNavyFill)
+                                Capsule().fill(isSelected ? Color.white : PPColor.onNavyFill)
                             )
                             .overlay(
-                                Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: selectedYear == year ? 0 : 0.5)
+                                Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: isSelected ? 0 : 0.5)
                             )
                     }
-                        .accessibilityIdentifier("holidayReport.row.\(year)")
+                        .accessibilityIdentifier("holidayReport.row.\(year.startDayKey.prefix(4))")
                         .buttonStyle(PPPressableButtonStyle())
                 }
             }
         }
-    }
-
-    private var yearBookings: [HolidayBooking] {
-        let cal = Calendar.current
-        let yearStart = cal.date(from: DateComponents(year: selectedYear, month: 1, day: 1))!
-        let yearEnd = cal.date(from: DateComponents(year: selectedYear, month: 12, day: 31))!
-
-        let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() })
-
-        return holidayStore.bookings
-            .filter { $0.status == .approved }
-            .filter { booking in
-                if let operative, booking.operativeId == operative.id { return true }
-                if booking.userId == user.id { return true }
-                return false
-            }
-            .filter { booking in
-                // include any booking overlapping this year
-                let start = cal.startOfDay(for: booking.startDate)
-                let end = cal.startOfDay(for: booking.endDate)
-                return end >= yearStart && start <= yearEnd
-            }
-            .sorted { $0.startDate > $1.startDate }
-    }
-
-    private var totalDaysTaken: Int {
-        yearBookings.reduce(0) { partial, booking in
-            partial + daysCount(for: booking, inYear: selectedYear)
-        }
-    }
-
-    private func daysCount(for booking: HolidayBooking, inYear year: Int) -> Int {
-        let cal = Calendar.current
-        let yearStart = cal.startOfDay(for: cal.date(from: DateComponents(year: year, month: 1, day: 1))!)
-        let yearEnd = cal.startOfDay(for: cal.date(from: DateComponents(year: year, month: 12, day: 31))!)
-        let start = max(cal.startOfDay(for: booking.startDate), yearStart)
-        let end = min(cal.startOfDay(for: booking.endDate), yearEnd)
-        guard start <= end else { return 0 }
-        let days = cal.dateComponents([.day], from: start, to: end).day ?? 0
-        return days + 1
     }
 
     private var summaryCard: some View {
@@ -149,7 +163,7 @@ struct HolidayReportView: View {
             PPGroupedCard {
                 HStack(spacing: 13) {
                     PPIconTile(symbol: "sun.max.fill", family: .plan, size: 38)
-                    Text("\(totalDaysTaken) day\(totalDaysTaken == 1 ? "" : "s") approved in \(selectedYear)")
+                    Text("\(formatDays(report?.totalDays ?? 0)) approved in \(selectedYear.map(yearTitle) ?? "—")")
                         .font(.body.weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(.primary)
@@ -164,11 +178,12 @@ struct HolidayReportView: View {
     private var bookingsList: some View {
         VStack(alignment: .leading, spacing: 0) {
             PPGroupLabel(text: "Approved holiday")
-            if yearBookings.isEmpty {
+            let rows = report?.rows ?? []
+            if rows.isEmpty {
                 PPGroupedCard {
                     HStack(spacing: 13) {
                         PPIconTile(symbol: "calendar", family: .system, size: PPMetrics.menuIcon)
-                        Text("No approved holiday for \(selectedYear).")
+                        Text("No approved holiday for \(selectedYear.map(yearTitle) ?? "this year").")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         Spacer(minLength: 0)
@@ -178,14 +193,14 @@ struct HolidayReportView: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(yearBookings) { booking in
+                    ForEach(rows, id: \.id) { row in
                         HStack(spacing: 13) {
                             PPIconTile(symbol: "sun.max.fill", family: .plan, size: PPMetrics.menuIcon)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("\(booking.startDate.formatted(date: .abbreviated, time: .omitted)) – \(booking.endDate.formatted(date: .abbreviated, time: .omitted))")
+                                Text("\(dayText(row.startDayKey)) – \(dayText(row.endDayKey))")
                                     .font(.body)
                                     .foregroundStyle(.primary)
-                                Text("\(daysCount(for: booking, inYear: selectedYear)) day\(daysCount(for: booking, inYear: selectedYear) == 1 ? "" : "s")")
+                                Text(formatDays(row.days))
                                     .font(.footnote)
                                     .monospacedDigit()
                                     .foregroundStyle(.secondary)
@@ -207,5 +222,6 @@ struct HolidayReportView: View {
     HolidayReportView(user: AppUser(id: "1", email: "test@example.com", organizationId: "org", role: .manager, createdAt: Date(), firstName: "Test", surname: "User", isActive: true, passwordSet: true, permissions: UserPermissions(manager: true), isSuperAdmin: false))
         .environmentObject(HolidayStore())
         .environmentObject(OperativeStore())
+        .environmentObject(UserStore())
 }
 

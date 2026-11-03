@@ -130,57 +130,14 @@ enum TimesheetDraftAdjustments {
             || draft.priceWorkEntries.contains { $0.managerDecision == .pending }
     }
 
-    static func payrollTotal(
-        lines: [TimesheetPayrollLineItem],
-        draft: TimesheetDraft,
-        managerHasSigned: Bool,
-        applyLiveReview: Bool = false
-    ) -> Double {
-        lines.reduce(0) { partial, line in
-            partial + effectivePayrollAmount(
-                line: line,
-                draft: draft,
-                managerHasSigned: managerHasSigned,
-                applyLiveReview: applyLiveReview
-            )
-        }
-    }
-
-    static func expensesTotal(draft: TimesheetDraft, managerHasSigned: Bool, applyLiveReview: Bool = false) -> Double {
-        draft.expenseEntries.reduce(0) {
-            $0 + effectiveExpenseAmount($1, managerHasSigned: managerHasSigned, applyLiveReview: applyLiveReview)
-        }
-    }
-
-    static func priceWorkTotal(draft: TimesheetDraft, managerHasSigned: Bool, applyLiveReview: Bool = false) -> Double {
-        draft.priceWorkEntries.reduce(0) {
-            $0 + effectivePriceWorkAmount($1, managerHasSigned: managerHasSigned, applyLiveReview: applyLiveReview)
-        }
-    }
-
-    static func grandTotal(
-        lines: [TimesheetPayrollLineItem],
-        draft: TimesheetDraft,
-        managerHasSigned: Bool,
-        applyLiveReview: Bool = false
-    ) -> Double {
-        payrollTotal(lines: lines, draft: draft, managerHasSigned: managerHasSigned, applyLiveReview: applyLiveReview)
-            + expensesTotal(draft: draft, managerHasSigned: managerHasSigned, applyLiveReview: applyLiveReview)
-            + priceWorkTotal(draft: draft, managerHasSigned: managerHasSigned, applyLiveReview: applyLiveReview)
-    }
+    // RULEBOOK 1.22.0 §8: sheet totals (labour, price work, expenses, total) are `CanonicalBusinessEngine.timesheetTotals`
+    // (`TimesheetTotalsSource.totals`), the sum of the invoice rows. The Swift sums that were here are deleted.
 
     static func managerAdjustmentCount(draft: TimesheetDraft) -> Int {
         let payroll = draft.payrollLineReviews.values.filter { $0.decision == .declined || $0.decision == .edited }.count
         let expenses = draft.expenseEntries.filter { $0.managerDecision == .declined || $0.managerDecision == .edited }.count
         let priceWork = draft.priceWorkEntries.filter { $0.managerDecision == .declined || $0.managerDecision == .edited }.count
         return payroll + expenses + priceWork
-    }
-}
-
-extension TimesheetDraft {
-    func effectiveAdditionalTotal(managerHasSigned: Bool) -> Double {
-        TimesheetDraftAdjustments.expensesTotal(draft: self, managerHasSigned: managerHasSigned)
-            + TimesheetDraftAdjustments.priceWorkTotal(draft: self, managerHasSigned: managerHasSigned)
     }
 }
 
