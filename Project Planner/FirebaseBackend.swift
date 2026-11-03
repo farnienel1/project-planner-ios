@@ -168,6 +168,7 @@ class FirebaseBackend: ObservableObject {
     @Published var errorMessage: String?
     @Published var currentOrganization: Organization? {
         didSet {
+            if currentOrganization != nil { sessionHasNoOrganization = false }
             OrganizationDocumentAbbreviation.update(from: currentOrganization)
             OrganizationRulebookContext.update(from: currentOrganization)
             // Users parsed before the organisation's leave defaults were known (`annualLeaveDefaultsPending` from
@@ -188,6 +189,9 @@ class FirebaseBackend: ObservableObject {
         }
     }
     @Published var userRole: UserRole = .basic
+    /// True when the session chooser answered that the signed-in account belongs to no organisation and recovery did
+    /// not find one. The root shows "You're not a member of an organisation yet" instead of an empty Home.
+    @Published var sessionHasNoOrganization = false
     /// Set after the root shell has kicked off the first org-wide store load (prevents duplicate parallel reloads on launch).
     @Published var hasBootstrappedOrgDataLoad = false
     /// True while `PlannerStoreWiring.bootstrapOrgDataIfNeeded` is in flight (including waiting for org).
@@ -903,6 +907,7 @@ class FirebaseBackend: ObservableObject {
         OfflineOutboxStore.shared.clearAll()
         SiteAuditOfflineStore.shared.clearAll()
         TimesheetDraftStore.clearAll()
+        sessionHasNoOrganization = false
         NotificationCenter.default.post(name: .appDidSignOut, object: nil)
     }
 
@@ -1820,6 +1825,9 @@ class FirebaseBackend: ObservableObject {
                 }
                 errorMessage = "Organization not linked. Attempting recovery..."
                 await attemptToFixMissingOrganization(userId: userId, userData: userData)
+                // Only a definite answer (the chooser ran and found none) shows the no-organisation screen; a
+                // failed read never does.
+                if choice != nil && currentOrganization == nil { sessionHasNoOrganization = true }
                 return
             }
             let organizationId = choice.organizationId
@@ -11087,7 +11095,7 @@ extension FirebaseBackend {
     }
 
     private func mergeDeadlinesFirstWriterWins(remote: [DLDeadline], local: [DLDeadline]) -> [DLDeadline] {
-        var byId = Dictionary(uniqueKeysWithValues: remote.map { ($0.id, $0) })
+        var byId = Dictionary(remote.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for item in local where byId[item.id] == nil {
             byId[item.id] = item
         }

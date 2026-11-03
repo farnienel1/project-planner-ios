@@ -316,7 +316,12 @@ struct ProjectPlannerRootView: View {
             SubscriptionLapsedView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
-        } else if let currentUser = userStore.currentUser, !currentUser.policyAccepted {
+        } else if firebaseBackend.sessionHasNoOrganization && firebaseBackend.currentOrganization == nil {
+            NoOrganisationView()
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+        } else if let currentUser = userStore.currentUser, currentUser.needsLegalPackAcceptance {
+            // `legalPackNeedsAcceptance`: not accepted, or an older pack accepted.
             PolicyAcceptanceView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)

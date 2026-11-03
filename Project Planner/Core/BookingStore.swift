@@ -776,7 +776,7 @@ class BookingStore: ObservableObject {
             return
         }
         if remote.count < existing.count {
-            var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+            var byId = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for booking in remote {
                 byId[booking.id] = booking
             }

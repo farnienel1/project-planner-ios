@@ -1064,7 +1064,7 @@ struct SiteAuditCreateFlowView: View {
         let date = selectedDate
         let title = customTitle
         let visibilityChoice = operativeAccessVisibleToOperatives
-        let existingItemsById = Dictionary(uniqueKeysWithValues: (existingAudit?.items ?? []).map { ($0.id, $0) })
+        let existingItemsById = Dictionary((existingAudit?.items ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         Task {
             let cachedOrgId = firebaseBackend.currentOrganization?.firestoreDocumentId

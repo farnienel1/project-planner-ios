@@ -36,7 +36,6 @@ struct SettingsView: View {
     @State private var isLinking = false
     @State private var linkError: String?
     @State private var showingSignOutAlert = false
-    @State private var showingEmailTest = false
     @State private var testEmailAddress = ""
     @State private var isTestingEmail = false
     @State private var emailTestResult: String?
@@ -475,71 +474,7 @@ struct SettingsView: View {
         }
     }
 
-    private var notificationTestingSection: some View {
-        Section("Notification Testing") {
-            Text("Test notifications will appear 3 seconds after tapping.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            if userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true {
-                Button(action: {
-                    Task { await runTemporaryPushDiagnostic() }
-                }) {
-                    HStack {
-                        Text("Send a test notification")
-                        Spacer()
-                        if isRunningPushDiagnostic {
-                            ProgressView()
-                        } else {
-                            Image(systemName: "antenna.radiowaves.left.and.right")
-                        }
-                    }
-                }
-                .accessibilityIdentifier("settings.tempRemotePushDiagnostic")
-                .disabled(isRunningPushDiagnostic)
-            }
-
-            notificationTestButton(
-                title: "Test Local Notification",
-                type: .bookingCreated,
-                details: "Project Planner notification test."
-            )
-        }
-        .alert("Notification Test", isPresented: $showingNotificationTestAlert) {
-            Button("OK", role: .cancel) { }
-                .accessibilityIdentifier("settings.ok")
-        } message: {
-            Text(notificationTestMessage)
-        }
-    }
-
-    private func notificationTestButton(
-        title: String,
-        type: AppNotification.NotificationType,
-        details: String
-    ) -> some View {
-        Button(action: {
-            Task {
-                await LocalNotificationService.shared.scheduleTestNotification(type: type, details: details)
-                notificationTestMessage = "✅ Test notification scheduled! It will appear in 3 seconds."
-                showingNotificationTestAlert = true
-            }
-        }) {
-            HStack {
-                Text(title)
-                Spacer()
-                Image(systemName: "bell")
-            }
-        }
-            .accessibilityIdentifier("settings.testNotificationScheduledItWillAppear")
-    }
     
-    private func diagnoseData() async {
-        isDiagnosing = true
-        diagnosticReport = await firebaseBackend.diagnoseMissingData()
-        isDiagnosing = false
-        showingDiagnosticReport = true
-    }
     
     private func forceReloadData() async {
         isReloading = true
@@ -559,25 +494,6 @@ struct SettingsView: View {
         isReloading = false
     }
     
-    private func seedPlaygroundDemo() async {
-        isSeedingPlayground = true
-        playgroundSeedMessage = nil
-        let name = userStore.currentUser?.fullName ?? firebaseBackend.currentUser?.email ?? "Demo"
-        do {
-            let msg = try await PlaygroundDemoSeeder.seedIfNeeded(
-                projectStore: projectStore,
-                taskStore: taskStore,
-                bookingStore: bookingStore,
-                operativeStore: operativeStore,
-                firebaseBackend: firebaseBackend,
-                createdByName: name
-            )
-            playgroundSeedMessage = msg
-        } catch {
-            playgroundSeedMessage = error.localizedDescription
-        }
-        isSeedingPlayground = false
-    }
     
     private func manuallyLinkToOrganization() async {
         isLinking = true
@@ -606,145 +522,7 @@ struct SettingsView: View {
         isLinking = false
     }
     
-    private var emailTestSheet: some View {
-        NavigationView {
-            Form {
-                Section("Test Email Sending") {
-                    Text("This will send a test password setup email to verify SendGrid is working correctly.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    TextField("Test Email Address", text: $testEmailAddress)
-                        .accessibilityIdentifier("settings.testEmailAddress")
-                        .keyboardType(.emailAddress)
-                        .autocapitalization(.none)
-                        .autocorrectionDisabled()
-                    
-                    if let result = emailTestResult {
-                        Text(result)
-                            .font(.caption)
-                            .foregroundColor(result.contains("✅") ? .green : .red)
-                    }
-                    
-                    Button(action: {
-                        Task {
-                            await testEmailSending()
-                        }
-                    }) {
-                        HStack {
-                            Spacer()
-                            if isTestingEmail {
-                                ProgressView()
-                                Text("Sending...")
-                            } else {
-                                Text("Send Test Email")
-                            }
-                            Spacer()
-                        }
-                    }
-                    .accessibilityIdentifier("settings.sending")
-                    .disabled(isTestingEmail || testEmailAddress.isEmpty)
-                }
-                
-                Section("Debug Info") {
-                    Text("Check the console/Xcode logs for detailed Resend error messages. Look for lines starting with '📧' or '❌'.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Section("Domain Status") {
-                    Text("Using verified domain: info@projectplanner.us")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                    
-                    Text("If emails fail, check:\n1. Resend dashboard → Domains (verify domain status)\n2. Resend dashboard → Logs (check delivery status)\n3. DNS records are properly configured")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Section("Note") {
-                    Text("This tests Resend email sending. The current 'Permission denied' error when creating users is a Firestore rules issue, not an email issue.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .navigationTitle("Test Email")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        showingEmailTest = false
-                        testEmailAddress = ""
-                        emailTestResult = nil
-                    }
-                        .accessibilityIdentifier("settings.done")
-                }
-            }
-        }
-    }
     
-    private func testEmailSending() async {
-        isTestingEmail = true
-        emailTestResult = nil
-        
-        print("📧 TEST: Starting email test to: \(testEmailAddress)")
-        
-        let resendService = ResendEmailService()
-        let testCode = UUID().uuidString.prefix(8).uppercased()
-        let fromName = firebaseBackend.currentOrganization?.name
-        
-        let success = await resendService.sendPasswordSetupEmail(
-            to: testEmailAddress,
-            firstName: "Test",
-            surname: "User",
-            invitationCode: String(testCode),
-            fromName: fromName
-        )
-        
-        // Get the error message after the attempt
-        let errorMessage = resendService.errorMessage
-        
-        await MainActor.run {
-            if success {
-                emailTestResult = "✅ Test email sent successfully!\n\nCheck your inbox at \(testEmailAddress).\nAlso check Resend dashboard → Logs to verify delivery.\n\nIf email doesn't arrive:\n1. Check spam folder\n2. Verify info@projectplanner.us domain is verified in Resend\n3. Check Resend Logs for delivery status"
-                print("📧 TEST: ✅ Email sent successfully")
-            } else {
-                var resultMessage = "❌ Failed to send test email.\n\n"
-                
-                if let errorMessage = errorMessage, !errorMessage.isEmpty {
-                    resultMessage += "Error: \(errorMessage)\n\n"
-                }
-                
-                resultMessage += "Common issues:\n"
-                resultMessage += "• 401 Unauthorized: API key is invalid or expired\n"
-                resultMessage += "• 403 Forbidden: API key lacks permissions\n"
-                resultMessage += "• 422 Unprocessable: Invalid email address or content\n"
-                resultMessage += "• Network error: Check internet connection\n\n"
-                resultMessage += "Next steps:\n"
-                resultMessage += "1. Check Resend dashboard → Logs for detailed errors\n"
-                resultMessage += "2. Verify API key in ResendEmailService.swift\n"
-                resultMessage += "3. Check console logs for detailed error messages\n"
-                resultMessage += "4. Visit https://resend.com to check your account status"
-                
-                emailTestResult = resultMessage
-                print("📧 TEST: ❌ Email failed - \(errorMessage ?? "Unknown error")")
-            }
-            isTestingEmail = false
-        }
-    }
-
-    private func runTemporaryPushDiagnostic() async {
-        await MainActor.run {
-            isRunningPushDiagnostic = true
-        }
-        let result = await notificationService.sendTemporaryPushDiagnosticToCurrentUser()
-        await MainActor.run {
-            notificationTestMessage = result
-            showingNotificationTestAlert = true
-            isRunningPushDiagnostic = false
-        }
-    }
-
     private func deleteAllOperatives() async {
         await MainActor.run {
             isDeletingAllOperatives = true

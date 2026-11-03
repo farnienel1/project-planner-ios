@@ -1547,9 +1547,9 @@ struct HolidayView: View {
         let sorted = startOfDays.sorted()
         guard !sorted.isEmpty else { return nil }
         return AnnualLeavePolicy.validateProposedDaySlots(
-            daySlots: Dictionary(uniqueKeysWithValues: startOfDays.map { day in
+            daySlots: Dictionary(startOfDays.map { day in
                 (day, selectedDaySlots[day] ?? selectedHolidayTimeSlot)
-            }),
+            }, uniquingKeysWith: { first, _ in first }),
             bookings: holidayStore.bookings,
             profileUserId: u.id,
             operativeId: currentOperative?.id,
