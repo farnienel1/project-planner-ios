@@ -40,8 +40,10 @@ struct Booking: Identifiable, Codable, Hashable {
 
     /// The document id under `organizations/{orgId}/bookings`.
     var documentKey: String { documentId ?? id.uuidString }
-    
-    init(
+
+    /// `nonisolated`: the canonical readers (`FirebaseBackend.booking(fromCanonical:)`) and their tests build bookings
+    /// off the main actor. The init only stores values, so it needs no actor.
+    nonisolated init(
         id: UUID = UUID(),
         operativeId: UUID,
         projectId: UUID,
@@ -173,7 +175,7 @@ enum TimeSlot: String, CaseIterable, Identifiable, Codable {
     case customHours = "CUSTOM_HOURS"
 
     /// Web and iOS have stored the same day as `FULL DAY` and `FULL_DAY`. Both load.
-    static func fromStored(_ raw: String) -> TimeSlot? {
+    nonisolated static func fromStored(_ raw: String) -> TimeSlot? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if let direct = TimeSlot(rawValue: trimmed) { return direct }
         switch CanonicalBusinessEngine.namedSlotKind(trimmed) {
