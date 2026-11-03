@@ -49,7 +49,7 @@ struct ScheduleOverlapWarningPanel: View {
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(Color(red: 0.96, green: 0.97, blue: 0.98))
+                    .background(ProjectWorksRevampColors.canvas)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -68,7 +68,7 @@ struct ScheduleOverlapWarningPanel: View {
                     .foregroundStyle(Color.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(ProjectWorksRevampColors.blue)
+                    .background(ProjectWorksRevampColors.blueFill)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .accessibilityIdentifier("scheduleOverlapWarningPanel.checkmark")
@@ -131,7 +131,7 @@ struct OperativeClashReviewPanel: View {
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(Color(red: 0.96, green: 0.97, blue: 0.98))
+                    .background(ProjectWorksRevampColors.canvas)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -149,7 +149,7 @@ struct OperativeClashReviewPanel: View {
                     .foregroundStyle(Color.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(canConfirmBooking ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted.opacity(0.45))
+                    .background(canConfirmBooking ? ProjectWorksRevampColors.blueFill : ProjectWorksRevampColors.muted.opacity(0.45))
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .accessibilityIdentifier("operativeClashReviewPanel.checkmark")
@@ -203,7 +203,7 @@ struct OperativeClashReviewPanel: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .frame(width: 36, height: 36)
-                    .background(Color(red: 0.96, green: 0.97, blue: 0.98))
+                    .background(ProjectWorksRevampColors.canvas)
                     .clipShape(Circle())
             }
             .accessibilityIdentifier("operativeClashReviewPanel.row.\(operative.id).close")
@@ -213,14 +213,14 @@ struct OperativeClashReviewPanel: View {
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 36)
-                    .background(ProjectWorksRevampColors.blue)
+                    .background(ProjectWorksRevampColors.blueFill)
                     .clipShape(Circle())
             }
             .accessibilityIdentifier("operativeClashReviewPanel.row.\(operative.id).checkmark")
             .buttonStyle(.plain)
         }
         .padding(10)
-        .background(Color(red: 0.98, green: 0.99, blue: 1.0))
+        .background(ProjectWorksRevampColors.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)

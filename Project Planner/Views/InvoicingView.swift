@@ -1796,6 +1796,9 @@ private struct MyTimesheetView: View {
     @State private var showExpenseSheet = false
     /// A server copy of this sheet arrived while an edit sheet was open; it loads when that sheet closes.
     @State private var serverTimesheetChangedWhileEditing = false
+    /// The "Note to manager" box has the keyboard. Each keystroke saves, and the live listener would
+    /// otherwise reload the server copy over the box mid-typing and drop what was just typed.
+    @FocusState private var managerNoteFocused: Bool
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     /// Pay-rate history read state: a failed read blocks sign-off, the agreed snapshot, invoices and exports.
     @State private var payInputsState: PayInputsLoadState = .loading
@@ -2127,6 +2130,7 @@ private struct MyTimesheetView: View {
                             .font(.subheadline.weight(.semibold))
                         TextEditor(text: $draft.managerNote)
                             .accessibilityIdentifier("timesheets.textEditor")
+                            .focused($managerNoteFocused)
                             .frame(minHeight: 74)
                             .padding(8)
                             .background(ProjectWorksRevampColors.canvas)
@@ -2147,10 +2151,10 @@ private struct MyTimesheetView: View {
                         : "If you don't agree with the hours shown, amend your booking schedule before signing. Agreed changes appear on a new timesheet."
                     )
                         .font(.footnote)
-                        .foregroundStyle(Color(red: 0.498, green: 0.113, blue: 0.113))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                 }
                 .padding(12)
-                .background(Color(red: 0.992, green: 0.918, blue: 0.918))
+                .background(ProjectWorksRevampColors.requiredPillBg)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 if let blocked = payInputsBlockMessage, draft.operativeSignedAt == nil {
@@ -2536,7 +2540,7 @@ private struct MyTimesheetView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -2611,7 +2615,7 @@ private struct MyTimesheetView: View {
             content()
         }
         .padding(14)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -2629,6 +2633,7 @@ private struct MyTimesheetView: View {
     /// An add / edit sheet or the re-sign prompt is open: the person may be part-way through a change.
     private var isEditingTimesheet: Bool {
         showAddExpense || showAddPriceWork || showPriceWorkSheet || showExpenseSheet || showPostSignExtraWarning
+            || managerNoteFocused
     }
 
     private func listenToServerTimesheet() {
@@ -5244,7 +5249,7 @@ private struct TimesheetMoneyEntrySheet: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
+        .background(ProjectWorksRevampColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -5379,10 +5384,10 @@ private struct SignTimesheetView: View {
                         .foregroundStyle(.red)
                     Text("By signing you confirm these hours match the work you carried out.")
                         .font(.footnote)
-                        .foregroundStyle(Color(red: 0.498, green: 0.113, blue: 0.113))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                 }
                 .padding(12)
-                .background(Color(red: 0.992, green: 0.918, blue: 0.918))
+                .background(ProjectWorksRevampColors.requiredPillBg)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 Button {
@@ -5927,13 +5932,13 @@ private struct GenerateInvoiceView: View {
         HStack(spacing: 10) {
             Text(chip)
                 .font(.subheadline.weight(.bold))
-                .foregroundStyle(Color(red: 0.055, green: 0.122, blue: 0.2))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(Color(red: 0.929, green: 0.957, blue: 0.984))
+                .background(ProjectWorksRevampColors.blueTint)
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color(red: 0.863, green: 0.91, blue: 0.965), lineWidth: 1)
+                        .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 1)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             Text(text)

@@ -136,7 +136,7 @@ struct ScheduleQuickAddSheet: View {
             .foregroundStyle(selected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
-            .background(selected ? Color(red: 0.902, green: 0.945, blue: 0.984) : ProjectWorksRevampColors.surface)
+            .background(selected ? ProjectWorksRevampColors.blueTint : ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -302,7 +302,7 @@ struct ScheduleQuickAddSheet: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
-                .background(clocks == nil ? ProjectWorksRevampColors.muted : ProjectWorksRevampColors.blue)
+                .background(clocks == nil ? ProjectWorksRevampColors.disabledFill : ProjectWorksRevampColors.blueFill)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .accessibilityIdentifier("scheduleQuickAdd.save")

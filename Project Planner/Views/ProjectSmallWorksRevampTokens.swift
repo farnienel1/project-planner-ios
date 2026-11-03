@@ -102,6 +102,50 @@ enum ProjectWorksRevampColors {
         light: AppAdaptiveColor.rgb(0.949, 0.953, 0.961),
         dark: AppAdaptiveColor.rgb(0.145, 0.157, 0.196)
     )
+
+    // MARK: Dark-mode-safe fills (UI only)
+    //
+    // Use these instead of `Color.white` or a fixed `Color(red:…)` for any button, chip, pill
+    // or card that carries theme text (`ink`, `blue`, `.primary`). A fixed light fill keeps
+    // its light colour in dark mode while the theme text turns light, so the text disappears.
+
+    /// Unselected chip / segmented button / small card fill. White in light mode.
+    static let chipSurface = surface
+    /// Solid fill behind white text (primary buttons, selected chips). `blue` turns pale in
+    /// dark mode for text use, which leaves white text unreadable on it, so fills use this.
+    static let blueFill = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.094, 0.373, 0.647), // #185FA5
+        dark: AppAdaptiveColor.rgb(0.161, 0.408, 0.690)   // #2968B0
+    )
+    /// Stronger amber used as the second stop of overtime gradients.
+    static let amberTintStrong = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.960, 0.880, 0.720),
+        dark: AppAdaptiveColor.rgb(0.302, 0.224, 0.098)
+    )
+    /// Soft fill for wells, steppers and secondary buttons sitting on a card.
+    static let wellFill = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.945, 0.961, 0.976), // #F1F5F9
+        dark: AppAdaptiveColor.rgb(0.145, 0.157, 0.196)
+    )
+    /// Disabled solid button fill (white text stays readable in both modes).
+    static let disabledFill = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.820, 0.840, 0.870),
+        dark: AppAdaptiveColor.rgb(0.263, 0.282, 0.341)
+    )
+    /// Success banner fill and text.
+    static let successTint = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.925, 0.992, 0.961),
+        dark: AppAdaptiveColor.rgb(0.071, 0.196, 0.149)
+    )
+    /// Gradient stops for the annual-leave hero card.
+    static let leaveHeroWarm = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.990, 0.940, 0.900),
+        dark: AppAdaptiveColor.rgb(0.231, 0.161, 0.122)
+    )
+    static let leaveHeroCool = AppAdaptiveColor.dynamic(
+        light: AppAdaptiveColor.rgb(0.960, 0.970, 0.990),
+        dark: AppAdaptiveColor.rgb(0.118, 0.141, 0.200)
+    )
 }
 
 struct WorksListStatusCounts {

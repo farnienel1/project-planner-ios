@@ -1505,7 +1505,7 @@ struct ProjectDetailView: View {
 
     private func schedulingHoursPill(hours: Double, hasOvertime: Bool) -> some View {
         let text = "\(formatSchedulingOTHours(hours))h"
-        let bg = hasOvertime ? Color(red: 0.98, green: 0.933, blue: 0.855) : Color(red: 0.882, green: 0.961, blue: 0.933)
+        let bg = hasOvertime ? ProjectWorksRevampColors.amberTint : ProjectWorksRevampColors.greenTint
         let fg = hasOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen
         return Text(text)
             .font(.system(size: 8, weight: .medium))
@@ -2211,11 +2211,11 @@ struct ProjectDetailView: View {
                 .foregroundStyle(isSelected ? Color.white : ProjectMyTasksPalette.muted)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 5)
-                .background(isSelected ? ProjectMyTasksPalette.blue : Color.white)
+                .background(isSelected ? ProjectWorksRevampColors.blueFill : ProjectWorksRevampColors.chipSurface)
                 .clipShape(Capsule())
                 .overlay(
                     Capsule()
-                        .stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: isSelected ? 0 : 0.5)
+                        .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: isSelected ? 0 : 0.5)
                 )
         }
         .accessibilityIdentifier("projectDetail.\(AccessibilityID.token(title))")
@@ -2533,7 +2533,7 @@ struct ProjectDetailView: View {
             .padding(.vertical, 8)
             .background(ProjectWorksRevampColors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
             
             if !userStore.isOperativeMode() {
                 Text(taskFilterDescription)
@@ -2556,7 +2556,7 @@ struct ProjectDetailView: View {
             if projectTasksListForCurrentScope.isEmpty {
                 VStack(spacing: 14) {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color(red: 230 / 255, green: 241 / 255, blue: 251 / 255))
+                        .fill(ProjectWorksRevampColors.blueTint)
                         .frame(width: 56, height: 56)
                         .overlay(
                             Image(systemName: "clipboard.fill")
@@ -3764,7 +3764,7 @@ private struct AddProjectTaskView: View {
                     .foregroundStyle(.white)
                 ZStack {
                     Circle()
-                        .fill(Color.white)
+                        .fill(ProjectWorksRevampColors.chipSurface)
                         .frame(width: 22, height: 22)
                         .overlay(Circle().stroke(NewTaskScreenPalette.canvas, lineWidth: 2))
                     Image(systemName: "plus")
@@ -3959,7 +3959,7 @@ private struct AddProjectTaskView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 64, alignment: .center)
             .padding(.vertical, 10)
-            .background(isOn.wrappedValue ? NewTaskScreenPalette.operativeSelectedFill : Color.white)
+            .background(isOn.wrappedValue ? NewTaskScreenPalette.operativeSelectedFill : ProjectWorksRevampColors.chipSurface)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -4145,7 +4145,7 @@ private struct AddProjectTaskView: View {
         if level == .normal, selected {
             return NewTaskScreenPalette.priorityMediumBg
         }
-        return Color.white
+        return ProjectWorksRevampColors.chipSurface
     }
 
     private func priorityBorder(_ level: ProjectTask.Priority, selected: Bool) -> Color {
@@ -4923,7 +4923,7 @@ struct TaskCompletionPopupView: View {
                     .padding(.vertical, 8)
                     .background(ProjectWorksRevampColors.surface)
                     .clipShape(Capsule())
-                    .overlay(Capsule().stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
+                    .overlay(Capsule().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -5150,7 +5150,7 @@ struct TaskCompletionPopupView: View {
                 proofShortcut(title: "From library", systemImage: "photo.on.rectangle", iconBg: CompleteTaskUXPalette.libraryIconBg, iconFg: CompleteTaskUXPalette.green) {
                     showingImagePicker = true
                 }
-                proofShortcut(title: "Add file", systemImage: "paperclip", iconBg: Color(red: 230 / 255, green: 241 / 255, blue: 251 / 255), iconFg: CompleteTaskUXPalette.blue) {
+                proofShortcut(title: "Add file", systemImage: "paperclip", iconBg: ProjectWorksRevampColors.blueTint, iconFg: CompleteTaskUXPalette.blue) {
                     showingFilePicker = true
                 }
             }
@@ -5805,7 +5805,7 @@ struct CompletedTaskDetailView: View {
                             .frame(width: 36, height: 36)
                             .background(ProjectWorksRevampColors.surface)
                             .clipShape(Circle())
-                            .overlay(Circle().stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
+                            .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                     }
                         .accessibilityIdentifier("completedTaskDetail.back")
                 }
@@ -5821,7 +5821,7 @@ struct CompletedTaskDetailView: View {
                                 .frame(width: 36, height: 36)
                                 .background(ProjectWorksRevampColors.surface)
                                 .clipShape(Circle())
-                                .overlay(Circle().stroke(Color(red: 229 / 255, green: 231 / 255, blue: 235 / 255), lineWidth: 0.5))
+                                .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                         }
                             .accessibilityIdentifier("completedTaskDetail.editTask")
                     }
@@ -5895,7 +5895,7 @@ struct CompletedTaskDetailView: View {
                 .foregroundStyle(CompleteTaskUXPalette.blue)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 3)
-                .background(Color(red: 230 / 255, green: 241 / 255, blue: 251 / 255))
+                .background(ProjectWorksRevampColors.blueTint)
                 .clipShape(Capsule())
             }
         }
@@ -5923,19 +5923,19 @@ struct CompletedTaskDetailView: View {
     private var statusCapsuleParts: (String, Color, Color, String) {
         switch displayTask.status {
         case .todo:
-            return ("To do", CompleteTaskUXPalette.muted, Color(red: 242 / 255, green: 243 / 255, blue: 245 / 255), "circle.dashed")
+            return ("To do", CompleteTaskUXPalette.muted, ProjectWorksRevampColors.grayTint, "circle.dashed")
         case .inProgress:
-            return ("In progress", Color(red: 133 / 255, green: 79 / 255, blue: 11 / 255), Color(red: 250 / 255, green: 238 / 255, blue: 218 / 255), "chart.line.uptrend.xyaxis")
+            return ("In progress", ProjectWorksRevampColors.upcomingAmber, ProjectWorksRevampColors.amberTint, "chart.line.uptrend.xyaxis")
         case .completed:
-            return ("Done", CompleteTaskUXPalette.green, Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255), "checkmark.circle.fill")
+            return ("Done", CompleteTaskUXPalette.green, ProjectWorksRevampColors.greenTint, "checkmark.circle.fill")
         }
     }
 
     private var priorityPill: some View {
         let (fg, bg, dot): (Color, Color, Color) = {
             switch displayTask.priority {
-            case .low: return (CompleteTaskUXPalette.muted, Color(red: 242 / 255, green: 243 / 255, blue: 245 / 255), CompleteTaskUXPalette.muted)
-            case .normal: return (Color(red: 133 / 255, green: 79 / 255, blue: 11 / 255), Color(red: 250 / 255, green: 238 / 255, blue: 218 / 255), Color(red: 133 / 255, green: 79 / 255, blue: 11 / 255))
+            case .low: return (CompleteTaskUXPalette.muted, ProjectWorksRevampColors.grayTint, CompleteTaskUXPalette.muted)
+            case .normal: return (ProjectWorksRevampColors.upcomingAmber, ProjectWorksRevampColors.amberTint, ProjectWorksRevampColors.upcomingAmber)
             case .high, .urgent: return (CompleteTaskUXPalette.requiredFg, CompleteTaskUXPalette.requiredBg, CompleteTaskUXPalette.requiredFg)
             }
         }()
@@ -5961,9 +5961,9 @@ struct CompletedTaskDetailView: View {
 
     private var detailsCard: some View {
         VStack(spacing: 0) {
-            detailRow(icon: "person.fill", iconBg: Color(red: 238 / 255, green: 237 / 255, blue: 254 / 255), iconFg: Color(red: 83 / 255, green: 74 / 255, blue: 183 / 255), title: "Created by", value: createdByLine, showDivider: true)
+            detailRow(icon: "person.fill", iconBg: ProjectWorksRevampColors.jobTypePillBg, iconFg: ProjectWorksRevampColors.jobTypePillInk, title: "Created by", value: createdByLine, showDivider: true)
             if let due = displayTask.dueDate {
-                detailRow(icon: "flag.fill", iconBg: Color(red: 250 / 255, green: 236 / 255, blue: 231 / 255), iconFg: Color(red: 153 / 255, green: 60 / 255, blue: 29 / 255), title: "Due", value: dueLine(due), showDivider: true)
+                detailRow(icon: "flag.fill", iconBg: ProjectWorksRevampColors.endDateBg, iconFg: ProjectWorksRevampColors.endDateFg, title: "Due", value: dueLine(due), showDivider: true)
             }
             assignedRow
         }
@@ -6020,7 +6020,7 @@ struct CompletedTaskDetailView: View {
     private var assignedRow: some View {
         HStack(alignment: .center, spacing: 12) {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(red: 230 / 255, green: 241 / 255, blue: 251 / 255))
+                .fill(ProjectWorksRevampColors.blueTint)
                 .frame(width: 30, height: 30)
                 .overlay(Image(systemName: "person.2.fill").font(.system(size: 15)).foregroundStyle(CompleteTaskUXPalette.blue))
             VStack(alignment: .leading, spacing: 2) {
@@ -6214,7 +6214,7 @@ struct CompletedTaskDetailView: View {
                             attachmentRow(icon: "doc.fill", iconBg: CompleteTaskUXPalette.requiredBg, iconFg: CompleteTaskUXPalette.requiredFg, title: displayTask.attachedFileName ?? "File", subtitle: "Tap to open", url: fileURL, reportFileName: displayTask.attachedFileName ?? "", showDivider: !displayTask.attachedImageURLs.isEmpty)
                         }
                         ForEach(Array(displayTask.attachedImageURLs.enumerated()), id: \.offset) { idx, url in
-                            attachmentRow(icon: "photo", iconBg: Color(red: 225 / 255, green: 245 / 255, blue: 238 / 255), iconFg: CompleteTaskUXPalette.green, title: "Image \(idx + 1)", subtitle: "Tap to open", url: url, reportFileName: "", showDivider: idx < displayTask.attachedImageURLs.count - 1)
+                            attachmentRow(icon: "photo", iconBg: ProjectWorksRevampColors.greenTint, iconFg: CompleteTaskUXPalette.green, title: "Image \(idx + 1)", subtitle: "Tap to open", url: url, reportFileName: "", showDivider: idx < displayTask.attachedImageURLs.count - 1)
                         }
                     }
                     .padding(.horizontal, 14)

@@ -409,7 +409,7 @@ struct BookLabourFlowView: View {
                                 .foregroundStyle(isMultiSelectMode ? Color.white : ProjectWorksRevampColors.requiredPillFg)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
-                                .background(isMultiSelectMode ? ProjectWorksRevampColors.blue : Color.white.opacity(0.7))
+                                .background(isMultiSelectMode ? ProjectWorksRevampColors.blueFill : ProjectWorksRevampColors.chipSurface)
                                 .clipShape(Capsule())
                             }
                             .accessibilityIdentifier("bookLabourFlow.button")
@@ -494,7 +494,7 @@ struct BookLabourFlowView: View {
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 14)
-                                .background(selectedPersonIds.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.blue)
+                                .background(selectedPersonIds.isEmpty ? ProjectWorksRevampColors.placeholderInk : ProjectWorksRevampColors.blueFill)
                                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
                         .accessibilityIdentifier("bookLabourFlow.continue")
@@ -783,7 +783,7 @@ struct BookLabourFlowView: View {
                                 .foregroundStyle(ProjectWorksRevampColors.blue)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
-                                .background(Color(red: 0.902, green: 0.945, blue: 0.984))
+                                .background(ProjectWorksRevampColors.blueTint)
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -809,7 +809,7 @@ struct BookLabourFlowView: View {
                         .foregroundStyle(ProjectWorksRevampColors.blue)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
-                        .background(Color(red: 0.902, green: 0.945, blue: 0.984))
+                        .background(ProjectWorksRevampColors.blueTint)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1049,7 +1049,7 @@ struct BookLabourFlowView: View {
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .background(ProjectWorksRevampColors.blue)
+                            .background(ProjectWorksRevampColors.blueFill)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .accessibilityIdentifier("bookLabourFlow.saveBooking")
@@ -1188,7 +1188,7 @@ struct BookLabourFlowView: View {
             .foregroundStyle(ProjectWorksRevampColors.blue)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
-            .background(Color(red: 0.902, green: 0.945, blue: 0.984))
+            .background(ProjectWorksRevampColors.blueTint)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -1277,9 +1277,9 @@ struct BookLabourFlowView: View {
     private func scheduleLocationPickVisuals(_ pick: ScheduleLocationPick) -> (symbol: String, background: Color, foreground: Color) {
         switch pick {
         case .office:
-            return ("building.2.fill", Color(red: 0.902, green: 0.945, blue: 0.984), ProjectWorksRevampColors.blue)
+            return ("building.2.fill", ProjectWorksRevampColors.blueTint, ProjectWorksRevampColors.blue)
         case .workingFromHome:
-            return ("house.fill", Color(red: 0.882, green: 0.961, blue: 0.933), ProjectWorksRevampColors.activeGreen)
+            return ("house.fill", ProjectWorksRevampColors.greenTint, ProjectWorksRevampColors.activeGreen)
         case .siteSurvey:
             return ("mappin.and.ellipse", ProjectWorksRevampColors.pinRoseBg, ProjectWorksRevampColors.pinRoseFg)
         case .custom:
@@ -1380,11 +1380,11 @@ struct BookLabourFlowView: View {
         }()
         let isOn = selected == column
         let fill: Color = {
-            guard isOn else { return Color.white }
+            guard isOn else { return ProjectWorksRevampColors.chipSurface }
             switch column {
-            case .other: return Color(red: 0.902, green: 0.945, blue: 0.984)
-            case .projects: return Color(red: 0.882, green: 0.961, blue: 0.933)
-            case .smallWorks: return Color(red: 0.980, green: 0.933, blue: 0.855)
+            case .other: return ProjectWorksRevampColors.blueTint
+            case .projects: return ProjectWorksRevampColors.greenTint
+            case .smallWorks: return ProjectWorksRevampColors.amberTint
             }
         }()
         let iconName: String = {
@@ -1456,7 +1456,7 @@ struct BookLabourFlowView: View {
     }
 
     private func bookLabourProjectRow(project: Project, smallWorks: Bool) -> some View {
-        let iconBg = smallWorks ? Color(red: 0.980, green: 0.933, blue: 0.855) : Color(red: 0.882, green: 0.961, blue: 0.933)
+        let iconBg = smallWorks ? ProjectWorksRevampColors.amberTint : ProjectWorksRevampColors.greenTint
         let iconFg = smallWorks ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen
         let jobColor = smallWorks ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.blue
         return HStack(spacing: 12) {
@@ -2047,7 +2047,7 @@ private struct BookLabourRoleChipRow: View {
     var body: some View {
         HStack(spacing: 4) {
             if person.user.permissions.operativeMode {
-                chip("Operative", bg: Color(red: 0.902, green: 0.945, blue: 0.984), fg: ProjectWorksRevampColors.blue)
+                chip("Operative", bg: ProjectWorksRevampColors.blueTint, fg: ProjectWorksRevampColors.blue)
                 if let trade = person.tradeDisplayString {
                     chip(trade, bg: ProjectWorksRevampColors.pinRoseBg, fg: ProjectWorksRevampColors.pinRoseFg)
                 }
@@ -2062,7 +2062,7 @@ private struct BookLabourRoleChipRow: View {
                     chip(trade, bg: ProjectWorksRevampColors.pinRoseBg, fg: ProjectWorksRevampColors.pinRoseFg)
                 }
                 if !person.user.permissions.manager && !person.user.permissions.adminAccess {
-                    chip("User", bg: Color(red: 0.933, green: 0.937, blue: 0.941), fg: ProjectWorksRevampColors.muted)
+                    chip("User", bg: ProjectWorksRevampColors.grayTint, fg: ProjectWorksRevampColors.muted)
                 }
             }
         }
@@ -2104,7 +2104,7 @@ private struct BookLabourRectifyTimeline: View {
                 let width = geo.size.width
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
+                        .fill(ProjectWorksRevampColors.grayTint)
 
                     if !timeline.allHoursAtMultiplier {
                         segment(

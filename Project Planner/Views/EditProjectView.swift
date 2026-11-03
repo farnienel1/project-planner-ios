@@ -154,7 +154,7 @@ struct EditProjectView: View {
                         .overlay(alignment: .topLeading) {
                             if projectDescription.isEmpty {
                                 Text("Add notes, scope, key contacts…")
-                                    .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                                    .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
                                     .font(.system(size: 12))
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 18)
@@ -371,7 +371,7 @@ struct EditProjectView: View {
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                        .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
                 }
                 .padding(.vertical, 10)
             }
@@ -390,7 +390,7 @@ struct EditProjectView: View {
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                        .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
                 }
                 .padding(.vertical, 10)
             }
@@ -445,7 +445,7 @@ struct EditProjectView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(red: 0.902, green: 0.945, blue: 0.984))
+        .background(ProjectWorksRevampColors.blueTint)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
@@ -462,7 +462,7 @@ struct EditProjectView: View {
     private var clientMenuRow: some View {
         HStack(spacing: 12) {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(red: 0.98, green: 0.933, blue: 0.855))
+                .fill(ProjectWorksRevampColors.amberTint)
                 .frame(width: 30, height: 30)
                 .overlay(Image(systemName: "building.2.fill").foregroundStyle(ProjectWorksRevampColors.upcomingAmber))
             VStack(alignment: .leading, spacing: 2) {

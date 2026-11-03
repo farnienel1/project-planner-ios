@@ -2406,7 +2406,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 13)
-                .background(ProjectWorksRevampColors.blue)
+                .background(ProjectWorksRevampColors.blueFill)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .padding(16)
@@ -2459,7 +2459,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
         .foregroundStyle(selectedSlot == slot ? .white : ProjectWorksRevampColors.ink)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
-        .background(selectedSlot == slot ? ProjectWorksRevampColors.blue : Color.white)
+        .background(selectedSlot == slot ? ProjectWorksRevampColors.blueFill : ProjectWorksRevampColors.chipSurface)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)

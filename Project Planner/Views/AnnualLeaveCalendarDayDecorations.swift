@@ -51,7 +51,7 @@ struct AnnualLeaveBlockedDayStyle: ViewModifier {
             case .weekend:
                 Circle().fill(AnnualLeaveCalendarChrome.weekendFill)
             case .bankHoliday:
-                Circle().fill(Color.white)
+                Circle().fill(ProjectWorksRevampColors.chipSurface)
             case .none:
                 Circle().fill(Color.clear)
             }

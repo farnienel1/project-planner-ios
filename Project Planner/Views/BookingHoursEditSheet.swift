@@ -189,7 +189,7 @@ private struct BookingHoursTimelineBar: View {
                 let h = geo.size.height
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color(red: 0.949, green: 0.953, blue: 0.961))
+                        .fill(ProjectWorksRevampColors.grayTint)
 
                     if !timeline.allHoursAtMultiplier,
                        let ds = timeline.standardWindowStartMinutes,
@@ -271,8 +271,8 @@ private struct BookingHoursTimelineBar: View {
         case .overtime:
             return LinearGradient(
                 colors: [
-                    Color(red: 0.98, green: 0.933, blue: 0.855),
-                    Color(red: 0.96, green: 0.88, blue: 0.72),
+                    ProjectWorksRevampColors.amberTint,
+                    ProjectWorksRevampColors.amberTintStrong,
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -956,7 +956,7 @@ struct OperativeCustomHoursSheet: View {
             HStack(spacing: 12) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(breakIncluded ? Color(red: 0.98, green: 0.933, blue: 0.855) : Color(red: 0.949, green: 0.953, blue: 0.961))
+                        .fill(breakIncluded ? ProjectWorksRevampColors.amberTint : ProjectWorksRevampColors.grayTint)
                         .frame(width: 32, height: 32)
                     Image(systemName: "cup.and.saucer.fill")
                         .font(.system(size: 15))
@@ -1063,11 +1063,11 @@ struct OperativeCustomHoursSheet: View {
                 HStack {
                     Text("Break")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color(red: 0.82, green: 0.24, blue: 0.24))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                     Spacer()
                     Text("−\(formatHours(bd.breakDeductionHours))h")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color(red: 0.82, green: 0.24, blue: 0.24))
+                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
                 }
             }
         }
@@ -1106,7 +1106,7 @@ struct OperativeCustomHoursSheet: View {
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(red: 0.98, green: 0.933, blue: 0.855))
+            .background(ProjectWorksRevampColors.amberTint)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }

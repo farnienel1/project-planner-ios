@@ -46,7 +46,7 @@ struct AppLockView: View {
                     .foregroundStyle(.white)
                     .frame(maxWidth: 280)
                     .padding(.vertical, 14)
-                    .background(ProjectWorksRevampColors.blue)
+                    .background(ProjectWorksRevampColors.blueFill)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .disabled(appLock.isAuthenticating || !appLock.deviceCanLock)
@@ -133,7 +133,7 @@ struct AppLockSignInOfferView: View {
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(ProjectWorksRevampColors.blue)
+                    .background(ProjectWorksRevampColors.blueFill)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .disabled(appLock.isAuthenticating)

@@ -234,7 +234,12 @@ enum LaunchWindowReveal {
             let rooted = scene.windows.filter { $0.rootViewController != nil }
             guard let host = rooted.first(where: \.isKeyWindow) ?? rooted.first else { continue }
             host.isHidden = false
-            host.backgroundColor = UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1)
+            // Dynamic so the window behind sheets is not a light flash in dark mode.
+            host.backgroundColor = UIColor { traits in
+                traits.userInterfaceStyle == .dark
+                    ? UIColor(red: 0.071, green: 0.078, blue: 0.102, alpha: 1)
+                    : UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1)
+            }
             if !host.isKeyWindow {
                 host.makeKey()
             }

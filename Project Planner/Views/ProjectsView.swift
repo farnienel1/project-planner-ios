@@ -580,7 +580,7 @@ struct ProjectDetailRowView: View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: system)
                 .font(.system(size: 13))
-                .foregroundStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
                 .frame(width: 14, alignment: .center)
             Text(text)
                 .font(.system(size: 11))
@@ -659,9 +659,9 @@ struct ProjectDetailRowView: View {
 
     private var statusPillBackground: Color {
         switch project.status {
-        case .active: return Color(red: 0.882, green: 0.961, blue: 0.933) // #E1F5EE
-        case .upcoming: return Color(red: 1, green: 0.965, blue: 0.882)
-        case .completed, .inactive: return Color(red: 0.949, green: 0.953, blue: 0.961) // #F2F3F5
+        case .active: return ProjectWorksRevampColors.greenTint // #E1F5EE
+        case .upcoming: return ProjectWorksRevampColors.amberTint
+        case .completed, .inactive: return ProjectWorksRevampColors.grayTint // #F2F3F5
         }
     }
 
@@ -685,7 +685,7 @@ struct ProjectDetailRowView: View {
                     Capsule()
                         .fill(
                             project.status == .completed
-                                ? AnyShapeStyle(Color(red: 0.773, green: 0.788, blue: 0.824))
+                                ? AnyShapeStyle(ProjectWorksRevampColors.placeholderInk)
                                 : AnyShapeStyle(
                                     LinearGradient(
                                         colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],

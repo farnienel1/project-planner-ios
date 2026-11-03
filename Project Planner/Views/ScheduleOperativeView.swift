@@ -768,7 +768,7 @@ struct ScheduleOperativeView: View {
                             .foregroundStyle(canOpenPeoplePicker ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .background(Color(red: 0.902, green: 0.945, blue: 0.984).opacity(canOpenPeoplePicker ? 1 : 0.5))
+                            .background(ProjectWorksRevampColors.blueTint.opacity(canOpenPeoplePicker ? 1 : 0.5))
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1000,7 +1000,7 @@ struct ScheduleOperativeView: View {
                 .font(.system(size: 10, weight: .medium))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
-                .background(selected ? Color(red: 0.902, green: 0.945, blue: 0.984) : Color.white)
+                .background(selected ? ProjectWorksRevampColors.blueTint : ProjectWorksRevampColors.chipSurface)
                 .foregroundStyle(selected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
                 .clipShape(Capsule())
                 .overlay(
@@ -1073,7 +1073,7 @@ struct ScheduleOperativeView: View {
                             .font(.system(size: 10, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
-                            .background(isBulkSelectedSlot(.customHours) ? Color(red: 0.902, green: 0.945, blue: 0.984) : Color.white)
+                            .background(isBulkSelectedSlot(.customHours) ? ProjectWorksRevampColors.blueTint : ProjectWorksRevampColors.chipSurface)
                             .foregroundStyle(isBulkSelectedSlot(.customHours) ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
                             .clipShape(Capsule())
                             .overlay(
@@ -1156,7 +1156,7 @@ struct ScheduleOperativeView: View {
             }
             .padding(EdgeInsets(top: 8, leading: 11, bottom: 8, trailing: 11))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(otH < 0.05 ? Color(red: 0.882, green: 0.961, blue: 0.933) : Color(red: 0.98, green: 0.933, blue: 0.855))
+            .background(otH < 0.05 ? ProjectWorksRevampColors.greenTint : ProjectWorksRevampColors.amberTint)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }
@@ -1221,7 +1221,7 @@ struct ScheduleOperativeView: View {
                 .foregroundStyle(quickSelectDays == days ? .white : ProjectWorksRevampColors.blue)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .background(quickSelectDays == days ? ProjectWorksRevampColors.blue : Color.white)
+                .background(quickSelectDays == days ? ProjectWorksRevampColors.blueFill : ProjectWorksRevampColors.chipSurface)
                 .clipShape(Capsule())
                 .overlay(
                     Capsule()
@@ -1277,7 +1277,7 @@ struct ScheduleOperativeView: View {
                     Group {
                         if isSelected {
                             Circle()
-                                .fill(ProjectWorksRevampColors.blue)
+                                .fill(ProjectWorksRevampColors.blueFill)
                         } else if isToday {
                             Circle()
                                 .stroke(ProjectWorksRevampColors.blue, lineWidth: 1.5)
@@ -1340,7 +1340,7 @@ struct ScheduleOperativeView: View {
                     .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .fill(canConfirmBooking ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted.opacity(0.45))
+                            .fill(canConfirmBooking ? ProjectWorksRevampColors.blueFill : ProjectWorksRevampColors.muted.opacity(0.45))
                     )
                 }
                 .accessibilityIdentifier("scheduleOperative.checkmark")

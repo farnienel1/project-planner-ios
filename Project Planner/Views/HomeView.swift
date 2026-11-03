@@ -852,8 +852,8 @@ struct HomeView: View {
             if userStore.canViewStaffWarnings() {
                 secondaryPill(
                     icon: "exclamationmark.triangle.fill",
-                    iconTint: Color(red: 0.64, green: 0.18, blue: 0.18),
-                    iconBackground: Color(red: 0.99, green: 0.92, blue: 0.92),
+                    iconTint: ProjectWorksRevampColors.requiredPillFg,
+                    iconBackground: ProjectWorksRevampColors.requiredPillBg,
                     title: "Warnings",
                     value: WarningsDisplayPhase.homePillValue(hasCompletedLiveDetection: homeWarningsReady, activeCount: homeWarningCount)
                 ) {
@@ -865,7 +865,7 @@ struct HomeView: View {
             secondaryPill(
                 icon: "checklist",
                 iconTint: homeBlue,
-                iconBackground: Color(red: 0.9, green: 0.945, blue: 0.984),
+                iconBackground: ProjectWorksRevampColors.blueTint,
                 title: "Tasks",
                 value: "\(assignedTasksCount) pending"
             ) {
@@ -1996,7 +1996,7 @@ private struct HomeProfileCardSheet: View {
                 }
                 .padding(16)
             }
-            .background(Color(red: 0.933, green: 0.945, blue: 0.961).ignoresSafeArea())
+            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
             .navigationTitle("My Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

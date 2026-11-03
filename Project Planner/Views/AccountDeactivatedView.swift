@@ -49,7 +49,7 @@ struct AccountDeactivatedView: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(ProjectWorksRevampColors.blue)
+                        .background(ProjectWorksRevampColors.blueFill)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                 }

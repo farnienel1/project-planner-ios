@@ -1296,8 +1296,8 @@ struct HolidayView: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.99, green: 0.94, blue: 0.90),
-                            Color(red: 0.96, green: 0.97, blue: 0.99),
+                            ProjectWorksRevampColors.leaveHeroWarm,
+                            ProjectWorksRevampColors.leaveHeroCool,
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing

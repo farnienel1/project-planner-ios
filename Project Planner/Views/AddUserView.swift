@@ -159,7 +159,7 @@ struct AddUserView: View {
             ForEach(1...totalSteps, id: \.self) { step in
                 ZStack {
                     Circle()
-                        .fill(step < currentStep ? ManageUserProfilePalette.avatarGradientTop : (step == currentStep ? ManageUserProfilePalette.avatarGradientTop : Color(red: 0xE3 / 255, green: 0xE3 / 255, blue: 0xE8 / 255)))
+                        .fill(step < currentStep ? ManageUserProfilePalette.avatarGradientTop : (step == currentStep ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder))
                         .frame(width: 26, height: 26)
                     if step < currentStep {
                         Image(systemName: "checkmark")
@@ -173,7 +173,7 @@ struct AddUserView: View {
                 }
                 if step < totalSteps {
                     Rectangle()
-                        .fill(step < currentStep ? ManageUserProfilePalette.avatarGradientTop : Color(red: 0xE3 / 255, green: 0xE3 / 255, blue: 0xE8 / 255))
+                        .fill(step < currentStep ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder)
                         .frame(height: 2.5)
                         .padding(.horizontal, 5)
                 }
@@ -340,7 +340,7 @@ struct AddUserView: View {
                 Spacer()
                 ZStack {
                     Circle()
-                        .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : Color(red: 0xE5 / 255, green: 0xE5 / 255, blue: 0xEA / 255), lineWidth: 2)
+                        .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder, lineWidth: 2)
                         .frame(width: 24, height: 24)
                     if selected {
                         Circle()
@@ -353,11 +353,11 @@ struct AddUserView: View {
                 }
             }
             .padding(16)
-            .background(selected ? ManageUserProfilePalette.chipPurpleBg : Color.white)
+            .background(selected ? ManageUserProfilePalette.chipPurpleBg : ProjectWorksRevampColors.chipSurface)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : Color(red: 0xE5 / 255, green: 0xE5 / 255, blue: 0xEB / 255), lineWidth: selected ? 2 : 1.5)
+                    .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder, lineWidth: selected ? 2 : 1.5)
             )
         }
         .accessibilityIdentifier("addUser.checkmark")
