@@ -22,6 +22,8 @@ nonisolated enum SyncWriteTrigger: String, Sendable, CaseIterable {
     case backgroundSync
     case pullToRefresh
     case listenerSnapshot
+    /// RULEBOOK 1.10.0 §7: producing a Weekly Report never writes (`syncWriteAllowed('weeklyReport')` is false).
+    case weeklyReport
 }
 
 /// One `LIVE_COLLECTIONS` row.
@@ -72,6 +74,12 @@ extension CanonicalBusinessEngine {
         callJSON("syncWriteAllowed", arguments: [trigger.rawValue]) as? Bool ?? false
     }
 
+    /// RULEBOOK 1.10.0 §1: `syncWriteAllowed(trigger, migration)` — a migration named in `IDEMPOTENT_MIGRATION_WRITES`
+    /// (the warning-key migration, `warningResolutionMigrationWrites`) may run from a scan.
+    nonisolated static func syncWriteAllowed(_ trigger: SyncWriteTrigger, migration: String) -> Bool {
+        callJSON("syncWriteAllowed", arguments: [trigger.rawValue, migration]) as? Bool ?? false
+    }
+
     /// `recordsToSave(records, changedIds)`: the ids (as given in `recordIds`) the user changed in this action,
     /// matched without case. Nil when the script did not answer.
     nonisolated static func recordsToSave(recordIds: [String], changedIds: [String]) -> [String]? {
@@ -105,8 +113,9 @@ extension CanonicalBusinessEngine {
 /// The gate every write that is not obviously a button press passes (§1): a launch, foreground, reconnect,
 /// background sync, pull-to-refresh or listener snapshot never writes a record. App plumbing over `syncWriteAllowed`.
 nonisolated enum SyncWriteGate {
-    static func allows(_ trigger: SyncWriteTrigger, _ what: @autoclosure () -> String) -> Bool {
-        let allowed = CanonicalBusinessEngine.syncWriteAllowed(trigger)
+    static func allows(_ trigger: SyncWriteTrigger, _ what: @autoclosure () -> String, migration: String? = nil) -> Bool {
+        let allowed = migration.map { CanonicalBusinessEngine.syncWriteAllowed(trigger, migration: $0) }
+            ?? CanonicalBusinessEngine.syncWriteAllowed(trigger)
         if !allowed {
             NSLog("SYNC_WRITE_REFUSED trigger=%@ what=%@", trigger.rawValue, what())
         }

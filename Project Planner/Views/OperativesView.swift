@@ -1195,6 +1195,313 @@ struct EditOperativeView: View {
         let rateBasis = rowIsHourly ? "hourly" : "day"
 
         Task {
+            // RULEBOOK 1.10.0 §8 `payRateChangeWrites`: the history rows are decided before anything is written; a
+            // history that did not load refuses the save (never treated as empty, which wrote a second seed row).
+            var historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = []
+            if payChanged, let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                let collection = try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)
+                let historyIds = collection.map { loaded in
+                    loaded.mergedEntries(userId: linkedUserId, operativeId: operative.id).map { $0.documentId ?? $0.id.uuidString }
+                }
+                guard let change = CanonicalBusinessEngine.payRateChangeWrites(
+                    userId: linkedUserId,
+                    operativeId: operative.documentId,
+                    previous: (previousAmount, rateBasis),
+                    next: (newAmount, rateBasis),
+                    historyRowIds: historyIds,
+                    effective: Date(),
+                    seedEffective: operative.createdAt
+                ) else {
+                    await MainActor.run { payErrorMessage = "Couldn't save the rate: the pay rules did not load. Try again." }
+                    return
+                }
+                if let refusal = change.refusal {
+                    await MainActor.run { payErrorMessage = refusal }
+                    return
+                }
+                historyRows = change.rows
+            }
+            await operativeStore.updateOperative(updatedOperative)
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                for row in historyRows {
+                    do {
+                        try await firebaseBackend.recordOperativeDayRateChange(
+                            organizationId: orgId,
+                            userId: row.userId.isEmpty ? nil : row.userId,
+                            operativeId: operative.id,
+                            dayRate: row.dayRate,
+                            effectiveAt: row.effectiveAt,
+                            payBasis: row.payBasis
+                        )
+                    } catch {
+                        print("🔥🔥🔥 DEBUG: Failed to record operative day rate history: \(error.localizedDescription)")
+                    }
+                }
+            }
+
+            await MainActor.run {
+                dismiss()
+            }
+        }
+    }
+    
+    private func parseCurrencyAmount(_ input: String) -> (amount: Double?, symbol: String?) {
+        parseOrganisationAmount(input)
+    }
+}
+
+struct EditOperativeView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    let operative: Operative
+    
+    @State private var firstName: String
+    @State private var lastName: String
+    @State private var email: String
+    @State private var phone: String
+    @State private var startDate: Date
+    @State private var selectedQualifications: Set<Qualification>
+    @State private var dayRate: String
+    /// Shown when the signed-in user may not change this person's pay (`canChangePersonPay`).
+    @State private var payErrorMessage: String?
+    @State private var notes: String
+    @State private var isActive: Bool
+    @State private var showingDeleteConfirmation = false
+    @State private var tradePresetRaw: String
+    @State private var tradeCustomText: String
+    
+    init(operative: Operative) {
+        self.operative = operative
+        self._firstName = State(initialValue: operative.firstName)
+        self._lastName = State(initialValue: operative.lastName)
+        self._email = State(initialValue: operative.email)
+        self._phone = State(initialValue: operative.phone ?? "")
+        self._startDate = State(initialValue: operative.startDate)
+        self._selectedQualifications = State(initialValue: operative.qualifications)
+        self._dayRate = State(initialValue: {
+            let amount = operative.dayRate ?? operative.hourlyRate
+            guard let amount else { return "" }
+            return OrgMoney.format(amount)
+        }())
+        self._notes = State(initialValue: operative.notes ?? "")
+        self._isActive = State(initialValue: operative.isActive)
+        self._tradePresetRaw = State(initialValue: operative.tradeTypePreset ?? "")
+        self._tradeCustomText = State(initialValue: operative.tradeTypeCustom ?? "")
+        
+        print("🔥🔥🔥 DEBUG: EditOperativeView initialized for operative: \(operative.name)")
+        print("🔥🔥🔥 DEBUG: Operative skills: \(operative.skills)")
+        print("🔥🔥🔥 DEBUG: Operative qualifications: \(operative.qualifications)")
+    }
+    
+    var body: some View {
+        let _ = print("🔥🔥🔥 DEBUG: EditOperativeView body called - skills count: \(operativeStore.organizationSkills.count), qualifications count: \(operativeStore.qualifications.count)")
+        let _ = print("🔥🔥🔥 DEBUG: EditOperativeView - operative name: \(operative.name)")
+        let _ = print("🔥🔥🔥 DEBUG: EditOperativeView - operative email: \(operative.email)")
+        
+        NavigationView {
+            VStack {
+                Text("Edit Operative: \(operative.name)")
+                    .font(.headline)
+                    .padding()
+                
+                Text("Qualifications available: \(operativeStore.qualifications.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.bottom)
+                
+                Text("Debug: View is rendering")
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                    .padding(.bottom)
+                
+                Form {
+                    Section("Personal Information") {
+                        TextField("First Name", text: $firstName)
+                            .accessibilityIdentifier("editOperative.firstName")
+                        TextField("Last Name", text: $lastName)
+                            .accessibilityIdentifier("editOperative.lastName")
+                        TextField("Email", text: $email)
+                            .accessibilityIdentifier("editOperative.email")
+                            .keyboardType(.emailAddress)
+                            .autocapitalization(.none)
+                        TextField("Phone", text: $phone)
+                            .accessibilityIdentifier("editOperative.phone")
+                            .keyboardType(.phonePad)
+                        DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
+                            .accessibilityIdentifier("editOperative.startDate")
+                        Toggle("Active", isOn: $isActive)
+                            .accessibilityIdentifier("editOperative.active")
+                    }
+                
+                Section("Qualifications") {
+                    if operativeStore.qualifications.isEmpty {
+                        Text("No qualifications added yet.")
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                    } else {
+                        ForEach(operativeStore.qualifications, id: \.id) { qualification in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(qualification.name)
+                                        .font(.body)
+                                    
+                                    if qualification.hasEndDate, let endDate = qualification.endDate {
+                                        Text("Expires: \(endDate, style: .date)")
+                                            .font(.caption)
+                                            .foregroundColor(.orange)
+                                    } else {
+                                        Text("No expiration")
+                                            .font(.caption)
+                                            .foregroundColor(.green)
+                                    }
+                                }
+                                
+                                Spacer()
+                                
+                                if selectedQualifications.contains(qualification) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                            
+                            .accessibilityIdentifier("editOperative.checkmarkCircleFill").onTapGesture {
+                                if selectedQualifications.contains(qualification) {
+                                    selectedQualifications.remove(qualification)
+                                } else {
+                                    selectedQualifications.insert(qualification)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                Section("Additional Info") {
+                    StaffTradeTypeFormSection(
+                        presetRaw: $tradePresetRaw,
+                        customText: $tradeCustomText,
+                        title: "Trade type *",
+                        footnote: "Required."
+                    )
+                    TextField("Day rate (\(OrgMoney.symbol()))", text: $dayRate)
+                        .accessibilityIdentifier("editOperative.dayRateEG4550")
+                    if let payErrorMessage {
+                        Text(payErrorMessage)
+                            .font(.footnote)
+                            .foregroundColor(.red)
+                    }
+                    TextField("Notes", text: $notes, axis: .vertical)
+                        .accessibilityIdentifier("editOperative.notes")
+                        .lineLimit(3...6)
+                }
+                
+                Section {
+                    Button("Delete Operative") {
+                        showingDeleteConfirmation = true
+                    }
+                    .accessibilityIdentifier("editOperative.deleteOperative")
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(10)
+                    .disabled(false) // Delete button is always enabled
+                }
+                }
+            }
+            .navigationTitle("Edit Operative")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                        .accessibilityIdentifier("editOperative.cancel")
+                }
+                
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Save") {
+                                updateOperative()
+                            }
+                            .accessibilityIdentifier("editOperative.save")
+                            .disabled(!isFormValid)
+                        }
+            }
+        }
+        .alert("Delete Operative", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+                .accessibilityIdentifier("editOperative.cancel2")
+            Button("Delete", role: .destructive) {
+                Task {
+                    await operativeStore.deleteOperative(operative, bookingStore: bookingStore)
+                    await MainActor.run {
+                        dismiss()
+                    }
+                }
+            }
+                .accessibilityIdentifier("editOperative.delete")
+        } message: {
+            let bookingCount = bookingStore.bookings.filter { $0.operativeId == operative.id }.count
+            if bookingCount > 0 {
+                Text("Are you sure you want to delete \(operative.name)?\n\nThis will also delete \(bookingCount) booking\(bookingCount == 1 ? "" : "s") associated with this operative.\n\nThis action cannot be undone.")
+            } else {
+                Text("Are you sure you want to delete \(operative.name)? This action cannot be undone.")
+            }
+        }
+    }
+    
+    private var isFormValid: Bool {
+        !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty &&
+        StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
+    }
+    
+    private func updateOperative() {
+        // Parse the hourly rate, preserving currency symbols
+        let parsedRate = parseCurrencyAmount(dayRate)
+        let tp = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tc = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        var updatedOperative = operative
+        updatedOperative.firstName = firstName.trimmingCharacters(in: .whitespaces)
+        updatedOperative.lastName = lastName.trimmingCharacters(in: .whitespaces)
+        updatedOperative.email = email.trimmingCharacters(in: .whitespaces)
+        updatedOperative.phone = phone.isEmpty ? nil : phone.trimmingCharacters(in: .whitespaces)
+        updatedOperative.startDate = startDate
+        updatedOperative.skills = operative.skills  // skills UI removed; preserve existing
+        updatedOperative.qualifications = selectedQualifications
+        // One field edits the row's own basis: hourly when only an hourly rate is stored, else day (§8).
+        let rowIsHourly = operative.dayRate == nil && operative.hourlyRate != nil
+        let previousAmount = rowIsHourly ? operative.hourlyRate : operative.dayRate
+        let newAmount = parsedRate.amount
+        let emailNorm = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let linkedUser = userStore.organizationUsers.first(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
+        })
+        // Compared in hundredths: the field shows two decimals, so an untouched field is not a change.
+        let payChanged = previousAmount.map { ($0 * 100).rounded() } != newAmount.map { ($0 * 100).rounded() }
+        if payChanged && !userStore.canChangePay(of: linkedUser) {
+            payErrorMessage = UserStore.payChangeRefusedMessage
+            return
+        }
+        payErrorMessage = nil
+        if payChanged {
+            updatedOperative.dayRate = rowIsHourly ? nil : newAmount
+            updatedOperative.hourlyRate = rowIsHourly ? newAmount : nil
+            updatedOperative.currencySymbol = parsedRate.symbol
+        }
+        updatedOperative.notes = notes.isEmpty ? nil : notes
+        updatedOperative.isActive = isActive
+        updatedOperative.tradeTypePreset = tp.isEmpty ? nil : tp
+        updatedOperative.tradeTypeCustom = tc.isEmpty ? nil : tc
+        updatedOperative.updatedAt = Date()
+
+        let linkedUserId = linkedUser?.id
+        let rateBasis = rowIsHourly ? "hourly" : "day"
+
+        Task {
             await operativeStore.updateOperative(updatedOperative)
 
             // History rows only for someone who may change this person's pay (checked above).

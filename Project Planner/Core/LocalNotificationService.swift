@@ -97,6 +97,12 @@ class LocalNotificationService {
         case .holidayRequestDeclined:
             content.title = "Holiday Declined"
             content.body = details.isEmpty ? "A holiday request has been declined." : details
+        case .holidayCancelledByManager:
+            content.title = "Annual Leave Cancelled"
+            content.body = details.isEmpty ? "Your annual leave was cancelled." : details
+        case .holidayBookedForYou:
+            content.title = "Annual Leave Booked"
+            content.body = details.isEmpty ? "Annual leave was booked for you." : details
         case .timesheetPendingManagerSignoff:
             content.title = "Timesheet needs sign-off"
             content.body = details.isEmpty ? "A team member submitted a timesheet for your signature." : details

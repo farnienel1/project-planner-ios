@@ -1391,7 +1391,14 @@ struct HomeView: View {
             isManager: signedIn?.permissions.manager == true,
             operatives: operatives,
             bookings: bookings,
-            managerBookings: managerBookings
+            managerBookings: managerBookings,
+            canSee: signedIn.map { user -> (Project) -> Bool in
+                let viewer = userStore.jobAccessViewer(for: user)
+                let rows = managers.map { ["id": $0.firestoreDocumentId, "email": $0.email] as [String: Any] }
+                return { (job: Project) -> Bool in
+                    CanonicalBusinessEngine.canSeeJob(viewer, job: job.jobAccessFields, managers: rows, kind: job.jobKind)
+                }
+            }
         )
 
         async let upNextTask = HomeUpNextSupport.upcomingDaySections(

@@ -97,6 +97,33 @@ extension CanonicalBusinessEngine {
         return rows.compactMap { $0 as? String }
     }
 
+    /// `jobDeleteBookingRemovals({ projectId, bookings, subcontractorBookings, managerSiteBookings, nowIso, timeZone })`
+    /// (RULEBOOK 1.10.0 §2): the ids, per collection, a job delete removes (today or later, ids without case, returned
+    /// as stored). Rows are `{ id, projectId? | locationType?, locationId?, dateMs }`. Nil when the script did not answer.
+    nonisolated static func jobDeleteBookingRemovals(
+        projectId: String,
+        bookings: [[String: Any]],
+        subcontractorBookings: [[String: Any]],
+        managerSiteBookings: [[String: Any]],
+        now: Date,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> (bookings: [String], subcontractorBookings: [String], managerSiteBookings: [String])? {
+        let input: [String: Any] = [
+            "projectId": projectId,
+            "bookings": bookings,
+            "subcontractorBookings": subcontractorBookings,
+            "managerSiteBookings": managerSiteBookings,
+            "nowIso": ISO8601DateFormatter().string(from: now),
+            "timeZone": timeZone,
+        ]
+        guard let row = callJSON("jobDeleteBookingRemovals", arguments: [input]) as? [String: Any] else { return nil }
+        return (
+            row["bookings"] as? [String] ?? [],
+            row["subcontractorBookings"] as? [String] ?? [],
+            row["managerSiteBookings"] as? [String] ?? []
+        )
+    }
+
     // MARK: Subcontractor bookings
 
     /// `parseSubcontractorBookingDocument(docId, data, { timeZone })`: nil without a firm, job or date, or with an

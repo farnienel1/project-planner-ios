@@ -22,6 +22,10 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case holidayRequestSubmitted = "holiday_request_submitted"
         case holidayRequestApproved = "holiday_request_approved"
         case holidayRequestDeclined = "holiday_request_declined"
+        /// RULEBOOK 1.10.0 §13: a manager or admin removed someone's approved leave (`holidayDecisionRecipients`).
+        case holidayCancelledByManager = "holiday_cancelled_by_manager"
+        /// RULEBOOK 1.10.0 §13: a manager or admin booked approved leave for someone (`holidayDecisionRecipients`).
+        case holidayBookedForYou = "holiday_booked_for_you"
         case timesheetPendingManagerSignoff = "timesheet_pending_manager_signoff"
         case timesheetSignedByManager = "timesheet_signed_by_manager"
         case lineManagerPeerUpdate = "line_manager_peer_update"

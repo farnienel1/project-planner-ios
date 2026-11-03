@@ -2681,9 +2681,10 @@ struct ProjectDetailView: View {
         }
     }
     
+    /// RULEBOOK 1.10.0 §16: `canEditJob` — anyone who may change the job's managers, and a manager on a job they
+    /// manage (details only; the manager list stays as stored).
     private var canEditCurrentWorkItem: Bool {
-        let catalogue: WorkAccess.JobCatalogue = project.jobType == .smallWorks ? .smallWorks : .projects
-        return userStore.canManageWorkCatalogue(catalogue)
+        userStore.canEditJob(project)
     }
 }
 
@@ -6356,14 +6357,7 @@ struct CompletedTaskDetailView: View {
         updatedTask.completionNotes = notes
         updatedTask.updatedAt = Date()
         await taskStore.updateTask(updatedTask)
-        if let creatorId = userStore.currentUser?.id {
-            await notificationService.notifyTaskCompleted(
-                taskId: updatedTask.id,
-                taskTitle: updatedTask.title,
-                completedBy: completedBy,
-                assignedToUserId: creatorId
-            )
-        }
+        await notificationService.notifyTaskCompleted(task: updatedTask, completedBy: completedBy)
     }
 }
 

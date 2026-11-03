@@ -10,7 +10,10 @@ import Combine
 
 @MainActor
 class BookingStore: ObservableObject {
-    @Published var bookings: [Booking] = []
+    @Published var bookings: [Booking] = [] {
+        // RULEBOOK 1.10.0 §17: an operative reads the jobs of their own bookings one by one (`jobQueryPlan`).
+        didSet { JobAccessContext.updateOperativeJobIds(bookings: bookings, managerBookings: []) }
+    }
     @Published var isLoading: Bool = false
     @Published var errorMessage: String?
     @Published var isOffline: Bool = false
@@ -242,7 +245,22 @@ class BookingStore: ObservableObject {
     
     // MARK: - Booking Operations
     
+    /// RULEBOOK 1.10.0 §2, §16: `canWriteBooking` / `canDeleteBooking` — admins every booking, managers only on jobs
+    /// they manage, operatives never. Refused before anything is written or queued (the security rules refuse it too).
+    private func writeRefusal(_ rows: [Booking], isDelete: Bool = false) -> String? {
+        for booking in rows {
+            if let message = JobAccessContext.bookingWriteRefusal(collection: "bookings", projectId: booking.storedProjectId, isDelete: isDelete) {
+                return message
+            }
+        }
+        return nil
+    }
+
     func addBooking(_ booking: Booking) async {
+        if let refusal = writeRefusal([booking]) {
+            errorMessage = refusal
+            return
+        }
         bookings.append(booking)
         await saveData(writes: [BookingWrite(booking: booking, changedFields: nil)])
     }
@@ -250,6 +268,10 @@ class BookingStore: ObservableObject {
     /// Append multiple bookings then sync only the new rows (much faster than repeated full saves).
     func addBookings(_ newBookings: [Booking]) async {
         guard !newBookings.isEmpty else { return }
+        if let refusal = writeRefusal(newBookings) {
+            errorMessage = refusal
+            return
+        }
         bookings.append(contentsOf: newBookings)
         await saveData(writes: newBookings.map { BookingWrite(booking: $0, changedFields: nil) })
     }
@@ -257,6 +279,11 @@ class BookingStore: ObservableObject {
     /// Saves only the fields that changed against the copy on this device (RULEBOOK §1 partial writes).
     func updateBooking(_ booking: Booking) async {
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
+            // Both the job it was on and the job it moves to must be the viewer's.
+            if let refusal = writeRefusal([bookings[index], booking]) {
+                errorMessage = refusal
+                return
+            }
             let changed = BookingWritePatch.changedLabourFields(from: bookings[index], to: booking)
             bookings[index] = booking
             await saveData(writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed)])
@@ -309,6 +336,10 @@ class BookingStore: ObservableObject {
             errorMessage = OfflinePolicy.onlineOnlyMessage
             return
         }
+        if let refusal = writeRefusal([booking], isDelete: true) {
+            errorMessage = refusal
+            return
+        }
         bookings.removeAll { $0.id == booking.id }
         try? await persistenceService.saveBookingData(bookings: bookings)
         smartCache?.cacheBookings(bookings)
@@ -342,6 +373,10 @@ class BookingStore: ObservableObject {
     
     func cancelBooking(_ booking: Booking) async {
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
+            if let refusal = writeRefusal([bookings[index]]) {
+                errorMessage = refusal
+                return
+            }
             bookings[index].status = .cancelled
             await saveData(writes: [BookingWrite(booking: bookings[index], changedFields: ["status"])])
         }
@@ -349,6 +384,10 @@ class BookingStore: ObservableObject {
     
     func completeBooking(_ booking: Booking) async {
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
+            if let refusal = writeRefusal([bookings[index]]) {
+                errorMessage = refusal
+                return
+            }
             bookings[index].status = .completed
             await saveData(writes: [BookingWrite(booking: bookings[index], changedFields: ["status"])])
         }

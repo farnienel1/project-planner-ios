@@ -45,6 +45,9 @@ struct Project: Identifiable, Codable, Hashable {
     var firestoreDocumentId: String? = nil
     /// `managerIds` exactly as `parseJobDocument` read them, so a save writes a stored id back unchanged.
     var storedManagerIds: [String] = []
+    /// RULEBOOK 1.10.0 §16, §17: `managerUserIds` as stored (the account ids of the job's managers, `jobManagerUserIds`).
+    /// The security rules match a manager against it; a save writes the recomputed list beside `managerIds`.
+    var storedManagerUserIds: [String] = []
 
     /// The Firestore document id every write, delete and lookup addresses.
     var documentId: String {
@@ -239,7 +242,7 @@ struct Project: Identifiable, Codable, Hashable {
         case isLive, description, notes, createdAt, updatedAt
         case hiddenManagerUserIds, hiddenOperativeUserIds
         case usesMapPinForLocation, latitude, longitude
-        case firestoreDocumentId, storedManagerIds
+        case firestoreDocumentId, storedManagerIds, storedManagerUserIds
     }
     
     init(from decoder: Decoder) throws {
@@ -271,6 +274,7 @@ struct Project: Identifiable, Codable, Hashable {
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
         firestoreDocumentId = try c.decodeIfPresent(String.self, forKey: .firestoreDocumentId)
         storedManagerIds = try c.decodeIfPresent([String].self, forKey: .storedManagerIds) ?? []
+        storedManagerUserIds = try c.decodeIfPresent([String].self, forKey: .storedManagerUserIds) ?? []
         // A saved copy read before the server answers: remember stored spellings so writes keep them.
         if let firestoreDocumentId { _ = WorkDocumentKeys.inAppId(for: firestoreDocumentId) }
         for managerId in storedManagerIds { _ = WorkDocumentKeys.inAppId(for: managerId) }
@@ -305,6 +309,7 @@ struct Project: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(longitude, forKey: .longitude)
         try c.encodeIfPresent(firestoreDocumentId, forKey: .firestoreDocumentId)
         try c.encode(storedManagerIds, forKey: .storedManagerIds)
+        try c.encode(storedManagerUserIds, forKey: .storedManagerUserIds)
     }
 }
 

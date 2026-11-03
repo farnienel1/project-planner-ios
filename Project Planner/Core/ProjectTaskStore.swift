@@ -142,6 +142,9 @@ class ProjectTaskStore: ObservableObject {
             throw TaskLimitError.taskLimitReached
         }
         
+        // RULEBOOK 1.10.0 §13: a new task stores who created it (`createdByUserId`, the signed-in account).
+        var task = task
+        if (task.createdByUserId ?? "").isEmpty { task.createdByUserId = firebaseBackend?.currentUser?.uid }
         tasks.append(task)
         if let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId {
             OfflineTaskLocalStore.shared.upsert(task, organizationId: organizationId)

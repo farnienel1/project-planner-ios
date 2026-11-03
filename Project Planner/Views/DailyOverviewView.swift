@@ -73,6 +73,7 @@ struct DailyOverviewView: View {
         firebaseBackend.payrollPolicy(for: overviewDate)
     }
     
+    /// Staff open Book Labour; which jobs they may book onto is `canWriteBooking` per job (RULEBOOK 1.10.0 §16).
     private var canBookLabour: Bool {
         userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true
     }
@@ -867,7 +868,8 @@ struct DailyOverviewView: View {
                 project: project,
                 bookings: bookings,
                 day: overviewDate,
-                canEditBookings: canBookLabour,
+                // RULEBOOK 1.10.0 §16: `canWriteBooking` — admins, or a manager of this job.
+                canEditBookings: canBookLabour && userStore.canWriteBooking(on: project),
                 onEditOperative: { booking in
                     let name = rosterNameForLabourBooking(
                         operativeId: booking.operativeId,

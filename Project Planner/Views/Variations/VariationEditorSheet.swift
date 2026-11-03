@@ -1638,7 +1638,8 @@ struct VariationEditorSheet: View {
                     parentName: variation.parentName,
                     isSmallWorks: project.jobType == .smallWorks,
                     createdByUserId: uid,
-                    jobManagerIds: project.managerIds
+                    jobManagerIds: project.managerIds,
+                    variationId: variation.id
                 )
             }
         } catch {

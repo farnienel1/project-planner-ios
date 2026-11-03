@@ -40,8 +40,22 @@ extension TimesheetManagerDecision {
 }
 
 enum TimesheetDraftAdjustments {
+    /// RULEBOOK 1.10.0 §8 `payrollLineReview(sheet, lineId)`: the line id as stored, then without case (iOS keys
+    /// reviews by `UUID.uuidString`, web by the stored line id). Falls back to the exact key when the script did not
+    /// answer.
     static func payrollReview(in draft: TimesheetDraft, lineId: String) -> TimesheetPayrollLineReview? {
-        draft.payrollLineReviews[lineId]
+        guard !draft.payrollLineReviews.isEmpty else { return nil }
+        let reviews: [String: Any] = draft.payrollLineReviews.mapValues { review in
+            ["decision": review.decision.rawValue, "revisedAmount": review.revisedAmount ?? NSNull()] as [String: Any]
+        }
+        guard let answer = CanonicalBusinessEngine.callJSON("payrollLineReview", arguments: [["payrollLineReviews": reviews], lineId]) else {
+            return draft.payrollLineReviews[lineId]
+        }
+        guard let row = answer as? [String: Any] else { return nil }
+        return TimesheetPayrollLineReview(
+            decision: TimesheetManagerDecision(rawValue: row["decision"] as? String ?? "") ?? .approved,
+            revisedAmount: (row["revisedAmount"] as? NSNumber)?.doubleValue
+        )
     }
 
     static func expenseDecision(_ entry: TimesheetExpenseEntry) -> TimesheetManagerDecision {
@@ -59,7 +73,7 @@ enum TimesheetDraftAdjustments {
         applyLiveReview: Bool = false
     ) -> Double {
         let applyDecisions = managerHasSigned || applyLiveReview
-        guard applyDecisions, let review = draft.payrollLineReviews[line.id] else {
+        guard applyDecisions, let review = payrollReview(in: draft, lineId: line.id) else {
             return line.amount
         }
         switch review.decision {
@@ -77,7 +91,7 @@ enum TimesheetDraftAdjustments {
         applyLiveReview: Bool = false
     ) -> Bool {
         let applyDecisions = managerHasSigned || applyLiveReview
-        guard applyDecisions, let review = draft.payrollLineReviews[line.id] else { return false }
+        guard applyDecisions, let review = payrollReview(in: draft, lineId: line.id) else { return false }
         return review.decision == .declined
     }
 

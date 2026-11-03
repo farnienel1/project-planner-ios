@@ -102,21 +102,37 @@ extension CanonicalBusinessEngine {
 
     /// `inboxNotificationVisibleToUser(row, ids)`: the row's `userId` is one of the person's ids. Ownerless rows
     /// are not inbox rows. Nil when the script did not answer.
-    nonisolated static func inboxNotificationVisibleToUser(rowUserId: String?, userIds: [String]) -> Bool? {
-        let row: [String: Any] = ["userId": rowUserId ?? NSNull()]
-        return callJSON("inboxNotificationVisibleToUser", arguments: [row, userIds]) as? Bool
+    /// RULEBOOK 1.10.0 §13: with `createdAtMs` and `now`, a row dated after `now` is not listed yet (rows count from
+    /// their `createdAt`).
+    nonisolated static func inboxNotificationVisibleToUser(
+        rowUserId: String?,
+        userIds: [String],
+        createdAtMs: Double? = nil,
+        now: Date? = nil
+    ) -> Bool? {
+        var row: [String: Any] = ["userId": rowUserId ?? NSNull()]
+        if let createdAtMs { row["createdAt"] = createdAtMs }
+        var arguments: [Any] = [row, userIds]
+        if let now { arguments.append(now.timeIntervalSince1970 * 1000) }
+        return callJSON("inboxNotificationVisibleToUser", arguments: arguments) as? Bool
     }
 
     /// `unreadNotificationBadgeCount(rows, ids)`: unread rows addressed to one of the person's ids.
     /// Nil when the script did not answer.
     static func unreadNotificationBadgeCount(
         rows: [CanonicalUnreadNotificationRow],
-        userIds: [String]
+        userIds: [String],
+        createdAtMs: [Double?]? = nil,
+        now: Date? = nil
     ) -> Int? {
-        let payload: [[String: Any]] = rows.map { row in
-            ["userId": row.userId ?? NSNull(), "isRead": row.isRead]
+        let payload: [[String: Any]] = rows.enumerated().map { index, row in
+            var out: [String: Any] = ["userId": row.userId ?? NSNull(), "isRead": row.isRead]
+            if let list = createdAtMs, index < list.count, let created = list[index] { out["createdAt"] = created }
+            return out
         }
-        return (callJSON("unreadNotificationBadgeCount", arguments: [payload, userIds]) as? NSNumber)?.intValue
+        var arguments: [Any] = [payload, userIds]
+        if let now { arguments.append(now.timeIntervalSince1970 * 1000) }
+        return (callJSON("unreadNotificationBadgeCount", arguments: arguments) as? NSNumber)?.intValue
     }
 }
 

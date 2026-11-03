@@ -71,6 +71,9 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
     }
 
+    /// The id of the last issue `issueTalk` created (`toolbox_talk_issued` names it).
+    var lastIssuedIssueId: String?
+
     func issueTalk(
         talk: HSToolboxTalk,
         weekCommencing: Date,
@@ -83,6 +86,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         // Date on the issue sheet is the talk date, not a hidden schedule. Issued talks
         // must appear in Tracking immediately — matching how managers expect the flow.
         let issueId = UUID().uuidString
+        lastIssuedIssueId = issueId
         let issue = HSToolboxIssue(
             id: issueId,
             projectId: project.id,
@@ -884,7 +888,8 @@ struct ProjectHealthSafetyView: View {
                         talkTitle: selectedTalk.displayTitle,
                         issuedByName: rawIssuer.isEmpty ? "Someone" : rawIssuer,
                         issuedByUserId: userStore.currentUser?.id,
-                        recipientUserIds: recipients
+                        recipientUserIds: recipients,
+                        issueId: vm.lastIssuedIssueId
                     )
                 }
             }

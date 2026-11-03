@@ -256,6 +256,11 @@ class FirebaseBackend: ObservableObject {
     @Published private(set) var lastBookingDecodeReport: BookingDecodeReport?
     private var managerScheduleLiveListener: ListenerRegistration?
     private var managerScheduleLiveListenerTarget: String?
+    /// RULEBOOK 1.10.0 §17: the last `listenBookings` / `listenManagerSiteBookings` request, run again when the read
+    /// plan changes (`jobReadPlanDidChange`) so the listeners follow the visible jobs.
+    var bookingsLiveRequest: (@MainActor () -> Void)?
+    var managerScheduleLiveRequest: (@MainActor () -> Void)?
+    var jobReadPlanObserver: NSObjectProtocol?
     /// Every other organisation-scoped live listener (`OrgLiveListeners.swift`). Emptied with the schedule
     /// listeners on an organisation switch and on sign-out.
     let liveListeners = OrgListenerRegistry()
@@ -350,10 +355,25 @@ class FirebaseBackend: ObservableObject {
         bookingsLiveListener?.remove()
         bookingsLiveListener = nil
         bookingsLiveListenerTarget = nil
+        bookingsLiveRequest = nil
         managerScheduleLiveListener?.remove()
         managerScheduleLiveListener = nil
         managerScheduleLiveListenerTarget = nil
+        managerScheduleLiveRequest = nil
         liveListeners.removeAll()
+        JobAccessContext.resetForOrganizationSwitch()
+    }
+
+    /// RULEBOOK 1.10.0 §17: when the inputs of `jobQueryPlan` / `bookingQueryPlan` change, the booking listeners
+    /// ask again (their target names the plan, so an unchanged plan keeps its listeners).
+    func observeJobReadPlanChanges() {
+        guard jobReadPlanObserver == nil else { return }
+        jobReadPlanObserver = NotificationCenter.default.addObserver(forName: .jobReadPlanDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.bookingsLiveRequest?()
+                self?.managerScheduleLiveRequest?()
+            }
+        }
     }
 
     private func startOrganizationDocumentListener(organizationId: String) {
@@ -481,6 +501,7 @@ class FirebaseBackend: ObservableObject {
         Task { @MainActor [self] in
             await self.attachAuthStateListenerWhenReady()
         }
+        observeJobReadPlanChanges()
     }
 
     /// Call immediately before any `Auth`/`Firestore` use if launch-time configure was skipped (e.g. bad plist path).
@@ -2065,12 +2086,13 @@ class FirebaseBackend: ObservableObject {
         previous: Project?
     ) async throws {
         let ref = db.collection("organizations").document(organizationId).collection(collection).document(job.documentId)
+        let fields = Self.jobSaveFields(job, previous: previous, organizationId: organizationId, viewer: JobAccessContext.readViewer)
         do {
             // The copy the user edited is the baseline, so only the fields they changed are written.
             try await writeChangedRosterRow(
                 ref,
-                payload: Self.jobDocumentPayload(job, organizationId: organizationId),
-                previousPayload: previous.map { Self.jobDocumentPayload($0, organizationId: organizationId) },
+                payload: fields.payload,
+                previousPayload: fields.previous,
                 writeFields: "jobWriteFields",
                 mode: mode
             )
@@ -2079,6 +2101,33 @@ class FirebaseBackend: ObservableObject {
             print("🔥🔥🔥 DEBUG: [SAVE JOB] ❌ \(collection)/\(job.documentId): \(nsError.domain) \(nsError.code) \(error.localizedDescription)")
             throw error
         }
+    }
+
+    /// RULEBOOK 1.10.0 §16: a job save writes `managerUserIds = jobManagerUserIds(job, managers, accounts)` beside
+    /// `managerIds` (the previous copy carries the stored list, so a change is written), and someone who may not change
+    /// the manager list (`canChangeJobManagers` false: a manager without the toggle editing a job they manage) sends
+    /// none of `JOB_MANAGER_LIST_FIELDS` (`jobWriteWithoutManagerList`) — the rules refuse such a write otherwise.
+    static func jobSaveFields(
+        _ job: Project,
+        previous: Project?,
+        organizationId: String,
+        viewer: JobAccessViewer?
+    ) -> (payload: [String: Any], previous: [String: Any]?) {
+        var payload = jobDocumentPayload(job, organizationId: organizationId)
+        var previousPayload = previous.map { jobDocumentPayload($0, organizationId: organizationId) }
+        if let ids = JobAccessContext.managerUserIds(for: job) {
+            payload["managerUserIds"] = ids.isEmpty ? FieldValue.delete() as Any : ids as Any
+        }
+        if let previous, !previous.storedManagerUserIds.isEmpty {
+            previousPayload?["managerUserIds"] = previous.storedManagerUserIds
+        }
+        if let viewer, !CanonicalBusinessEngine.canChangeJobManagers(viewer, kind: job.jobKind) {
+            let keep = CanonicalBusinessEngine.jobWriteKeysWithoutManagerList(Array(payload.keys))
+                ?? Set(payload.keys).subtracting(CanonicalBusinessEngine.jobManagerListFields)
+            payload = payload.filter { keep.contains($0.key) }
+            previousPayload = previousPayload?.filter { keep.contains($0.key) }
+        }
+        return (payload, previousPayload)
     }
 
     /// The fields a job save would write, as native Firestore values. "No value" is `FieldValue.delete()`, which
@@ -2226,6 +2275,7 @@ class FirebaseBackend: ObservableObject {
         job.storedManagerIds = storedManagerIds + (storedPrimary.map { primary in
             storedManagerIds.contains(primary) ? [] : [primary]
         } ?? [])
+        job.storedManagerUserIds = row.strings("managerUserIds")
         return job
     }
     
@@ -2255,16 +2305,27 @@ class FirebaseBackend: ObservableObject {
         }
     }
 
+    /// The job documents of `collection` this viewer may read (`jobQueryPlan`), as `(id, data)` rows. The whole
+    /// collection keeps the server-first read with its cache rule (`getDocumentsPreferringServer`).
+    func readPlannedJobRows(organizationId orgId: String, collection: String) async throws -> LiveDocumentRows {
+        let plan = jobReadSources(organizationId: orgId, collection: collection)
+        if plan.sources.count == 1, case let .query(query, _) = plan.sources[0].kind, let whole = query as? CollectionReference {
+            let snapshot = try await getDocumentsPreferringServer(whole)
+            return snapshot.documents.map { (id: $0.documentID, data: $0.data()) }
+        }
+        return try await readPlannedRows(plan.sources)
+    }
+
     func loadProjects(organizationId: String) async throws -> [Project] {
         let orgId = try await ensureReadableOrganization(organizationId)
-        let snapshot = try await getDocumentsPreferringServer(
-            db.collection("organizations").document(orgId).collection("projects")
-        )
-        let jobs = Self.jobs(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) }, smallWorks: false)
-        print("🔥🔥🔥 DEBUG: [LOAD] ✅ Loaded \(jobs.count) of \(snapshot.documents.count) projects documents")
+        // RULEBOOK 1.10.0 §17: the job queries `jobQueryPlan` names (whole collection for admins and toggle
+        // managers, `managerUserIds array-contains` for other managers, single documents for operatives).
+        let rows = try await readPlannedJobRows(organizationId: orgId, collection: "projects")
+        let jobs = Self.jobs(fromDocuments: rows, smallWorks: false)
+        print("🔥🔥🔥 DEBUG: [LOAD] ✅ Loaded \(jobs.count) of \(rows.count) projects documents")
         // Documents arrived but none could be read: a failed read, not an empty company (the store keeps its list).
-        if LiveSnapshotMerge.loadYieldedNothing(collection: "projects", documentIds: snapshot.documents.map(\.documentID), parsedCount: jobs.count) {
-            throw RulebookReaderYieldedNothingError(collection: "projects", rowCount: snapshot.documents.count)
+        if LiveSnapshotMerge.loadYieldedNothing(collection: "projects", documentIds: rows.map(\.id), parsedCount: jobs.count) {
+            throw RulebookReaderYieldedNothingError(collection: "projects", rowCount: rows.count)
         }
         return jobs
     }
@@ -2381,37 +2442,55 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Project deleted successfully from Firebase")
     }
 
-    /// RULEBOOK 1.7.0 §2: deleting a job removes its bookings from today on (`bookingsToRemoveOnProjectDelete`),
-    /// each with its tombstone (`deleteBookingWithTombstone`); past bookings stay for timesheets and reports. A
-    /// booking the rules refuse to delete (labour booking deletes are admin only) is logged and left in place.
+    /// RULEBOOK 1.10.0 §2: deleting a job removes its labour, subcontractor and job-linked manager site bookings dated
+    /// today or later (`jobDeleteBookingRemovals`), each with its tombstone (`deleteBookingWithTombstone`); past
+    /// bookings stay for timesheets and reports. A booking the rules refuse to delete is logged and left in place.
     /// Bookings are found under every spelling of the job id (stored, upper-case UUID older builds wrote, lower
-    /// case web wrote), like materials (`JobKeys.queryValues`); the rulebook then matches ids without case.
+    /// case web wrote); the rulebook then matches ids without case.
     private func removeFutureBookingsOfDeletedJob(_ job: Project, organizationId: String) async {
-        do {
-            var lookup: [String] = []
-            for value in JobKeys.queryValues(for: job.id) + [job.documentId, job.documentId.uppercased(), job.documentId.lowercased()]
-            where !value.isEmpty && !lookup.contains(value) {
-                lookup.append(value)
+        var lookup: [String] = []
+        for value in JobKeys.queryValues(for: job.id) + [job.documentId, job.documentId.uppercased(), job.documentId.lowercased()]
+        where !value.isEmpty && !lookup.contains(value) {
+            lookup.append(value)
+        }
+        let org = db.collection("organizations").document(organizationId)
+        func rows(_ collection: String, field: String) async -> [[String: Any]] {
+            do {
+                let snapshot = try await org.collection(collection).whereField(field, in: lookup).getDocuments()
+                return snapshot.documents.map { doc in
+                    let data = doc.data()
+                    var row: [String: Any] = ["id": doc.documentID]
+                    for key in ["projectId", "locationType", "locationId"] {
+                        if let value = data[key] as? String { row[key] = value }
+                    }
+                    // `bookingDateMs` reads every stored date shape (Timestamp, text day, millis).
+                    row["dateMs"] = CanonicalBusinessEngine.callJSON("bookingDateMs", arguments: [Self.firestoreJSON(data["date"] ?? NSNull())]) as? Double ?? 0
+                    return row
+                }
+            } catch {
+                print("🔥🔥🔥 DEBUG: [DELETE JOB] could not read the job's \(collection): \(error.localizedDescription)")
+                return []
             }
-            let snapshot = try await db.collection("organizations").document(organizationId).collection("bookings")
-                .whereField("projectId", in: lookup)
-                .getDocuments()
-            let bookings = bookingsFromFirestoreDocuments(snapshot.documents)
-            guard !bookings.isEmpty,
-                  let ids = CanonicalBusinessEngine.bookingsToRemoveOnProjectDelete(
-                    bookings.map { (id: $0.documentKey, projectId: $0.storedProjectId, date: $0.date) },
-                    projectId: job.documentId,
-                    now: Date()
-                  ) else { return }
+        }
+        let labour = await rows("bookings", field: "projectId")
+        let subcontractor = await rows("subcontractorBookings", field: "projectId")
+        let managerSite = await rows("managerSiteBookings", field: "locationId")
+        guard !(labour.isEmpty && subcontractor.isEmpty && managerSite.isEmpty),
+              let removals = CanonicalBusinessEngine.jobDeleteBookingRemovals(
+                projectId: job.documentId,
+                bookings: labour,
+                subcontractorBookings: subcontractor,
+                managerSiteBookings: managerSite,
+                now: Date()
+              ) else { return }
+        for (collection, ids) in [("bookings", removals.bookings), ("subcontractorBookings", removals.subcontractorBookings), ("managerSiteBookings", removals.managerSiteBookings)] {
             for id in ids {
                 do {
-                    try await deleteBookingWithTombstone(collection: "bookings", bookingId: id, organizationId: organizationId)
+                    try await deleteBookingWithTombstone(collection: collection, bookingId: id, organizationId: organizationId)
                 } catch {
-                    print("🔥🔥🔥 DEBUG: [DELETE JOB] booking \(id) not removed: \(error.localizedDescription)")
+                    print("🔥🔥🔥 DEBUG: [DELETE JOB] \(collection)/\(id) not removed: \(error.localizedDescription)")
                 }
             }
-        } catch {
-            print("🔥🔥🔥 DEBUG: [DELETE JOB] could not read the job's bookings: \(error.localizedDescription)")
         }
     }
     
@@ -2433,13 +2512,12 @@ class FirebaseBackend: ObservableObject {
     
     func loadSmallWorks(organizationId: String) async throws -> [Project] {
         let orgId = try await ensureReadableOrganization(organizationId)
-        let snapshot = try await getDocumentsPreferringServer(
-            db.collection("organizations").document(orgId).collection("smallWorks")
-        )
-        let jobs = Self.jobs(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) }, smallWorks: true)
-        print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] ✅ Loaded \(jobs.count) of \(snapshot.documents.count) smallWorks documents")
-        if LiveSnapshotMerge.loadYieldedNothing(collection: "smallWorks", documentIds: snapshot.documents.map(\.documentID), parsedCount: jobs.count) {
-            throw RulebookReaderYieldedNothingError(collection: "small works", rowCount: snapshot.documents.count)
+        // RULEBOOK 1.10.0 §17: `jobQueryPlan` (see `loadProjects`).
+        let rows = try await readPlannedJobRows(organizationId: orgId, collection: "smallWorks")
+        let jobs = Self.jobs(fromDocuments: rows, smallWorks: true)
+        print("🔥🔥🔥 DEBUG: [LOAD SMALL WORKS] ✅ Loaded \(jobs.count) of \(rows.count) smallWorks documents")
+        if LiveSnapshotMerge.loadYieldedNothing(collection: "smallWorks", documentIds: rows.map(\.id), parsedCount: jobs.count) {
+            throw RulebookReaderYieldedNothingError(collection: "small works", rowCount: rows.count)
         }
         return jobs
     }
@@ -2453,7 +2531,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - Job Types Management
     
-    func saveJobTypes(organizationId: String, jobTypes: Set<String>, removed: [String] = []) async throws {
+    func saveJobTypes(organizationId: String, added: [String] = [], removed: [String] = []) async throws {
         print("🔥🔥🔥 DEBUG: saveJobTypes called for organization: \(organizationId)")
         guard currentUser != nil else {
             throw NSError(
@@ -2484,8 +2562,9 @@ class FirebaseBackend: ObservableObject {
         let ref = db.collection("organizations").document(orgId).collection("settings").document("jobTypes")
         let snapshot = try await ref.getDocument(source: .server)
         let stored = snapshot.exists ? CanonicalBusinessEngine.parseJobTypesDocument(snapshot.data()) : nil
-        guard let answer = CanonicalBusinessEngine.jobTypesWriteFields(stored: stored, next: Array(jobTypes), removed: removed) else {
-            throw CanonicalWriteUnavailableError(function: "jobTypesWriteFields")
+        // RULEBOOK 1.10.0: only the user's explicit change (`jobTypesChangeWriteFields`), never the merged display list.
+        guard let answer = CanonicalBusinessEngine.jobTypesChangeWriteFields(stored: stored, add: added, remove: removed) else {
+            throw CanonicalWriteUnavailableError(function: "jobTypesChangeWriteFields")
         }
         guard let names = answer else { return }
         let patch = WriteMetadata.stamped(["jobTypes": names], userId: currentUser?.uid)
@@ -2580,6 +2659,7 @@ class FirebaseBackend: ObservableObject {
             completedItemIds: row.strings("completedItemIds").map { JobKeys.inAppId($0) }
         )
         task.projectKey = projectKey
+        task.createdByUserId = row.optionalText("createdByUserId")
         return task
     }
 
@@ -2599,6 +2679,8 @@ class FirebaseBackend: ObservableObject {
             "title": task.title,
             "details": task.details ?? NSNull(),
             "createdBy": task.createdBy,
+            // RULEBOOK 1.10.0 §13: `createdByUserId` (set when the task is created on this device).
+            "createdByUserId": task.createdByUserId ?? NSNull(),
             "status": task.status.rawValue,
             "priority": task.priority.rawValue,
             "assignedOperativeId": task.assignedOperativeId.map { stored($0) as Any } ?? NSNull(),
@@ -5457,11 +5539,9 @@ class FirebaseBackend: ObservableObject {
             email: user.email,
             mobileNumber: user.mobileNumber
         )
-        try await snapshotCurrentUserOntoMembership(
-            userId: user.id,
-            organizationId: user.organizationId,
-            userData: payload
-        )
+        // RULEBOOK 1.10.0 §14: the person never rewrites their own membership (role and permissions are an admin's,
+        // `orgMembershipWriteFields`); only the identity fields above are saved.
+        _ = payload
         deviceSessionProfile = user
     }
 
@@ -5802,7 +5882,8 @@ class FirebaseBackend: ObservableObject {
         hasNoLineManager: Bool? = nil,
         dayRate: Double?,
         updateDayRate: Bool = true,
-        payBasis: String? = nil
+        payBasis: String? = nil,
+        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = []
     ) async throws {
         var payload: [String: Any] = [:]
         let ids: [String] = {
@@ -5829,15 +5910,49 @@ class FirebaseBackend: ObservableObject {
                 payload[key] = value
             }
         }
-        try await db.collection("users").document(userId)
-            .updateData(WriteMetadata.stamped(payload, userId: auth.currentUser?.uid))
+        try await commitProfileWithPayHistory(userId: userId, payload: payload, historyRows: historyRows)
     }
 
     /// Rate-only patch on `users/{uid}`: `payBasis` plus one amount (`exclusivePayFields`) and `WriteMetadata`.
-    func updateUserDayRateMetadata(userId: String, dayRate: Double?, payBasis: String? = nil) async throws {
+    func updateUserDayRateMetadata(
+        userId: String,
+        dayRate: Double?,
+        payBasis: String? = nil,
+        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = []
+    ) async throws {
         let payload = Self.exclusivePayFields(payBasis: payBasis, amount: dayRate)
-        try await db.collection("users").document(userId)
-            .updateData(WriteMetadata.stamped(payload, userId: auth.currentUser?.uid))
+        try await commitProfileWithPayHistory(userId: userId, payload: payload, historyRows: historyRows)
+    }
+
+    /// RULEBOOK 1.10.0 §8: the profile update and its `payRateChangeWrites` history rows in one batch, so a refused
+    /// profile write leaves no history row (and a refused history row no profile change).
+    private func commitProfileWithPayHistory(
+        userId: String,
+        payload: [String: Any],
+        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite]
+    ) async throws {
+        let uid = auth.currentUser?.uid
+        let userRef = db.collection("users").document(userId)
+        guard !historyRows.isEmpty, let orgId = currentOrganization?.firestoreDocumentId else {
+            try await userRef.updateData(WriteMetadata.stamped(payload, userId: uid))
+            return
+        }
+        let batch = db.batch()
+        batch.updateData(WriteMetadata.stamped(payload, userId: uid), forDocument: userRef)
+        for row in historyRows {
+            let fields: [String: Any] = [
+                "dayRate": row.dayRate.map { $0 as Any } ?? NSNull(),
+                "payBasis": row.payBasis.map { $0 as Any } ?? NSNull(),
+                "effectiveAt": Timestamp(date: row.effectiveAt),
+                "userId": row.userId,
+                "operativeId": row.operativeId,
+                "createdAt": FieldValue.serverTimestamp()
+            ]
+            let ref = db.collection("organizations").document(orgId)
+                .collection("operativeDayRateHistory").document(UUID().uuidString)
+            batch.setData(WriteMetadata.stamped(fields, userId: uid), forDocument: ref)
+        }
+        try await batch.commit()
     }
 
     /// Client heartbeat for “last seen”; merge-only so other writes are not replaced.
@@ -6076,11 +6191,19 @@ class FirebaseBackend: ObservableObject {
         guard !trimmed.isEmpty, !orgId.isEmpty else { return }
         let ref = db.collection("users").document(trimmed).collection("orgMemberships").document(orgId)
         do {
-            let snap = try await ref.getDocument()
-            guard snap.exists else { return }
-            var topLevel = fields
-            topLevel.removeValue(forKey: "permissions.adminAccess")
-            try await ref.updateData(topLevel)
+            // RULEBOOK 1.10.0 §14: `orgMembershipWriteFields` (admin) — nested `permissions.adminAccess`, role, super
+            // admin; never a flat merge. Only an existing membership is updated.
+            _ = ref
+            try await writeOrgMembership(
+                userId: trimmed,
+                organizationId: orgId,
+                next: [
+                    "role": fields["role"] as? String ?? UserRole.admin.rawValue,
+                    "isSuperAdmin": fields["isSuperAdmin"] as? Bool ?? false,
+                    "permissions": ["adminAccess": (fields["permissions.adminAccess"] as? Bool) ?? (fields["adminAccess"] as? Bool) ?? true],
+                ],
+                writer: "admin"
+            )
         } catch {
             print("🔥🔥🔥 DEBUG: membership super-admin flag patch skipped for \(trimmed): \(error.localizedDescription)")
         }
@@ -7205,19 +7328,17 @@ class FirebaseBackend: ObservableObject {
 
     func loadBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [Booking] {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
-        var bookingsQuery: Query = db.collection("organizations").document(orgId).collection("bookings")
-        if let start {
-            bookingsQuery = bookingsQuery.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
-        }
-        let snapshot = try await getQueryPreferringServer(bookingsQuery)
-        let bookings = bookingsFromFirestoreDocuments(snapshot.documents)
+        // RULEBOOK 1.10.0 §17: the booking queries `bookingQueryPlan` names (with `date >= start`), merged by id.
+        let plan = bookingReadSources(organizationId: orgId, collection: "bookings", startingOn: start)
+        let documents = try await readPlannedQueryDocuments(plan.sources)
+        let bookings = bookingsFromFirestoreDocuments(documents)
         if bookings.isEmpty {
-            NSLog("BOOKINGS_EMPTY org=%@ start=%@ fromCache=%d — no booking documents in range", orgId, start.map { CanonicalBusinessEngine.isoString(from: $0) } ?? "all", snapshot.metadata.isFromCache ? 1 : 0)
+            NSLog("BOOKINGS_EMPTY org=%@ start=%@ plan=%@ — no booking documents in range", orgId, start.map { CanonicalBusinessEngine.isoString(from: $0) } ?? "all", plan.signature)
         }
         return bookings
     }
 
-    private func getQueryPreferringServer(_ query: Query) async throws -> QuerySnapshot {
+    func getQueryPreferringServer(_ query: Query) async throws -> QuerySnapshot {
         do {
             return try await Self.readCollectionFromServer(query, timeoutSeconds: 8)
         } catch {
@@ -7405,47 +7526,41 @@ class FirebaseBackend: ObservableObject {
     ) {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
-        let target = "bookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)"
+        // RULEBOOK 1.10.0 §17: one listener per `bookingQueryPlan` query, merged by id. The target names the plan, so
+        // a new plan (visible jobs or own ids changed, `jobReadPlanDidChange`) re-attaches and the same plan is free.
+        let plan = bookingReadSources(organizationId: orgId, collection: "bookings", startingOn: start)
+        let target = "bookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)|\(plan.signature)"
+        bookingsLiveRequest = { [weak self] in self?.listenBookings(organizationId: organizationId, startingOn: start, onChange: onChange) }
         guard LaunchStartupPolicy.shouldAttachListener(
             activeTarget: bookingsLiveListenerTarget,
             requestedTarget: target
         ) else { return }
         bookingsLiveListener?.remove()
         bookingsLiveListenerTarget = target
-        var bookingsQuery: Query = db.collection("organizations").document(orgId).collection("bookings")
-        if let start {
-            bookingsQuery = bookingsQuery.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
-        }
-        bookingsLiveListener = bookingsQuery
-            .addSnapshotListener { [weak self] snapshot, error in
-                if let error {
-                    NSLog("BOOKINGS_LISTENER_FAILED org=%@ error=%@", orgId, error.localizedDescription)
-                    Task { @MainActor in
-                        NotificationCenter.default.post(name: .bookingsListenerFailed, object: nil, userInfo: ["organizationId": orgId])
-                    }
-                    return
-                }
-                guard let snapshot else { return }
-                let fromCache = snapshot.metadata.isFromCache
-                Task { @MainActor in
-                    guard let self else { return }
-                    let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
-                    guard WarningsBookingScanScheduler.acceptsListener(
-                        listenerOrganizationId: orgId,
-                        currentOrganizationId: currentOrganizationId,
-                        sessionOrganizationId: self.sessionOrganizationId
-                    ) else {
-                        print("🔥🔥🔥 DEBUG: bookings live listener ignored (organisation is no longer current) listener=\(orgId) current=\(currentOrganizationId ?? "nil") session=\(self.sessionOrganizationId)")
-                        return
-                    }
-                    if fromCache && snapshot.documents.isEmpty {
-                        print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT — ignored an empty cache snapshot")
-                        return
-                    }
-                    let list = self.bookingsFromFirestoreDocuments(snapshot.documents)
-                    onChange(list, fromCache)
-                }
+        bookingsLiveListener = Self.listenPlannedSources(
+            plan.sources,
+            label: "bookings",
+            fromQueryDocument: { $0 },
+            fromDocument: { _ in nil },
+            documentId: { $0.documentID }
+        ) { [weak self] documents, fromCache in
+            guard let self else { return }
+            let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
+            guard WarningsBookingScanScheduler.acceptsListener(
+                listenerOrganizationId: orgId,
+                currentOrganizationId: currentOrganizationId,
+                sessionOrganizationId: self.sessionOrganizationId
+            ) else {
+                print("🔥🔥🔥 DEBUG: bookings live listener ignored (organisation is no longer current) listener=\(orgId) current=\(currentOrganizationId ?? "nil") session=\(self.sessionOrganizationId)")
+                return
             }
+            if fromCache && documents.isEmpty {
+                print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT — ignored an empty cache snapshot")
+                return
+            }
+            let list = self.bookingsFromFirestoreDocuments(documents)
+            onChange(list, fromCache)
+        }
     }
     
     func deleteBooking(_ booking: Booking, organizationId: String) async throws {
@@ -7458,13 +7573,13 @@ class FirebaseBackend: ObservableObject {
             )
         } catch {
             let nsError = error as NSError
-            // web firestore.rules: deleting a labour booking (and writing its tombstone) is admins only.
+            // RULEBOOK 1.10.0 §2, §16: admins delete any labour booking, managers those on jobs they manage.
             if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
                 throw NSError(
                     domain: "FirebaseBackend",
                     code: 403,
                     userInfo: [
-                        NSLocalizedDescriptionKey: "Only an organisation admin can delete a labour booking. Ask an admin, or cancel the booking instead.",
+                        NSLocalizedDescriptionKey: "Only an admin or one of this job's managers can delete this booking.",
                         NSUnderlyingErrorKey: nsError
                     ]
                 )
@@ -7561,12 +7676,9 @@ class FirebaseBackend: ObservableObject {
     }
 
     func loadManagerSiteBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [ManagerSiteBooking] {
-        var query: Query = db.collection("organizations").document(organizationId).collection("managerSiteBookings")
-        if let start {
-            query = query.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
-        }
-        let snapshot = try await getQueryPreferringServer(query)
-        return managerSiteBookingsFromFirestoreDocuments(snapshot.documents)
+        // RULEBOOK 1.10.0 §17: `bookingQueryPlan` (per visible job `locationId in`, own `userId ==`, or whole).
+        let plan = bookingReadSources(organizationId: organizationId, collection: "managerSiteBookings", startingOn: start)
+        return managerSiteBookingsFromFirestoreDocuments(try await readPlannedQueryDocuments(plan.sources))
     }
 
     func managerSiteBookingFromFirestoreDocument(_ doc: QueryDocumentSnapshot) -> ManagerSiteBooking? {
@@ -7614,44 +7726,40 @@ class FirebaseBackend: ObservableObject {
     ) {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
-        let target = "managerSiteBookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)"
+        // RULEBOOK 1.10.0 §17: one listener per `bookingQueryPlan` query (see `listenBookings`).
+        let plan = bookingReadSources(organizationId: orgId, collection: "managerSiteBookings", startingOn: start)
+        let target = "managerSiteBookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)|\(plan.signature)"
+        managerScheduleLiveRequest = { [weak self] in self?.listenManagerSiteBookings(organizationId: organizationId, startingOn: start, onChange: onChange) }
         guard LaunchStartupPolicy.shouldAttachListener(
             activeTarget: managerScheduleLiveListenerTarget,
             requestedTarget: target
         ) else { return }
         managerScheduleLiveListener?.remove()
         managerScheduleLiveListenerTarget = target
-        var query: Query = db.collection("organizations").document(orgId).collection("managerSiteBookings")
-        if let start {
-            query = query.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: start))
-        }
-        managerScheduleLiveListener = query
-            .addSnapshotListener { [weak self] snapshot, error in
-                if let error {
-                    print("🔥🔥🔥 DEBUG: manager schedule live listener error: \(error.localizedDescription)")
-                    return
-                }
-                guard let snapshot else { return }
-                let fromCache = snapshot.metadata.isFromCache
-                Task { @MainActor in
-                    guard let self else { return }
-                    let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
-                    guard WarningsBookingScanScheduler.acceptsListener(
-                        listenerOrganizationId: orgId,
-                        currentOrganizationId: currentOrganizationId,
-                        sessionOrganizationId: self.sessionOrganizationId
-                    ) else {
-                        print("🔥🔥🔥 DEBUG: manager schedule live listener ignored (organisation is no longer current) listener=\(orgId) current=\(currentOrganizationId ?? "nil") session=\(self.sessionOrganizationId)")
-                        return
-                    }
-                    if fromCache && snapshot.documents.isEmpty {
-                        print("🔥🔥🔥 DEBUG: manager schedule kept — ignored an empty cache snapshot")
-                        return
-                    }
-                    let list = self.managerSiteBookingsFromFirestoreDocuments(snapshot.documents)
-                    onChange(list)
-                }
+        managerScheduleLiveListener = Self.listenPlannedSources(
+            plan.sources,
+            label: "managerSiteBookings",
+            fromQueryDocument: { $0 },
+            fromDocument: { _ in nil },
+            documentId: { $0.documentID }
+        ) { [weak self] documents, fromCache in
+            guard let self else { return }
+            let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
+            guard WarningsBookingScanScheduler.acceptsListener(
+                listenerOrganizationId: orgId,
+                currentOrganizationId: currentOrganizationId,
+                sessionOrganizationId: self.sessionOrganizationId
+            ) else {
+                print("🔥🔥🔥 DEBUG: manager schedule live listener ignored (organisation is no longer current) listener=\(orgId) current=\(currentOrganizationId ?? "nil") session=\(self.sessionOrganizationId)")
+                return
             }
+            if fromCache && documents.isEmpty {
+                print("🔥🔥🔥 DEBUG: manager schedule kept — ignored an empty cache snapshot")
+                return
+            }
+            let list = self.managerSiteBookingsFromFirestoreDocuments(documents)
+            onChange(list)
+        }
     }
 
     func deleteManagerSiteBooking(_ booking: ManagerSiteBooking, organizationId: String) async throws {
@@ -8390,20 +8498,15 @@ class FirebaseBackend: ObservableObject {
                                 report += "\n4. DATA IN SUBCOLLECTIONS\n"
                                 
                                 // Projects
-                                let projectsSnapshot = try await db.collection("organizations")
-                                    .document(orgId)
-                                    .collection("projects")
-                                    .getDocuments()
-                                let projectCount = projectsSnapshot.documents.count
-                                report += "   Projects: \(projectCount) found\n"
-                                let readableProjects = Self.jobs(fromDocuments: projectsSnapshot.documents.map { (id: $0.documentID, data: $0.data()) }, smallWorks: false).count
+                                // RULEBOOK 1.10.0 §17: the same planned reads the app runs (`jobQueryPlan`).
+                                let projectRows = try await readPlannedJobRows(organizationId: orgId, collection: "projects")
+                                let projectCount = projectRows.count
+                                report += "   Projects: \(projectCount) found (plan: \(jobReadSources(organizationId: orgId, collection: "projects").signature))\n"
+                                let readableProjects = Self.jobs(fromDocuments: projectRows, smallWorks: false).count
                                 report += "   Projects read by the rulebook: \(readableProjects)\n"
-                                let smallWorksSnapshot = try await db.collection("organizations")
-                                    .document(orgId)
-                                    .collection("smallWorks")
-                                    .getDocuments()
-                                let readableSmallWorks = Self.jobs(fromDocuments: smallWorksSnapshot.documents.map { (id: $0.documentID, data: $0.data()) }, smallWorks: true).count
-                                report += "   Small works: \(smallWorksSnapshot.documents.count) found, \(readableSmallWorks) read by the rulebook\n"
+                                let smallWorksRows = try await readPlannedJobRows(organizationId: orgId, collection: "smallWorks")
+                                let readableSmallWorks = Self.jobs(fromDocuments: smallWorksRows, smallWorks: true).count
+                                report += "   Small works: \(smallWorksRows.count) found, \(readableSmallWorks) read by the rulebook\n"
                                 if projectCount > 0 {
                                     report += "   ✅ Projects exist in Firebase\n"
                                 } else {
@@ -9532,18 +9635,21 @@ extension FirebaseBackend {
         try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
     }
 
+    /// RULEBOOK 1.10.0 §2: subcontractor bookings are tombstoned (`TOMBSTONED_BOOKING_COLLECTIONS`): the delete and its
+    /// `deletedBookings` tombstone go in one batch, so an offline edit elsewhere cannot bring it back.
     func deleteSubcontractorBooking(_ booking: SubcontractorBooking, organizationId: String) async throws {
-        try await db.collection("organizations").document(organizationId)
-            .collection("subcontractorBookings")
-            .document(booking.documentId)
-            .delete()
+        try await deleteBookingWithTombstone(
+            collection: "subcontractorBookings",
+            bookingId: booking.documentId,
+            organizationId: organizationId
+        )
     }
     
     func loadSubcontractorBookings(organizationId: String) async throws -> [SubcontractorBooking] {
-        let snapshot = try await db.collection("organizations").document(organizationId)
-            .collection("subcontractorBookings")
-            .getDocuments()
-        return Self.subcontractorBookings(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+        // RULEBOOK 1.10.0 §17: `bookingQueryPlan` (whole collection, or per visible job `projectId in`).
+        let plan = bookingReadSources(organizationId: organizationId, collection: "subcontractorBookings", startingOn: nil)
+        let documents = try await readPlannedQueryDocuments(plan.sources)
+        return Self.subcontractorBookings(fromDocuments: documents.map { (id: $0.documentID, data: $0.data()) })
     }
 
     /// RULEBOOK 1.7.0 §1 "Document readers": `subcontractorBookings/{id}` are read only through

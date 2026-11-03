@@ -265,6 +265,19 @@ extension CanonicalBusinessEngine {
         return .some(names.compactMap { $0 as? String })
     }
 
+    /// RULEBOOK 1.10.0 §1 `jobTypesChangeWriteFields(stored, { add, remove })`: the stored list plus the user's explicit
+    /// adds, minus their removes — never the display list merged with names recovered from jobs. Same result shape as
+    /// `jobTypesWriteFields` (inner nil: nothing to write). Outer nil when the script did not answer.
+    nonisolated static func jobTypesChangeWriteFields(stored: [String]?, add: [String], remove: [String]) -> [String]?? {
+        guard let value = callJSON(
+            "jobTypesChangeWriteFields",
+            arguments: [stored.map { $0 as Any } ?? NSNull(), ["add": add, "remove": remove]]
+        ) else { return nil }
+        if value is NSNull { return .some(nil) }
+        guard let names = ((value as? [String: Any])?["set"] as? [String: Any])?["jobTypes"] as? [Any] else { return nil }
+        return .some(names.compactMap { $0 as? String })
+    }
+
     /// `parseTradeTypeInventory(data)`: trimmed, de-duplicated without case, stored order.
     nonisolated static func parseTradeTypeInventory(_ data: [String: Any]?) -> [String]? {
         let arg: Any = data.map { peopleDocumentJSON($0) as Any } ?? NSNull()

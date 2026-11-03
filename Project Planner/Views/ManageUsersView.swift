@@ -3839,7 +3839,7 @@ struct EditUserView: View {
         )
         if needsSelfBookClear && permissionsSuccess && operativeDetailsSuccess {
             await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: user.id)
-            await notificationService.notifyAnnualLeaveSelfBookDisabled(userId: user.id)
+            // RULEBOOK 1.10.0 §13: switching self-book off writes no notice.
             await holidayStore.loadData()
         }
 

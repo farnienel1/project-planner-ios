@@ -14,7 +14,10 @@ import FirebaseFirestore
 
 @MainActor
 class UserStore: ObservableObject {
-    @Published var currentUser: AppUser?
+    @Published var currentUser: AppUser? {
+        // RULEBOOK 1.10.0 §17: the job and booking read plans follow the signed-in profile.
+        didSet { refreshJobAccessContext() }
+    }
     /// When set, tab visibility and `can*` helpers use a simulated role. Identity and Firestore still use `currentUser`.
     @Published var roleTestingPreset: RoleTestingPreset?
     @Published var organizationUsers: [AppUser] = [] {
@@ -22,6 +25,7 @@ class UserStore: ObservableObject {
             restampSameEmailAliasesIfNeeded()
             // Rules that run without a store (`timesheetSelfSigned` in `TimesheetApprovalPolicy`) read this roster.
             RulebookRosterSnapshot.update(organizationUsers)
+            refreshJobAccessContext()
         }
     }
     /// Folded same-email `users` document id → the id the roster kept, from the last roster load.
@@ -1241,18 +1245,14 @@ class UserStore: ObservableObject {
         return currentUser.permissions.manager && currentUser.permissions.subContractors
     }
 
-    /// Create / edit / add projects or small works. Lists stay available when this is off.
-    /// Admins follow the Projects and Small Works toggles. Super admin does not.
+    /// Add projects or small works (`canCreateJob`, RULEBOOK 1.10.0 §16 round 2): admins and super admins outside
+    /// operative mode always; a manager only with that kind's toggle; operatives never. The same answer as
+    /// `canEditWorkCatalogue` and `canChangeJobManagers`. Editing one job is `canEditJob`.
     func canManageWorkCatalogue(_ catalogue: WorkAccess.JobCatalogue) -> Bool {
-        if isOperativeMode() { return false }
-        guard let u = displayUser else { return false }
-        if u.isSuperAdmin { return true }
-        let isStaff = u.permissions.manager || u.permissions.adminAccess || u.role == .admin || u.role == .manager
-        guard isStaff else { return false }
         switch catalogue {
-        case .projects: return u.permissions.projects
-        case .smallWorks: return u.permissions.smallWorks
-        case .all: return u.permissions.projects && u.permissions.smallWorks
+        case .projects: return canCreateJob(kind: .projects)
+        case .smallWorks: return canCreateJob(kind: .smallWorks)
+        case .all: return canCreateJob(kind: .projects) && canCreateJob(kind: .smallWorks)
         }
     }
 
@@ -1357,23 +1357,46 @@ class UserStore: ObservableObject {
         return true
     }
     
-    /// True if `actingUser` may delete `targetUser` under org policy:
-    /// - Super Admin: can delete any non-creator user (including admins)
-    /// - Admin (non-super): can delete only non-admin/non-super users
+    /// RULEBOOK 1.10.0 §11: `userDeleteRefusal(actor, target, { roster, creatorUserId })` — only an admin or super
+    /// admin outside operative mode deletes; never themselves, the super admin or the company owner; an admin who is
+    /// not super admin deletes only people who are not admins. Nil when the delete may go ahead.
+    func userDeleteRefusalMessage(targetUser: AppUser, actingUser: AppUser) -> String? {
+        let roster = RulebookPeople.roster(organizationUsers)
+        let options: [String: Any] = [
+            "roster": roster,
+            "creatorUserId": firebaseBackend?.currentOrganization?.creatorUserId ?? NSNull(),
+        ]
+        guard let raw = CanonicalBusinessEngine.callJSON(
+            "userDeleteRefusal",
+            arguments: [Self.userDeletePerson(actingUser), Self.userDeletePerson(targetUser), options]
+        ) else {
+            return "Couldn't check who may delete this person: the rules did not load. Try again."
+        }
+        guard let code = raw as? String else { return nil }
+        let messages = CanonicalBusinessEngine.constant("USER_DELETE_REFUSAL_MESSAGES", as: [String: String].self) ?? [:]
+        return messages[code] ?? "You do not have permission to delete this user."
+    }
+
+    /// `UserDeletePerson { id, email, role, formerUserIds, sameEmailUserIds }`.
+    static func userDeletePerson(_ user: AppUser) -> [String: Any] {
+        let role = staffAccountRole(for: user)
+        return [
+            "id": user.id,
+            "email": user.email,
+            "role": [
+                "isSuperAdmin": role.isSuperAdmin,
+                "isAdmin": role.isAdmin,
+                "isManager": role.isManager,
+                "isOperativeMode": role.isOperativeMode,
+            ],
+            "formerUserIds": user.formerUserIds,
+            "sameEmailUserIds": user.sameEmailUserIds,
+        ]
+    }
+
+    /// `canDeleteUser`: `userDeleteRefusal` is null.
     private func canDeleteUser(targetUser: AppUser, actingUser: AppUser) -> Bool {
-        if targetUser.isSuperAdmin { return false }
-        if isProtectedSuperAdmin(targetUser) { return false }
-
-        if actingUser.isSuperAdmin {
-            return actingUser.id != targetUser.id
-        }
-
-        if actingUser.permissions.adminAccess {
-            let targetIsAdminLike = targetUser.isSuperAdmin || targetUser.permissions.adminAccess || targetUser.role == .admin
-            return !targetIsAdminLike
-        }
-
-        return false
+        userDeleteRefusalMessage(targetUser: targetUser, actingUser: actingUser) == nil
     }
 
     /// UI-facing wrapper for delete permission checks.
@@ -1770,134 +1793,100 @@ class UserStore: ObservableObject {
                      return
                  }
                  
-                guard canDeleteUser(targetUser: user, actingUser: currentUser) else {
-                    print("🔥🔥🔥 DEBUG: ❌ Delete blocked by role policy")
-                     await MainActor.run {
-                        if user.isSuperAdmin || isOrganizationCreator(userId: user.id) {
-                            errorMessage = "The Super Admin cannot be deleted."
-                        } else if user.permissions.adminAccess || user.role == .admin {
-                            errorMessage = "Only the Super Admin can delete admin users."
-                        } else {
-                            errorMessage = "You do not have permission to delete this user."
-                        }
-                     }
-                     return
-                 }
-                 
-                 let isOperative = user.permissions.operativeMode
-                 
-                 // Historic bookings keep the stored `bookedBy` name (AGENTS rule 4); deleting the booker never
-                 // rewrites them.
-                 
-                 // Rulebook `bookingsToRemoveOnOperativeDelete`: this person's bookings from today on, under every id they
-                 // have had (`bookingIdsForAccount`). Past bookings stay for timesheets and weekly reports. Never by name.
-                 if let bookingStore = bookingStore {
-                     let personIds = labourBookingIds(for: user, operatives: operativeStore?.allOperatives ?? [])
-                     let bookingsToDelete = bookingStore.bookingsToRemoveOnPersonDelete(personIds: personIds)
-                     print("🔥🔥🔥 DEBUG: Deleting \(bookingsToDelete.count) bookings from today on for \(userName)")
-                     for booking in bookingsToDelete {
-                         await bookingStore.deleteBooking(booking)
-                     }
-                 }
-
-                 // An operative's catalogue row on the same email goes too.
-                 if isOperative, let operativeStore = operativeStore {
-                     let matchingOperative = operativeStore.operatives.first { $0.email.lowercased() == userEmail }
-                     if let operative = matchingOperative {
-                         await operativeStore.deleteOperative(operative, bookingStore: bookingStore)
-                         print("🔥🔥🔥 DEBUG: ✅ Deleted operative record from OperativeStore")
-                     }
-                 }
-
-                // Delete from Firebase: remove ALL user documents for this email in this org
-                // (invited users: users/{randomUUID}; after signup may also have users/{authUid} — delete every match)
-                guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-                    await MainActor.run { errorMessage = "Organization not loaded." }
+                // RULEBOOK 1.10.0 §11: `canDeleteUser` / `userDeleteRefusal` first — nothing is written when refused.
+                if let refusal = userDeleteRefusalMessage(targetUser: user, actingUser: currentUser) {
+                    print("🔥🔥🔥 DEBUG: ❌ Delete blocked by userDeleteRefusal: \(refusal)")
+                    errorMessage = refusal
                     return
                 }
+                guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+                    errorMessage = "Organization not loaded."
+                    return
+                }
+                guard let actorUid = Auth.auth().currentUser?.uid else {
+                    errorMessage = "Sign in again to delete this person."
+                    return
+                }
+                // Historic bookings keep the stored `bookedBy` name (AGENTS rule 4); deleting the booker never
+                // rewrites them.
                 do {
                     let db = Firestore.firestore()
+                    let ids = RulebookPeople.ownerIds(for: user, users: organizationUsers)
                     let emailNormalized = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                     let emailRaw = user.email.trimmingCharacters(in: .whitespacesAndNewlines)
-                    
-                    var docIdsToDelete = Set<String>()
-                    docIdsToDelete.insert(userId)
-                    
-                    func collectDocs(_ snap: QuerySnapshot) {
-                        for doc in snap.documents { docIdsToDelete.insert(doc.documentID) }
-                    }
-                    
-                    let snapLower = try await db.collection("users")
-                        .whereField("organizationId", isEqualTo: organizationId)
-                        .whereField("email", isEqualTo: emailNormalized)
-                        .getDocuments(source: .server)
-                    collectDocs(snapLower)
-                    
-                    if emailRaw != emailNormalized {
-                        let snapRaw = try await db.collection("users")
-                            .whereField("organizationId", isEqualTo: organizationId)
-                            .whereField("email", isEqualTo: emailRaw)
-                            .getDocuments(source: .server)
-                        collectDocs(snapRaw)
-                    }
-                    
-                    print("🔥🔥🔥 DEBUG: Deleting \(docIdsToDelete.count) user document id(s) for \(userEmail)")
-                    
-                    var deletedAny = false
-                    for docId in docIdsToDelete {
-                        let ref = db.collection("users").document(docId)
-                        let doc = try await ref.getDocument(source: .server)
-                        guard doc.exists, let data = doc.data() else {
-                            continue
-                        }
-                        guard (data["organizationId"] as? String) == organizationId else {
-                            print("🔥🔥🔥 DEBUG: ⚠️ Skip users/\(docId) — organizationId mismatch")
-                            continue
-                        }
-                        let docEmailNorm = ((data["email"] as? String) ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                        let sameRowAsUI = (docId == userId)
-                        guard docEmailNorm == emailNormalized || sameRowAsUI else {
-                            print("🔥🔥🔥 DEBUG: ⚠️ Skip users/\(docId) — email mismatch (doc=\(docEmailNorm) vs \(emailNormalized))")
-                            continue
-                        }
-                        print("🔥🔥🔥 DEBUG: Deleting user document: users/\(docId)")
-                        try await ref.delete()
-                        deletedAny = true
-                        print("🔥🔥🔥 DEBUG: ✅ Deleted users/\(docId)")
-                        do {
-                            try await db.collection("organizations").document(organizationId).updateData([
-                                "members.\(docId)": FieldValue.delete()
-                            ])
-                            print("🔥🔥🔥 DEBUG: ✅ Removed \(docId) from organization members")
-                        } catch {
-                            print("🔥🔥🔥 DEBUG: ⚠️ Could not remove \(docId) from members: \(error.localizedDescription)")
+                    // Manager site bookings under any of the person's ids (labour bookings come from the store).
+                    var managerRows: [[String: Any]] = []
+                    for chunk in stride(from: 0, to: ids.count, by: 30).map({ Array(ids[$0..<min($0 + 30, ids.count)]) }) where !chunk.isEmpty {
+                        let snap = try await db.collection("organizations").document(organizationId)
+                            .collection("managerSiteBookings").whereField("userId", in: chunk).getDocuments(source: .server)
+                        for doc in snap.documents {
+                            let date = (doc.data()["date"] as? Timestamp)?.dateValue() ?? .distantPast
+                            managerRows.append(["id": doc.documentID, "userId": doc.data()["userId"] as? String ?? "", "dateMs": date.timeIntervalSince1970 * 1000])
                         }
                     }
-                    
-                    if !deletedAny {
-                        print("🔥🔥🔥 DEBUG: No matching user documents deleted for \(userEmail) (may already be gone)")
-                    }
-                    
-                    // Clear email claim so this email can be re-invited (Firestore duplicate-prevention)
-                    try await db.collection("organizations").document(organizationId)
-                        .collection("userEmails").document(emailNormalized).delete()
-                    print("🔥🔥🔥 DEBUG: ✅ Cleared userEmails/\(emailNormalized) if present")
-                    
-                    // Remove pending invitations so stale links and resend state don't linger
-                    let emailVariants = Array(Set([emailNormalized, emailRaw].filter { !$0.isEmpty }))
-                    for variant in emailVariants {
+                    var invitationRows: [[String: Any]] = []
+                    for variant in Array(Set([emailNormalized, emailRaw].filter { !$0.isEmpty })) {
                         let invSnap = try await db.collection("invitations")
                             .whereField("organizationId", isEqualTo: organizationId)
                             .whereField("email", isEqualTo: variant)
                             .getDocuments(source: .server)
-                        for invDoc in invSnap.documents {
-                            try await invDoc.reference.delete()
-                            print("🔥🔥🔥 DEBUG: ✅ Deleted invitation \(invDoc.documentID) for \(variant)")
+                        invitationRows += invSnap.documents.map { ["id": $0.documentID, "email": ($0.data()["email"] as? String) ?? variant] }
+                    }
+                    let input: [String: Any] = [
+                        "orgId": organizationId,
+                        "user": Self.userDeletePerson(user),
+                        "actorUserId": actorUid,
+                        "platform": "ios",
+                        "roster": RulebookPeople.roster(organizationUsers),
+                        "bookings": (bookingStore?.bookings ?? []).map {
+                            ["id": $0.documentKey, "operativeId": $0.storedOperativeId, "dateMs": $0.date.timeIntervalSince1970 * 1000] as [String: Any]
+                        },
+                        "managerSiteBookings": managerRows,
+                        "operativeRows": (operativeStore?.operatives ?? []).map { ["id": $0.documentId, "email": $0.email] as [String: Any] },
+                        "managerRows": (operativeStore?.managers ?? []).map { ["id": $0.firestoreDocumentId, "email": $0.email] as [String: Any] },
+                        "invitations": invitationRows,
+                        "nowIso": CanonicalBusinessEngine.isoString(from: Date()),
+                        "tz": OrganizationRulebookContext.timeZoneIdentifier,
+                    ]
+                    guard let steps = CanonicalBusinessEngine.callJSON("userDeleteWrites", arguments: [input]) as? [[String: Any]],
+                          !steps.isEmpty else {
+                        errorMessage = "Couldn't delete this person: the rules did not load. Try again."
+                        return
+                    }
+                    // `userDeleteWrites`: one batch per step, in order; the account batch first, so a refusal there
+                    // leaves everything as it was. Later steps stop at the first refusal.
+                    for (index, step) in steps.enumerated() {
+                        let batch = db.batch()
+                        for write in step["writes"] as? [[String: Any]] ?? [] {
+                            guard let path = write["path"] as? String, !path.isEmpty else { continue }
+                            let ref = db.document(path)
+                            switch write["op"] as? String {
+                            case "delete":
+                                batch.deleteDocument(ref)
+                            case "update":
+                                var fields: [AnyHashable: Any] = [:]
+                                for field in write["deleteFields"] as? [String] ?? [] { fields[field] = FieldValue.delete() }
+                                if !fields.isEmpty { batch.updateData(fields, forDocument: ref) }
+                            case "set":
+                                var fields = write["fields"] as? [String: Any] ?? [:]
+                                for field in write["serverTimestampFields"] as? [String] ?? [] { fields[field] = FieldValue.serverTimestamp() }
+                                batch.setData(fields, forDocument: ref)
+                            default:
+                                continue
+                            }
+                        }
+                        do {
+                            try await batch.commit()
+                            print("🔥🔥🔥 DEBUG: ✅ userDeleteWrites step \(index) (\(step["step"] as? String ?? "?")) done")
+                        } catch {
+                            if index == 0 { throw error }
+                            print("🔥🔥🔥 DEBUG: ⚠️ userDeleteWrites step \(step["step"] as? String ?? "?") refused: \(error.localizedDescription)")
+                            break
                         }
                     }
                 } catch {
                     print("🔥🔥🔥 DEBUG: ❌ Failed to delete user \(userName) from Firebase: \(error.localizedDescription)")
-                    await MainActor.run { errorMessage = "Failed to delete user: \(error.localizedDescription)" }
+                    errorMessage = "Failed to delete user: \(error.localizedDescription)"
                     return
                 }
                 
@@ -2365,7 +2354,29 @@ class UserStore: ObservableObject {
                     Self.applyStoredPay(to: &updatedUser, basis: previousPay.basis, amount: dayRate)
                 }
 
+                var historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = []
+                if dayRateChanged, let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                    let emailNorm = updatedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                    let linkedOperativeId = operativeStore?.operatives.first(where: {
+                        $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
+                    })?.id
+                    let change = await payRateChangeRows(
+                        organizationId: orgId,
+                        user: updatedUser,
+                        operativeId: linkedOperativeId,
+                        previous: previousPay,
+                        nextAmount: dayRate,
+                        nextBasis: previousPay.basis,
+                        effectiveAt: dayRateEffectiveAt ?? Date()
+                    )
+                    if let refusal = change.refusal {
+                        errorMessage = refusal
+                        return false
+                    }
+                    historyRows = change.rows
+                }
                 do {
+                    // RULEBOOK 1.10.0 §8: the profile and its `payRateChangeWrites` rows in one batch.
                     try await firebaseBackend.updateOperativeProfileMetadata(
                         userId: updatedUser.id,
                         assignedManagerUserId: updatedUser.assignedManagerUserId,
@@ -2373,24 +2384,9 @@ class UserStore: ObservableObject {
                         hasNoLineManager: hasNoLineManager ?? updatedUser.hasNoLineManager,
                         dayRate: dayRate,
                         updateDayRate: dayRateChanged,
-                        payBasis: previousPay.basis
+                        payBasis: previousPay.basis,
+                        historyRows: historyRows
                     )
-                    if dayRateChanged,
-                       let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                        let emailNorm = updatedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                        let linkedOperativeId = operativeStore?.operatives.first(where: {
-                            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
-                        })?.id
-                        await recordRateHistory(
-                            organizationId: orgId,
-                            user: updatedUser,
-                            operativeId: linkedOperativeId,
-                            previous: previousPay,
-                            nextAmount: dayRate,
-                            nextBasis: previousPay.basis,
-                            effectiveAt: dayRateEffectiveAt ?? Date()
-                        )
-                    }
                     // Mirror (web writes the same one). Never read over users/{uid}; best effort.
                     let mirrored = Self.storedPay(of: updatedUser)
                     try? await firebaseBackend.saveOperativeProfileMetadataFallback(
@@ -2472,11 +2468,10 @@ class UserStore: ObservableObject {
         return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7
     }
 
-    /// `operativeDayRateHistory` rows for a rate change, as web `recordDayRateChangeIfNeeded` writes them
-    /// (each through `payRateHistoryWriteFields`): with no history yet, the previous live rate from the
-    /// account's creation, then the new rate (an explicit 0 included). Clearing a saved rate (`nextAmount`
-    /// nil) writes one "rate cleared" row. Only called after `canChangePay` passed. Best effort, like web.
-    private func recordRateHistory(
+    /// RULEBOOK 1.10.0 §8 `payRateChangeWrites`: the `operativeDayRateHistory` rows a rate change writes in the
+    /// profile's batch (a seed row only when the person's history loaded and is empty; a "rate cleared" row when a
+    /// rate is cleared). A failed history load refuses the save (`refusal`), never counted as empty history.
+    private func payRateChangeRows(
         organizationId: String,
         user: AppUser,
         operativeId: UUID?,
@@ -2484,39 +2479,30 @@ class UserStore: ObservableObject {
         nextAmount: Double?,
         nextBasis: String,
         effectiveAt: Date
-    ) async {
-        guard let firebaseBackend, canChangePay(of: user) else { return }
-        guard let nextAmount else {
-            guard previous.amount != nil else { return }
-            try? await firebaseBackend.recordOperativeDayRateChange(
-                organizationId: organizationId,
-                userId: user.id,
-                operativeId: operativeId,
-                dayRate: nil,
-                effectiveAt: effectiveAt
-            )
-            return
+    ) async -> (rows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite], refusal: String?) {
+        guard let firebaseBackend else { return ([], nil) }
+        var historyIds: [String]?
+        if let collection = try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: organizationId) {
+            // The person's loaded rows (any of their ids, or their operative row).
+            var ids = Set<String>()
+            for personId in RulebookPeople.ownerIds(for: user, users: organizationUsers) {
+                for entry in collection.mergedEntries(userId: personId, operativeId: nil) { ids.insert(entry.documentId ?? entry.id.uuidString) }
+            }
+            for entry in collection.mergedEntries(userId: nil, operativeId: operativeId) { ids.insert(entry.documentId ?? entry.id.uuidString) }
+            historyIds = Array(ids).sorted()
         }
-        let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: organizationId)) ?? .empty
-        let merged = collection.mergedEntries(userId: user.id, operativeId: operativeId)
-        if merged.isEmpty, let previousAmount = previous.amount, previousAmount > 0 {
-            try? await firebaseBackend.recordOperativeDayRateChange(
-                organizationId: organizationId,
-                userId: user.id,
-                operativeId: operativeId,
-                dayRate: previousAmount,
-                effectiveAt: user.createdAt,
-                payBasis: previous.basis
-            )
-        }
-        try? await firebaseBackend.recordOperativeDayRateChange(
-            organizationId: organizationId,
+        guard let result = CanonicalBusinessEngine.payRateChangeWrites(
             userId: user.id,
-            operativeId: operativeId,
-            dayRate: nextAmount,
-            effectiveAt: effectiveAt,
-            payBasis: nextBasis
-        )
+            operativeId: operativeId.map { Booking.storedOperativeId(for: $0) },
+            previous: (previous.amount, previous.basis == "hourly" ? "hourly" : "day"),
+            next: (nextAmount, nextBasis == "hourly" ? "hourly" : "day"),
+            historyRowIds: historyIds,
+            effective: effectiveAt,
+            seedEffective: user.createdAt
+        ) else {
+            return ([], "Couldn't save the rate: the pay rules did not load. Try again.")
+        }
+        return (result.rows, result.refusal)
     }
     
     /// Persists trade type on the user document and mirrors it to linked operative or manager roster rows (matched by email).
@@ -2630,23 +2616,31 @@ class UserStore: ObservableObject {
         }
         Self.applyStoredPay(to: &updatedUser, basis: previousPay.basis, amount: dayRate)
 
+        var historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = []
+        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+            let change = await payRateChangeRows(
+                organizationId: orgId,
+                user: updatedUser,
+                operativeId: nil,
+                previous: previousPay,
+                nextAmount: dayRate,
+                nextBasis: previousPay.basis,
+                effectiveAt: effectiveAt ?? Date()
+            )
+            if let refusal = change.refusal {
+                errorMessage = refusal
+                return false
+            }
+            historyRows = change.rows
+        }
         do {
+            // RULEBOOK 1.10.0 §8: the profile and its `payRateChangeWrites` rows in one batch.
             try await firebaseBackend.updateUserDayRateMetadata(
                 userId: updatedUser.id,
                 dayRate: dayRate,
-                payBasis: previousPay.basis
+                payBasis: previousPay.basis,
+                historyRows: historyRows
             )
-            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                await recordRateHistory(
-                    organizationId: orgId,
-                    user: updatedUser,
-                    operativeId: nil,
-                    previous: previousPay,
-                    nextAmount: dayRate,
-                    nextBasis: previousPay.basis,
-                    effectiveAt: effectiveAt ?? Date()
-                )
-            }
             // Mirror (web writes the same one). Never read over users/{uid}; best effort.
             try? await firebaseBackend.saveOperativeProfileMetadataFallback(
                 organizationId: updatedUser.organizationId,

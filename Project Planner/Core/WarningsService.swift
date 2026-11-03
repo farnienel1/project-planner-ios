@@ -598,6 +598,13 @@ class WarningsService: ObservableObject {
         input.materialCutOffBookings = materialCutOffBookings
         input.materialSendRecords = materialSendRecords
         input.clashDayKeys = clashDayKeys
+        // RULEBOOK 1.10.0 §17: a restricted manager's warnings cover only their jobs and the people on them.
+        input.warningScopeJSON = WarningScopeSupport.scopeJSON(
+            bookings: bookings,
+            managerBookings: managerSiteBookings,
+            users: users,
+            operatives: operatives
+        )
         // Snapshot on MainActor (Swift 6 default isolation) over the *windowed* arrays.
         // Detach only generate. Extra yields stop Home quiet-expired jetsam.
         await Task.yield()

@@ -43,6 +43,9 @@ struct WarningsComputationInput: @unchecked Sendable {
     var materialSendRecords: [MaterialSendRecord] = []
     /// `clashScanDays.dayKeys`. Nil checks clashes on the coverage window only (script did not answer).
     var clashDayKeys: [String]? = nil
+    /// RULEBOOK 1.10.0 §17: `warningScopeFor(...)` as JSON, passed as `scope` to `unbookedLabourRows`,
+    /// `qualificationExpiryRows`, `unverifiedOperativeRows` and `materialCutOffWarningRows`. Nil is everything.
+    var warningScopeJSON: Data? = nil
 }
 
 struct WarningsComputationSnapshot: Sendable {
@@ -212,6 +215,13 @@ struct WarningsComputationSnapshot: Sendable {
     var materialSendRecords: [MaterialSendRecordSnapshot] = []
     /// `clashScanDays.dayKeys`. Nil checks clashes on the coverage window.
     var clashDayKeys: Set<String>? = nil
+    /// `warningScopeFor(...)` as JSON (RULEBOOK 1.10.0 §17). Nil is everything.
+    var warningScopeJSON: Data? = nil
+
+    /// The scope object for a rulebook payload, or nil.
+    nonisolated var warningScope: Any? {
+        warningScopeJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) }
+    }
 }
 
 enum WarningsComputation {
@@ -419,7 +429,8 @@ enum WarningsComputation {
             materialCutOff: input.materialCutOff,
             materialCutOffBookings: materialCutOffBookings,
             materialSendRecords: materialSendRecords,
-            clashDayKeys: input.clashDayKeys.map { Set($0) }
+            clashDayKeys: input.clashDayKeys.map { Set($0) },
+            warningScopeJSON: input.warningScopeJSON
         )
     }
 
@@ -657,6 +668,8 @@ enum WarningsComputation {
             "sendRecords": input.materialSendRecords.map { record -> [String: Any] in
                 ["requestType": record.requestType, "materialIds": record.materialIds]
             },
+            // RULEBOOK 1.10.0 §17: a restricted viewer's scope (`warningScopeFor`).
+            "scope": input.warningScope ?? NSNull(),
         ]
         guard let rows = CanonicalBusinessEngine.materialCutOffWarningRows(payload) else { return nil }
         let projectById = keyedByUUID(input.projects, id: \.id)
@@ -729,6 +742,8 @@ enum WarningsComputation {
                 "referenceIso": CanonicalBusinessEngine.isoString(from: reference),
                 "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
                 "operatives": operatives,
+                // RULEBOOK 1.10.0 §17: a restricted viewer's scope (`warningScopeFor`).
+                "scope": input.warningScope ?? NSNull(),
             ]
         ) else {
             return nil
@@ -799,6 +814,7 @@ enum WarningsComputation {
                 "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
                 "operatives": operatives,
                 "people": people,
+                "scope": input.warningScope ?? NSNull(),
             ]
         ) else {
             return nil
@@ -1091,6 +1107,18 @@ enum WarningsComputation {
             bookings: shared.bookings.compactMap(unbookedBooking),
             holidays: shared.holidays.compactMap(unbookedHoliday)
         )
+        // RULEBOOK 1.10.0 §17: a restricted viewer's Daily Overview covers only their jobs (`warningScopeFor`, passed
+        // as `scope`). With no restriction the typed call is used as before.
+        if let scope = WarningScopeSupport.scope(
+            bookings: operativeBookings, managerBookings: managerBookings, users: users, operatives: operatives
+        ), let encoded = try? JSONEncoder().encode(input),
+           var payload = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any] {
+            payload["scope"] = scope
+            guard let raw = CanonicalBusinessEngine.callJSON("unbookedLabourRowsOnDay", arguments: [payload]),
+                  let data = try? JSONSerialization.data(withJSONObject: raw),
+                  let rows = try? JSONDecoder().decode([CanonicalUnbookedLabourRow].self, from: data) else { return [] }
+            return rows
+        }
         return CanonicalBusinessEngine.unbookedLabourRowsOnDay(input) ?? []
     }
 
@@ -1262,6 +1290,7 @@ enum WarningsComputation {
                 "operatives": operatives,
                 "bookings": shared.bookings,
                 "holidays": shared.holidays,
+                "scope": input.warningScope ?? NSNull(),
             ]
         ) else {
             return nil
