@@ -1268,7 +1268,7 @@ struct ManagerScheduleContentView: View {
         let normalizedDays = days.map { calendar.startOfDay(for: $0) }
         // RULEBOOK 1.13.1 §4.3: one request never mixes weekdays and weekend days, and a new Saturday or Sunday
         // booking is custom hours (`bookingDaysMixWeekdayAndWeekend`, `allowedTimeSlotsOnDay`).
-        if let message = CanonicalBusinessEngine.weekendWeekdayMixMessage(for: normalizedDays, calendar: calendar) {
+        if let message = CanonicalBusinessEngine.weekendWeekdayMixRefusal(for: normalizedDays, calendar: calendar) {
             weekendMixMessage = message
             return
         }
@@ -1561,7 +1561,7 @@ struct ManagerScheduleContentView: View {
             let key = calendar.startOfDay(for: date)
             if selectedDates.contains(key) {
                 selectedDates.remove(key)
-            } else if let message = CanonicalBusinessEngine.weekendWeekdayMixMessage(for: Array(selectedDates) + [key], calendar: calendar) {
+            } else if let message = CanonicalBusinessEngine.weekendWeekdayMixRefusal(for: Array(selectedDates) + [key], calendar: calendar) {
                 // RULEBOOK 1.13.1 `bookingDaysMixWeekdayAndWeekend`: weekdays and weekend days are booked separately.
                 weekendMixMessage = message
             } else {

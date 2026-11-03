@@ -29,7 +29,7 @@ enum ScheduleDateSelectionPolicy {
         }
 
         // RULEBOOK 1.13.1 §4.3 `bookingDaysMixWeekdayAndWeekend`: one request never mixes weekdays and weekend days.
-        if let message = CanonicalBusinessEngine.weekendWeekdayMixMessage(for: Array(selected) + [normalized], calendar: calendar) {
+        if let message = CanonicalBusinessEngine.weekendWeekdayMixRefusal(for: Array(selected) + [normalized], calendar: calendar) {
             return message
         }
         let addingWeekend = PayrollTimePolicyCatalog.isWeekend(normalized, calendar: calendar)
