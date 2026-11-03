@@ -62,13 +62,18 @@ struct PayrollHoursResult: Equatable {
     /// only — pay stays `outsideHours × outsideMultiplier`. Memoised in the wrapper.
     var multipliedHours: RulebookMultipliedHours? {
         CanonicalBusinessEngine.payrollMultipliedHours(RulebookMultipliedHoursInput(
-            segments: segments.map {
-                RulebookMultipliedHoursInput.Segment(
-                    kind: $0.kind.scriptName, baseHours: $0.baseHours, multiplier: $0.multiplier, unpaidBreakHours: $0.unpaidBreakHours
-                )
-            },
+            segments: scriptSegments,
             outsideMultiplier: outsideMultiplier
         ))
+    }
+
+    /// The segments in the script's shape (`payrollHoursResult.segments`): a mapping, not a calculation.
+    private var scriptSegments: [RulebookMultipliedHoursInput.Segment] {
+        segments.map {
+            RulebookMultipliedHoursInput.Segment(
+                kind: $0.kind.scriptName, baseHours: $0.baseHours, multiplier: $0.multiplier, unpaidBreakHours: $0.unpaidBreakHours
+            )
+        }
     }
 
     /// The paid hours of the multiplied segments (outside the window, or every hour at N×), as the pay rule prices
@@ -85,7 +90,9 @@ struct PayrollHoursResult: Equatable {
             totalPaidHours: totalPaidHours,
             standardHours: standardHours,
             outsideHours: outsideHours,
-            outsideMultiplier: outsideMultiplier
+            outsideMultiplier: outsideMultiplier,
+            // 1.20.3: the script needs the segments to show clock hours × N − break, not the back-calculated hours.
+            segments: scriptSegments
         ))
     }
 

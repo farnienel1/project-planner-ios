@@ -201,12 +201,15 @@ nonisolated struct RulebookBookingRequest: Hashable, Sendable {
     }
 }
 
-/// The four `payrollHoursResult` figures `bookingHoursLabel` reads.
+/// The `payrollHoursResult` fields `bookingHoursLabel` reads. RULEBOOK 1.20.3: the segments (kind, base hours,
+/// multiplier, unpaid break) let the script show clock hours at the multiplier and the break as plain hours; without
+/// them it falls back to `outsideHours` ("6.25h × 2").
 nonisolated struct RulebookBookingHoursInput: Hashable, Sendable {
     var totalPaidHours: Double
     var standardHours: Double
     var outsideHours: Double
     var outsideMultiplier: Double
+    var segments: [RulebookMultipliedHoursInput.Segment] = []
 }
 
 extension CanonicalBusinessEngine {
@@ -233,10 +236,15 @@ extension CanonicalBusinessEngine {
     /// sum — "8h", "13h (6.5h × 2)", "11h (8h + 2h × 1.5)". Memoised by the four figures.
     nonisolated static func bookingHoursLabel(_ input: RulebookBookingHoursInput) -> String {
         hoursLabelMemo.value(for: input) {
-            let argument: [String: Any] = [
+            var argument: [String: Any] = [
                 "totalPaidHours": input.totalPaidHours, "standardHours": input.standardHours,
                 "outsideHours": input.outsideHours, "outsideMultiplier": input.outsideMultiplier,
             ]
+            if !input.segments.isEmpty {
+                argument["segments"] = input.segments.map {
+                    ["kind": $0.kind, "baseHours": $0.baseHours, "multiplier": $0.multiplier, "unpaidBreakHours": $0.unpaidBreakHours]
+                }
+            }
             return (callJSON("bookingHoursLabel", arguments: [argument]) as? [String: Any])?["label"] as? String
         } ?? "\(input.totalPaidHours)h"
     }
