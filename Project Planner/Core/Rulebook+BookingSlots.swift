@@ -27,34 +27,7 @@ nonisolated enum RulebookBookingSlot: String, CaseIterable, Sendable {
 }
 
 extension CanonicalBusinessEngine {
-    /// `OrgPayrollTimePolicy` in the script's field names (the same mapping as `PayrollHoursEngine.canonicalPolicy`).
-    /// A mapping, not a rule.
-    nonisolated static func payrollPolicyJSON(_ policy: OrgPayrollTimePolicy) -> [String: Any]? {
-        func weekend(_ day: OrgWeekendDayPayrollSettings, sameAsSaturday: Bool?) -> [String: Any] {
-            var row: [String: Any] = [
-                "allHoursAtMultiplierMode": day.allHoursAtMultiplierMode,
-                "allHoursMultiplier": day.allHoursMultiplier,
-                "outsideWindowMultiplier": day.outsideStandardWindowMultiplier,
-            ]
-            if let value = day.customStandardStart { row["definedWindowStart"] = value }
-            if let value = day.customStandardEnd { row["definedWindowEnd"] = value }
-            if let value = day.countsAsHours { row["countsAsStandardHours"] = value }
-            if let sameAsSaturday { row["sameAsSaturday"] = sameAsSaturday }
-            return row
-        }
-        return [
-            "standardDayStart": policy.standardDayStart,
-            "standardDayEnd": policy.standardDayEnd,
-            "unpaidBreakMinutes": policy.unpaidBreakMinutes,
-            "standardPaidHours": policy.standardPaidHours,
-            "breakWindowStart": policy.breakWindowStart,
-            "breakWindowEnd": policy.breakWindowEnd,
-            "weekdayOutsideStandardMultiplier": policy.weekdayOutsideStandardMultiplier,
-            "saturday": weekend(policy.saturday, sameAsSaturday: nil),
-            "sunday": weekend(policy.sunday, sameAsSaturday: policy.sundaySameAsSaturday),
-            "breakPaid": policy.breakPaid,
-        ]
-    }
+    // The policy JSON is `payrollPolicyJSON` (Rulebook+OrganisationSettings.swift, `parsePayrollPolicy`).
 
     /// The booking day as an organisation-zone `YYYY-MM-DD` key.
     nonisolated static func bookingDayKey(_ date: Date) -> String {
