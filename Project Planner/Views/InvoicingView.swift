@@ -2780,9 +2780,13 @@ private struct MyTimesheetView: View {
         }
     }
 
+    /// RULEBOOK 1.20.4: an overtime line with a break shows "6.5h × 2 − 0.5h break = 12.5h" (`multipliedHoursText`,
+    /// a signed line's stored text read back with `parseMultipliedHoursText`), never the back-calculated 6.25h.
     private func timesheetHoursRateLine(for row: InvoiceLineItem) -> String {
-        let hours = formatTimesheetHours(row.paidHours)
-        return "\(hours)h · \(row.timesheetRateAnnotation)"
+        let hours = CanonicalBusinessEngine.payLineHoursText(
+            details: row.details, paidHours: row.paidHours, isOvertimeLine: row.isOvertimeLine
+        )
+        return "\(hours) · \(row.timesheetRateAnnotation)"
     }
 
     private func formatTimesheetHours(_ value: Double) -> String {
@@ -6794,7 +6798,10 @@ private enum InvoicePDFBuilder {
                 in: CGRect(x: middleX, y: y + 7, width: 190, height: 18),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: navy]
             )
-            let detail = "\(item.details) · \(hoursString(item.paidHours))h · \(item.timesheetRateAnnotation)"
+            // RULEBOOK 1.20.4: an overtime line whose text is already `multipliedHoursText` is not repeated as hours.
+            let detail = item.isOvertimeLine && CanonicalBusinessEngine.parseMultipliedHoursText(item.details) != nil
+                ? "\(item.details) · \(item.timesheetRateAnnotation)"
+                : "\(item.details) · \(CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)) · \(item.timesheetRateAnnotation)"
             (detail as NSString).draw(
                 in: CGRect(x: middleX, y: y + 22, width: 190, height: 28),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 9.5), .foregroundColor: slate]

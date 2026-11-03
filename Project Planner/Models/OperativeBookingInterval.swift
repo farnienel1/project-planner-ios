@@ -106,12 +106,12 @@ extension Booking {
         }
         if let s = workStartTime, let e = workEndTime, !s.isEmpty, !e.isEmpty {
             let result = payrollHoursResult(policy: policy)
-            let ot = overtimeHoursBeyondPaidStandard(policy: policy)
-            if ot > 0.05, let outside = result.segments.first(where: { $0.kind == .outsideWindow || $0.kind == .allHoursMultiplier }) {
-                let paidOT = outside.paidHours
-                let stdShow = result.totalPaidHours - paidOT
-                let equation = ScheduleCoverageFormat.overtimeEquation(rawHours: ot, multiplier: outside.multiplier, paidHours: paidOT)
-                return ("\(s)–\(e) · \(ScheduleCoverageFormat.hours(stdShow))h + \(equation)", true)
+            // RULEBOOK 1.20.4 (`CanonicalBusinessEngine.payrollMultipliedHours`): hours at the multiplier as clock hours with the break as plain hours
+            // (`payrollMultipliedHours` → "6.5h × 2 − 0.5h break = 12.5h"), never the back-calculated base.
+            if let multiplied = result.multipliedHours, multiplied.clockHours > 0.05 {
+                let stdShow = max(0, result.totalPaidHours - multiplied.paidHours)
+                let text = stdShow > 0.005 ? "\(ScheduleCoverageFormat.hours(stdShow))h + \(multiplied.text)" : multiplied.text
+                return ("\(s)–\(e) · \(text)", true)
             }
             var t = "\(s)–\(e)"
             // RULEBOOK 1.19.0: "break removed" only on a day that takes an unpaid break off (`unpaidBreakAppliesOnDay`).
@@ -167,24 +167,12 @@ extension Booking {
         return (start, end)
     }
 
-    /// Wall-clock hours for this booking (explicit times or legacy slot mapped to the org day).
-    /// An end before the start still counts as the next morning here: this is the Swift-only
-    /// overnight wall-hours rule (the rulebook's `payrollHoursResult` pays it the same way), not the clash path.
+    /// Clock hours this booking occupies: the length of its `slotInterval` (the rulebook's interval for the stored slot
+    /// and clock times — an overnight 22:00–02:00 is 22:00 to 26:00, 4h; a FULL DAY / AM / PM its window). No Swift copy of
+    /// the slot table or the overnight rule (`CanonicalBusinessEngine.slotInterval`); 0 when the script did not answer.
     func totalBookedHours(policy: OrgPayrollTimePolicy = .default) -> Double {
-        if let s = workStartTime, let e = workEndTime,
-           let span = ManagerScheduleInterval.clockSpanMinutes(start: s, end: e) {
-            return Double(span.1 - span.0) / 60.0
-        }
-        if let iv = OperativeBookingInterval.clashInterval(for: self, policy: policy) {
-            return Double(iv.1 - iv.0) / 60.0
-        }
-        switch timeSlot {
-        case .fullDay: return max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0)
-        case .morning, .afternoon: return max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0) / 2
-        case .evening: return 4
-        case .overtime: return 2
-        case .customHours: return max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0)
-        }
+        guard let iv = OperativeBookingInterval.clashInterval(for: self, policy: policy) else { return 0 }
+        return Double(max(0, iv.1 - iv.0)) / 60.0
     }
 }
 

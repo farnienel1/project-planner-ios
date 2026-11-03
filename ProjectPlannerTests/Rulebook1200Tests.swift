@@ -37,15 +37,17 @@ final class Rulebook1200Tests: XCTestCase {
         )))
     }
 
-    func testThePackedScriptIsRulebook1202OrLater() throws {
+    func testThePackedScriptIsRulebook1204OrLater() throws {
         let stamp = try XCTUnwrap(CanonicalBusinessEngine.rulebookStamp())
         let parts = stamp.version.split(separator: ".").compactMap { Int($0) }
-        XCTAssertFalse(parts.lexicographicallyPrecedes([1, 20, 2]), "rulebook \(stamp.version) predates 1.20.2")
+        XCTAssertFalse(parts.lexicographicallyPrecedes([1, 20, 4]), "rulebook \(stamp.version) predates 1.20.4")
         let names = Set(CanonicalBusinessEngine.exportNames())
         for name in [
             "derivedWeekdayPaidHours", "weekdayPaidHours", "withDerivedWeekdayPaidHours", "weekdayPaidDayPreview",
             "leaveHalfDayWindows", "leaveHalfDayLabel", "leaveComparableInterval", "allowedTimeSlotsOnDay",
             "bookingHoursLabel", "bookingRequestIdentity", "isSameBookingRequest", "payrollPolicyTimeOnStep",
+            "payrollBreakTimeOnStep", "payrollBreakMinutesOnStep", "weekendDayPreview", "payrollMultipliedHours",
+            "multipliedHoursText", "parseMultipliedHoursText", "payrollOutsideClockHours",
         ] {
             XCTAssertTrue(names.contains(name), name)
         }
@@ -238,29 +240,46 @@ final class Rulebook1200Tests: XCTestCase {
 
     // MARK: 1.20.2
 
-    func testWorkingHoursTimesAreOnThirtyMinuteSteps() {
+    /// RULEBOOK 1.20.2 / 1.20.3 §4.3: day start and finish on 30 minutes; lunch-break times and length on 15 minutes
+    /// (10:00–10:45, 45 min is valid); an off-step value saved earlier passes until changed.
+    func testWorkingHoursDayTimesOnThirtyMinutesAndBreakOnFifteen() {
         XCTAssertEqual(CanonicalBusinessEngine.payrollPolicyTimeStepMinutes, 30)
+        XCTAssertEqual(CanonicalBusinessEngine.payrollBreakTimeStepMinutes, 15)
         XCTAssertEqual(CanonicalBusinessEngine.payrollPolicyTimeStepMessage, "Working hours use 30-minute steps (e.g. 07:30).")
+        XCTAssertEqual(
+            CanonicalBusinessEngine.payrollBreakTimeStepMessage,
+            "Lunch break times and length use 15-minute steps (e.g. 10:45)."
+        )
         XCTAssertTrue(CanonicalBusinessEngine.payrollPolicyTimeOnStep("07:30"))
         XCTAssertFalse(CanonicalBusinessEngine.payrollPolicyTimeOnStep("10:45"))
+        XCTAssertTrue(CanonicalBusinessEngine.payrollBreakTimeOnStep("10:45"))
+        XCTAssertFalse(CanonicalBusinessEngine.payrollBreakTimeOnStep("10:50"))
+        XCTAssertTrue(CanonicalBusinessEngine.payrollBreakMinutesOnStep(45))
+        XCTAssertFalse(CanonicalBusinessEngine.payrollBreakMinutesOnStep(20))
+
         let saved = ownerPolicy(derived: false)
+        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(saved), "10:00–10:45, 45 min is valid")
+        var dayOff = saved
+        dayOff.standardDayStart = "06:45"
         XCTAssertEqual(
-            CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(saved),
-            "Working hours use 30-minute steps (e.g. 07:30).",
-            "with no saved policy the off-step 10:45 is refused"
+            CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(dayOff, previous: saved),
+            "Working hours use 30-minute steps (e.g. 07:30)."
         )
-        var changed = saved
-        changed.breakWindowStart = "10:15"
-        changed.breakWindowEnd = "11:00"
+        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(dayOff, previous: dayOff), "saved off-step passes")
+        var breakOff = saved
+        breakOff.breakWindowEnd = "10:50"
         XCTAssertEqual(
-            CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(changed, previous: saved),
-            "Working hours use 30-minute steps (e.g. 07:30).",
-            "an off-step time is refused once it is changed"
+            CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(breakOff, previous: saved),
+            "Lunch break times and length use 15-minute steps (e.g. 10:45)."
         )
-        var onStep = saved
-        onStep.breakWindowEnd = "10:30"
-        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(onStep, previous: saved))
-        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(.default), "break length stays any minutes")
+        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(breakOff, previous: breakOff))
+        var lengthOff = saved
+        lengthOff.unpaidBreakMinutes = 40
+        XCTAssertEqual(
+            CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(lengthOff, previous: saved),
+            "Lunch break times and length use 15-minute steps (e.g. 10:45)."
+        )
+        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(lengthOff, previous: lengthOff))
     }
 
     func testBookingHoursLabelIsThePayRulesHoursWithTheMultiplierSum() {
@@ -316,5 +335,95 @@ final class Rulebook1200Tests: XCTestCase {
         // Sunday's unpaid figure is the packed rule's (1.20.3 changes whether the break is multiplied); only assert that
         // the preview moved when the break became unpaid.
         XCTAssertLessThan(unpaid.last ?? 99, paid.last ?? 0)
+    }
+
+    // MARK: 1.20.3 / 1.20.4 — an unpaid break is never multiplied; pay lines show clock hours and the break
+
+    private func weekendPolicy(sundayBreakPaid: Bool, saturdayWindowEnd: String = "14:00", saturdayCountsAs: Double = 8, saturdayBreakPaid: Bool = true) -> OrgPayrollTimePolicy {
+        var policy = OrgPayrollTimePolicy.default
+        policy.saturday.customStandardEnd = saturdayWindowEnd
+        policy.saturday.countsAsHours = saturdayCountsAs
+        policy.saturday.breakPaid = saturdayBreakPaid
+        policy.sunday.breakPaid = sundayBreakPaid
+        return policy
+    }
+
+    private func weekendBooking(_ dayKey: String) throws -> Booking {
+        let day = try XCTUnwrap(OrganizationRulebookContext.date(fromDayKey: dayKey))
+        return LogicFixtures.booking(on: day, slot: .customHours, start: "07:30", end: "14:00")
+    }
+
+    func testSundayEveryHourAtTwoUnpaidBreakIsTwelveAndAHalf() throws {
+        let result = try weekendBooking("2026-11-08").payrollHoursResult(policy: weekendPolicy(sundayBreakPaid: false))
+        XCTAssertEqual(result.totalPaidHours, 12.5, accuracy: 0.001)
+        let multiplied = try XCTUnwrap(result.multipliedHours)
+        XCTAssertEqual(multiplied.clockHours, 6.5, accuracy: 0.001)
+        XCTAssertEqual(multiplied.breakHours, 0.5, accuracy: 0.001)
+        XCTAssertEqual(multiplied.text, "6.5h × 2 − 0.5h break = 12.5h")
+        XCTAssertEqual(result.paidHoursLabel, "12.5h (6.5h × 2 − 0.5h break)")
+        XCTAssertEqual(
+            TimesheetPayrollCollector.overtimeDetails(multiplied: multiplied, otHours: result.outsideHours),
+            "OT 6.5h × 2 − 0.5h break = 12.5h",
+            "never the back-calculated 6.25h"
+        )
+    }
+
+    func testSaturdayOutsideWindowBreakComesOffAfterTheMultiplier() throws {
+        // Window 07:30–11:00 counts as 4h, outside ×2, booked 07:30–14:00, unpaid break 12:00–12:30.
+        let policy = weekendPolicy(sundayBreakPaid: true, saturdayWindowEnd: "11:00", saturdayCountsAs: 4, saturdayBreakPaid: false)
+        let result = try weekendBooking(saturday).payrollHoursResult(policy: policy)
+        XCTAssertEqual(result.totalPaidHours, 9.5, accuracy: 0.001)
+        XCTAssertEqual(result.multipliedHours?.text, "3h × 2 − 0.5h break = 5.5h")
+        XCTAssertEqual(result.paidHoursLabel, "9.5h (4h + 3h × 2 − 0.5h break)")
+        let rows = try XCTUnwrap(CanonicalBusinessEngine.weekendBookingBreakdown(
+            policy: policy, dayKeys: [saturday], start: "07:30", end: "14:00", isBreakRemoved: false, timeZone: zone
+        ))
+        XCTAssertEqual(rows.map(\.line), ["Saturday 07:30–14:00 = 4h + 3h × 2 − 0.5h unpaid break = 9.5h"])
+    }
+
+    func testPayAmountsAreUnchangedByTheNewWording() throws {
+        let result = try weekendBooking("2026-11-08").payrollHoursResult(policy: weekendPolicy(sundayBreakPaid: false))
+        let hourly = ResolvedPayrollRate(basis: .hourly, dayRate: nil, hourlyRate: 20)
+        let day = ResolvedPayrollRate(basis: .dayRate, dayRate: 200, hourlyRate: nil)
+        XCTAssertEqual(hourly.payForHours(result.outsideHours, standardDayHours: 8, otMultiplier: result.outsideMultiplier), 250, accuracy: 0.001)
+        XCTAssertEqual(day.payForHours(result.outsideHours, standardDayHours: 8, otMultiplier: result.outsideMultiplier), 312.5, accuracy: 0.001)
+    }
+
+    func testSignedLinesReadTheirStoredTextBack() throws {
+        let parsed = try XCTUnwrap(CanonicalBusinessEngine.parseMultipliedHoursText("OT 6.5h × 2 − 0.5h break = 12.5h"))
+        XCTAssertEqual(parsed.clockHours, 6.5, accuracy: 0.001)
+        XCTAssertEqual(parsed.multiplier, 2, accuracy: 0.001)
+        XCTAssertEqual(parsed.breakHours, 0.5, accuracy: 0.001)
+        XCTAssertNil(CanonicalBusinessEngine.parseMultipliedHoursText("OT 7h"))
+        XCTAssertEqual(CanonicalBusinessEngine.multipliedHoursText(clockHours: 6.5, multiplier: 2, breakHours: 0), "6.5h × 2 = 13h")
+        XCTAssertEqual(
+            CanonicalBusinessEngine.payLineHoursText(details: "OT 6.5h × 2 − 0.5h break = 12.5h", paidHours: 6.25, isOvertimeLine: true),
+            "6.5h × 2 − 0.5h break = 12.5h"
+        )
+        XCTAssertEqual(CanonicalBusinessEngine.payLineHoursText(details: "07:30–16:00", paidHours: 7.25, isOvertimeLine: false), "7.25h")
+    }
+
+    func testWorkingHoursWeekendPreviewComesFromTheScript() throws {
+        var policy = weekendPolicy(sundayBreakPaid: false)
+        let sunday = try XCTUnwrap(CanonicalBusinessEngine.weekendDayPreview(policy: policy, weekday: "sunday", timeZone: zone))
+        XCTAssertEqual(sunday.start, "07:30")
+        XCTAssertEqual(sunday.end, "16:00")
+        XCTAssertEqual(sunday.summary, "Every hour at ×2 · Unpaid break 12:00–12:30, 30 min — 30 min taken off · 16.5h paid")
+        let saturday = try XCTUnwrap(CanonicalBusinessEngine.weekendDayPreview(policy: policy, weekday: "saturday", timeZone: zone))
+        XCTAssertEqual(saturday.summary, "07:30–14:00 counts as 8h · Paid break 12:00–12:30, 30 min · 8h paid")
+        policy.saturday.breakPaid = false
+        let unpaid = try XCTUnwrap(CanonicalBusinessEngine.weekendDayPreview(policy: policy, weekday: "saturday", timeZone: zone))
+        XCTAssertEqual(
+            unpaid.summary,
+            "07:30–14:00 counts as 8h · Unpaid break 12:00–12:30, 30 min — 30 min taken off · 7.5h paid",
+            "switching the draft's break to Unpaid changes the preview at once"
+        )
+    }
+
+    func testTotalBookedHoursIsTheSlotIntervalLength() throws {
+        let day = try XCTUnwrap(OrganizationRulebookContext.date(fromDayKey: monday))
+        XCTAssertEqual(LogicFixtures.booking(on: day, slot: .customHours, start: "22:00", end: "02:00").totalBookedHours(policy: .default), 4, accuracy: 0.001)
+        XCTAssertEqual(LogicFixtures.booking(on: day, slot: .customHours, start: "07:30", end: "14:00").totalBookedHours(policy: .default), 6.5, accuracy: 0.001)
+        XCTAssertEqual(LogicFixtures.booking(on: day, slot: .fullDay).totalBookedHours(policy: .default), 8.5, accuracy: 0.001)
     }
 }

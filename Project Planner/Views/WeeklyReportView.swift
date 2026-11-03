@@ -1035,7 +1035,7 @@ struct WeeklyReportView: View {
                     person.name,
                     person.role,
                     line.rateTypeLabel,
-                    formatDays(line.days),
+                    line.daysCell(formatDays),
                     formatCurrency(line.rate),
                     line.payLabel ?? formatCurrency(line.pay),
                 ])
@@ -1173,7 +1173,7 @@ struct WeeklyReportView: View {
                     person.name,
                     person.role,
                     line.rateTypeLabel,
-                    formatDays(line.days),
+                    line.daysCell(formatDays),
                     formatCurrency(line.rate),
                     line.payLabel ?? formatCurrency(line.pay)
                 ])
@@ -1580,6 +1580,10 @@ struct WeeklyReportView: View {
             var resolved: ResolvedPayrollRate
             var normalHours: Double = 0
             var otHours: Double = 0
+            /// RULEBOOK 1.20.4 (`payrollMultipliedHours`): the clock hours at the multiplier and the unpaid break taken
+            /// off them as plain hours, summed — display only, pay stays `otHours × otMultiplier`.
+            var otClockHours: Double = 0
+            var otBreakHours: Double = 0
             var otMultiplier: Double
             var standardDayHours: Double
             var isPaye: Bool = false
@@ -1620,6 +1624,10 @@ struct WeeklyReportView: View {
             var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
             acc.normalHours += normalHours
             acc.otHours += otHours
+            if let multiplied = booking.payrollHoursResult(policy: policy).multipliedHours {
+                acc.otClockHours += multiplied.clockHours
+                acc.otBreakHours += multiplied.breakHours
+            }
             byKey[key] = acc
         }
 
@@ -1658,6 +1666,10 @@ struct WeeklyReportView: View {
             var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
             acc.normalHours += normalHours
             acc.otHours += otHours
+            if let multiplied = booking.payrollHoursResult(policy: policy).multipliedHours {
+                acc.otClockHours += multiplied.clockHours
+                acc.otBreakHours += multiplied.breakHours
+            }
             byKey[key] = acc
         }
 
@@ -1705,13 +1717,21 @@ struct WeeklyReportView: View {
                         ? "OT x\(Int(entry.otMultiplier.rounded()))"
                         : String(format: "OT x%.1f", entry.otMultiplier)
                     let otLabel = entry.resolved.basis == .hourly ? "\(label) (hourly)" : label
+                    // RULEBOOK 1.20.4: with an unpaid break off the multiplied hours the row shows
+                    // "6.5h × 2 − 0.5h break = 12.5h" (`multipliedHoursText`), never the back-calculated hours.
+                    let hoursText = entry.otBreakHours > 0.0001 && entry.otClockHours > 0.0001
+                        ? CanonicalBusinessEngine.multipliedHoursText(
+                            clockHours: entry.otClockHours, multiplier: entry.otMultiplier, breakHours: entry.otBreakHours
+                        )
+                        : nil
                     lines.append(
                         PayrollRateLine(
                             rateTypeLabel: otLabel,
                             days: otDays,
                             rate: entry.isPaye ? nil : otRate,
                             pay: otPay,
-                            isPaye: entry.isPaye
+                            isPaye: entry.isPaye,
+                            hoursText: hoursText
                         )
                     )
                     total += otPay
@@ -1843,7 +1863,17 @@ struct WeeklyReportView: View {
                     days: line.days,
                     rate: rate,
                     pay: paye ? 0 : line.amount,
-                    isPaye: paye
+                    isPaye: paye,
+                    // RULEBOOK 1.20.4: a signed OT line keeps its stored text (`parseMultipliedHoursText`).
+                    hoursText: line.isOvertime
+                        ? CanonicalBusinessEngine.parseMultipliedHoursText(line.details).flatMap { parsed in
+                            parsed.breakHours > 0
+                                ? CanonicalBusinessEngine.multipliedHoursText(
+                                    clockHours: parsed.clockHours, multiplier: parsed.multiplier, breakHours: parsed.breakHours
+                                )
+                                : nil
+                        }
+                        : nil
                 )
             )
         }
@@ -1963,6 +1993,14 @@ private struct PayrollRateLine {
     var isPaye: Bool = false
     /// `PAYE` when the cell shows that instead of a figure (`reportPayCell`).
     var payLabel: String? = nil
+    /// RULEBOOK 1.20.4: an overtime row's `multipliedHoursText` when an unpaid break came off the multiplied hours.
+    var hoursText: String? = nil
+
+    /// The Days cell on screen, PDF, XLSX and HTML: the day units, with the multiplied hours beside them.
+    func daysCell(_ formatDays: (Double) -> String) -> String {
+        guard let hoursText else { return formatDays(days) }
+        return "\(formatDays(days)) (\(hoursText))"
+    }
 }
 
 private struct PayrollPersonSummary {

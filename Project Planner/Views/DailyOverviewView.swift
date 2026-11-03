@@ -252,17 +252,44 @@ struct DailyOverviewView: View {
     /// Hours on job sites from the pay rule (`payrollHoursResult.totalPaidHours` for each booking under the policy in
     /// effect that day), never the clock duration: a Saturday window counting 8h adds 8h, Sunday every hour ×2 adds 13h.
     private var dayJobSiteLabourHours: Double {
+        dayJobSitePayResults.reduce(0) { $0 + $1.totalPaidHours }
+    }
+
+    /// `payrollHoursResult` for every job-site booking on the overview day (memoised answers), the source of the
+    /// headline total, the standard hours and the hours at the multiplier (web `buildDailyOverview`).
+    private var dayJobSitePayResults: [PayrollHoursResult] {
         let p = payrollTimePolicy
         let cal = CanonicalBusinessEngine.businessCalendar
-        var total = dayBookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: p) }
+        var results = dayBookings.map { $0.payrollHoursResult(policy: p) }
         for b in managerScheduleStore.managerSiteBookings
         where cal.isDate(b.date, inSameDayAs: overviewDate) && (b.locationType == .project || b.locationType == .smallWork) {
-            total += b.paidBookedHours(policy: p)
+            results.append(b.payrollHoursResult(policy: p))
         }
         for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
-            total += b.payrollMirrorBooking().paidBookedHours(policy: p)
+            results.append(b.payrollMirrorBooking().payrollHoursResult(policy: p))
         }
-        return total
+        return results
+    }
+
+    /// RULEBOOK 1.20.4 (web `buildDailyOverview`): the day's hours at the multiplier as clock hours, with the unpaid
+    /// break as plain hours — "6.5h × 2 − 0.5h break = 12.5h" (`multipliedHoursText`) when a break came off and one
+    /// multiplier applies; otherwise the clock hours.
+    private var dayJobSiteOvertimeText: String {
+        var clock = 0.0
+        var breakHours = 0.0
+        var multipliers = Set<Double>()
+        for result in dayJobSitePayResults {
+            let multiplied = result.multipliedHours
+            clock += multiplied?.clockHours ?? result.outsideHours
+            breakHours += multiplied?.breakHours ?? 0
+            if result.outsideHours > 0 { multipliers.insert(result.outsideMultiplier) }
+        }
+        if breakHours > 0.0001, clock > 0.0001, multipliers.count <= 1 {
+            return CanonicalBusinessEngine.multipliedHoursText(
+                clockHours: clock, multiplier: dayJobSiteOvertimeMultiplier, breakHours: breakHours
+            )
+        }
+        return overviewFormatHours(clock)
     }
 
     /// Hours worked outside the standard window (`workedHoursSplit.outsideWorkedHours`).
@@ -272,7 +299,8 @@ struct DailyOverviewView: View {
 
     /// Hours worked inside the standard window (`workedHoursSplit.standardWorkedHours`).
     private var dayJobSiteStandardPortionHours: Double {
-        dayJobSiteHourSplits.reduce(0) { $0 + $1.standardWorkedHours }
+        // RULEBOOK 1.20.2 §6: the standard hours of the pay rule (`payrollHoursResult.standardHours`).
+        dayJobSitePayResults.reduce(0) { $0 + $1.standardHours }
     }
 
     /// The overtime multiplier label: the highest `outsideMultiplier` among bookings with outside
@@ -286,11 +314,7 @@ struct DailyOverviewView: View {
     }
 
     private func overviewFormatHours(_ hours: Double) -> String {
-        let rounded = (hours * 2).rounded() / 2
-        if abs(rounded - rounded.rounded(.towardZero)) < 0.01 {
-            return String(format: "%.0f", rounded)
-        }
-        return String(format: "%.1f", rounded)
+        ScheduleCoverageFormat.hours(hours)
     }
 
     private func shiftOverviewDay(_ delta: Int) {
@@ -542,7 +566,7 @@ struct DailyOverviewView: View {
             HStack(alignment: .top, spacing: 12) {
                 PPStat(value: overviewFormatHours(dayJobSiteStandardPortionHours), label: "Standard hrs")
                 PPStatDivider()
-                PPStat(value: overviewFormatHours(dayJobSiteOvertimeHours), label: "OT \(multLabel)×")
+                PPStat(value: dayJobSiteOvertimeText, label: "OT \(multLabel)×")
                 PPStatDivider()
                 PPStat(value: "\(jobsCount)", label: jobsCount == 1 ? "Job active" : "Jobs active")
             }

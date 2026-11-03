@@ -164,10 +164,9 @@ fileprivate extension View {
 }
 
 fileprivate func managerBookingOtChipText(_ b: ManagerSiteBooking, policy: OrgPayrollTimePolicy) -> String? {
-    let ot = b.overtimeHoursBeyondPaidStandard(policy: policy)
-    guard ot > 0.05 else { return nil }
-    let m = PayrollTimePolicyCatalog.effectiveMultiplier(for: b, policy: policy)
-    return "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: ot, multiplier: m))"
+    // RULEBOOK 1.20.4 `multipliedHoursText` over `payrollMultipliedHours`: "OT 6.5h × 2 − 0.5h break = 12.5h".
+    guard let multiplied = b.payrollHoursResult(policy: policy).multipliedHours, multiplied.clockHours > 0.05 else { return nil }
+    return "OT \(multiplied.text)"
 }
 
 /// Clock range plus paid hours (break deducted for standard window bookings).
@@ -189,10 +188,9 @@ fileprivate func managerBookingClockSubtitle(_ b: ManagerSiteBooking, day: Date,
 }
 
 fileprivate func operativeBookingOtChipText(_ b: Booking, policy: OrgPayrollTimePolicy) -> String? {
-    let ot = b.overtimeHoursBeyondPaidStandard(policy: policy)
-    guard ot > 0.05 else { return nil }
-    let m = b.effectiveWeekdayOtMultiplier(policy: policy)
-    return "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: ot, multiplier: m))"
+    // RULEBOOK 1.20.4 `multipliedHoursText` over `payrollMultipliedHours`: "OT 6.5h × 2 − 0.5h break = 12.5h".
+    guard let multiplied = b.payrollHoursResult(policy: policy).multipliedHours, multiplied.clockHours > 0.05 else { return nil }
+    return "OT \(multiplied.text)"
 }
 
 fileprivate func operativeBookingClockSubtitle(_ b: Booking, day: Date, policy: OrgPayrollTimePolicy) -> String {

@@ -274,3 +274,179 @@ extension Booking {
         )
     }
 }
+
+// MARK: - Lunch-break step (RULEBOOK 1.20.3 §4.3)
+
+extension CanonicalBusinessEngine {
+    /// `PAYROLL_BREAK_TIME_STEP_MINUTES` (15): lunch-break start, end and length are picked on this step.
+    nonisolated static var payrollBreakTimeStepMinutes: Int {
+        constant("PAYROLL_BREAK_TIME_STEP_MINUTES", as: Int.self) ?? 15
+    }
+
+    /// `PAYROLL_BREAK_TIME_STEP_MESSAGE`.
+    nonisolated static var payrollBreakTimeStepMessage: String {
+        constant("PAYROLL_BREAK_TIME_STEP_MESSAGE", as: String.self)
+            ?? "Lunch break times and length use 15-minute steps (e.g. 10:45)."
+    }
+
+    nonisolated private static let breakTimeOnStepMemo = RulebookAnswerMemo<String, Bool>(limit: 256)
+    nonisolated private static let breakMinutesOnStepMemo = RulebookAnswerMemo<Int, Bool>(limit: 256)
+
+    /// `payrollBreakTimeOnStep(value)`: whether a lunch-break clock time is on the 15-minute step.
+    nonisolated static func payrollBreakTimeOnStep(_ value: String) -> Bool {
+        breakTimeOnStepMemo.value(for: value) {
+            callJSON("payrollBreakTimeOnStep", arguments: [value]) as? Bool
+        } ?? true
+    }
+
+    /// `payrollBreakMinutesOnStep(minutes)`: whether a break length is on the 15-minute step.
+    nonisolated static func payrollBreakMinutesOnStep(_ minutes: Int) -> Bool {
+        breakMinutesOnStepMemo.value(for: minutes) {
+            callJSON("payrollBreakMinutesOnStep", arguments: [minutes]) as? Bool
+        } ?? true
+    }
+}
+
+// MARK: - Working hours weekend preview (RULEBOOK 1.20.3 §4.3)
+
+/// `weekendDayPreview(draft, weekday, timeZone)`: the example hours, the summary and the priced rows.
+nonisolated struct RulebookWeekendDayPreview: Hashable, Sendable {
+    let dayKey: String
+    let start: String
+    let end: String
+    /// "07:30–14:00 counts as 8h · Unpaid break 12:00–12:30, 30 min — 30 min taken off · 7.5h paid".
+    let summary: String
+    let rows: [RulebookBookingDayBreakdownRow]
+}
+
+extension CanonicalBusinessEngine {
+    nonisolated private struct WeekendPreviewKey: Hashable, Sendable {
+        let policy: OrgPayrollTimePolicy
+        let weekday: String
+        let timeZone: String
+    }
+
+    nonisolated private static let weekendPreviewMemo = RulebookAnswerMemo<WeekendPreviewKey, RulebookWeekendDayPreview>(limit: 64)
+
+    /// RULEBOOK 1.20.3 `weekendDayPreview(policy, weekday, timeZone)` from the draft being edited (memoised by the
+    /// whole draft), so Paid / Unpaid, length and times change it at once. `weekday` is `saturday` or `sunday`.
+    nonisolated static func weekendDayPreview(
+        policy: OrgPayrollTimePolicy,
+        weekday: String,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> RulebookWeekendDayPreview? {
+        weekendPreviewMemo.value(for: WeekendPreviewKey(policy: policy, weekday: weekday, timeZone: timeZone)) {
+            guard let policyJSON = payrollPolicyJSON(policy),
+                  let row = callJSON("weekendDayPreview", arguments: [policyJSON, weekday, timeZone]) as? [String: Any],
+                  let summary = row["summary"] as? String else { return nil }
+            return RulebookWeekendDayPreview(
+                dayKey: row["dayKey"] as? String ?? "",
+                start: row["start"] as? String ?? "",
+                end: row["end"] as? String ?? "",
+                summary: summary,
+                rows: (row["rows"] as? [Any] ?? []).compactMap(RulebookBookingDayBreakdownRow.init(json:))
+            )
+        }
+    }
+}
+
+// MARK: - Hours at a multiplier (RULEBOOK 1.20.3 / 1.20.4 §8)
+
+/// `payrollMultipliedHours(result)`: the clock hours at the multiplier, the multiplier, the unpaid break taken off
+/// them as plain hours, the hours they pay and `multipliedHoursText` ("6.5h × 2 − 0.5h break = 12.5h").
+nonisolated struct RulebookMultipliedHours: Hashable, Sendable {
+    let clockHours: Double
+    let multiplier: Double
+    let breakHours: Double
+    let paidHours: Double
+    let text: String
+}
+
+/// The `payrollHoursResult` fields `payrollMultipliedHours` reads (segment kind, base hours, multiplier, break).
+nonisolated struct RulebookMultipliedHoursInput: Hashable, Sendable {
+    nonisolated struct Segment: Hashable, Sendable {
+        let kind: String
+        let baseHours: Double
+        let multiplier: Double
+        let unpaidBreakHours: Double
+    }
+
+    let segments: [Segment]
+    let outsideMultiplier: Double
+}
+
+extension CanonicalBusinessEngine {
+    nonisolated private static let multipliedMemo = RulebookAnswerMemo<RulebookMultipliedHoursInput, RulebookMultipliedHoursBox>(limit: 2048)
+    nonisolated private static let multipliedTextMemo = RulebookAnswerMemo<String, String>(limit: 512)
+
+    /// RULEBOOK 1.20.3 `payrollMultipliedHours(result)`. Nil when the booking has no hours at a multiplier (or the
+    /// script did not answer). Display only: pay stays `outsideHours × outsideMultiplier`.
+    nonisolated static func payrollMultipliedHours(_ input: RulebookMultipliedHoursInput) -> RulebookMultipliedHours? {
+        multipliedMemo.value(for: input) {
+            let argument: [String: Any] = [
+                "outsideMultiplier": input.outsideMultiplier,
+                "segments": input.segments.map {
+                    ["kind": $0.kind, "baseHours": $0.baseHours, "multiplier": $0.multiplier, "unpaidBreakHours": $0.unpaidBreakHours]
+                },
+            ]
+            let raw = callJSON("payrollMultipliedHours", arguments: [argument])
+            if raw is NSNull { return RulebookMultipliedHoursBox(value: nil) }
+            guard let row = raw as? [String: Any], let text = row["text"] as? String else { return nil }
+            func number(_ key: String) -> Double { (row[key] as? NSNumber)?.doubleValue ?? 0 }
+            return RulebookMultipliedHoursBox(value: RulebookMultipliedHours(
+                clockHours: number("clockHours"), multiplier: number("multiplier"), breakHours: number("breakHours"),
+                paidHours: number("paidHours"), text: text
+            ))
+        }?.value
+    }
+
+    /// RULEBOOK 1.20.4 `multipliedHoursText({ clockHours, multiplier, breakHours })`: "6.5h × 2 − 0.5h break = 12.5h",
+    /// or "6.5h × 2 = 13h" with no break — for figures summed over several lines.
+    nonisolated static func multipliedHoursText(clockHours: Double, multiplier: Double, breakHours: Double) -> String {
+        let key = "\(clockHours)|\(multiplier)|\(breakHours)"
+        return multipliedTextMemo.value(for: key) {
+            callJSON(
+                "multipliedHoursText",
+                arguments: [["clockHours": clockHours, "multiplier": multiplier, "breakHours": breakHours]]
+            ) as? String
+        } ?? "\(clockHours)h × \(multiplier)"
+    }
+
+    /// RULEBOOK 1.20.4 `parseMultipliedHoursText(text)`: a signed line's stored "6.5h × 2 − 0.5h break = 12.5h" (after
+    /// an optional "OT "), read back so it shows like a live line. Nil for any other text (older sheets).
+    nonisolated static func parseMultipliedHoursText(_ text: String) -> (clockHours: Double, multiplier: Double, breakHours: Double)? {
+        let box = parsedTextMemo.value(for: text) {
+            guard let row = callJSON("parseMultipliedHoursText", arguments: [text]) as? [String: Any] else {
+                return ParsedMultipliedTextBox(value: nil)
+            }
+            func number(_ key: String) -> Double { (row[key] as? NSNumber)?.doubleValue ?? 0 }
+            return ParsedMultipliedTextBox(value: [number("clockHours"), number("multiplier"), number("breakHours")])
+        }
+        guard let values = box?.value, values.count == 3 else { return nil }
+        return (values[0], values[1], values[2])
+    }
+
+    nonisolated private struct ParsedMultipliedTextBox: Sendable {
+        let value: [Double]?
+    }
+
+    nonisolated private static let parsedTextMemo = RulebookAnswerMemo<String, ParsedMultipliedTextBox>(limit: 1024)
+
+    /// RULEBOOK 1.20.4: the hours a pay line shows — for an overtime line whose text is `multipliedHoursText` (live or
+    /// signed, read back with `parseMultipliedHoursText`), that text; otherwise the line's hours ("7.25h").
+    nonisolated static func payLineHoursText(details: String, paidHours: Double, isOvertimeLine: Bool) -> String {
+        if isOvertimeLine, let parsed = parseMultipliedHoursText(details) {
+            return multipliedHoursText(clockHours: parsed.clockHours, multiplier: parsed.multiplier, breakHours: parsed.breakHours)
+        }
+        let rounded = (paidHours * 100).rounded() / 100
+        var text = String(format: "%.2f", rounded)
+        while text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        return "\(text)h"
+    }
+}
+
+/// A memoised `payrollMultipliedHours` answer, including "no hours at a multiplier".
+nonisolated struct RulebookMultipliedHoursBox: Hashable, Sendable {
+    let value: RulebookMultipliedHours?
+}

@@ -437,8 +437,8 @@ struct OrganisationWorkingHoursView: View {
 
                 // The firm sets the break window; it is never moved for them (1.20.0).
                 HStack(spacing: 12) {
-                    timeFieldColumn(label: "Break starts", text: $draft.breakWindowStart, step: Self.breakStepMinutes)
-                    timeFieldColumn(label: "Break ends", text: $draft.breakWindowEnd, step: Self.breakStepMinutes)
+                    timeFieldColumn(label: "Break starts", text: $draft.breakWindowStart, isBreakTime: true)
+                    timeFieldColumn(label: "Break ends", text: $draft.breakWindowEnd, isBreakTime: true)
                 }
 
                 cardDivider
@@ -729,11 +729,11 @@ struct OrganisationWorkingHoursView: View {
             timeFieldColumn(label: "Break start", text: Binding(
                 get: { current.start },
                 set: { draft[keyPath: keyPath].breakWindowStart = $0.isEmpty ? nil : $0 }
-            ), step: Self.breakStepMinutes)
+            ), isBreakTime: true)
             timeFieldColumn(label: "Break end", text: Binding(
                 get: { current.end },
                 set: { draft[keyPath: keyPath].breakWindowEnd = $0.isEmpty ? nil : $0 }
-            ), step: Self.breakStepMinutes)
+            ), isBreakTime: true)
         }
         .tint(accent)
     }
@@ -942,28 +942,24 @@ struct OrganisationWorkingHoursView: View {
             .frame(height: 1)
     }
 
-    private func timeFieldColumn(label: String, text: Binding<String>, step: Int? = nil) -> some View {
+    private func timeFieldColumn(label: String, text: Binding<String>, isBreakTime: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(WorkingHoursPalette.muted)
-            WorkingHoursTimeField(text: text, step: step ?? CanonicalBusinessEngine.payrollPolicyTimeStepMinutes)
+            WorkingHoursTimeField(text: text, isBreakTime: isBreakTime)
         }
         .frame(maxWidth: .infinity)
     }
 
-    /// Owner decision (rulebook 1.20.3, 3 Nov): lunch-break start, end and length are picked in 15-minute steps
-    /// (0, 15, 30, 45 … 120 min; 10:00–10:45 selectable), on Monday–Friday and on each weekend day. RULEBOOK-GAP: the
-    /// packed 1.20.2 script has no constant for it yet; replace with the 1.20.3 constant on the next sync.
-    static let breakStepMinutes = 15
-
-    /// Break length in `breakStepMinutes` steps within `PAYROLL_POLICY_LIMITS.breakMinutes`; a saved length off the
-    /// step (e.g. 20) is kept and listed as "(saved)" until changed.
+    /// RULEBOOK 1.20.3 §4.3: break length in `PAYROLL_BREAK_TIME_STEP_MINUTES` (15) steps within
+    /// `PAYROLL_POLICY_LIMITS.breakMinutes` (0, 15, 30, 45 … 120); a saved length off the step
+    /// (`payrollBreakMinutesOnStep` false, e.g. 20) is kept and listed as "(saved)" until changed.
     private func breakLengthRow(label: String, minutes: Binding<Int>) -> some View {
         let low = Int(limits?.breakMinutes.min ?? 0)
         let high = Int(limits?.breakMinutes.max ?? 120)
-        let choices = Array(stride(from: low, through: high, by: Self.breakStepMinutes))
-        let saved = choices.contains(minutes.wrappedValue) ? nil : minutes.wrappedValue
+        let choices = Array(stride(from: low, through: high, by: max(1, CanonicalBusinessEngine.payrollBreakTimeStepMinutes)))
+        let saved = CanonicalBusinessEngine.payrollBreakMinutesOnStep(minutes.wrappedValue) ? nil : minutes.wrappedValue
         return HStack {
             Text(label)
                 .font(.subheadline.weight(.medium))
@@ -1325,243 +1321,39 @@ nonisolated private struct WorkingHoursWeekendPreviewModel: Sendable {
     }
 
     private static let memo = RulebookAnswerMemo<Key, WorkingHoursWeekendPreviewModel>(limit: 64)
-    /// Web's fixed preview days (a Saturday and a Sunday), read in Europe/London as web does.
-    private static let previewDay: [RulebookWeekendDay: String] = [.saturday: "2026-01-03", .sunday: "2026-01-04"]
+    /// Web reads its fixed preview days (`WEEKEND_PREVIEW_DAY_KEYS`) in Europe/London.
     private static let previewZone = "Europe/London"
 
-    /// Priced only by `weekendBookingBreakdown` (`payrollHoursResult`); the span is `weekendCustomHoursDefault`, else the
-    /// standard day (`halfDayWindows(policy).day`); the bands are `payrollDayWindows` and `payrollBreakOnDay`.
+    /// RULEBOOK 1.20.3 `weekendDayPreview(draft, weekday, timeZone)`: the example hours, the summary (break, minutes
+    /// taken off, paid hours) and the rows — all from the script, from the draft, so Paid / Unpaid, length and times
+    /// change it at once. Read in Europe/London as web does (only the weekday matters).
     @MainActor static func make(policy: OrgPayrollTimePolicy, day: RulebookWeekendDay) -> WorkingHoursWeekendPreviewModel? {
-        guard let dayKey = previewDay[day] else { return nil }
-        return memo.value(for: Key(policy: policy, day: day.rawValue)) {
-            let span: (start: String, end: String)
-            if let window = CanonicalBusinessEngine.weekendCustomHoursDefault(policy: policy, dayKey: dayKey, timeZone: previewZone) {
-                span = window
-            } else if let standard = CanonicalBusinessEngine.halfDayWindows(CanonicalStandardDayInput(policy: policy))?.day {
-                span = (ManagerScheduleInterval.formatMinutes(standard.start), ManagerScheduleInterval.formatMinutes(standard.end))
-            } else {
-                return nil
-            }
-            guard let rows = CanonicalBusinessEngine.weekendBookingBreakdown(
-                policy: policy, dayKeys: [dayKey], start: span.start, end: span.end, isBreakRemoved: false, timeZone: previewZone
-            ), !rows.isEmpty else { return nil }
-            let bands = CanonicalBusinessEngine.payrollDayWindows(policy: policy, dayKey: dayKey, timeZone: previewZone)
-            let dayBreak = CanonicalBusinessEngine.payrollBreakOnDay(policy: policy, dayKey: dayKey, timeZone: previewZone)
-            var summary: String
-            if let all = bands?.allHoursMultiplier {
-                summary = "Every hour at ×\(ScheduleCoverageFormat.hours(all))"
-            } else {
-                summary = "\(span.start)–\(span.end) counts as set hours"
-            }
-            if let dayBreak {
-                summary += " · \(dayBreak.paid ? "Paid" : "Unpaid") break "
-                    + "\(ManagerScheduleInterval.formatMinutes(dayBreak.start))–\(ManagerScheduleInterval.formatMinutes(dayBreak.end))"
-                    + " (\(dayBreak.minutes) min)"
-            }
+        memo.value(for: Key(policy: policy, day: day.rawValue)) {
+            guard let preview = CanonicalBusinessEngine.weekendDayPreview(
+                policy: policy, weekday: day.rawValue, timeZone: previewZone
+            ), !preview.rows.isEmpty else { return nil }
             let name = day == .saturday ? "Saturday" : "Sunday"
             return WorkingHoursWeekendPreviewModel(
-                summary: summary,
-                title: "\(name) example · \(span.start)–\(span.end)",
-                rows: rows
+                summary: preview.summary,
+                title: "\(name) example · \(preview.start)–\(preview.end)",
+                rows: preview.rows
             )
         }
     }
 }
 
-/// The live calculation under Saturday and Sunday, as Monday–Friday has. No figure is computed here.
-private struct WorkingHoursWeekendPreview: View {
-    let policy: OrgPayrollTimePolicy
-    let day: RulebookWeekendDay
-    let accent: Color
-
-    var body: some View {
-        if let model = WorkingHoursWeekendPreviewModel.make(policy: policy, day: day) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(model.summary)
-                    .font(.footnote)
-                    .foregroundStyle(WorkingHoursPalette.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(model.title.uppercased())
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(accent)
-                        .tracking(0.8)
-                    ForEach(model.rows) { row in
-                        if row.lines.isEmpty {
-                            Text(row.line)
-                                .font(.footnote.weight(.semibold))
-                                .monospacedDigit()
-                        } else {
-                            ForEach(Array(row.lines.enumerated()), id: \.offset) { _, line in
-                                HStack {
-                                    Text(line.label)
-                                        .font(line.kind == "total" ? .subheadline.weight(.semibold) : .subheadline)
-                                        .foregroundStyle(line.kind == "total" ? accent : WorkingHoursPalette.muted)
-                                    Spacer()
-                                    Text(line.value)
-                                        .font(line.kind == "total" ? .body.weight(.heavy) : .body.weight(.bold))
-                                        .monospacedDigit()
-                                        .foregroundStyle(line.kind == "total" ? accent : WorkingHoursPalette.ink)
-                                }
-                            }
-                        }
-                    }
-                }
-                .padding(14)
-                .background(accent.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("organisationWorkingHours.\(day.rawValue).preview")
-        }
-    }
-}
-
-// MARK: - Reusable controls
-
-private struct WorkingHoursSegmentedPicker: View {
-    let selection: Binding<Int>
-    let options: [(Int, String)]
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(options, id: \.0) { option in
-                Button {
-                    selection.wrappedValue = option.0
-                } label: {
-                    Text(option.1)
-                        .font(.footnote.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .background(selection.wrappedValue == option.0 ? Color(.systemBackground) : Color.clear)
-                        .foregroundStyle(selection.wrappedValue == option.0 ? Color.primary : Color(.systemGray))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .shadow(color: selection.wrappedValue == option.0 ? Color.black.opacity(0.06) : .clear, radius: 2, y: 1)
-                }
-                .accessibilityIdentifier("workingHoursSegmentedPicker.row.\(option)")
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(3)
-        .background(ProjectWorksRevampColors.wellFill)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-private struct WorkingHoursToggle: View {
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Button {
-            isOn.toggle()
-        } label: {
-            ZStack(alignment: isOn ? .trailing : .leading) {
-                Capsule()
-                    .fill(isOn ? WorkingHoursPalette.indigo : Color(.systemGray3))
-                    .frame(width: 46, height: 27)
-                Circle()
-                    .fill(Color.white)
-                    .shadow(color: Color.black.opacity(0.12), radius: 2, y: 1)
-                    .frame(width: 23, height: 23)
-                    .padding(2)
-            }
-        }
-        .accessibilityIdentifier("workingHoursToggle.button")
-        .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.2), value: isOn)
-    }
-}
-
-private struct WorkingHoursStepper: View {
-    @Binding var value: Double
-    let step: Double
-    let min: Double
-    let max: Double
-    let suffix: String
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Button {
-                value = Swift.max(min, roundedStep(value - step, step: step))
-            } label: {
-                Text("–")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 32, height: 32)
-            }
-            .accessibilityIdentifier("workingHoursStepper.button")
-            .buttonStyle(.plain)
-
-            Text(displayValue)
-                .font(.subheadline.weight(.bold))
-                .monospacedDigit()
-                .frame(minWidth: 52)
-
-            Button {
-                value = Swift.min(max, roundedStep(value + step, step: step))
-            } label: {
-                Text("+")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 32, height: 32)
-            }
-            .accessibilityIdentifier("workingHoursStepper.button2")
-            .buttonStyle(.plain)
-        }
-        .background(ProjectWorksRevampColors.wellFill)
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-    }
-
-    private var displayValue: String {
-        if suffix == " min" {
-            return "\(Int(value))\(suffix)"
-        }
-        if abs(value - value.rounded()) < 0.05 {
-            return "\(Int(value))\(suffix)"
-        }
-        return String(format: "%.1f%@", value, suffix)
-    }
-
-    private func roundedStep(_ raw: Double, step: Double) -> Double {
-        guard step > 0 else { return raw }
-        return (raw / step).rounded() * step
-    }
-}
-
-private struct WorkingHoursMultiplierField: View {
-    @Binding var value: Double
-    let accent: Color
-
-    var body: some View {
-        HStack(spacing: 6) {
-            TextField("×", value: $value, format: .number)
-                .accessibilityIdentifier("workingHoursMultiplierField.textField")
-                .keyboardType(.decimalPad)
-                .multilineTextAlignment(.center)
-                .font(.body.weight(.bold))
-                .foregroundStyle(accent)
-                .frame(width: 56)
-                .padding(.vertical, 8)
-                .background(ProjectWorksRevampColors.canvas)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(WorkingHoursPalette.cardBorder, lineWidth: 1)
-                )
-            Text("x")
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(Color(red: 0.580, green: 0.639, blue: 0.722))
-        }
-    }
-}
-
-/// RULEBOOK 1.20.2 §4.3: a working-hours clock time is picked on the 30-minute step (`PAYROLL_POLICY_TIME_STEP_MINUTES`,
-/// :00 / :30). A time saved off the step before 1.20.2 (`payrollPolicyTimeOnStep` false) is kept and listed as
-/// "07:45 (saved)" until it is changed; the save check (`validatePayrollTimePolicy(policy, previous)`) refuses an
-/// off-step time only once it is changed. Break LENGTH is not a clock time and keeps any minutes.
+/// RULEBOOK 1.20.2 / 1.20.3 §4.3: day start and finish (weekday and weekend windows) are picked on the 30-minute step
+/// (`PAYROLL_POLICY_TIME_STEP_MINUTES`, `payrollPolicyTimeOnStep`); lunch-break start and end on the 15-minute step
+/// (`PAYROLL_BREAK_TIME_STEP_MINUTES`, `payrollBreakTimeOnStep`), e.g. 10:00–10:45. A time saved off its step is kept
+/// and listed as "07:45 (saved)" until changed; `validatePayrollTimePolicy(policy, previous)` refuses it only then.
 private struct WorkingHoursTimeField: View {
     @Binding var text: String
-    /// Minutes between choices: 30 for the working day and weekend windows (`PAYROLL_POLICY_TIME_STEP_MINUTES`),
-    /// 15 for lunch-break start / end (owner decision, rulebook 1.20.3).
-    var step: Int = CanonicalBusinessEngine.payrollPolicyTimeStepMinutes
+    /// A lunch-break start / end (15-minute step) rather than a day start / finish (30-minute step).
+    var isBreakTime: Bool = false
+
+    private var step: Int {
+        isBreakTime ? CanonicalBusinessEngine.payrollBreakTimeStepMinutes : CanonicalBusinessEngine.payrollPolicyTimeStepMinutes
+    }
 
     private var stepTimes: [String] {
         stride(from: 0, to: 24 * 60, by: max(1, step)).map { String(format: "%02d:%02d", $0 / 60, $0 % 60) }
@@ -1570,8 +1362,10 @@ private struct WorkingHoursTimeField: View {
     /// The picker only offers on-step times, so a current value off this field's step is the saved one.
     private var offStepSaved: String? {
         guard !text.isEmpty else { return nil }
-        guard let minutes = ManagerScheduleInterval.parseMinutes(text) else { return text }
-        return minutes % max(1, step) == 0 ? nil : text
+        let onStep = isBreakTime
+            ? CanonicalBusinessEngine.payrollBreakTimeOnStep(text)
+            : CanonicalBusinessEngine.payrollPolicyTimeOnStep(text)
+        return onStep ? nil : text
     }
 
     private var label: String {

@@ -117,8 +117,11 @@ enum TimesheetPayrollCollector {
             let otHours = hours?.outsideHours ?? 0
             let otMultiplier = hours?.outsideMultiplier ?? 1
             let normalHours = max(0, hours?.standardHours ?? 0)
+            // RULEBOOK 1.20.3 / 1.20.4: hours at the multiplier as clock hours, with any unpaid break as plain hours
+            // (`CanonicalBusinessEngine.payrollMultipliedHours`). Display only; pay below stays `otHours × otMultiplier`.
+            let multiplied = PayrollHoursEngine.compute(booking: probe, day: probe.date, policy: policy).multipliedHours
             totalHours += paidHours
-            overtimeHours += otHours
+            overtimeHours += multiplied?.clockHours ?? otHours
             let isPaye = user.employmentType(on: day) == .paye
             let lineBookingId = "\(idPrefix)-\(bookingId.uuidString)"
             paidBookings.append(
@@ -165,7 +168,9 @@ enum TimesheetPayrollCollector {
                         date: day,
                         jobNumber: labels.jobNumber,
                         projectName: "\(labels.siteName) (Overtime)",
-                        details: "OT \(ScheduleCoverageFormat.overtimeEquation(rawHours: otHours, multiplier: otMultiplier))",
+                        // Web `timesheetPayrollCollector`: "OT 6.5h × 2 − 0.5h break = 12.5h" when a break came off the
+                        // multiplied hours (`multipliedHoursText`), else "OT {clock hours}h".
+                        details: Self.overtimeDetails(multiplied: multiplied, otHours: otHours),
                         paidHours: otHours,
                         payrollBasis: resolved.basis,
                         dayRate: otDisplayRate,
@@ -278,6 +283,13 @@ enum TimesheetPayrollCollector {
             scheduleOptions: scheduleOptions,
             relatedUsers: relatedUsers
         )
+    }
+
+    /// RULEBOOK 1.20.4: an overtime line's text — `multipliedHoursText` when an unpaid break came off the multiplied
+    /// hours (`CanonicalBusinessEngine.multipliedHoursText`), else the clock hours at the multiplier. Never "6.25h".
+    static func overtimeDetails(multiplied: RulebookMultipliedHours?, otHours: Double) -> String {
+        if let multiplied, multiplied.breakHours > 0 { return "OT \(multiplied.text)" }
+        return "OT \(ScheduleCoverageFormat.hours(multiplied?.clockHours ?? otHours))h"
     }
 
     /// Approved annual leave inside the period (`timesheetLeaveLines`): information rows with no hours,

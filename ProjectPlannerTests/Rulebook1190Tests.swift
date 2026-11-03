@@ -84,7 +84,8 @@ final class Rulebook1190Tests: XCTestCase {
     func testSundayEveryHourAtTwoPaidUnpaidAndNoUnpaidBreak() throws {
         XCTAssertEqual(try paid(ownerPolicy(), day: sunday, "07:30", "14:00").hours.totalPaidHours, 13, accuracy: 0.001)
         let unpaid = ownerPolicy(sundayBreakPaid: false)
-        XCTAssertEqual(try paid(unpaid, day: sunday, "07:30", "14:00").hours.totalPaidHours, 12, accuracy: 0.001)
+        // RULEBOOK 1.20.3: an unpaid break is never multiplied — 6.5h × 2 − 0.5h = 12.5h (12h before 1.20.3).
+        XCTAssertEqual(try paid(unpaid, day: sunday, "07:30", "14:00").hours.totalPaidHours, 12.5, accuracy: 0.001)
         XCTAssertEqual(
             try paid(unpaid, day: sunday, "07:30", "14:00", breakRemoved: true).hours.totalPaidHours, 13, accuracy: 0.001,
             "No unpaid break cancels the weekend break as on weekdays"
@@ -98,13 +99,13 @@ final class Rulebook1190Tests: XCTestCase {
         ))
         XCTAssertEqual(rows.map(\.line), [
             "Saturday 07:30–14:00 = 8h − 0.5h unpaid break = 7.5h",
-            "Sunday 07:30–14:00 = (6.5h − 0.5h unpaid break) × 2 = 12h",
+            "Sunday 07:30–14:00 = 6.5h × 2 = 13h − 0.5h unpaid break = 12.5h",
         ])
         XCTAssertEqual(rows.map(\.unpaidBreakHours), [0.5, 0.5])
         XCTAssertEqual(rows[0].lines.map(\.label), ["Set hours", "Unpaid break", "Total paid hours"])
         XCTAssertEqual(rows[0].lines.map(\.value), ["8h", "−0.5h", "7.5h"])
         XCTAssertEqual(rows[1].lines.map(\.label), ["Every hour", "Unpaid break", "Total paid hours"])
-        XCTAssertEqual(rows[1].lines.map(\.value), ["6.5h × 2", "−0.5h", "12h"])
+        XCTAssertEqual(rows[1].lines.map(\.value), ["6.5h × 2", "−0.5h", "12.5h"])
     }
 
     func testTheToggleAndLunchWarningOnAWeekendOnlyWhenThatDaysBreakIsUnpaid() {

@@ -18,15 +18,6 @@ enum ManagerScheduleInterval {
         return h * 60 + m
     }
 
-    /// Minutes from midnight. An end that is earlier than the start is the next morning.
-    /// Swift-only overnight wall hours for `Booking.totalBookedHours`; the clash, sort, and
-    /// calendar-export path uses the canonical `slotInterval`, which does not extend overnight.
-    nonisolated static func clockSpanMinutes(start: String, end: String) -> (Int, Int)? {
-        guard let sm = parseMinutes(start), let em = parseMinutes(end), sm != em else { return nil }
-        if em > sm { return (sm, em) }
-        return (sm, em + 24 * 60)
-    }
-
     /// Closed intervals [start, end] in minutes from midnight; touching endpoints do not overlap.
     static func closedIntervalsOverlap(_ a: (Int, Int), _ b: (Int, Int)) -> Bool {
         a.0 < b.1 && b.0 < a.1
@@ -206,11 +197,11 @@ extension ManagerSiteBooking {
         return (start, end)
     }
 
+    /// Clock hours this booking occupies: the length of its `slotInterval` (the rulebook's interval for the stored slot
+    /// and clock times, `CanonicalBusinessEngine.slotInterval`). 0 when the script did not answer — no Swift fallback.
     func totalBookedHours(policy: OrgPayrollTimePolicy = .default) -> Double {
-        if let iv = ManagerScheduleInterval.clashInterval(for: self, policy: policy) {
-            return Double(iv.1 - iv.0) / 60.0
-        }
-        return max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0)
+        guard let iv = ManagerScheduleInterval.clashInterval(for: self, policy: policy) else { return 0 }
+        return Double(max(0, iv.1 - iv.0)) / 60.0
     }
 
     func overtimeHoursBeyondPaidStandard(policy: OrgPayrollTimePolicy = .default) -> Double {
