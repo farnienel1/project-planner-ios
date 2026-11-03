@@ -378,7 +378,7 @@ extension BookingLeaveConflictItems {
         users: [AppUser],
         policy: OrgPayrollTimePolicy
     ) -> [BookingConflictItem] {
-        let person = users.first { $0.id == booking.userId }.map(BookingLeaveConflictInputs.person(user:))
+        let person = users.first { $0.id == booking.userId }.map { BookingLeaveConflictInputs.person(user: $0) }
             ?? BookingLeaveConflictInputs.Person(id: booking.userId, userId: booking.userId)
         return items(
             booked: [Booked(person: person, name: personName)],

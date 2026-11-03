@@ -1368,7 +1368,7 @@ struct ManagerScheduleContentView: View {
             // RULEBOOK 1.16.0 §5, §9 `bookingLeaveConflicts`: leave on the chosen days is ticked or dropped first;
             // dropping every day saves nothing.
             let me = self.userStore.currentUser
-            let leavePerson = me.map(BookingLeaveConflictInputs.person(user:))
+            let leavePerson = me.map { BookingLeaveConflictInputs.person(user: $0) }
                 ?? BookingLeaveConflictInputs.Person(id: uid, userId: uid)
             let probeSlot = normalizedDays.first.map {
                 self.bookingProbe(

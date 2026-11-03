@@ -131,7 +131,7 @@ enum BookingLeaveConflictInputs {
         var input: [String: Any] = [
             "people": people.map(\.payload),
             "dayKeys": Array(Set(dates.map { OrganizationRulebookContext.dayKey($0) })).sorted(),
-            "holidays": holidays.map(holiday),
+            "holidays": holidays.map { holiday($0) },
             "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
             "roster": RulebookPeople.roster(users),
         ]
