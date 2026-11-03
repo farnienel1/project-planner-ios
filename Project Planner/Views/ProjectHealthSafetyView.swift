@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseFirestore
 import PencilKit
 import Combine
 import UIKit
@@ -70,6 +71,9 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
     }
 
+    /// The id of the last issue `issueTalk` created (`toolbox_talk_issued` names it).
+    var lastIssuedIssueId: String?
+
     func issueTalk(
         talk: HSToolboxTalk,
         weekCommencing: Date,
@@ -82,6 +86,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         // Date on the issue sheet is the talk date, not a hidden schedule. Issued talks
         // must appear in Tracking immediately — matching how managers expect the flow.
         let issueId = UUID().uuidString
+        lastIssuedIssueId = issueId
         let issue = HSToolboxIssue(
             id: issueId,
             projectId: project.id,
@@ -254,7 +259,8 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
                 title: "Toolbox Talk Reminder",
                 message: "\(talkTitle) is still awaiting your signature.",
                 userId: userId,
-                relatedId: nil,
+                // `notificationRelatedId`: `hs_toolbox_reminder` names the health & safety issue.
+                relatedKey: issueId,
                 isRead: false,
                 createdAt: Date(),
                 requiresPermission: nil
@@ -268,7 +274,13 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         data.issues.removeAll { $0.id == issueId }
         data.signatures.removeAll { $0.issueId == issueId }
         recalculateIssueStatuses()
-        await persist(firebaseBackend: firebaseBackend, userStore: userStore)
+        // RULEBOOK 1.9.0: a deliberate removal (the last issue can be removed) and its signatures go with it.
+        await persist(
+            firebaseBackend: firebaseBackend,
+            userStore: userStore,
+            removedIds: ["issues": [issueId]],
+            signatureRemovals: [(issueId: issueId, userId: nil)]
+        )
     }
 
     func isIssueScheduled(_ issue: HSToolboxIssue, now: Date = Date()) -> Bool {
@@ -335,7 +347,12 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         data.issues[issueIdx].recipientUserIds.removeAll { $0 == recipientId }
         data.signatures.removeAll { $0.issueId == issueId && $0.userId == recipientId }
         recalculateIssueStatuses()
-        await persist(firebaseBackend: firebaseBackend, userStore: userStore)
+        // RULEBOOK 1.9.0: the removed recipient's signature for this issue is removed too.
+        await persist(
+            firebaseBackend: firebaseBackend,
+            userStore: userStore,
+            signatureRemovals: [(issueId: issueId, userId: recipientId)]
+        )
     }
 
     func addRams(
@@ -531,7 +548,9 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
     private func persist(
         firebaseBackend: FirebaseBackend,
         userStore: UserStore,
-        fields: Set<String> = ["talks", "issues", "signatures", "ramsDocuments", "otherDocuments"]
+        fields: Set<String> = ["talks", "issues", "signatures", "ramsDocuments", "otherDocuments"],
+        removedIds: [String: [String]] = [:],
+        signatureRemovals: [(issueId: String, userId: String?)] = []
     ) async {
         guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) else {
             errorMessage = "Cannot save without organization."
@@ -539,7 +558,14 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         }
         data.updatedAt = Date()
         do {
-            try await firebaseBackend.saveHealthSafetyData(data, project: project, organizationId: orgId, fields: fields)
+            try await firebaseBackend.saveHealthSafetyData(
+                data,
+                project: project,
+                organizationId: orgId,
+                fields: fields,
+                removedIds: removedIds,
+                signatureRemovals: signatureRemovals
+            )
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -815,7 +841,17 @@ struct ProjectHealthSafetyView: View {
                 operativeWeekFilter = availableOperativeWeeks.first
             }
         }
-        .reloadsOnForeground { await vm.load(firebaseBackend: firebaseBackend, userStore: userStore) }
+        .listensWhileOpen("healthSafety", key: "healthSafety", targetSuffix: project.documentId,
+                          firebaseBackend: firebaseBackend,
+                          query: { org in
+                              let ids = CanonicalBusinessEngine.healthSafetyDocumentIds(
+                                  jobId: project.documentId,
+                                  isSmallWorks: project.jobType == .smallWorks
+                              ) ?? []
+                              return org.collection("settings").whereField(FieldPath.documentID(), in: ids.isEmpty ? ["-"] : ids)
+                          }) {
+            await vm.load(firebaseBackend: firebaseBackend, userStore: userStore)
+        }
         .alert("Health & Safety", isPresented: Binding<Bool>(
             get: { vm.errorMessage != nil || reminderSuccessMessage != nil },
             set: { _ in
@@ -852,7 +888,8 @@ struct ProjectHealthSafetyView: View {
                         talkTitle: selectedTalk.displayTitle,
                         issuedByName: rawIssuer.isEmpty ? "Someone" : rawIssuer,
                         issuedByUserId: userStore.currentUser?.id,
-                        recipientUserIds: recipients
+                        recipientUserIds: recipients,
+                        issueId: vm.lastIssuedIssueId
                     )
                 }
             }

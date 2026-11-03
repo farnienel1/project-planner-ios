@@ -7,6 +7,13 @@ import XCTest
 /// `lib/canonical/canonical.test.ts`.
 @MainActor
 final class HolidayDocumentReaderTests: XCTestCase {
+    /// Other tests set a signed-in viewer on the shared `JobAccessContext`; these check the unscoped rules, so start
+    /// with no viewer (an admin-wide scope), as a device does before the profile loads.
+    nonisolated override func setUp() {
+        super.setUp()
+        JobAccessContext.updateViewer(nil)
+    }
+
     private let dayKey = "2026-10-27" // a Tuesday
     private let adminId = "ADMIN-ABC"
 

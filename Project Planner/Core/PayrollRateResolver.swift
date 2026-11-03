@@ -24,28 +24,30 @@ struct ResolvedPayrollRate: Equatable {
         }
     }
 
-    /// Pro-rata day-rate equivalent (hourly × standard paid hours when paid hourly).
+    /// Pro-rata day-rate equivalent: a whole organisation day's pay (`payForHours` for `orgDayHours`).
     func effectiveDayRate(standardDayHours: Double) -> Double {
         switch basis {
         case .dayRate:
             return dayRate ?? 0
         case .hourly:
-            return (hourlyRate ?? 0) * max(standardDayHours, 0.01)
+            let dayHours = CanonicalBusinessEngine.callJSON("orgDayHours", arguments: [standardDayHours]) as? Double ?? standardDayHours
+            return payForHours(dayHours, standardDayHours: standardDayHours)
         }
     }
 
+    /// RULEBOOK 1.10.0 §8: `payForHours({ payBasis, dayRate, hourlyRate, paidHours, standardDayHours, otMultiplier })`
+    /// — hourly rate × hours, or day rate × (hours ÷ `orgDayHours`), × multiplier, `roundPennies`. 0 when the script
+    /// did not answer (no Swift copy of the sum).
     func payForHours(_ paidHours: Double, standardDayHours: Double, otMultiplier: Double = 1) -> Double {
-        guard paidHours > 0 else { return 0 }
-        let raw: Double
-        switch basis {
-        case .dayRate:
-            let rate = dayRate ?? 0
-            raw = rate * (paidHours / max(standardDayHours, 0.01)) * otMultiplier
-        case .hourly:
-            let rate = hourlyRate ?? 0
-            raw = rate * paidHours * otMultiplier
-        }
-        return (raw * 100).rounded() / 100
+        let input: [String: Any] = [
+            "payBasis": basis == .hourly ? "hourly" : "day",
+            "dayRate": dayRate.map { ($0.isFinite ? $0 : 0) as Any } ?? NSNull(),
+            "hourlyRate": hourlyRate.map { ($0.isFinite ? $0 : 0) as Any } ?? NSNull(),
+            "paidHours": paidHours.isFinite ? paidHours : 0,
+            "standardDayHours": standardDayHours.isFinite ? standardDayHours : 0,
+            "otMultiplier": otMultiplier.isFinite ? otMultiplier : 1,
+        ]
+        return (CanonicalBusinessEngine.callJSON("payForHours", arguments: [input]) as? NSNumber)?.doubleValue ?? 0
     }
 
     func splitPay(
@@ -99,7 +101,10 @@ enum PayrollRateResolver {
         userId: String?,
         operativeId: UUID?
     ) -> [CanonicalBusinessEngine.CanonicalPayHistoryRow] {
-        history.mergedEntries(userId: userId, operativeId: operativeId).map { entry in
+        // RULEBOOK 1.10.0 §8: the whole loaded history; `payRateOnDay` keeps the person's rows (every id of the
+        // person through `person` + `roster`, and the operative row). No iOS pre-filter.
+        _ = (userId, operativeId)
+        return history.allEntries.map { entry in
             CanonicalBusinessEngine.CanonicalPayHistoryRow(
                 id: entry.documentId ?? entry.id.uuidString,
                 userId: entry.userId,
@@ -144,7 +149,9 @@ enum PayrollRateResolver {
             history: historyRows(history, userId: user?.id, operativeId: operative?.id),
             userIds: userIds,
             operativeIds: operativeIds,
-            dayKey: OrganizationRulebookContext.dayKey(day)
+            dayKey: OrganizationRulebookContext.dayKey(day),
+            person: user.map { RulebookPeople.person($0) },
+            roster: RulebookRosterSnapshot.roster
         )
     }
 

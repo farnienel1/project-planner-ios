@@ -43,6 +43,9 @@ struct ProjectTask: Identifiable, Codable, Hashable {
     var title: String
     var details: String?
     var createdBy: String
+    /// RULEBOOK 1.10.0 §13: the account that created the task (`createdByUserId`), so `task_completed` reaches it
+    /// (`taskCompletedRecipients`). Nil on tasks created before 1.10.0 (the rule then matches the `createdBy` name).
+    var createdByUserId: String? = nil
     var assignedOperativeId: UUID? // Legacy single assignment (for backward compatibility)
     var assignedManagerId: UUID? // Legacy single assignment (for backward compatibility)
     var assignedOperativeIds: [UUID] // Multiple operative assignments

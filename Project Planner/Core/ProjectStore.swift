@@ -12,7 +12,10 @@ import FirebaseAuth
 
 @MainActor
 class ProjectStore: ObservableObject {
-    @Published var projects: [Project] = []
+    @Published var projects: [Project] = [] {
+        // RULEBOOK 1.10.0 §17: a restricted manager reads the bookings of the jobs they see (`bookingQueryPlan`).
+        didSet { JobAccessContext.updateJobs(projects) }
+    }
     @Published var clients: [Client] = []
     @Published var jobTypes: Set<String> = []
     @Published var isLoading: Bool = false
@@ -23,6 +26,8 @@ class ProjectStore: ObservableObject {
     
     private let persistenceService: PersistenceService
     private var firebaseBackend: FirebaseBackend?
+    private var readPlanObserver: NSObjectProtocol?
+    private var readPlanOrganizationId: String?
     private var notificationService: NotificationService?
     private var smartCache: SmartCacheService?
     private var cancellables = Set<AnyCancellable>()
@@ -465,16 +470,19 @@ class ProjectStore: ObservableObject {
     /// is also what keeps the in-memory copy from going stale. Cached copy first; offline keeps the last copy.
     func startLiveUpdates(organizationId: String) {
         guard let firebaseBackend else { return }
+        observeReadPlan(organizationId: organizationId)
         for smallWorks in [false, true] {
             let collection = smallWorks ? "smallWorks" : "projects"
-            firebaseBackend.listenOrganizationQuery(
+            // RULEBOOK 1.10.0 §17: the job queries `jobQueryPlan` names; re-planned on `jobReadPlanDidChange`.
+            firebaseBackend.listenOrganizationPlan(
                 key: collection,
                 organizationId: organizationId,
-                query: { $0.collection(collection) }
+                plan: firebaseBackend.jobReadSources(organizationId: organizationId, collection: collection)
             ) { [weak self] rows, fromCache in
                 guard let self else { return }
-                // `job(fromCanonical:)` puts every `smallWorks` document in the small works slice, so this filter
-                // only leaves out a `projects` document typed Small Works (as `loadProjects` does).
+                // `job(fromCanonical:)` routes by collection: every `smallWorks` document is a small work and every
+                // `projects` document a project (one typed "Small Works" reads as CAT A), so this filter keeps the
+                // whole snapshot and only guards the slice the listener owns.
                 let incoming = FirebaseBackend.jobs(fromDocuments: rows, smallWorks: smallWorks)
                     .filter { ($0.jobType == .smallWorks) == smallWorks }
                 self.applyLiveWorkSlice(
@@ -519,6 +527,19 @@ class ProjectStore: ObservableObject {
                   ), !merged.isEmpty else { return }
             let next = Set(merged)
             if next != self.jobTypes { self.jobTypes = next }
+        }
+    }
+
+    /// RULEBOOK 1.10.0 §17: the job listeners follow the read plan (viewer, an operative's booked job ids).
+    private func observeReadPlan(organizationId: String) {
+        readPlanOrganizationId = organizationId
+        guard readPlanObserver == nil else { return }
+        readPlanObserver = NotificationCenter.default.addObserver(forName: .jobReadPlanDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, let orgId = self.readPlanOrganizationId,
+                      self.firebaseBackend?.currentOrganization?.firestoreDocumentId == orgId else { return }
+                self.startLiveUpdates(organizationId: orgId)
+            }
         }
     }
 
@@ -1094,30 +1115,31 @@ class ProjectStore: ObservableObject {
         guard !trimmed.isEmpty else { return }
         jobTypes.insert(trimmed)
         Task {
-            await saveJobTypesCatalogue()
+            await saveJobTypesCatalogue(added: [trimmed])
         }
     }
     
     func removeJobType(_ jobType: String) {
         jobTypes.remove(jobType)
         Task {
-            await saveJobTypesCatalogue()
+            // RULEBOOK 1.9.0: a deliberate removal, so deleting the last job type is written (`jobTypesWriteFields`).
+            await saveJobTypesCatalogue(removed: [jobType])
         }
     }
 
     /// Writes the job type list after an edit in Job Types Management (admins and managers, RULEBOOK §16).
     /// A settings document is online only (§2): offline, the edit stays on this device and is not queued.
-    private func saveJobTypesCatalogue() async {
+    private func saveJobTypesCatalogue(added: [String] = [], removed: [String] = []) async {
         guard let firebaseBackend,
               firebaseBackend.isAuthenticated,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
-              !jobTypes.isEmpty else { return }
+              !added.isEmpty || !removed.isEmpty else { return }
         guard firebaseBackend.userRole == .admin || firebaseBackend.userRole == .manager else {
             errorMessage = "Only admins and managers can change job types."
             return
         }
         do {
-            try await firebaseBackend.saveJobTypes(organizationId: organizationId, jobTypes: jobTypes)
+            try await firebaseBackend.saveJobTypes(organizationId: organizationId, added: added, removed: removed)
         } catch {
             errorMessage = "Job types were not saved: \(error.localizedDescription)"
             print("🔥🔥🔥 DEBUG: Error saving job types catalogue: \(error.localizedDescription)")

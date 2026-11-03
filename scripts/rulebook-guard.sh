@@ -38,7 +38,7 @@ status() {
 }
 
 pack_problems() {
-  local want_bundle want_rulebook
+  local want_bundle want_rulebook want_contract contract
   [ -f "$MANIFEST" ] || { echo "Project Planner/Canonical/canonical-manifest.json is missing — run scripts/sync-rulebook-from-web.sh."; return; }
   want_bundle="$(json_string "$MANIFEST" bundleSha256)"
   want_rulebook="$(json_string "$MANIFEST" rulebookSha256)"
@@ -48,6 +48,13 @@ pack_problems() {
     || echo "canonical-business.js.sha256 differs from the manifest — re-run scripts/sync-rulebook-from-web.sh."
   [ -f "$RULEBOOK" ] && [ "$(sha256_of "$RULEBOOK")" = "$want_rulebook" ] \
     || echo "docs/RULEBOOK.md differs from the rulebook web published. It is a mirror; rule text changes start in project-planner-web."
+  # Rulebook 1.10.0: the cross-platform contract is mirrored too (manifest crossPlatformContractSha256).
+  want_contract="$(json_string "$MANIFEST" crossPlatformContractSha256)"
+  contract="$ROOT/ProjectPlannerTests/CrossPlatformContract.json"
+  if [ -n "$want_contract" ]; then
+    [ -f "$contract" ] && [ "$(sha256_of "$contract")" = "$want_contract" ] \
+      || echo "ProjectPlannerTests/CrossPlatformContract.json differs from the contract web published — re-run scripts/sync-rulebook-from-web.sh."
+  fi
 }
 
 # Rulebook-owned areas (RULEBOOK.md §4–§13). A changed Swift file that adds lines computing one of these

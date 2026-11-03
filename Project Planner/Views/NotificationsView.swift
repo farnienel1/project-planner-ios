@@ -169,8 +169,8 @@ struct NotificationRowView: View {
         case .toolboxTalkIssued, .hsToolboxReminder: return "list.clipboard.fill"
         case .ideaStatus, .ideaShipped, .ideaComment, .ideaMerged: return "lightbulb.fill"
         case .holidayRequestSubmitted: return "sun.max"
-        case .holidayRequestApproved: return "sun.max.fill"
-        case .holidayRequestDeclined: return "xmark.circle.fill"
+        case .holidayRequestApproved, .holidayBookedForYou: return "sun.max.fill"
+        case .holidayRequestDeclined, .holidayCancelledByManager: return "xmark.circle.fill"
         case .timesheetPendingManagerSignoff: return "signature"
         case .timesheetSignedByManager: return "checkmark.seal.fill"
         case .lineManagerPeerUpdate: return "person.2.fill"
@@ -203,8 +203,8 @@ struct NotificationRowView: View {
         case .toolboxTalkIssued, .hsToolboxReminder: return .plan
         case .ideaStatus, .ideaShipped, .ideaComment, .ideaMerged: return .sites
         case .holidayRequestSubmitted: return .trade
-        case .holidayRequestApproved: return .sites
-        case .holidayRequestDeclined: return .alert
+        case .holidayRequestApproved, .holidayBookedForYou: return .sites
+        case .holidayRequestDeclined, .holidayCancelledByManager: return .alert
         case .timesheetPendingManagerSignoff: return .trade
         case .timesheetSignedByManager: return .sites
         case .lineManagerPeerUpdate: return .people

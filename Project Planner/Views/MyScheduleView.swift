@@ -839,16 +839,15 @@ struct ManagerScheduleContentView: View {
     /// This account's leave (approved and pending) whose leave days (`leaveRecordDayKeys`) include `day`.
     /// Matched by account: every id the account has had, or its email (§10), never by name.
     private func myHolidayBookings(on day: Date) -> [HolidayBooking] {
-        guard let uid = firebaseBackend.currentUser?.uid else { return [] }
-        let accountIds = signedInAccountIds
+        guard firebaseBackend.currentUser?.uid != nil else { return [] }
         let dayKey = OrganizationRulebookContext.dayKey(day)
-        let mine = holidayStore.myBookings(userId: uid, operativeId: nil, email: firebaseBackend.currentUser?.email)
-        let byAccount = holidayStore.bookings.filter { booking in
-            guard let owner = booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
-            return accountIds.contains(owner)
-        }
+        // RULEBOOK 1.9.0 §10: every id of the account (`leaveRecordsForAccount`), never by name.
+        let mine = holidayStore.myBookings(
+            account: userStore.displayUser ?? userStore.currentUser,
+            operatives: operativeStore.allOperatives
+        )
         var seen = Set<UUID>()
-        return (mine + byAccount)
+        return mine
             .filter { seen.insert($0.id).inserted }
             .filter { $0.status != .rejected }
             .filter { LeaveRecordDays.covers($0, dayKey: dayKey) }
@@ -2640,19 +2639,14 @@ struct OperativeScheduleContentView: View {
 
     /// This account's approved and pending leave (§10: pending is shown, marked as pending).
     private var myHolidays: [HolidayBooking] {
-        guard let userId = userStore.currentUser?.id else { return [] }
-        let operativeId = currentOperative?.id
-        let accountIds = WorkAccess.signedInAccountIds(
-            authUid: firebaseBackend.currentUser?.uid,
-            currentUser: userStore.displayUser ?? userStore.currentUser,
-            organizationUsers: userStore.organizationUsers
-        )
-        let byAccount = holidayStore.bookings.filter { booking in
-            guard let owner = booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
-            return accountIds.contains(owner)
-        }
+        guard userStore.currentUser != nil else { return [] }
+        // RULEBOOK 1.9.0 §10: every id of the account (`leaveRecordsForAccount`), never by name.
         var seen = Set<UUID>()
-        return (holidayStore.myBookings(userId: userId, operativeId: operativeId) + byAccount)
+        return holidayStore.myBookings(
+            account: userStore.displayUser ?? userStore.currentUser,
+            operatives: operativeStore.allOperatives,
+            operativeId: currentOperative?.id
+        )
             .filter { seen.insert($0.id).inserted }
             .filter { $0.status == .approved || $0.status == .pending }
     }

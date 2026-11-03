@@ -454,6 +454,32 @@ class HolidayStore: ObservableObject {
         }
     }
 
+    /// RULEBOOK 1.9.0 §9, §10: this account's leave — `leaveRecordsForAccount` (a record whose `userId` or
+    /// `operativeId` is any of the account's ids: uid, former and same-email ids, catalogue rows on its email; without
+    /// case, never by name). With no account, the records on `operativeId` (a catalogue-only person). Falls back to
+    /// `myBookings(userId:operativeId:email:)` only when the script did not answer.
+    func myBookings(account: AppUser?, operatives: [Operative], operativeId: UUID? = nil) -> [HolidayBooking] {
+        guard let account else {
+            guard let operativeId else { return [] }
+            return bookings.filter { $0.operativeId == operativeId }
+        }
+        let indexes = CanonicalBusinessEngine.leaveRecordsForAccount(
+            records: bookings.map { (userId: $0.userId, operativeId: $0.operativeIdRaw) },
+            account: CanonicalBusinessEngine.CanonicalBookingPersonAccount(
+                id: account.id,
+                email: account.email,
+                formerIds: account.formerUserIds,
+                aliasIds: account.sameEmailUserIds
+            ),
+            operatives: operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.documentId, email: $0.email) }
+        )
+        guard let indexes else {
+            return myBookings(userId: account.id, operativeId: operativeId, email: account.email)
+        }
+        let all = bookings
+        return indexes.filter { $0 >= 0 && $0 < all.count }.map { all[$0] }
+    }
+
     func myBookings(userId: String?, operativeId: UUID?, email: String? = nil) -> [HolidayBooking] {
         bookings.filter { b in
             if AnnualLeavePolicy.holidayUserMatches(bookingUserId: b.userId, profileUserId: userId, profileEmail: email) {

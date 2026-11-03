@@ -83,7 +83,8 @@ enum OfflineSyncCoordinator {
                 }
                 // `bookingReplayRefusedIsFinal({ code, isCreate })`: also final is not-found on an edit replay
                 // (the booking was deleted elsewhere; an edit never turns into a create).
-                if BookingWritePatch.isRefusedFinal(error, isCreate: bookingSaveIsCreate(entry)) {
+                // Any other queued edit: `replayRefusedIsFinal({ code, isCreate })` (RULEBOOK 1.9.0 §1).
+                if replayIsFinal(error, entry: entry) {
                     // RULEBOOK §2: a refused replay is final (`bookingReplayRefusedIsFinal`). The booking
                     // was deleted (tombstone) or cancelled elsewhere, or the area is online only.
                     handleRefused(entry: entry, outbox: outbox)
@@ -112,6 +113,29 @@ enum OfflineSyncCoordinator {
             "entityId": entry.entityId,
             "organizationId": entry.organizationId,
         ]
+    }
+
+    /// Bookings: `bookingReplayRefusedIsFinal`; every other queued item: `replayRefusedIsFinal`.
+    private static func replayIsFinal(_ error: Error, entry: OfflineOutboxEntry) -> Bool {
+        switch entry.operation {
+        case .saveBooking, .saveManagerSiteBooking, .deleteBooking, .deleteManagerSiteBooking:
+            return BookingWritePatch.isRefusedFinal(error, isCreate: bookingSaveIsCreate(entry))
+        default:
+            let nsError = error as NSError
+            guard nsError.domain == "FIRFirestoreErrorDomain" else { return false }
+            return CanonicalBusinessEngine.replayRefusedIsFinal(errorCode: nsError.code, isCreate: queuedItemIsCreate(entry))
+        }
+    }
+
+    /// A queued partial update knows whether it creates (`isCreate`); other items are unknown (nil), so only
+    /// permission-denied is final for them.
+    private static func queuedItemIsCreate(_ entry: OfflineOutboxEntry) -> Bool? {
+        switch entry.operation {
+        case .saveAnnualLeaveRequest, .saveOwnProfileFields, .saveOwnNotificationToggles:
+            return (try? JSONDecoder().decode(OfflinePartialUpdatePayload.self, from: entry.payload))?.isCreate
+        default:
+            return nil
+        }
     }
 
     /// For a queued booking save: true for a create (no `changedFields`), false for an edit. Nil otherwise.

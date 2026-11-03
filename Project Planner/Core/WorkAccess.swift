@@ -17,11 +17,9 @@ enum WorkAccess {
         }
     }
 
-    /// Admins and managers see every job in the catalogue, including jobs they are not assigned to.
-    /// `permissions.projects` and `permissions.smallWorks` do not hide those lists. They only gate
-    /// create and edit (`UserStore.canManageWorkCatalogue`). Super admin ignores those two toggles.
-    /// A job explicitly hidden from a manager stays off that manager's list. Operatives still see
-    /// only jobs they are booked onto.
+    /// RULEBOOK 1.10.0 §16 (`canSeeJob`): admins see every job; managers with that kind's Projects / Small works
+    /// toggle see every job of the kind; other managers only the jobs they manage. A job explicitly hidden from a
+    /// manager stays off that manager's list. Operatives still see only jobs they are booked onto.
     static func visibleWorks(
         from projects: [Project],
         catalogue: JobCatalogue,
@@ -50,24 +48,18 @@ enum WorkAccess {
         }
 
         guard let user else { return [] }
+        // RULEBOOK 1.10.0 §16: `canSeeJob(viewer, job, managers, kind)` — admins every job; a manager with that kind's
+        // Projects / Small works toggle every job of the kind; other managers only the jobs they manage.
+        let viewer = userStore.jobAccessViewer(for: user)
+        let managers = operativeStore.allManagers.map { ["id": $0.firestoreDocumentId, "email": $0.email] as [String: Any] }
+        let visible = scoped.filter {
+            CanonicalBusinessEngine.canSeeJob(viewer, job: $0.jobAccessFields, managers: managers, kind: $0.jobKind)
+        }
         if user.isExcludedFromManagerVisibilityHiding {
-            return scoped
+            return visible
         }
-
-        let notHidden = scoped.filter { !$0.hiddenManagerUserIds.contains(user.id) }
-        let isManager = user.permissions.manager || user.role == .manager
-        if isManager {
-            return notHidden
-        }
-        return notHidden.filter { project in
-            isAssignedOrBookedOnto(
-                project,
-                user: user,
-                operativeStore: operativeStore,
-                bookingStore: bookingStore,
-                managerBookings: managerBookings
-            )
-        }
+        // The per-job "View" hide list still narrows a manager's list (it never widens what `canSeeJob` allows).
+        return visible.filter { !$0.hiddenManagerUserIds.contains(user.id) }
     }
 
     /// Variations: every admin and every manager, on every job. Assignment does not hide a job.
@@ -141,7 +133,8 @@ enum WorkAccess {
         isManager: Bool,
         operatives: [Operative],
         bookings: [Booking],
-        managerBookings: [ManagerSiteBooking]
+        managerBookings: [ManagerSiteBooking],
+        canSee: ((Project) -> Bool)? = nil
     ) -> Int {
         let active = projects.filter { $0.status == .active }
         guard let user else { return 0 }
@@ -171,10 +164,10 @@ enum WorkAccess {
         if seesEveryJob {
             return active.count
         }
-        if isManager {
-            return active.filter { !$0.hiddenManagerUserIds.contains(user.id) }.count
-        }
-        return active.filter { !$0.hiddenManagerUserIds.contains(user.id) }.count
+        _ = isManager
+        // RULEBOOK 1.10.0 §16: `canSeeJob` (the caller passes only the jobs the viewer may see when it has a viewer).
+        let visible = canSee.map { rule in active.filter(rule) } ?? active
+        return visible.filter { !$0.hiddenManagerUserIds.contains(user.id) }.count
     }
 
     /// Roster row for the signed-in account, matched by email only (§10: by account, never by name).

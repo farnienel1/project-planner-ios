@@ -523,13 +523,33 @@ struct EditProjectView: View {
         .padding(.horizontal, 14)
     }
 
+    /// RULEBOOK 1.10.0 §16: only someone who may change the manager list (`canChangeJobManagers`) gets the picker; a
+    /// manager editing the details of a job they manage sees the managers read-only (the save leaves them as stored).
+    @ViewBuilder
     private var teamCard: some View {
-        ProjectAssignedManagersEditor(
-            selectedManagers: $selectedManagers,
-            availableManagersToAdd: availableManagersToAdd,
-            onCreateManager: { showingCreateManager = true },
-            onEdited: { managersUserEdited = true }
-        )
+        if userStore.canChangeJobManagers(kind: project.jobKind) {
+            ProjectAssignedManagersEditor(
+                selectedManagers: $selectedManagers,
+                availableManagersToAdd: availableManagersToAdd,
+                onCreateManager: { showingCreateManager = true },
+                onEdited: { managersUserEdited = true }
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Managers")
+                    .font(.subheadline.weight(.semibold))
+                Text(selectedManagers.isEmpty ? "No managers assigned" : selectedManagers.map(\.fullName).joined(separator: ", "))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Text("Only an admin, or a manager with the \(project.jobType == .smallWorks ? "Small works" : "Projects") permission, can change a job's managers.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+            .accessibilityIdentifier("editProject.managersReadOnly")
+        }
     }
 
     private var availableManagersToAdd: [Manager] {

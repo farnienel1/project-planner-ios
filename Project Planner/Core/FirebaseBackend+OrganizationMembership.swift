@@ -169,23 +169,45 @@ extension FirebaseBackend {
         )
     }
 
-    /// Copies the live `users/{uid}` document onto `orgMemberships/{orgId}`, including
-    /// `accountActive` from `isActive`. Does not invent a second user document.
-    func snapshotCurrentUserOntoMembership(
+    /// RULEBOOK 1.10.0 §14: `orgMembershipWriteFields({ organizationId, stored, next, writer, now })` against the stored
+    /// membership, written as one partial update (or a create when none is stored). `writer` `admin` writes role,
+    /// permissions, super admin and the active flag; `self` only accepts. Returns whether anything was written.
+    /// Never a flat merge of the users document (the rules refuse a self-write that changes role or permissions).
+    @discardableResult
+    func writeOrgMembership(
         userId: String,
         organizationId: String,
-        userData: [String: Any]
-    ) async throws {
+        next: [String: Any],
+        writer: String,
+        createIfMissing: Bool = false
+    ) async throws -> Bool {
         let orgId = normalizedOrganizationId(organizationId)
-        guard !orgId.isEmpty else { return }
-        var snapshot = userData
-        snapshot["accountActive"] = firestoreUserIsActive(from: userData)
-        snapshot["organizationId"] = orgId
-        snapshot["updatedAt"] = Timestamp(date: Date())
-        try await orgMembershipsCollection(userId: userId).document(orgId).setData(snapshot, merge: true)
+        guard !userId.isEmpty, !orgId.isEmpty else { return false }
+        let ref = orgMembershipsCollection(userId: userId).document(orgId)
+        let snap = try await ref.getDocument(source: .server)
+        if !snap.exists && !createIfMissing { return false }
+        let stored: Any = snap.exists ? Self.firestoreJSON(snap.data() ?? [:]) : NSNull()
+        let nowMarker = "__serverNow__"
+        guard let write = CanonicalBusinessEngine.callJSON(
+            "orgMembershipWriteFields",
+            arguments: [["organizationId": orgId, "stored": stored, "next": next, "writer": writer, "now": nowMarker]]
+        ) else {
+            throw CanonicalWriteUnavailableError(function: "orgMembershipWriteFields")
+        }
+        guard let row = write as? [String: Any],
+              var fields = row["fields"] as? [String: Any] else { return false }
+        for (key, value) in fields where (value as? String) == nowMarker { fields[key] = FieldValue.serverTimestamp() }
+        if (row["mode"] as? String) == "create" {
+            try await ref.setData(fields)
+            return true
+        }
+        for key in row["remove"] as? [String] ?? [] { fields[key] = FieldValue.delete() }
+        guard !fields.isEmpty else { return false }
+        try await ref.updateData(fields)
+        return true
     }
 
-    /// Writes `accountActive` only when that membership document already exists.
+    /// Writes `accountActive` only when that membership document already exists (`orgMembershipWriteFields`, admin).
     /// Returns whether the membership document was updated. Never creates a stub.
     @discardableResult
     func patchMembershipAccountActiveIfExists(
@@ -193,21 +215,51 @@ extension FirebaseBackend {
         organizationId: String,
         accountActive: Bool
     ) async -> Bool {
-        let orgId = normalizedOrganizationId(organizationId)
-        guard !userId.isEmpty, !orgId.isEmpty else { return false }
-        let ref = orgMembershipsCollection(userId: userId).document(orgId)
         do {
-            let snap = try await ref.getDocument(source: .server)
-            guard snap.exists else { return false }
-            try await ref.updateData([
-                "accountActive": accountActive,
-                "updatedAt": Timestamp(date: Date())
-            ])
-            return true
+            return try await writeOrgMembership(
+                userId: userId,
+                organizationId: organizationId,
+                next: ["accountActive": accountActive],
+                writer: "admin"
+            )
         } catch {
             print("🔥🔥🔥 DEBUG: [OrgMembership] accountActive patch skipped: \(error.localizedDescription)")
             return false
         }
+    }
+
+    /// RULEBOOK 1.10.0 §14: the membership as `parseOrgMembershipDocument` reads it (nested `permissions`, else the
+    /// legacy flat keys, else the defaults). Nil when the script did not answer.
+    static func orgMembership(organizationId: String, data: [String: Any]) -> (role: String, isSuperAdmin: Bool, accountActive: Bool, permissions: [String: Bool])? {
+        guard let row = CanonicalBusinessEngine.callJSON("parseOrgMembershipDocument", arguments: [organizationId, firestoreJSON(data)]) as? [String: Any],
+              let permissions = row["permissions"] as? [String: Bool] else { return nil }
+        return (
+            row["role"] as? String ?? "member",
+            row["isSuperAdmin"] as? Bool ?? false,
+            row["accountActive"] as? Bool ?? true,
+            permissions
+        )
+    }
+
+    /// `parseOrgMembershipDocument` permissions as `UserPermissions` (keys `ORG_MEMBERSHIP_PERMISSION_KEYS`).
+    static func userPermissions(fromMembership flags: [String: Bool], fallback: UserPermissions) -> UserPermissions {
+        var out = fallback
+        out.adminAccess = flags["adminAccess"] ?? out.adminAccess
+        out.manager = flags["manager"] ?? out.manager
+        out.operatives = flags["operatives"] ?? out.operatives
+        out.skills = flags["skills"] ?? out.skills
+        out.qualifications = flags["qualifications"] ?? out.qualifications
+        out.materials = flags["materials"] ?? out.materials
+        out.projects = flags["projects"] ?? out.projects
+        out.smallWorks = flags["smallWorks"] ?? out.smallWorks
+        out.operativeMode = flags["operativeMode"] ?? out.operativeMode
+        out.siteAudit = flags["siteAudit"] ?? out.siteAudit
+        out.subContractors = flags["subContractors"] ?? out.subContractors
+        out.wholesalersOrderHistory = flags["wholesalersOrderHistory"] ?? out.wholesalersOrderHistory
+        out.annualLeaveSelfBook = flags["annualLeaveSelfBook"] ?? out.annualLeaveSelfBook
+        out.weeklyReports = flags["weeklyReports"] ?? out.weeklyReports
+        out.dailyOverview = flags["dailyOverview"] ?? out.dailyOverview
+        return out
     }
 
     /// Restores the destination membership onto `users/{uid}` and copies `accountActive`
@@ -294,27 +346,9 @@ extension FirebaseBackend {
         if !sharedOrgId.isEmpty {
             sharedUserOrganizationId = sharedOrgId
         }
-        // Snapshot the company this phone is leaving. Do not copy that profile onto users/{uid},
-        // because that document is the other platform's current company.
-        let leavingOrgId = normalizedOrganizationId(currentOrganization?.firestoreDocumentId ?? "")
-        if !leavingOrgId.isEmpty,
-           !organizationIdsMatch(leavingOrgId, trimmedId) {
-            if let sessionProfile = deviceSessionProfile,
-               organizationIdsMatch(sessionProfile.organizationId, leavingOrgId) {
-                try await snapshotCurrentUserOntoMembership(
-                    userId: userId,
-                    organizationId: leavingOrgId,
-                    userData: membershipPayload(from: sessionProfile)
-                )
-            } else if userDoc.exists, organizationIdsMatch(sharedOrgId, leavingOrgId) {
-                try await snapshotCurrentUserOntoMembership(
-                    userId: userId,
-                    organizationId: leavingOrgId,
-                    userData: userData
-                )
-            }
-        }
-
+        // RULEBOOK 1.10.0 §14: switching writes nothing onto a membership (no `snapshotCurrentUserOntoMembership`): the
+        // membership is written only by an admin of that company (`orgMembershipWriteFields`), and it is read with
+        // `parseOrgMembershipDocument` when this phone opens that company.
         let destinationAccountActive = await loadDeviceSessionProfile(
             userId: userId,
             organizationId: trimmedId,
@@ -583,6 +617,12 @@ extension FirebaseBackend {
             profile = Self.parseAppUserDocument(userId: userId, data: data)
             profile.organizationId = orgId
             profile.isActive = accountActive
+            // RULEBOOK 1.10.0 §14: role flags from `parseOrgMembershipDocument` (nested `permissions`, else flat).
+            if let membership = Self.orgMembership(organizationId: orgId, data: data) {
+                profile.permissions = Self.userPermissions(fromMembership: membership.permissions, fallback: profile.permissions)
+                profile.isSuperAdmin = membership.isSuperAdmin
+                profile.isActive = membership.accountActive
+            }
         } else {
             let shaped = Self.sessionPermissions(forMembersRole: roleInOrg, isCreator: isCreator)
             profile = base
@@ -658,40 +698,6 @@ extension FirebaseBackend {
             sharedUserData: sharedData
         )
         return deviceSessionProfile ?? user
-    }
-
-    private func membershipPayload(from user: AppUser) -> [String: Any] {
-        var data: [String: Any] = [
-            "email": user.email,
-            "organizationId": user.organizationId,
-            "role": user.role.rawValue,
-            "firstName": user.firstName,
-            "surname": user.surname,
-            "lastName": user.surname,
-            "isActive": user.isActive,
-            "passwordSet": user.passwordSet,
-            "adminAccess": user.permissions.adminAccess,
-            "manager": user.permissions.manager,
-            "operatives": user.permissions.operatives,
-            "skills": false,
-            "qualifications": user.permissions.qualifications,
-            "materials": user.permissions.operativeMode ? user.permissions.materials : true,
-            "projects": user.permissions.projects,
-            "smallWorks": user.permissions.smallWorks,
-            "operativeMode": user.permissions.operativeMode,
-            "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
-            "weeklyReports": user.permissions.weeklyReports,
-            "dailyOverview": user.permissions.dailyOverview,
-            "subContractors": user.permissions.subContractors,
-            "siteAudit": user.permissions.operativeMode ? user.permissions.siteAudit : true,
-            "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory,
-            "isSuperAdmin": user.isSuperAdmin,
-            "accountActive": user.isActive
-        ]
-        if let mobile = user.mobileNumber, !mobile.isEmpty {
-            data["mobileNumber"] = mobile
-        }
-        return data
     }
 
     /// No membership snapshot yet: use the members-map role only. Do not copy toggles from another company.

@@ -25,6 +25,14 @@ enum LaunchStartupPolicy {
         case drop
     }
 
+    /// `anchored`: the person is the signed-in account, the organisation's creator, or on its members map / membership.
+    /// Only a confirmed-missing document removes them; a denied read (another company's `organizationId` on their
+    /// document, or a token not yet attached after sign-in) is not proof they left this organisation.
+    static func rosterAbsenceDecision(_ read: RosterUserDocumentRead, anchored: Bool) -> RosterAbsenceDecision {
+        if anchored, read == .permissionDenied { return .keep }
+        return rosterAbsenceDecision(read)
+    }
+
     static func rosterAbsenceDecision(_ read: RosterUserDocumentRead) -> RosterAbsenceDecision {
         switch read {
         case .present, .unconfirmed:
@@ -71,16 +79,22 @@ enum LaunchStartupPolicy {
 
     /// Member keys, email-claim user ids, and explicit link fields. A catalogue document id
     /// is not a user document and is not point-read.
+    ///
+    /// `anchorUserIds` are the organisation's creator (`creatorUserId`) and the signed-in account when this
+    /// organisation lists them (members map, their own membership, or creator). Their `users` document may name
+    /// another company (the one they last opened), so the `organizationId` query misses them; they are always read.
     static func pointReadUserIds(
         alreadyLoaded: Set<String>,
         memberUserIds: Set<String>,
         claimUserIds: Set<String>,
         explicitLinkUserIds: Set<String>,
-        directoryDocumentIds: Set<String>
+        directoryDocumentIds: Set<String>,
+        anchorUserIds: Set<String> = []
     ) -> Set<String> {
         let allowed = memberUserIds
             .union(claimUserIds)
             .union(explicitLinkUserIds)
+            .union(anchorUserIds)
         let catalogueOnly = directoryDocumentIds.subtracting(allowed)
         return allowed.subtracting(alreadyLoaded).subtracting(catalogueOnly)
     }

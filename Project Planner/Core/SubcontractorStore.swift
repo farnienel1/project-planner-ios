@@ -10,6 +10,21 @@ class SubcontractorStore: ObservableObject {
     @Published var errorMessage: String?
     
     private var firebaseBackend: FirebaseBackend?
+    private var readPlanObserver: NSObjectProtocol?
+    private var readPlanOrganizationId: String?
+
+    /// RULEBOOK 1.10.0 §17: the bookings listener follows the read plan (visible jobs, own ids, viewer).
+    private func observeReadPlan(organizationId: String) {
+        readPlanOrganizationId = organizationId
+        guard readPlanObserver == nil else { return }
+        readPlanObserver = NotificationCenter.default.addObserver(forName: .jobReadPlanDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, let orgId = self.readPlanOrganizationId,
+                      self.firebaseBackend?.currentOrganization?.firestoreDocumentId == orgId else { return }
+                self.startLiveUpdates(organizationId: orgId)
+            }
+        }
+    }
     
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         firebaseBackend = backend
@@ -20,6 +35,7 @@ class SubcontractorStore: ObservableObject {
     /// deleted on web shows here without reopening the screen. Cached copy first; offline keeps the last copy.
     func startLiveUpdates(organizationId: String) {
         guard let firebaseBackend else { return }
+        observeReadPlan(organizationId: organizationId)
         firebaseBackend.listenOrganizationQuery(
             key: "subcontractors",
             organizationId: organizationId,
@@ -39,10 +55,11 @@ class SubcontractorStore: ObservableObject {
                   next != self.subcontractors else { return }
             self.subcontractors = next
         }
-        firebaseBackend.listenOrganizationQuery(
+        // RULEBOOK 1.10.0 §17: `bookingQueryPlan` queries (re-planned on `jobReadPlanDidChange`).
+        firebaseBackend.listenOrganizationPlan(
             key: "subcontractorBookings",
             organizationId: organizationId,
-            query: { $0.collection("subcontractorBookings") }
+            plan: firebaseBackend.bookingReadSources(organizationId: organizationId, collection: "subcontractorBookings", startingOn: nil)
         ) { [weak self] rows, fromCache in
             guard let self else { return }
             let incoming = FirebaseBackend.subcontractorBookings(fromDocuments: rows)
@@ -106,6 +123,11 @@ class SubcontractorStore: ObservableObject {
             errorMessage = "Organization is not loaded yet. Please try again."
             return
         }
+        // RULEBOOK 1.10.0 §2, §16: `canWriteBooking` — admins, or a manager of the booking's job.
+        if let refusal = JobAccessContext.bookingWriteRefusal(collection: "subcontractorBookings", projectId: booking.storedProjectId) {
+            errorMessage = refusal
+            return
+        }
         // The firm's people on site by name, written with their ids (RULEBOOK 1.7.0 `subcontractorBookingWriteFields`).
         let firm = subcontractors.first { $0.id == booking.subcontractorId }
         let names = booking.bookedOperativeNames(subcontractor: firm)
@@ -130,6 +152,10 @@ class SubcontractorStore: ObservableObject {
         guard let firebaseBackend,
               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             errorMessage = "Organization is not loaded yet. Please try again."
+            return
+        }
+        if let refusal = JobAccessContext.bookingWriteRefusal(collection: "subcontractorBookings", projectId: booking.storedProjectId, isDelete: true) {
+            errorMessage = refusal
             return
         }
         bookings.removeAll { $0.id == booking.id }

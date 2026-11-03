@@ -301,6 +301,15 @@ struct OperativeDayRateHistoryCollection: Sendable {
 
     static let empty = OperativeDayRateHistoryCollection(byUserId: [:], byOperativeId: [:])
 
+    /// Every loaded row once (both maps, de-duplicated by entry id), oldest first. `payRateOnDay` picks the person's.
+    var allEntries: [OperativeDayRateHistoryEntry] {
+        var seen = Set<UUID>()
+        var out: [OperativeDayRateHistoryEntry] = []
+        for rows in byUserId.values { for e in rows where seen.insert(e.id).inserted { out.append(e) } }
+        for rows in byOperativeId.values { for e in rows where seen.insert(e.id).inserted { out.append(e) } }
+        return out.sorted(by: { $0.effectiveAt < $1.effectiveAt })
+    }
+
     /// Merges history for a linked user account and/or operative roster row, de-duplicated by entry id.
     func mergedEntries(userId: String?, operativeId: UUID?) -> [OperativeDayRateHistoryEntry] {
         var seen = Set<UUID>()
@@ -359,6 +368,10 @@ struct OrganizationUserRoster {
     /// Every listed `users` document id that was folded into another because they share an email,
     /// mapped to the id that was kept (web `userIdAliases`, the input of `rosterAliasIdsFor`).
     var userIdAliases: [String: String] = [:]
+    /// Ids this organisation lists itself — members map keys, `creatorUserId`, and the signed-in account when it
+    /// belongs — that this load read. Their `users` document may name another company, so the live
+    /// `organizationId` listener never returns them and must not be the reason they leave the list.
+    var anchoredUserIds: Set<String> = []
 }
 
 // MARK: - User roster segments (Manage Users, Managers, Operatives)
@@ -494,6 +507,9 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// copy (role viewer, no permissions). Such a copy never replaces a profile or roster row the rulebook did read
     /// (`ReaderDiagnostics` records it). Not encoded.
     var parsedWithoutRulebook: Bool = false
+    /// RULEBOOK 1.9.0: the `parseUserDocument` `annualLeaveStored` keys (`daysPerYear`, `startMonth`, `endMonth`,
+    /// `carriesOver`) the user document stores itself, for `CanonicalBusinessEngine.annualLeavePendingOmitFields`. Not encoded.
+    var annualLeaveStoredKeys: [String] = []
     
     init(
         id: String,
@@ -738,8 +754,24 @@ extension AppUser {
     }
 
     /// Whether this account participates in the timesheet workflow (toggle + employment type).
+    /// RULEBOOK 1.10.0 §7, §13 `timesheetParticipant(user, day, timeZone)`: the Weekly Report timesheet feed and the
+    /// submission reminder recipients. Inactive and anonymised deleted profiles never; else `timesheetsEnabled`, or
+    /// self-employed on that day. False when the script did not answer.
     func participatesInTimesheets(on date: Date = Date()) -> Bool {
-        timesheetsEnabled || employmentType(on: date) == .selfEmployed
+        let row: [String: Any] = [
+            "isActive": isActive,
+            "email": email,
+            "name": fullName,
+            "timesheetsEnabled": timesheetsEnabled,
+            "operativeMode": permissions.operativeMode,
+            "employmentType": employmentType.rawValue,
+            "employmentTypeTransitionFrom": employmentTypeTransitionFrom?.rawValue ?? NSNull(),
+            "employmentTypeEffectiveAt": employmentTypeEffectiveAt.map { $0.timeIntervalSince1970 * 1000 } ?? NSNull(),
+        ]
+        return CanonicalBusinessEngine.callJSON(
+            "timesheetParticipant",
+            arguments: [row, date.timeIntervalSince1970 * 1000, OrganizationRulebookContext.timeZoneIdentifier]
+        ) as? Bool ?? false
     }
 
     /// Legacy UTR / VAT still on users/{uid}, for `resolveSensitiveProfile` only. Never shown directly.
@@ -2035,7 +2067,7 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .warningRemoved: return .warningRemoved
         case .taskCompleted, .taskCreated: return .taskAssigned
         case .holidayRequestSubmitted: return .annualLeaveRequests
-        case .holidayRequestApproved, .holidayRequestDeclined: return .annualLeaveDecisions
+        case .holidayRequestApproved, .holidayRequestDeclined, .holidayCancelledByManager, .holidayBookedForYou: return .annualLeaveDecisions
         case .timesheetPendingManagerSignoff, .timesheetSignedByManager: return .timesheetSignoff
         case .lineManagerPeerUpdate: return .lineManagerPeerUpdate
         case .materialAdded, .materialOrderPlaced: return .materialAdded

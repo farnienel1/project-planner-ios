@@ -173,9 +173,26 @@ class ManagerScheduleStore: ObservableObject {
         }
     }
 
+    /// RULEBOOK 1.10.0 §2, §16 (`canWriteBooking` / `canDeleteBooking`): a manager books themselves at a job they manage
+    /// or at a place with no job; admins anyone anywhere; operatives never.
+    private func writeRefusal(_ booking: ManagerSiteBooking, isDelete: Bool = false) -> String? {
+        let jobLocation = booking.locationType == .project || booking.locationType == .smallWork
+        return JobAccessContext.bookingWriteRefusal(
+            collection: "managerSiteBookings",
+            userId: booking.userId,
+            locationType: booking.locationType.rawValue,
+            locationId: jobLocation ? (booking.locationKey ?? booking.locationId.map { WorkDocumentKeys.storedId(for: $0) }) : nil,
+            isDelete: isDelete
+        )
+    }
+
     func saveBooking(_ booking: ManagerSiteBooking) async {
         guard let fb = firebaseBackend else { return }
         guard let orgId = fb.resolvedOrganizationIdForOfflineWrites() else { return }
+        if let refusal = writeRefusal(booking) {
+            errorMessage = refusal
+            return
+        }
 
         let normalizedDate = Calendar.current.startOfDay(for: booking.date)
         var normalizedBooking = booking
@@ -231,6 +248,10 @@ class ManagerScheduleStore: ObservableObject {
         }
         guard let fb = firebaseBackend else { return }
         guard let orgId = fb.resolvedOrganizationIdForOfflineWrites() else { return }
+        if let refusal = writeRefusal(booking, isDelete: true) {
+            errorMessage = refusal
+            return
+        }
 
         managerSiteBookings.removeAll { $0.id == booking.id }
         OfflineManagerScheduleLocalStore.remove(bookingId: booking.id, organizationId: orgId)

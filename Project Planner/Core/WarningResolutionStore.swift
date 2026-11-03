@@ -602,6 +602,9 @@ final class WarningResolutionStore: ObservableObject {
     /// A clash approval also writes its booking pair (`commitClashApproval`). Staff only; idempotent.
     private func migrateLegacyResolutions() {
         guard canWrite, let organizationId, let uid = Auth.auth().currentUser?.uid else { return }
+        // RULEBOOK 1.10.0 §1: runs from a warnings scan, allowed only as the named idempotent migration
+        // (`IDEMPOTENT_MIGRATION_WRITES`).
+        guard SyncWriteGate.allows(.listenerSnapshot, "warning-key migration", migration: "warningResolutionMigrationWrites") else { return }
         var documents: [(id: String, data: [String: Any])] = storedResolutionRows.map { row in
             let stored = row["storedKey"] ?? row["resolutionKey"] ?? row["id"] ?? ""
             var data: [String: Any] = ["resolutionKey": stored]

@@ -1171,7 +1171,7 @@ struct HolidayView: View {
 
     private var upcomingLeaveSection: some View {
         let today = calendar.startOfDay(for: Date())
-        let upcoming = holidayStore.myBookings(userId: firebaseBackend.currentUser?.uid, operativeId: currentOperative?.id)
+        let upcoming = holidayStore.myBookings(account: userStore.currentUser, operatives: operativeStore.allOperatives, operativeId: currentOperative?.id)
             .filter { booking in
                 booking.status != .rejected && calendar.startOfDay(for: booking.endDate) >= today
             }
@@ -1203,7 +1203,7 @@ struct HolidayView: View {
 
     private var ownRequestsSection: some View {
         let today = calendar.startOfDay(for: Date())
-        let mine = holidayStore.myBookings(userId: firebaseBackend.currentUser?.uid, operativeId: currentOperative?.id)
+        let mine = holidayStore.myBookings(account: userStore.currentUser, operatives: operativeStore.allOperatives, operativeId: currentOperative?.id)
             .filter {
                 $0.status == .pending || $0.cancellationRequestedAt != nil ||
                     ($0.status == .rejected && calendar.startOfDay(for: $0.endDate) >= today)

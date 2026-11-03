@@ -1271,10 +1271,20 @@ struct WeeklyReportView: View {
             $0.status == .approved && $0.cancellationRequestedAt == nil
         }
         var totals: [String: AnnualLeaveRow] = [:]
+        // RULEBOOK 1.9.0 §7: leave days in the report range are `leaveDaysInRange` (its `leaveRecordDayKeys` in range,
+        // 0.5 for AM / PM) — weekends and bank holidays inside a multi-day record are not counted.
+        let rangeStartKey = OrganizationRulebookContext.dayKey(reportStartDay)
+        let rangeEndKey = OrganizationRulebookContext.dayKey(reportEndDay)
         for booking in approved {
-            let days = overlappingDays(for: booking, calendar: cal)
-            guard days > 0 else { continue }
-            let dayValue = days * booking.timeSlot.dayValue
+            let dayValue = CanonicalBusinessEngine.leaveDaysInRange(
+                startDayKey: booking.startDayKey,
+                endDayKey: booking.endDayKey,
+                timeSlot: booking.timeSlot.rawValue,
+                rangeStartDayKey: rangeStartKey,
+                rangeEndDayKey: rangeEndKey,
+                nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
+            ) ?? overlappingDays(for: booking, calendar: cal) * booking.timeSlot.dayValue
+            guard dayValue > 0 else { continue }
             if let uid = booking.userId, let u = userStore.organizationUsers.first(where: { $0.id == uid }) {
                 let key = "\(u.fullName)|\(u.permissions.manager ? "Manager" : "User")"
                 var row = totals[key] ?? AnnualLeaveRow(personName: u.fullName, role: u.permissions.manager ? "Manager" : "User", days: 0)

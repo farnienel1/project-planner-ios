@@ -367,13 +367,11 @@ struct AddUserView: View {
     }
     
     private var lineManagerSummary: String {
-        if hasNoLineManager { return "No line manager" }
-        if selectedLineManagerUserIds.isEmpty { return "Select manager(s)…" }
-        let names = lineManagerCandidates
-            .filter { selectedLineManagerUserIds.contains($0.id) }
-            .map { $0.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? $0.email : $0.fullName }
-        if names.count == 1 { return names[0] }
-        return "\(names.first ?? "Manager") +\(names.count - 1) more"
+        LineManagerSummaryLabel.text(
+            selectedIds: selectedLineManagerUserIds,
+            roster: userStore.organizationUsers,
+            hasNoLineManager: hasNoLineManager
+        )
     }
 
     private var inviteDraftUserForValidation: AppUser {

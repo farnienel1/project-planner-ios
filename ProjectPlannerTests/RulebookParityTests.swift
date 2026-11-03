@@ -9,6 +9,8 @@ final class RulebookParityTests: XCTestCase {
         let rulebookVersion: String
         let rulebookSha256: String
         let bundleSha256: String
+        /// Rulebook 1.10.0: sha256 of `cross-platform-contract.json` (mirrored as `CrossPlatformContract.json`).
+        let crossPlatformContractSha256: String?
         let exports: [String]
     }
 
@@ -64,5 +66,12 @@ final class RulebookParityTests: XCTestCase {
         XCTAssertFalse(exported.isEmpty, "the packed script did not evaluate")
         let missing = try manifest().exports.filter { !exported.contains($0) }
         XCTAssertEqual(missing, [], "exports named in canonical-manifest.json are missing from the script")
+    }
+
+    func testCrossPlatformContractMatchesTheManifest() throws {
+        let want = try XCTUnwrap(try manifest().crossPlatformContractSha256, "canonical-manifest.json has no crossPlatformContractSha256 (rulebook 1.10.0+)")
+        let url = Bundle(for: RulebookParityTests.self).url(forResource: "CrossPlatformContract", withExtension: "json")
+            ?? repoRoot.appendingPathComponent("ProjectPlannerTests/CrossPlatformContract.json")
+        XCTAssertEqual(sha256(try Data(contentsOf: url)), want, "CrossPlatformContract.json was not mirrored from web — run scripts/sync-rulebook-from-web.sh")
     }
 }

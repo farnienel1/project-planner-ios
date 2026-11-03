@@ -492,3 +492,56 @@ enum LeaveRecordDays {
         covers(booking, dayKey: OrganizationRulebookContext.dayKey(day))
     }
 }
+
+extension CanonicalBusinessEngine {
+    // MARK: 1.9.0 leave counts and "my" leave
+
+    /// `leaveDaysInRange(record, range, timeZone, nonWorkingDayKeys)`: the leave days a record covers inside the
+    /// range (inclusive day keys) — its `leaveRecordDayKeys` in range, 1 each for a full day, 0.5 for AM / PM.
+    /// Nil when the script did not answer.
+    nonisolated static func leaveDaysInRange(
+        startDayKey: String,
+        endDayKey: String?,
+        timeSlot: String?,
+        rangeStartDayKey: String,
+        rangeEndDayKey: String,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier,
+        nonWorkingDayKeys: [String] = []
+    ) -> Double? {
+        var record: [String: Any] = ["startDayKey": startDayKey]
+        record["endDayKey"] = endDayKey.map { $0 as Any } ?? NSNull()
+        record["timeSlot"] = timeSlot.map { $0 as Any } ?? NSNull()
+        let range: [String: Any] = ["startDayKey": rangeStartDayKey, "endDayKey": rangeEndDayKey]
+        return (callJSON("leaveDaysInRange", arguments: [record, range, timeZone, nonWorkingDayKeys]) as? NSNumber)?.doubleValue
+    }
+
+    /// `leaveRecordsForAccount(records, account, operatives)`: the indexes of the records whose `userId` or
+    /// `operativeId` is any of the account's ids (`bookingIdsForAccount`), without case, in the given order. Never
+    /// matched by name. Nil when the script did not answer.
+    nonisolated static func leaveRecordsForAccount(
+        records: [(userId: String?, operativeId: String?)],
+        account: CanonicalBookingPersonAccount,
+        operatives: [CanonicalBookingPersonOperative]
+    ) -> [Int]? {
+        let rows: [[String: Any]] = records.enumerated().map { index, record in
+            [
+                "index": index,
+                "userId": record.userId.map { $0 as Any } ?? NSNull(),
+                "operativeId": record.operativeId.map { $0 as Any } ?? NSNull(),
+            ]
+        }
+        var accountJSON: [String: Any] = ["id": account.id]
+        if let email = account.email { accountJSON["email"] = email }
+        if let former = account.formerIds { accountJSON["formerIds"] = former }
+        if let alias = account.aliasIds { accountJSON["aliasIds"] = alias }
+        let operativeJSON: [[String: Any]] = operatives.map { row in
+            var out: [String: Any] = ["id": row.id]
+            if let email = row.email { out["email"] = email }
+            return out
+        }
+        guard let kept = callJSON("leaveRecordsForAccount", arguments: [rows, accountJSON, operativeJSON]) as? [[String: Any]] else {
+            return nil
+        }
+        return kept.compactMap { ($0["index"] as? NSNumber)?.intValue }
+    }
+}

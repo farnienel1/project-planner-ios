@@ -97,6 +97,33 @@ extension CanonicalBusinessEngine {
         return rows.compactMap { $0 as? String }
     }
 
+    /// `jobDeleteBookingRemovals({ projectId, bookings, subcontractorBookings, managerSiteBookings, nowIso, timeZone })`
+    /// (RULEBOOK 1.10.0 §2): the ids, per collection, a job delete removes (today or later, ids without case, returned
+    /// as stored). Rows are `{ id, projectId? | locationType?, locationId?, dateMs }`. Nil when the script did not answer.
+    nonisolated static func jobDeleteBookingRemovals(
+        projectId: String,
+        bookings: [[String: Any]],
+        subcontractorBookings: [[String: Any]],
+        managerSiteBookings: [[String: Any]],
+        now: Date,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> (bookings: [String], subcontractorBookings: [String], managerSiteBookings: [String])? {
+        let input: [String: Any] = [
+            "projectId": projectId,
+            "bookings": bookings,
+            "subcontractorBookings": subcontractorBookings,
+            "managerSiteBookings": managerSiteBookings,
+            "nowIso": ISO8601DateFormatter().string(from: now),
+            "timeZone": timeZone,
+        ]
+        guard let row = callJSON("jobDeleteBookingRemovals", arguments: [input]) as? [String: Any] else { return nil }
+        return (
+            row["bookings"] as? [String] ?? [],
+            row["subcontractorBookings"] as? [String] ?? [],
+            row["managerSiteBookings"] as? [String] ?? []
+        )
+    }
+
     // MARK: Subcontractor bookings
 
     /// `parseSubcontractorBookingDocument(docId, data, { timeZone })`: nil without a firm, job or date, or with an
@@ -223,5 +250,18 @@ extension CanonicalBusinessEngine {
     nonisolated static func deadlineAssignmentWriteFields(projectId: String, assigneeUserIds: [String]) -> CanonicalDeadlineAssignmentWrite? {
         let input: [String: Any] = ["projectId": projectId, "assigneeUserIds": assigneeUserIds]
         return CanonicalDeadlineAssignmentWrite(callJSON("deadlineAssignmentWriteFields", arguments: [input]))
+    }
+}
+
+extension CanonicalBusinessEngine {
+    // MARK: 1.9.0 manager site booking edits
+
+    /// `managerSiteBookingUpdateWriteFields(before, next)`: partial update of an existing `managerSiteBookings/{id}` —
+    /// changed fields only, the slot group and the location group (`MANAGER_SITE_BOOKING_LOCATION_WRITE_GROUP`) each
+    /// together, `id` / `createdAt` / `organizationId` never rewritten. Empty when `before` is nil (an edit of a missing
+    /// document writes nothing). Nil when the script did not answer.
+    nonisolated static func managerSiteBookingUpdateWriteFields(before: [String: Any]?, next: [String: Any]) -> CanonicalDocumentWrite? {
+        let beforeJSON: Any = before.map { peopleDocumentJSON($0) as Any } ?? NSNull()
+        return CanonicalDocumentWrite(callJSON("managerSiteBookingUpdateWriteFields", arguments: [beforeJSON, peopleDocumentJSON(next)]))
     }
 }

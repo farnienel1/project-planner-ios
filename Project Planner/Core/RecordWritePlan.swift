@@ -30,18 +30,23 @@ nonisolated enum RecordWriteAction: Sendable, Equatable {
 nonisolated enum RecordWritePlan {
     /// `mode` nil is the legacy upsert; every save now names its mode (subcontractors and the material catalogue
     /// included), so nil is kept only for the plan's own tests.
+    /// RULEBOOK 1.9.0 §1: an edit of a missing document is refused (`editOfMissingDocumentIsRefused`), never
+    /// re-created.
     static func action(mode: RecordSaveMode?, documentExists: Bool) -> RecordWriteAction {
         if documentExists { return .update }
-        switch mode {
-        case .update: return .refuseDeletedElsewhere
-        case .create, .none: return .create
+        let isCreate: Bool? = mode.map { $0 == .create }
+        // Script silent: an edit is still never turned into a create (nothing is created without the rule).
+        if CanonicalBusinessEngine.editOfMissingDocumentIsRefused(isCreate: isCreate, exists: false) ?? (isCreate == false) {
+            return .refuseDeletedElsewhere
         }
+        return .create
     }
 }
 
 /// An edit whose document no longer exists on the server. Final: never retried, never turned into a create.
 nonisolated struct RecordDeletedElsewhereError: LocalizedError, Sendable {
-    static let message = "This was deleted on another device."
+    /// `EDIT_OF_MISSING_DOCUMENT_MESSAGE`.
+    static var message: String { CanonicalBusinessEngine.editOfMissingDocumentMessage }
     let collection: String
     let documentId: String
 
@@ -65,6 +70,9 @@ struct ProjectStoreChangeSet {
 
     var works: [Work] = []
     var clients: [ClientChange] = []
+    /// What started this save (`SYNC_WRITE_TRIGGERS`). Every ProjectStore change set is a user action; a launch,
+    /// foreground or listener path that built one would be refused by `syncWriteAllowed`.
+    var trigger: SyncWriteTrigger = .userAction
 
     /// Local cache only (a delete already written, or clearing data): nothing goes to Firestore.
     static let localOnly = ProjectStoreChangeSet()
@@ -89,15 +97,30 @@ struct ProjectStoreChangeSet {
 
     /// The in-memory records this change set names, with how each is saved. A record no longer in memory
     /// (deleted while the save waited) is skipped.
+    /// `recordsToSave(records, changedIds)`: only the in-memory records this change set names.
+    private static func kept(recordIds: [UUID], changedIds: [UUID]) -> Set<String> {
+        let all = recordIds.map(\.uuidString)
+        let changed = changedIds.map(\.uuidString)
+        let ids = CanonicalBusinessEngine.recordsToSave(recordIds: all, changedIds: changed)
+            ?? all.filter { Set(changed).contains($0) } // script silent: the exact ids named, nothing more
+        return Set(ids.map { $0.lowercased() })
+    }
+
     func worksToSave(from projects: [Project]) -> [(work: Project, mode: RecordSaveMode, previous: Project?)] {
-        works.compactMap { change in
-            projects.first(where: { $0.id == change.id }).map { (work: $0, mode: change.mode, previous: change.previous) }
+        guard !works.isEmpty, SyncWriteGate.allows(trigger, "ProjectStore works") else { return [] }
+        let keep = Self.kept(recordIds: projects.map(\.id), changedIds: works.map(\.id))
+        return works.compactMap { change in
+            guard keep.contains(change.id.uuidString.lowercased()) else { return nil }
+            return projects.first(where: { $0.id == change.id }).map { (work: $0, mode: change.mode, previous: change.previous) }
         }
     }
 
     func clientsToSave(from all: [Client]) -> [(client: Client, mode: RecordSaveMode, previous: Client?)] {
-        clients.compactMap { change in
-            all.first(where: { $0.id == change.id }).map { (client: $0, mode: change.mode, previous: change.previous) }
+        guard !clients.isEmpty, SyncWriteGate.allows(trigger, "ProjectStore clients") else { return [] }
+        let keep = Self.kept(recordIds: all.map(\.id), changedIds: clients.map(\.id))
+        return clients.compactMap { change in
+            guard keep.contains(change.id.uuidString.lowercased()) else { return nil }
+            return all.first(where: { $0.id == change.id }).map { (client: $0, mode: change.mode, previous: change.previous) }
         }
     }
 }

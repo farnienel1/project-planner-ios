@@ -683,14 +683,7 @@ private struct MyTasksRedesignTaskCard: View {
         updatedTask.completionNotes = notes
         updatedTask.updatedAt = Date()
         await taskStore.updateTask(updatedTask)
-        if let creatorId = userStore.currentUser?.id {
-            await notificationService.notifyTaskCompleted(
-                taskId: updatedTask.id,
-                taskTitle: updatedTask.title,
-                completedBy: completedBy,
-                assignedToUserId: creatorId
-            )
-        }
+        await notificationService.notifyTaskCompleted(task: updatedTask, completedBy: completedBy)
     }
 
     @ViewBuilder

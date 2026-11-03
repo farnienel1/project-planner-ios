@@ -926,11 +926,15 @@ struct OperativeAnnualLeaveCalendarView: View {
         )
     }
 
+    /// RULEBOOK 1.9.0 §9: the person's leave by every id of their account (`leaveRecordsForAccount`).
     private var personHolidayBookings: [HolidayBooking] {
-        holidayStore.myBookings(
-            userId: person.userId ?? leaveProfileUser?.id,
+        if let account = leaveProfileUser {
+            return holidayStore.myBookings(account: account, operatives: operativeStore.allOperatives, operativeId: person.operativeId)
+        }
+        return holidayStore.myBookings(
+            userId: person.userId,
             operativeId: person.operativeId,
-            email: leaveProfileUser?.email
+            email: nil
         )
     }
 

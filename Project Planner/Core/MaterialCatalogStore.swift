@@ -70,10 +70,16 @@ final class MaterialCatalogStore: ObservableObject {
                 replaceItems(normalized)
                 return
             }
-            // Bootstrap once for orgs with historical material lines but empty catalogue.
-            try? await firebaseBackend.backfillMaterialCatalogueFromExistingMaterials(organizationId: organizationId)
-            let refreshed = try await firebaseBackend.loadMaterialCatalogue(organizationId: organizationId)
-            replaceItems(refreshed.map(normalizeCategory))
+            // RULEBOOK 1.9.0 §1 "Never re-save what you didn't change": a load (and a listener snapshot) never writes.
+            // An empty catalogue shows the items recovered from material lines, for display only; nothing is written
+            // until the user saves (`syncWriteAllowed`).
+            if SyncWriteGate.allows(.backgroundSync, "material catalogue backfill on load") {
+                try? await firebaseBackend.backfillMaterialCatalogueFromExistingMaterials(organizationId: organizationId)
+                let refreshed = try await firebaseBackend.loadMaterialCatalogue(organizationId: organizationId)
+                replaceItems(refreshed.map(normalizeCategory))
+                return
+            }
+            replaceItems((try? await fallbackItemsFromMaterialLines(firebaseBackend: firebaseBackend, organizationId: organizationId)) ?? [])
         } catch {
             catalogueLoaded = false
             // Fallback: if catalogue read fails or returns nothing, synthesize from existing materials so users can still see items.

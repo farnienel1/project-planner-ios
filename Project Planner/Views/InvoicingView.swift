@@ -743,15 +743,30 @@ enum TimesheetDraftStore {
         }
     }
 
-    /// Removes the local copy of one organisation's sheet for this person and period (draft and bounds).
+    /// Removes the local copy of one organisation's sheet for this person and period (draft, loaded copy and bounds).
     /// Used when the server reports no sheet: the device cache never outlives the server copy (§1).
     static func clear(userId: String, weekStart: Date, organizationId: String? = nil) {
         if let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId) {
             defaults.removeObject(forKey: storageKey)
+            defaults.removeObject(forKey: storageKey + ".loaded")
         }
         if let boundsKey = periodBoundsKey(userId: userId, weekStart: weekStart, organizationId: organizationId) {
             defaults.removeObject(forKey: boundsKey)
         }
+    }
+
+    /// RULEBOOK 1.9.0 §8: the sheet as this device last loaded (or wrote) it — the `base` of `timesheetChangedFields`,
+    /// so a save sends only what this editor changed and never resends fields another device wrote since.
+    static func loadedCopy(userId: String, weekStart: Date, organizationId: String? = nil) -> TimesheetDraft? {
+        guard let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId),
+              let data = defaults.data(forKey: storageKey + ".loaded") else { return nil }
+        return try? JSONDecoder().decode(TimesheetDraft.self, from: data)
+    }
+
+    static func rememberLoadedCopy(_ draft: TimesheetDraft, userId: String, weekStart: Date, organizationId: String? = nil) {
+        guard let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId),
+              let encoded = try? JSONEncoder().encode(draft) else { return }
+        defaults.set(encoded, forKey: storageKey + ".loaded")
     }
 
     static func storedPeriodEnd(userId: String, weekStart: Date, organizationId: String? = nil) -> Date? {
@@ -879,6 +894,7 @@ enum TimesheetDraftStore {
             rememberPeriodBounds(startDayKey: derivedStart, endDayKey: derivedEnd, userId: userId, weekStart: weekStart, organizationId: organizationId)
         }
         save(decoded, userId: userId, weekStart: weekStart, organizationId: organizationId)
+        rememberLoadedCopy(decoded, userId: userId, weekStart: weekStart, organizationId: organizationId)
         return decoded
     }
 
@@ -910,7 +926,7 @@ enum TimesheetDraftStore {
         writer: AppUser? = nil,
         subject: AppUser? = nil
     ) async -> String? {
-        let end = weekEnd ?? storedPeriodEnd(userId: userId, weekStart: weekStart) ?? weekStart
+        let end = weekEnd ?? storedPeriodEnd(userId: userId, weekStart: weekStart, organizationId: organizationId) ?? weekStart
         let writerId = Auth.auth().currentUser?.uid ?? writer?.id ?? ""
         let server: [String: Any]?
         do {
@@ -932,12 +948,13 @@ enum TimesheetDraftStore {
         var frozenEntriesChanged = false
         if !reviewer {
             for key in managerSignOffKeys { fields.removeValue(forKey: key) }
+            // RULEBOOK 1.9.0 §8: "manager signed" is read from the stored copy, never from this device's draft.
             let storedManagerSigned = server.flatMap { statusFields(fromFirestore: $0)?.managerSignedAtMs } != nil
             guard let keep = CanonicalBusinessEngine.timesheetOwnerWritableKeys(
                 Array(fields.keys),
                 // Unknown counts as having one: the snapshot is then left to the line manager (web).
                 subjectHasLineManager: subject.map { TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? true,
-                managerSigned: storedManagerSigned || draft.managerSignedAt != nil
+                managerSigned: storedManagerSigned
             ) else {
                 return "Couldn't save your timesheet: the timesheet rules did not load. Try again."
             }
@@ -949,8 +966,20 @@ enum TimesheetDraftStore {
             fields = fields.filter { keep.contains($0.key) }
         }
         var changed: [String: Any] = [:]
-        for (key, value) in fields where server == nil || !firestoreValuesEqual(value, server?[key]) {
-            changed[key] = value
+        if server != nil, let loaded = loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId) {
+            // RULEBOOK 1.9.0 §1, §8: `timesheetChangedFields(base, next)` — only what this editor changed since it
+            // loaded the sheet. A reviewer never resends the owner's signature, expenses or price work, and the owner
+            // never resends the manager's fields.
+            let base = asFirestoreMap(loaded).filter { fields[$0.key] != nil }
+            guard let write = CanonicalBusinessEngine.timesheetChangedFields(base: base, next: fields) else {
+                return "Couldn't save your timesheet: the timesheet rules did not load. Try again."
+            }
+            changed = write.firestoreFields(from: fields)
+        } else {
+            // Never loaded on this device (or no stored sheet yet): the fields that differ from the server copy.
+            for (key, value) in fields where server == nil || !firestoreValuesEqual(value, server?[key]) {
+                changed[key] = value
+            }
         }
         if reviewer {
             let storedIds = storedEntryIds(server)
@@ -984,6 +1013,8 @@ enum TimesheetDraftStore {
         } catch {
             return "Couldn't save your timesheet: \(error.localizedDescription)"
         }
+        // What this device wrote is now its loaded copy (the base of the next save).
+        rememberLoadedCopy(draft, userId: userId, weekStart: weekStart, organizationId: organizationId)
         if frozenEntriesChanged {
             return "Price work and expenses can't be changed after your line manager has signed. Ask them to amend it."
         }
@@ -1906,7 +1937,7 @@ private struct MyTimesheetView: View {
                             draft: draft,
                             managerHasSigned: managerHasSigned
                         )
-                        let review = draft.payrollLineReviews[row.payrollLine.id]
+                        let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.payrollLine.id)
                         let decision = review?.decision ?? .approved
                         let effective = TimesheetDraftAdjustments.effectivePayrollAmount(
                             line: row.payrollLine,
@@ -2302,7 +2333,8 @@ private struct MyTimesheetView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadDraft() }
         .task { await loadDayRateHistory() }
-        .reloadsOnForeground { await loadDayRateHistory() }
+        .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.myTimesheet", firebaseBackend: firebaseBackend,
+                          query: { $0.collection("operativeDayRateHistory") }) { await loadDayRateHistory() }
         // Approved leave rows read the holiday list (read only); load it when nothing is cached yet.
         .task { if holidayStore.bookings.isEmpty { await holidayStore.loadData() } }
         // Live sheet while open: a line manager's sign-off or review on web shows here. An edit sheet that is
@@ -4083,7 +4115,8 @@ private struct OperativeTimesheetReviewView: View {
                 Task { await refreshDraftFromCloud() }
             }
             .task { await loadDayRateHistory() }
-            .reloadsOnForeground { await loadDayRateHistory() }
+            .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.review", firebaseBackend: firebaseBackend,
+                              query: { $0.collection("operativeDayRateHistory") }) { await loadDayRateHistory() }
             .task { if holidayStore.bookings.isEmpty { await holidayStore.loadData() } }
             // Live sheet while open: the person's own edit or another reviewer's decision on web shows here.
             // An entry being edited, or the sign sheet, is never overwritten — the server copy loads after.
@@ -4420,7 +4453,7 @@ private struct OperativeTimesheetReviewView: View {
 
     @ViewBuilder
     private func managerPayrollLineRow(_ row: TimesheetPayrollLineItem) -> some View {
-        let review = draft.payrollLineReviews[row.id]
+        let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.id)
         let removed = TimesheetDraftAdjustments.isPayrollLineRemoved(
             line: row,
             draft: draft,
@@ -5565,8 +5598,8 @@ private enum InvoicePDFGenerationSupport {
             userId: currentUser.id,
             weekStart: OrganizationRulebookContext.calendar.startOfDay(for: period.startDate)
         )
-        // Built like the signed-sheet export (`weeklyReportOverride` first, then reviews and entry decisions);
-        // PAYE and leave lines never go on an invoice: `invoiceLines` filters the rows below.
+        // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows` (`raw`, as web's owner invoice): the signed snapshot first, else
+        // the live lines; PAYE and leave lines never go on an invoice.
         let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft)
         return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
@@ -5995,8 +6028,8 @@ private struct GenerateInvoiceView: View {
             userId: currentUser.id,
             weekStart: OrganizationRulebookContext.calendar.startOfDay(for: period.startDate)
         )
-        // Built like the signed-sheet export (`weeklyReportOverride` first, then reviews and entry decisions);
-        // PAYE and leave lines never go on an invoice: `invoiceLines` filters the rows below.
+        // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows` (`raw`, as web's owner invoice): the signed snapshot first, else
+        // the live lines; PAYE and leave lines never go on an invoice.
         let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft)
         return InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
@@ -6193,173 +6226,95 @@ private struct TimesheetLeaveInfoRows: View {
 /// payroll lines with their `payrollLineReviews` applied, then price work and expenses at the decision in
 /// effect (`timesheetEntryDecision`, already resolved by `parseTimesheetEntries` when the sheet is read)
 /// through `timesheetEntryEffectiveAmount` (declined left out, revised amount used).
+/// RULEBOOK 1.10.0 §8: the rows of a generated invoice are `timesheetInvoiceRows({ sheet, payrollLines, extrasMode })`
+/// — the signed snapshot (`weeklyReportOverride`) first, else the live lines (`invoiceLines`), with reviews
+/// (`payrollLineReview`) and entry decisions (`timesheetEntryDecision`) in `decided` mode. This only maps the
+/// script's rows back onto the line items the PDF prints; nothing is decided here. PAYE price work and expenses follow
+/// the function (kept today; owner decision pending).
 private enum TimesheetInvoiceRows {
+    enum ExtrasMode: String {
+        /// The owner's invoice before review (web `TimesheetPeriodPage`).
+        case raw
+        /// An export, or after the line manager signed.
+        case decided
+    }
+
     static func rows(
         for user: AppUser,
         summary: TimesheetPayrollSummary,
-        draft: TimesheetDraft
+        draft: TimesheetDraft,
+        extrasMode: ExtrasMode = .raw
     ) -> [InvoiceLineItem] {
-        var rows: [InvoiceLineItem] = []
-        if let override = draft.weeklyReportOverride {
-            let liveById = Dictionary(summary.lineItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            for line in override.lines where line.decision != .declined && line.amount > 0.0001 {
-                if let live = liveById[line.id] {
-                    var row = InvoiceLineItem(
-                        lineId: live.id,
-                        date: live.date,
-                        jobNumber: live.jobNumber,
-                        projectName: live.projectName,
-                        details: live.details,
-                        paidHours: live.paidHours,
-                        payrollBasis: live.payrollBasis,
-                        dayRate: live.dayRate,
-                        hourlyRate: live.hourlyRate,
-                        amount: line.amount,
-                        isPayeDay: live.isPayeDay,
-                        isOvertimeLine: live.isOvertimeLine
-                    )
-                    row.isOverlapping = live.isOverlapping
-                    row.bookingId = live.bookingId
-                    rows.append(row)
-                } else {
-                    rows.append(
-                        InvoiceLineItem(
-                            lineId: line.id,
-                            date: line.date,
-                            jobNumber: line.jobNumber,
-                            projectName: line.projectName,
-                            details: line.details,
-                            paidHours: line.paidHours,
-                            payrollBasis: .dayRate,
-                            dayRate: 0,
-                            hourlyRate: nil,
-                            amount: line.amount,
-                            isPayeDay: user.employmentType(on: line.date) == .paye,
-                            isOvertimeLine: line.isOvertime
-                        )
-                    )
-                }
-            }
-            for line in override.priceWork where line.decision != .declined && line.amount > 0.0001 {
-                rows.append(
-                    InvoiceLineItem(
-                        lineId: "pw-\(line.id)",
-                        date: line.date,
-                        jobNumber: line.jobNumber,
-                        projectName: "Price work",
-                        details: line.title,
-                        paidHours: 0,
-                        payrollBasis: .dayRate,
-                        dayRate: 0,
-                        hourlyRate: nil,
-                        amount: line.amount,
-                        isPayeDay: user.employmentType(on: line.date) == .paye
-                    )
-                )
-            }
-            for line in override.expenses where line.decision != .declined && line.amount > 0.0001 {
-                rows.append(
-                    InvoiceLineItem(
-                        lineId: "exp-\(line.id)",
-                        date: line.date,
-                        jobNumber: line.jobNumber.isEmpty ? "—" : line.jobNumber,
-                        projectName: "Expense",
-                        details: line.title,
-                        paidHours: 0,
-                        payrollBasis: .dayRate,
-                        dayRate: 0,
-                        hourlyRate: nil,
-                        amount: line.amount,
-                        isPayeDay: user.employmentType(on: line.date) == .paye
-                    )
-                )
-            }
-            return rows
+        _ = user
+        let sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft))
+        let lines: [[String: Any]] = summary.lineItems.map { ["id": $0.id, "amount": $0.amount, "isPayeDay": $0.isPayeDay] }
+        guard let result = CanonicalBusinessEngine.callJSON(
+            "timesheetInvoiceRows",
+            arguments: [["sheet": sheet, "payrollLines": lines, "extrasMode": extrasMode.rawValue]]
+        ) as? [[String: Any]] else {
+            // The script did not answer: nothing unchecked is invoiced.
+            return []
         }
+        func key(_ value: String) -> String { value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let liveById = Dictionary(summary.lineItems.map { (key($0.id), $0) }, uniquingKeysWith: { first, _ in first })
+        let override = draft.weeklyReportOverride
+        let overrideLines = Dictionary((override?.lines ?? []).map { (key($0.id), $0) }, uniquingKeysWith: { first, _ in first })
+        let overridePriceWork = Dictionary((override?.priceWork ?? []).map { (key($0.id), $0) }, uniquingKeysWith: { first, _ in first })
+        let overrideExpenses = Dictionary((override?.expenses ?? []).map { (key($0.id), $0) }, uniquingKeysWith: { first, _ in first })
+        func entryKey(_ storedId: String?, _ id: UUID) -> String { key(storedId ?? WorkDocumentKeys.storedId(for: id)) }
+        let priceWork = Dictionary(draft.priceWorkEntries.map { (entryKey($0.storedId, $0.id), $0) }, uniquingKeysWith: { first, _ in first })
+        let expenses = Dictionary(draft.expenseEntries.map { (entryKey($0.storedId, $0.id), $0) }, uniquingKeysWith: { first, _ in first })
 
-        for line in summary.lineItems {
-            if TimesheetDraftAdjustments.isPayrollLineRemoved(
-                line: line,
-                draft: draft,
-                managerHasSigned: false,
-                applyLiveReview: true
-            ) {
+        var rows: [InvoiceLineItem] = []
+        for row in result {
+            let id = row["id"] as? String ?? ""
+            let amount = (row["amount"] as? NSNumber)?.doubleValue ?? 0
+            let fromOverride = (row["source"] as? String) == "override"
+            switch row["kind"] as? String {
+            case "labour":
+                if let live = liveById[key(id)] {
+                    var item = InvoiceLineItem(
+                        lineId: live.id, date: live.date, jobNumber: live.jobNumber, projectName: live.projectName,
+                        details: live.details, paidHours: live.paidHours, payrollBasis: live.payrollBasis,
+                        dayRate: live.dayRate, hourlyRate: live.hourlyRate, amount: amount,
+                        isPayeDay: live.isPayeDay, isOvertimeLine: live.isOvertimeLine
+                    )
+                    item.isOverlapping = live.isOverlapping
+                    item.bookingId = live.bookingId
+                    rows.append(item)
+                } else if fromOverride, let line = overrideLines[key(id)] {
+                    rows.append(InvoiceLineItem(
+                        lineId: line.id, date: line.date, jobNumber: line.jobNumber, projectName: line.projectName,
+                        details: line.details, paidHours: line.paidHours, payrollBasis: .dayRate, dayRate: 0,
+                        hourlyRate: nil, amount: amount, isPayeDay: false, isOvertimeLine: line.isOvertime
+                    ))
+                }
+            case "priceWork":
+                if fromOverride, let line = overridePriceWork[key(id)] {
+                    rows.append(moneyRow(prefix: "pw", id: line.id, date: line.date, jobNumber: line.jobNumber, projectName: "Price work", details: line.title, amount: amount))
+                } else if let entry = priceWork[key(id)] {
+                    rows.append(moneyRow(prefix: "pw", id: entry.id.uuidString, date: entry.startDate, jobNumber: entry.jobNumber, projectName: "Price work", details: entry.title, amount: amount))
+                }
+            case "expense":
+                if fromOverride, let line = overrideExpenses[key(id)] {
+                    rows.append(moneyRow(prefix: "exp", id: line.id, date: line.date, jobNumber: line.jobNumber.isEmpty ? "—" : line.jobNumber, projectName: "Expense", details: line.title, amount: amount))
+                } else if let entry = expenses[key(id)] {
+                    rows.append(moneyRow(prefix: "exp", id: entry.id.uuidString, date: entry.date, jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber, projectName: "Expense", details: entry.title, amount: amount))
+                }
+            default:
                 continue
             }
-            let amount = TimesheetDraftAdjustments.effectivePayrollAmount(
-                line: line,
-                draft: draft,
-                managerHasSigned: false,
-                applyLiveReview: true
-            )
-            guard amount > 0.0001 else { continue }
-            var row = InvoiceLineItem(
-                lineId: line.id,
-                date: line.date,
-                jobNumber: line.jobNumber,
-                projectName: line.projectName,
-                details: line.details,
-                paidHours: line.paidHours,
-                payrollBasis: line.payrollBasis,
-                dayRate: line.dayRate,
-                hourlyRate: line.hourlyRate,
-                amount: amount,
-                isPayeDay: line.isPayeDay,
-                isOvertimeLine: line.isOvertimeLine
-            )
-            row.isOverlapping = line.isOverlapping
-            row.bookingId = line.bookingId
-            rows.append(row)
-        }
-        for entry in draft.priceWorkEntries {
-            guard entry.managerDecision != .declined,
-                  let amount = CanonicalBusinessEngine.timesheetEntryEffectiveAmount(
-                    decision: entry.managerDecision.rawValue,
-                    revisedAmount: entry.managerRevisedAmount,
-                    amount: entry.amount
-                  ),
-                  amount > 0.0001 else { continue }
-            rows.append(
-                InvoiceLineItem(
-                    lineId: "pw-\(entry.id.uuidString)",
-                    date: entry.startDate,
-                    jobNumber: entry.jobNumber,
-                    projectName: "Price work",
-                    details: entry.title,
-                    paidHours: 0,
-                    payrollBasis: .dayRate,
-                    dayRate: 0,
-                    hourlyRate: nil,
-                    amount: amount,
-                    isPayeDay: user.employmentType(on: entry.startDate) == .paye
-                )
-            )
-        }
-        for entry in draft.expenseEntries {
-            guard entry.managerDecision != .declined,
-                  let amount = CanonicalBusinessEngine.timesheetEntryEffectiveAmount(
-                    decision: entry.managerDecision.rawValue,
-                    revisedAmount: entry.managerRevisedAmount,
-                    amount: entry.amount
-                  ),
-                  amount > 0.0001 else { continue }
-            rows.append(
-                InvoiceLineItem(
-                    lineId: "exp-\(entry.id.uuidString)",
-                    date: entry.date,
-                    jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber,
-                    projectName: "Expense",
-                    details: entry.title,
-                    paidHours: 0,
-                    payrollBasis: .dayRate,
-                    dayRate: 0,
-                    hourlyRate: nil,
-                    amount: amount,
-                    isPayeDay: user.employmentType(on: entry.date) == .paye
-                )
-            )
         }
         return rows
+    }
+
+    /// A price work or expense row (no hours). Not a PAYE day: `timesheetInvoiceRows` already decided it goes on.
+    private static func moneyRow(prefix: String, id: String, date: Date, jobNumber: String, projectName: String, details: String, amount: Double) -> InvoiceLineItem {
+        InvoiceLineItem(
+            lineId: "\(prefix)-\(id)", date: date, jobNumber: jobNumber, projectName: projectName, details: details,
+            paidHours: 0, payrollBasis: .dayRate, dayRate: 0, hourlyRate: nil, amount: amount,
+            isPayeDay: false
+        )
     }
 }
 
@@ -7026,7 +6981,8 @@ private enum TimesheetExportHelper {
             scheduleOptions: scheduleOptions,
             relatedUsers: relatedUsers
         )
-        let rows = TimesheetInvoiceRows.rows(for: user, summary: summary, draft: draft)
+        // RULEBOOK 1.10.0 §8: an export reads decisions (`extrasMode` `decided`).
+        let rows = TimesheetInvoiceRows.rows(for: user, summary: summary, draft: draft, extrasMode: .decided)
         return rows.sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName

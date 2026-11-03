@@ -12,9 +12,15 @@ import FirebaseAuth
 
 @MainActor
 class OperativeStore: ObservableObject {
-    @Published var operatives: [Operative] = []
+    @Published var operatives: [Operative] = [] {
+        // RULEBOOK 1.10.0 §17: the signed-in account's own booking ids (`bookingIdsForAccount`) for `bookingQueryPlan`.
+        didSet { JobAccessContext.updateOperatives(operatives) }
+    }
     
-    @Published var managers: [Manager] = []
+    @Published var managers: [Manager] = [] {
+        // RULEBOOK 1.10.0: `canSeeJob` / `jobManagerUserIds` match a job's managers-list ids by this list's emails.
+        didSet { JobAccessContext.updateManagers(allManagers) }
+    }
     /// Organisation skill catalogue is retired. Kept empty so legacy decode/lookups stay safe.
     @Published var organizationSkills: [OrganizationSkill] = []
     @Published var qualifications: [Qualification] = []
@@ -213,6 +219,23 @@ class OperativeStore: ObservableObject {
             self.managers = next
             self.smartCache?.cacheManagers(next)
             NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+        }
+        // RULEBOOK 1.9.0 `LIVE_COLLECTIONS` `qualifications`: the library is live too. A server snapshot replaces the
+        // list; an empty or cache snapshot never empties it (the starter library seeds on the one-off load).
+        firebaseBackend.listenOrganizationQuery(
+            key: "qualifications",
+            organizationId: organizationId,
+            query: { $0.collection("qualifications") }
+        ) { [weak self] rows, fromCache in
+            guard let self else { return }
+            let incoming = FirebaseBackend.qualifications(fromDocuments: rows)
+            guard !incoming.isEmpty,
+                  let next = LiveSnapshotMerge.apply(existing: self.qualifications, incoming: incoming, fromCache: fromCache) else { return }
+            // `Qualification ==` compares ids only; a cache snapshot with the same rows changes nothing.
+            if fromCache && next.map(\.id) == self.qualifications.map(\.id) { return }
+            self.qualifications = next
+            self.smartCache?.cacheQualifications(next)
+            NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
         }
     }
 

@@ -61,6 +61,53 @@ extension CanonicalBusinessEngine {
         )
     }
 
+    /// RULEBOOK 1.10.0 §8 `payRateChangeWrites`: the history rows a pay change writes in the profile's batch, or the
+    /// refusal message (`PAY_HISTORY_NOT_LOADED_MESSAGE` when `history` is nil — never treated as empty). Previous and
+    /// next are `{ rate, payBasis }` (`day` / `hourly`). Nil when the script did not answer.
+    nonisolated static func payRateChangeWrites(
+        userId: String?,
+        operativeId: String?,
+        previous: (rate: Double?, payBasis: String?),
+        next: (rate: Double?, payBasis: String?),
+        historyRowIds: [String]?,
+        effective: Date,
+        seedEffective: Date?,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> (rows: [CanonicalPayRateHistoryWrite], refusal: String?)? {
+        let input: [String: Any] = [
+            "userId": userId.map { $0 as Any } ?? NSNull(),
+            "operativeId": operativeId.map { $0 as Any } ?? NSNull(),
+            "previousProfile": [
+                "rate": previous.rate.map { $0 as Any } ?? NSNull(),
+                "payBasis": previous.payBasis.map { $0 as Any } ?? NSNull(),
+            ] as [String: Any],
+            "nextProfile": [
+                "rate": next.rate.map { $0 as Any } ?? NSNull(),
+                "payBasis": next.payBasis.map { $0 as Any } ?? NSNull(),
+            ] as [String: Any],
+            "history": historyRowIds.map { ids in ids.map { ["id": $0] } as Any } ?? NSNull(),
+            "effectiveDayKey": effective.timeIntervalSince1970 * 1000,
+            "seedEffective": seedEffective.map { $0.timeIntervalSince1970 * 1000 as Any } ?? NSNull(),
+            "timeZone": timeZone,
+        ]
+        guard let result = callJSON("payRateChangeWrites", arguments: [input]) as? [String: Any] else { return nil }
+        guard result["ok"] as? Bool == true else {
+            return ([], result["message"] as? String ?? "Pay history could not be loaded. Check your connection and save again.")
+        }
+        let rows = (result["rows"] as? [[String: Any]] ?? []).compactMap { row -> CanonicalPayRateHistoryWrite? in
+            guard let effectiveAtMs = jsonNumber(row["effectiveAtMs"]), let dayKey = row["effectiveDayKey"] as? String else { return nil }
+            return CanonicalPayRateHistoryWrite(
+                userId: row["userId"] as? String ?? "",
+                operativeId: row["operativeId"] as? String ?? "",
+                dayRate: jsonNumber(row["dayRate"]),
+                payBasis: row["payBasis"] as? String,
+                effectiveAt: Date(timeIntervalSince1970: effectiveAtMs / 1000),
+                effectiveDayKey: dayKey
+            )
+        }
+        return (rows, nil)
+    }
+
     /// `payRateOnDay` result.
     nonisolated struct CanonicalPayRateOnDay: Equatable, Sendable {
         /// `day` or `hourly`.
@@ -145,7 +192,9 @@ extension CanonicalBusinessEngine {
         userIds: [String] = [],
         operativeIds: [String] = [],
         dayKey: String,
-        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier,
+        person: [String: Any]? = nil,
+        roster: [[String: Any]]? = nil
     ) -> CanonicalPayRateOnDay? {
         var input: [String: Any] = [
             "dayKey": dayKey,
@@ -153,6 +202,9 @@ extension CanonicalBusinessEngine {
             "userIds": userIds,
             "operativeIds": operativeIds
         ]
+        // RULEBOOK 1.10.0 §8: `person` + `roster` — history under every id of the person (`personIdSet`) counts.
+        if let person { input["person"] = person }
+        if let roster { input["roster"] = roster }
         if let userPay {
             var user = payProfileJSON(
                 id: userId,

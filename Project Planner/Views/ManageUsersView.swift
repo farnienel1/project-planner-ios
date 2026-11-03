@@ -1030,7 +1030,7 @@ struct ManageUserRowView: View {
                     .whereField("email", isEqualTo: user.email)
                     .getDocuments()
                 for doc in existing.documents {
-                    try? await doc.reference.updateData(["isUsed": true])
+                    try? await doc.reference.updateData(InvitationDocument.usedFields())
                 }
 
                 // Always create a brand new invitation (never reuse old link)
@@ -1063,7 +1063,9 @@ struct ManageUserRowView: View {
                 if let mobileNumber = user.mobileNumber {
                     invitationData["mobileNumber"] = mobileNumber
                 }
-                try await db.collection("invitations").document(invitationId).setData(invitationData)
+                invitationData["employmentType"] = user.employmentType.rawValue
+                // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
 
                 let success = await userStore.sendSignUpEmailWithVerification(
                     email: user.email,
@@ -1358,6 +1360,9 @@ struct EditUserView: View {
     /// When `true` (e.g. opened from the Managers roster shortcut), hide **Admin Access** — grant admin only via Change user type in full Manage Users.
     let suppressAdminAccessToggle: Bool
     @State private var permissions: UserPermissions
+    /// The stored permissions the editor's draft started from. A save writes only the flags changed against this,
+    /// and the draft follows the live row while nothing has been changed (RULEBOOK §1 partial writes).
+    @State private var permissionsBaseline: UserPermissions
     @State private var isUpdating = false
     @State private var isActive: Bool
     @State private var showingDeleteConfirmation = false
@@ -1440,6 +1445,7 @@ struct EditUserView: View {
         self.user = user
         self.suppressAdminAccessToggle = suppressAdminAccessToggle
         self._permissions = State(initialValue: user.permissions)
+        self._permissionsBaseline = State(initialValue: user.permissions)
         self._isActive = State(initialValue: user.isActive)
         self._selectedAssignedManagerUserId = State(initialValue: user.assignedManagerUserId)
         self._selectedLineManagerUserIds = State(initialValue: Set(user.lineManagerUserIds))
@@ -1740,13 +1746,11 @@ struct EditUserView: View {
 
     private var lineManagerSummary: String {
         guard permissions.operativeMode || permissions.manager || permissions.adminAccess else { return "" }
-        if hasNoLineManagerDraft { return "No line manager" }
-        if selectedLineManagerUserIds.isEmpty { return "Select manager(s)…" }
-        let names = lineManagerCandidates
-            .filter { selectedLineManagerUserIds.contains($0.id) }
-            .map { $0.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? $0.email : $0.fullName }
-        if names.count == 1 { return names[0] }
-        return "\(names.first ?? "Manager") +\(names.count - 1) more"
+        return LineManagerSummaryLabel.text(
+            selectedIds: selectedLineManagerUserIds,
+            roster: userStore.organizationUsers,
+            hasNoLineManager: hasNoLineManagerDraft
+        )
     }
 
     private var operativeSetupSectionTitle: String {
@@ -1809,6 +1813,31 @@ struct EditUserView: View {
             operativeTransitionMaterials = o.materials
             operativeTransitionSiteAudit = o.siteAudit
         }
+    }
+
+    /// Account kind of the stored row from the rulebook (`accountKindFromFlags`: super admin, then admin flag or
+    /// role, then operative mode), so the Change user type sheet opens on the type the header shows.
+    private func storedAccountKind(of subject: AppUser) -> ManagedAccountKind {
+        switch CanonicalBusinessEngine.accountKindFromFlags(
+            isSuperAdmin: subject.isSuperAdmin,
+            role: subject.role.rawValue,
+            adminAccess: subject.permissions.adminAccess,
+            manager: subject.permissions.manager,
+            operativeMode: subject.permissions.operativeMode
+        ) ?? "" {
+        case "admin": return .administrator
+        case "operative": return .operative
+        case "manager": return .manager
+        default: return UserRoleTransitionPolicy.kind(for: subject.permissions)
+        }
+    }
+
+    /// While nothing has been changed on this screen, the draft follows the stored row (live roster, read-back).
+    private func followStoredPermissionsIfDraftUnchanged() {
+        let stored = displayedUser.permissions
+        guard permissions == permissionsBaseline, stored != permissionsBaseline else { return }
+        permissions = stored
+        permissionsBaseline = stored
     }
 
     private var displayRoleLabel: String {
@@ -2066,6 +2095,10 @@ struct EditUserView: View {
             }
         }
         .onAppear(perform: syncEditUserDraftsFromStore)
+        .onAppear(perform: followStoredPermissionsIfDraftUnchanged)
+        .onChange(of: displayedUser.permissions) { _, _ in
+            followStoredPermissionsIfDraftUnchanged()
+        }
         .alert("Admin Access", isPresented: $showingAdminAccessLockedMessage) {
             Button("OK", role: .cancel) { }
                 .accessibilityIdentifier("editUser.ok")
@@ -2519,11 +2552,13 @@ struct EditUserView: View {
         )
         await MainActor.run { isApplyingUserType = false }
         if ok {
-            await userStore.loadOrganizationUsers()
+            // `updateUserPermissions` read the saved document back from the server; this screen shows that copy.
+            await userStore.loadOrganizationUsers(forceRefresh: true)
             await holidayStore.loadData()
             await MainActor.run {
                 if let fresh = userStore.organizationUsers.first(where: { $0.id == user.id }) {
                     permissions = fresh.permissions
+                    permissionsBaseline = fresh.permissions
                     selectedLineManagerUserIds = Set(fresh.lineManagerUserIds)
                     selectedAssignedManagerUserId = fresh.assignedManagerUserId
                     isActive = fresh.isActive
@@ -2537,7 +2572,13 @@ struct EditUserView: View {
             }
         } else {
             await MainActor.run {
-                userTypeChangeMessage = userStore.errorMessage ?? "Could not update account type."
+                // Refused or not stored: show the stored type again, never the one that was asked for.
+                let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+                permissions = stored.permissions
+                permissionsBaseline = stored.permissions
+                changeUserTypeDraft = storedAccountKind(of: stored)
+                applyDraftsForChangeUserTypeSelection()
+                userTypeChangeMessage = userStore.errorMessage ?? "Could not update account type. Nothing was changed."
             }
         }
     }
@@ -3160,7 +3201,8 @@ struct EditUserView: View {
                         title: "Change user type",
                         subtitle: "Switch between operative, manager, or administrator",
                         action: {
-                            changeUserTypeDraft = UserRoleTransitionPolicy.kind(for: permissions)
+                            followStoredPermissionsIfDraftUnchanged()
+                            changeUserTypeDraft = storedAccountKind(of: displayedUser)
                             applyDraftsForChangeUserTypeSelection()
                             userTypeChangeMessage = nil
                             showingPromoteToAdminConfirmation = false
@@ -3604,9 +3646,16 @@ struct EditUserView: View {
         let previousPermissions = subjectUser.permissions
         let previousHasNoLineManager = subjectUser.hasNoLineManager
         if canEditPermissionsMatrix && !isViewingSuperAdminProfile {
-            if canUseAdminAccountTools && permissions != subjectUser.permissions {
+            // Only the flags changed on this screen are sent, laid over the stored copy. A draft opened from an
+            // older row never writes that row's flags back (an older copy turned an admin's adminAccess off).
+            let editedPermissions = UserPermissionsDraftMerge.applyingEdits(
+                from: permissionsBaseline,
+                to: permissions,
+                onto: subjectUser.permissions
+            )
+            if canUseAdminAccountTools && permissions != permissionsBaseline && editedPermissions != subjectUser.permissions {
                 didPersistPermissions = true
-                var outgoing = permissions
+                var outgoing = editedPermissions
                 outgoing.skills = false
                 let staffMaterialsAlwaysOn = subjectUser.isSuperAdmin
                     || outgoing.adminAccess
@@ -3837,7 +3886,7 @@ struct EditUserView: View {
         )
         if needsSelfBookClear && permissionsSuccess && operativeDetailsSuccess {
             await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: user.id)
-            await notificationService.notifyAnnualLeaveSelfBookDisabled(userId: user.id)
+            // RULEBOOK 1.10.0 §13: switching self-book off writes no notice.
             await holidayStore.loadData()
         }
 
@@ -3850,6 +3899,12 @@ struct EditUserView: View {
             if identitySuccess && permissionsSuccess && activeSuccess && operativeDetailsSuccess && managerDayRateSuccess && tradeSuccess && employmentTypeSuccess && annualLeaveEnabledSuccess && annualLeaveSuccess && billingSuccess {
                 dismiss()
             } else {
+                if !permissionsSuccess {
+                    // A refused permission save shows the stored flags again, never the unsaved ones.
+                    let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+                    permissions = stored.permissions
+                    permissionsBaseline = stored.permissions
+                }
                 saveErrorMessage = userStore.errorMessage ?? "Could not save these user changes. Please try again."
             }
         }
@@ -3919,7 +3974,7 @@ struct EditUserView: View {
                 .whereField("email", isEqualTo: user.email)
                 .getDocuments()
             for doc in existing.documents {
-                try? await doc.reference.updateData(["isUsed": true])
+                try? await doc.reference.updateData(InvitationDocument.usedFields())
             }
         } catch {
             // Continue anyway; we'll create a new invitation
@@ -3955,9 +4010,11 @@ struct EditUserView: View {
         if let mobileNumber = user.mobileNumber {
             invitationData["mobileNumber"] = mobileNumber
         }
+        invitationData["employmentType"] = user.employmentType.rawValue
         
         do {
-            try await db.collection("invitations").document(invitationId).setData(invitationData)
+            // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+            try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
 
             await userStore.resendInvitationEmail(
                 email: user.email,
@@ -3992,7 +4049,7 @@ struct EditUserView: View {
                     .whereField("email", isEqualTo: user.email)
                     .getDocuments()
                 for doc in existing.documents {
-                    try? await doc.reference.updateData(["isUsed": true])
+                    try? await doc.reference.updateData(InvitationDocument.usedFields())
                 }
 
                 // Always create a brand new invitation (never reuse old link)
@@ -4025,7 +4082,9 @@ struct EditUserView: View {
                 if let mobileNumber = user.mobileNumber {
                     invitationData["mobileNumber"] = mobileNumber
                 }
-                try await db.collection("invitations").document(invitationId).setData(invitationData)
+                invitationData["employmentType"] = user.employmentType.rawValue
+                // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
 
                 let success = await userStore.sendSignUpEmailWithVerification(
                     email: user.email,

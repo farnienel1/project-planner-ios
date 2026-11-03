@@ -1195,37 +1195,47 @@ struct EditOperativeView: View {
         let rateBasis = rowIsHourly ? "hourly" : "day"
 
         Task {
+            // RULEBOOK 1.10.0 §8 `payRateChangeWrites`: the history rows are decided before anything is written; a
+            // history that did not load refuses the save (never treated as empty, which wrote a second seed row).
+            var historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = []
+            if payChanged, let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                let collection = try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)
+                let historyIds = collection.map { loaded in
+                    loaded.mergedEntries(userId: linkedUserId, operativeId: operative.id).map { $0.documentId ?? $0.id.uuidString }
+                }
+                guard let change = CanonicalBusinessEngine.payRateChangeWrites(
+                    userId: linkedUserId,
+                    operativeId: operative.documentId,
+                    previous: (previousAmount, rateBasis),
+                    next: (newAmount, rateBasis),
+                    historyRowIds: historyIds,
+                    effective: Date(),
+                    seedEffective: operative.createdAt
+                ) else {
+                    await MainActor.run { payErrorMessage = "Couldn't save the rate: the pay rules did not load. Try again." }
+                    return
+                }
+                if let refusal = change.refusal {
+                    await MainActor.run { payErrorMessage = refusal }
+                    return
+                }
+                historyRows = change.rows
+            }
             await operativeStore.updateOperative(updatedOperative)
-
-            // History rows only for someone who may change this person's pay (checked above).
-            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
-               payChanged {
-                do {
-                    let collection = try await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)
-                    let merged = collection.mergedEntries(userId: linkedUserId, operativeId: operative.id)
-                    if merged.isEmpty, let prev = previousAmount, prev > 0 {
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                for row in historyRows {
+                    do {
                         try await firebaseBackend.recordOperativeDayRateChange(
                             organizationId: orgId,
-                            userId: linkedUserId,
+                            userId: row.userId.isEmpty ? nil : row.userId,
                             operativeId: operative.id,
-                            dayRate: prev,
-                            effectiveAt: operative.createdAt,
-                            payBasis: rateBasis
+                            dayRate: row.dayRate,
+                            effectiveAt: row.effectiveAt,
+                            payBasis: row.payBasis
                         )
+                    } catch {
+                        print("🔥🔥🔥 DEBUG: Failed to record operative day rate history: \(error.localizedDescription)")
                     }
-                    // A cleared rate writes a "rate cleared" row (`payRateHistoryWriteFields` with no rate).
-                    if newAmount != nil || previousAmount != nil {
-                        try await firebaseBackend.recordOperativeDayRateChange(
-                            organizationId: orgId,
-                            userId: linkedUserId,
-                            operativeId: operative.id,
-                            dayRate: newAmount,
-                            effectiveAt: Date(),
-                            payBasis: rateBasis
-                        )
-                    }
-                } catch {
-                    print("🔥🔥🔥 DEBUG: Failed to record operative day rate history: \(error.localizedDescription)")
                 }
             }
 
@@ -1237,11 +1247,6 @@ struct EditOperativeView: View {
     
     private func parseCurrencyAmount(_ input: String) -> (amount: Double?, symbol: String?) {
         parseOrganisationAmount(input)
-    }
-    
-    private func formatCurrencyDisplay(amount: Double?, symbol: String?) -> String {
-        guard let amount = amount else { return "" }
-        return OrgMoney.format(amount)
     }
 }
 

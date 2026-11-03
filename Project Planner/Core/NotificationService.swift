@@ -411,24 +411,9 @@ class NotificationService: ObservableObject {
         }
     }
     
-    func notifyBookingBatchCreated(projectName: String, bookingCount: Int, createdBy: String) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        
-        let plural = bookingCount == 1 ? "booking" : "bookings"
-        let notification = AppNotification(
-            organizationId: organizationId,
-            type: .bookingCreated,
-            title: "New Booking Created",
-            message: "\(createdBy) created \(bookingCount) \(plural) for \(projectName).",
-            relatedId: UUID(),
-            requiresPermission: "superAdminOrAdmin"
-        )
-        await saveNotification(notification)
-    }
-    
-    /// Sends one targeted notification per booked user so it appears in their in-app notification center
-    /// and can be picked up by push delivery.
+    // RULEBOOK 1.10.0 §13: no ownerless "New Booking Created" row (a row without `userId` is not an inbox row).
+    // Booked people are told by `notifyBookedUsers` (`bookingCreatedRecipients`).
+
     func notifyBookedUsers(
         projectName: String,
         bookedBy: String,
@@ -597,7 +582,8 @@ class NotificationService: ObservableObject {
         parentName: String,
         isSmallWorks: Bool,
         createdByUserId: String,
-        jobManagerIds: [UUID] = []
+        jobManagerIds: [UUID] = [],
+        variationId: String? = nil
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
@@ -630,7 +616,8 @@ class NotificationService: ObservableObject {
                 title: "New variation added",
                 message: "New variation added to \(parentName)",
                 userId: userId,
-                relatedId: parentId,
+                // RULEBOOK 1.10.0 §13: `variation_added` carries the variation id (`notificationRelatedIdFor`).
+                relatedKey: CanonicalBusinessEngine.callJSON("notificationRelatedIdFor", arguments: ["variation_added", variationId ?? parentId.uuidString]) as? String,
                 deepLinkUserId: isSmallWorks ? VariationParentType.smallWork.rawValue : VariationParentType.project.rawValue
             )
             await saveNotification(notification)
@@ -679,7 +666,8 @@ class NotificationService: ObservableObject {
         talkTitle: String,
         issuedByName: String,
         issuedByUserId: String?,
-        recipientUserIds: [String]
+        recipientUserIds: [String],
+        issueId: String? = nil
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
@@ -704,7 +692,9 @@ class NotificationService: ObservableObject {
                 title: "Toolbox talk issued",
                 message: "\(issuedByName) issued \(detail) on \(place).",
                 userId: userId,
-                relatedId: projectId
+                // RULEBOOK 1.10.0 §13: `toolbox_talk_issued` carries the issue id (`notificationRelatedIdFor`).
+                relatedKey: issueId.flatMap { CanonicalBusinessEngine.callJSON("notificationRelatedIdFor", arguments: ["toolbox_talk_issued", $0]) as? String }
+                    ?? projectId.uuidString
             )
             await saveNotification(notification)
         }
@@ -781,27 +771,43 @@ class NotificationService: ObservableObject {
         )
     }
     
-    func notifyTaskCompleted(taskId: UUID, taskTitle: String, completedBy: String, assignedToUserId: String) async {
+    /// RULEBOOK 1.10.0 §13 `task_completed`: `taskCompletedRecipients(task, completer, roster)` — the task's creator
+    /// (`createdByUserId`, else the one active person named `createdBy`), never the person who completed it.
+    func notifyTaskCompleted(task: ProjectTask, completedBy: String) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let resolvedUserId = await resolvedRecipientUserIdResolvingStaleIds(assignedToUserId)
-        // Catalog `task_completed`: `excludeActor` (the task creator, never the person who completed it).
-        guard let canonicalUserId = idsWithoutActor([resolvedUserId]).first else { return }
-        let dedupeId = syntheticNotificationId(from: "taskCompleted|\(taskId.uuidString)|\(canonicalUserId)")
-        
-        // Only notify the user who assigned the task
-        let notification = AppNotification(
-            id: dedupeId,
-            organizationId: organizationId,
-            type: .taskCompleted,
-            title: "Task Completed",
-            message: "\(completedBy) completed the task: \(taskTitle)",
-            userId: canonicalUserId,
-            relatedId: taskId,
-            requiresPermission: nil // Task creator always gets notified
-        )
-        
-        await saveNotification(notification)
+        let users = userStore?.organizationUsers ?? []
+        let completer: Any
+        if let me = userStore?.currentUser {
+            completer = RulebookPeople.person(me)
+        } else {
+            completer = firebaseBackend.currentUser?.uid ?? ""
+        }
+        var roster = RulebookPeople.roster(users)
+        for (index, user) in users.enumerated() where index < roster.count {
+            roster[index]["firstName"] = user.firstName
+            roster[index]["surname"] = user.surname
+        }
+        let taskRow: [String: Any] = [
+            "createdByUserId": task.createdByUserId ?? NSNull(),
+            "createdBy": task.createdBy,
+        ]
+        guard let recipients = CanonicalBusinessEngine.callJSON(
+            "taskCompletedRecipients", arguments: [taskRow, completer, roster]
+        ) as? [String] else { return }
+        for recipient in recipients {
+            let notification = AppNotification(
+                id: syntheticNotificationId(from: "taskCompleted|\(task.id.uuidString)|\(recipient)"),
+                organizationId: organizationId,
+                type: .taskCompleted,
+                title: "Task Completed",
+                message: "\(completedBy) completed the task: \(task.title)",
+                userId: recipient,
+                relatedId: task.id,
+                requiresPermission: nil
+            )
+            await saveNotification(notification)
+        }
     }
     
     func notifyTaskCreated(taskId: UUID, taskTitle: String, createdBy: String, assignedOperativeIds: [UUID], assignedManagerIds: [UUID]) async {
@@ -1046,20 +1052,6 @@ class NotificationService: ObservableObject {
         }
     }
 
-    func notifyHolidayRequestApproved(bookingId: UUID, operativeName: String, approvedByName: String) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        let notification = AppNotification(
-            organizationId: organizationId,
-            type: .holidayRequestApproved,
-            title: "Annual Leave Approved",
-            message: "\(approvedByName) approved \(operativeName)'s annual leave request.",
-            relatedId: bookingId,
-            requiresPermission: "canViewManagers"
-        )
-        await saveNotification(notification)
-    }
-
     func notifyHolidayRequestDecisionToUser(userId: String, bookingId: UUID, approved: Bool, decidedByName: String, reason: String = "") async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
@@ -1113,7 +1105,8 @@ class NotificationService: ObservableObject {
         let notification = AppNotification(
             id: dedupeId,
             organizationId: organizationId,
-            type: .holidayRequestDeclined,
+            // RULEBOOK 1.10.0 §13: its own type (was `holiday_request_declined`), to `holidayDecisionRecipients`.
+            type: .holidayCancelledByManager,
             title: "Annual Leave Cancelled",
             message: message,
             userId: targetId,
@@ -1180,27 +1173,6 @@ class NotificationService: ObservableObject {
         AnnualLeaveNoticeText.decisionDateText(booking)
     }
 
-    /// Sent when a manager/admin loses self-book annual leave and must request days instead.
-    func notifyAnnualLeaveSelfBookDisabled(userId: String) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        // RULEBOOK §13 catalog: `holiday_request_declined` here goes through `holidayDecisionRecipients` with the
-        // actor. No non-push type in the catalog fits this notice, so the type stays (local banner off).
-        guard let targetId = holidayDecisionTarget(resolvedRecipientUserId(userId)) else { return }
-        let dedupeId = syntheticNotificationId(from: "annualLeaveSelfBookOff|\(targetId)")
-        let notification = AppNotification(
-            id: dedupeId,
-            organizationId: organizationId,
-            type: .holidayRequestDeclined,
-            title: "Annual leave update",
-            message: "Please check your annual leave and request any annual leave days moving forward.",
-            userId: targetId,
-            relatedId: nil,
-            requiresPermission: nil
-        )
-        await saveNotification(notification, deliverLocalPush: false)
-    }
-
     /// Sent when a manager/admin books approved annual leave on behalf of a team member.
     func notifyAnnualLeaveBookingConfirmation(
         userId: String,
@@ -1224,7 +1196,8 @@ class NotificationService: ObservableObject {
         let notification = AppNotification(
             id: dedupeId,
             organizationId: organizationId,
-            type: .holidayRequestApproved,
+            // RULEBOOK 1.10.0 §13: its own type (was `holiday_request_approved`), to `holidayDecisionRecipients`.
+            type: .holidayBookedForYou,
             title: "Annual Leave Booking Confirmation",
             message: "\(bookedByName) booked your annual leave for \(dateRange) (\(timeSlot.rawValue)). Tap to view your annual leave.",
             userId: targetId,
@@ -1377,7 +1350,8 @@ class NotificationService: ObservableObject {
             title: "Test notification",
             message: "Test notification for \(currentUser.fullName).",
             userId: targetId,
-            relatedId: UUID(),
+            // `push_test` carries no relatedId (`NOTIFICATION_RELATED_ID`); never a random id.
+            relatedId: nil,
             requiresPermission: nil
         )
         await saveNotification(notification)
@@ -1768,7 +1742,7 @@ class NotificationService: ObservableObject {
 
     private func processHolidayDecisionAlerts(from notifications: [AppNotification]) {
         let decisions = notifications
-            .filter { $0.type == .holidayRequestApproved || $0.type == .holidayRequestDeclined }
+            .filter { [.holidayRequestApproved, .holidayRequestDeclined, .holidayCancelledByManager, .holidayBookedForYou].contains($0.type) }
             .sorted { $0.createdAt > $1.createdAt }
         for n in decisions {
             let key = notificationDedupKey(for: n)
@@ -1784,7 +1758,7 @@ class NotificationService: ObservableObject {
         let sorted = notifications.sorted { $0.createdAt > $1.createdAt }
         for notification in sorted {
             switch notification.type {
-            case .holidayRequestSubmitted, .holidayRequestApproved, .holidayRequestDeclined:
+            case .holidayRequestSubmitted, .holidayRequestApproved, .holidayRequestDeclined, .holidayCancelledByManager, .holidayBookedForYou:
                 continue
             case .deadlineReminder, .deadlineDue, .materialOrderCutOff, .qualificationExpiry, .timesheetSubmissionReminder:
                 // Clocks and the timesheet FCM alert. Do not mirror them as an immediate local banner.
@@ -2078,7 +2052,7 @@ class NotificationService: ObservableObject {
             if notification.type == .holidayRequestSubmitted {
                 seenHolidayRequestNotificationKeys.insert(key)
             }
-            if notification.type == .holidayRequestApproved || notification.type == .holidayRequestDeclined {
+            if [.holidayRequestApproved, .holidayRequestDeclined, .holidayCancelledByManager, .holidayBookedForYou].contains(notification.type) {
                 seenHolidayDecisionNotificationKeys.insert(key)
             }
             if notification.type == .bookingCreated {
@@ -2171,22 +2145,17 @@ class NotificationService: ObservableObject {
         }
         // `inboxNotificationVisibleToUser(row, ids)`: the row's `userId` is one of the person's ids (`personIdSet`).
         // Ownerless rows are not inbox rows. Asked once per distinct owner.
+        // RULEBOOK 1.10.0 §13: with `now` — a row counts from its `createdAt` (asked per row).
         let ownerIds = inboxOwnerIds(for: userId)
-        var visibleByOwner: [String: Bool] = [:]
+        let now = Date()
         var visibleItems: [AppNotification] = []
         for item in items {
-            let ownerKey = item.userId ?? ""
-            let shown: Bool
-            if let known = visibleByOwner[ownerKey] {
-                shown = known
-            } else {
-                guard let answer = CanonicalBusinessEngine.inboxNotificationVisibleToUser(
-                    rowUserId: item.userId,
-                    userIds: ownerIds
-                ) else { return items }
-                visibleByOwner[ownerKey] = answer
-                shown = answer
-            }
+            guard let shown = CanonicalBusinessEngine.inboxNotificationVisibleToUser(
+                rowUserId: item.userId,
+                userIds: ownerIds,
+                createdAtMs: item.createdAt.timeIntervalSince1970 * 1000,
+                now: now
+            ) else { return items }
             if shown { visibleItems.append(item) }
         }
         // Order only: `compareInboxNotificationsByCreatedAt` through the existing wrapper. Every row here already
@@ -2220,7 +2189,9 @@ class NotificationService: ObservableObject {
         }
         guard let count = CanonicalBusinessEngine.unreadNotificationBadgeCount(
             rows: rows,
-            userIds: inboxOwnerIds(for: userId)
+            userIds: inboxOwnerIds(for: userId),
+            createdAtMs: items.map { $0.createdAt.timeIntervalSince1970 * 1000 },
+            now: Date()
         ) else { return }
         setUnreadCount(count)
     }

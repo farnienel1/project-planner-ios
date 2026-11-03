@@ -122,7 +122,9 @@ struct BookLabourFlowView: View {
             managerBookings: managerScheduleStore.managerSiteBookings,
             taskStore: nil,
             deadlineAssignedProjectIds: []
-        ).filter(\.isLive)
+        )
+        // RULEBOOK 1.10.0 §16: only jobs this account may book onto (`canWriteBooking`).
+        .filter { $0.isLive && userStore.canWriteBooking(on: $0) }
     }
 
     private var liveSmallWorks: [Project] {
@@ -135,7 +137,9 @@ struct BookLabourFlowView: View {
             managerBookings: managerScheduleStore.managerSiteBookings,
             taskStore: nil,
             deadlineAssignedProjectIds: []
-        ).filter(\.isLive)
+        )
+        // RULEBOOK 1.10.0 §16: only jobs this account may book onto (`canWriteBooking`).
+        .filter { $0.isLive && userStore.canWriteBooking(on: $0) }
     }
 
     enum ManagerSlotReturn: Hashable {
