@@ -2556,9 +2556,12 @@ class UserStore: ObservableObject {
 
     func updateUserEmploymentType(userId: String, employmentType: EmploymentType, effectiveAt: Date? = nil) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
-        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        guard let storedRow = organizationUsers.first(where: { $0.id == userId }) else { return false }
         if isOrganizationCreator(userId: userId) { return false }
-        var updated = organizationUsers[index]
+        // RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: the previous employment type is the
+        // pay editor's record (the pay profile while `privatePay` is on; the users document as stored while it is off).
+        var updated = await payEditorRecord(for: storedRow)
+        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
         if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
             return false
         }
@@ -2634,8 +2637,11 @@ class UserStore: ObservableObject {
                 updateDayRate: Bool = true
              ) async -> Bool {
                 guard let firebaseBackend = firebaseBackend else { return false }
+                guard organizationUsers.contains(where: { $0.id == user.id }) else { return false }
+                // RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: the save baseline (the "rate
+                // changed?" test and the rate-history previous row) is the editor's record, never a stale users rate.
+                let original = await payEditorRecord(for: organizationUsers.first(where: { $0.id == user.id }) ?? user)
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
-                let original = organizationUsers[index]
                 var updatedUser = original
                 guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager || updatedUser.permissions.adminAccess || updatedUser.role == .admin else { return false }
                 if let hasNoLineManager {
@@ -2920,12 +2926,14 @@ class UserStore: ObservableObject {
         operativeStore: OperativeStore? = nil
     ) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
+        guard organizationUsers.contains(where: { $0.id == user.id }) else { return false }
+        // RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: the previous rate is the editor's record.
+        let row = await payEditorRecord(for: organizationUsers.first(where: { $0.id == user.id }) ?? user)
         guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
-        let row = organizationUsers[index]
         let isStaffDayRate = row.permissions.manager || row.role == .manager || row.permissions.adminAccess || row.role == .admin
         guard isStaffDayRate, !row.permissions.operativeMode else { return false }
 
-        var updatedUser = organizationUsers[index]
+        var updatedUser = row
         let previousPay = Self.storedPay(of: updatedUser)
         guard previousPay.amount != dayRate else { return true }
         // A manager's pay is changed by admins only, and nobody but an admin changes their own (§8).
