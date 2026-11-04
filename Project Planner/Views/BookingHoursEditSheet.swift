@@ -513,7 +513,10 @@ struct OperativeCustomHoursSheet: View {
     @State private var lastValidEndHour: Int
     @State private var lastValidEndMinute: Int
     @State private var breakIncluded: Bool
-    @State private var otMultText: String
+    /// RULEBOOK 1.29.0 §25: the booking's own overtime rate (`otMultiplierOverride`); nil = the organisation's.
+    @State private var otRate: Double?
+    /// The rate the sheet opened with, so an untouched older rate outside the 1–3 steps is never refused or rewritten.
+    private let initialOtRate: Double?
     @State private var errorMessage: String?
     @State private var timeValidationBanner: String?
     @State private var bannerDismissTask: Task<Void, Never>?
@@ -591,7 +594,7 @@ struct OperativeCustomHoursSheet: View {
         let startHM: (Int, Int)
         let endHM: (Int, Int)
         let included: Bool
-        var otm = ""
+        var otm: Double? = nil
 
         let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: referenceDay, policy: policy)
         // RULEBOOK 1.13.1 §4.3 `weekendCustomHoursDefault`: a set-window Saturday or Sunday opens on that day's window.
@@ -629,7 +632,7 @@ struct OperativeCustomHoursSheet: View {
             }
             included = showsBreakControls ? !ic.isBreakRemoved : false
             if let m = ic.otMultiplierOverride {
-                otm = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
+                otm = m
             }
         } else {
             startHM = BookingHMTimePickerSupport.clampToQuarterHour(
@@ -656,7 +659,8 @@ struct OperativeCustomHoursSheet: View {
         _lastValidEndHour = State(initialValue: endHM.0)
         _lastValidEndMinute = State(initialValue: endHM.1)
         _breakIncluded = State(initialValue: included)
-        _otMultText = State(initialValue: otm)
+        _otRate = State(initialValue: otm)
+        initialOtRate = otm
     }
 
     private var startMinutes: Int {
@@ -677,9 +681,32 @@ struct OperativeCustomHoursSheet: View {
 
     private var resolvedOtMultiplierOverride: Double? {
         guard allowsOtMultiplierOverride else { return nil }
-        let t = otMultText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty { return nil }
-        return Double(t.replacingOccurrences(of: ",", with: "."))
+        return otRate
+    }
+
+    /// `overtimeRateControl` for the times on screen (the booking's day, custom hours).
+    private var overtimeRateControl: OvertimeRateControl? {
+        CanonicalBusinessEngine.overtimeRateControl(
+            OvertimeBookingInput(
+                id: "edit",
+                collection: "bookings",
+                personId: "",
+                dayKey: CanonicalBusinessEngine.bookingDayKey(rulebookDay),
+                timeSlot: "CUSTOM_HOURS",
+                workStartTime: startText,
+                workEndTime: endText,
+                isBreakRemoved: !breakIncluded,
+                otMultiplierOverride: otRate
+            ),
+            organization: OrganizationRulebookContext.payrollPolicyDocument ?? [:]
+        )
+    }
+
+    /// The control's steps, plus an older stored rate outside them so it is shown as it is.
+    private func overtimeRateChoices(_ control: OvertimeRateControl) -> [Double] {
+        var steps = control.steps
+        if let initialOtRate, !steps.contains(where: { abs($0 - initialOtRate) < 0.0001 }) { steps.append(initialOtRate) }
+        return steps
     }
 
     private var probeBooking: Booking {
@@ -1033,34 +1060,25 @@ struct OperativeCustomHoursSheet: View {
             }
             }
 
-            if allowsOtMultiplierOverride {
+            if allowsOtMultiplierOverride, let control = overtimeRateControl, control.show || otRate != nil {
                 if breakApplies {
                     Divider().overlay(ProjectWorksRevampColors.border)
                 }
-                let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: referenceDay, policy: policy)
-                let defaultMult = timeline.outsideMultiplier
-                let windowLabel: String = {
-                    if timeline.allHoursAtMultiplier {
-                        return "Every hour on this day is paid at the org multiplier."
-                    }
-                    if let start = timeline.standardWindowStart, let end = timeline.standardWindowEnd {
-                        return "Hours outside \(start)–\(end). Leave blank for org default (\(String(format: "%.1f", defaultMult))×)."
-                    }
-                    return "Leave blank for org default (\(String(format: "%.1f", defaultMult))×)."
-                }()
+                // RULEBOOK 1.29.0 §25 `overtimeRateControl`: "Organisation (×1.5)" or "Custom ×__" (1–3 in 0.25 steps).
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("OVERTIME MULTIPLIER")
+                    Text("OVERTIME RATE")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .tracking(0.8)
-                    TextField(
-                        "Optional — e.g. \(String(format: "%.1f", defaultMult))",
-                        text: $otMultText
-                    )
-                    .accessibilityIdentifier("operativeCustomHours.optionalEG")
-                    .font(.system(size: 15, weight: .medium))
-                    .keyboardType(.decimalPad)
-                    Text(windowLabel)
+                    Picker("Overtime rate", selection: $otRate) {
+                        Text(control.organizationLabel).tag(Double?.none)
+                        ForEach(overtimeRateChoices(control), id: \.self) { step in
+                            Text("Custom ×\(ScheduleCoverageFormat.hours(step))").tag(Double?.some(step))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("operativeCustomHours.overtimeRate")
+                    Text("Prices this booking's overtime hours only. Signed timesheets keep their figures.")
                         .font(.system(size: 10))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                 }
@@ -1073,7 +1091,7 @@ struct OperativeCustomHoursSheet: View {
 
     /// What the weekend rows depend on; they are recomputed only when it changes.
     private var weekendBreakdownInput: String {
-        "\(startText)|\(endText)|\(breakIncluded)|\(otMultText)"
+        "\(startText)|\(endText)|\(breakIncluded)|\(otRate.map { String($0) } ?? "org")"
     }
 
     /// RULEBOOK 1.18.0 §4.3 `weekendBookingBreakdown`: per-day rows for a selection with a Saturday or Sunday (not when
@@ -1230,15 +1248,12 @@ struct OperativeCustomHoursSheet: View {
         }
         var otOut: Double? = nil
         if allowsOtMultiplierOverride {
-            let raw = otMultText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !raw.isEmpty {
-                let normalized = raw.replacingOccurrences(of: ",", with: ".")
-                guard let v = Double(normalized), v >= 1.0, v <= 10.0 else {
-                    errorMessage = "OT multiplier must be between 1 and 10 (or leave blank for org default)."
-                    return
-                }
-                otOut = v
+            // RULEBOOK 1.29.0 §25 `overtimeMultiplierValidationError`: 1–3 in 0.25 steps, or the organisation's (nil).
+            if otRate != initialOtRate, let message = CanonicalBusinessEngine.overtimeMultiplierValidationError(otRate) {
+                errorMessage = message
+                return
             }
+            otOut = otRate
         }
         onSave(startText, endText, !breakIncluded, otOut)
     }

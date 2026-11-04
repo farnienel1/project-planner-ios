@@ -1350,6 +1350,78 @@ class NotificationService: ObservableObject {
         await saveNotification(notification)
     }
 
+    // MARK: - PAYE overtime (RULEBOOK 1.29.0 §13, §25)
+
+    /// `overtime_request_submitted` to `overtimeRequestRecipients(requester, roster)` — the requester's active line
+    /// managers and every active admin, never the requester. `deepLinkUserId` is the requester (opens Users' → that
+    /// person → Overtime); `relatedId` the request.
+    func notifyOvertimeRequestSubmitted(requester: AppUser, requestId: String, rangeStart: String, rangeEnd: String) async {
+        guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
+        guard let recipients = CanonicalBusinessEngine.overtimeRequestRecipients(
+            requester: RulebookPeople.person(requester),
+            roster: recipientRoster
+        ) else { return }
+        let name = requester.fullName.isEmpty ? "Someone" : requester.fullName
+        for userId in recipients {
+            let notification = AppNotification(
+                organizationId: organizationId,
+                type: .overtimeRequestSubmitted,
+                title: "Overtime request from \(name)",
+                message: "\(name) sent their overtime for \(rangeStart) to \(rangeEnd) for approval.",
+                userId: userId,
+                relatedKey: requestId,
+                deepLinkUserId: requester.id
+            )
+            await saveNotification(notification)
+        }
+    }
+
+    /// `overtime_request_reviewed` ("Overtime update") to `overtimeReviewedRecipients(requester, decider, roster)`.
+    func notifyOvertimeRequestReviewed(requesterId: String, requestId: String) async {
+        guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
+        guard let recipients = CanonicalBusinessEngine.overtimeReviewedRecipients(
+            requester: requesterId,
+            decider: actorPerson,
+            roster: recipientRoster
+        ) else { return }
+        for userId in recipients {
+            let notification = AppNotification(
+                organizationId: organizationId,
+                type: .overtimeRequestReviewed,
+                title: "Overtime update",
+                message: "Your overtime request was approved. Open Overtime to see the final hours.",
+                userId: userId,
+                relatedKey: requestId
+            )
+            await saveNotification(notification)
+        }
+    }
+
+    /// `booking_hours_changed_by_owner` (inbox only) to `bookingHoursChangedRecipients(owner, jobManagerIds, roster)`:
+    /// the job's managers and the person's line managers, never the person.
+    func notifyBookingHoursChangedByOwner(owner: AppUser, booking: OvertimeBookingInput, jobManagerIds: [String]) async {
+        guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
+        guard let recipients = CanonicalBusinessEngine.bookingHoursChangedRecipients(
+            owner: RulebookPeople.person(owner),
+            jobManagerIds: jobManagerIds,
+            roster: recipientRoster
+        ) else { return }
+        let name = owner.fullName.isEmpty ? "Someone" : owner.fullName
+        let job = booking.jobNumber.isEmpty ? "" : " (\(booking.jobNumber))"
+        for userId in recipients {
+            let notification = AppNotification(
+                organizationId: organizationId,
+                type: .bookingHoursChangedByOwner,
+                title: "Hours changed",
+                message: "\(name) changed the hours of their booking on \(booking.dayKey)\(job).",
+                userId: userId,
+                relatedKey: booking.id,
+                dayKey: booking.dayKey
+            )
+            await saveNotification(notification)
+        }
+    }
+
     /// Settings "send a test notification" (rulebook 1.4.0 §13): one `push_test` row to `pushTestRecipients(actor)`
     /// — the signed-in user — with `actorUserId` set (`saveNotification` stamps it). The push function delivers it to
     /// its sender (`notificationPushesToActor`), so this checks notification write → Cloud Function → APNs/FCM.

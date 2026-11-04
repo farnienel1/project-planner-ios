@@ -179,6 +179,8 @@ struct NotificationRowView: View {
         case .pushTest: return "bell.badge"
         case .bookedOntoJob: return "calendar.badge.plus"
         case .materialOrderCreated: return "shippingbox.fill"
+        case .overtimeRequestSubmitted, .overtimeRequestReviewed: return "clock.badge.checkmark"
+        case .bookingHoursChangedByOwner: return "clock.arrow.2.circlepath"
         case .unknown: return "bell"
         }
     }
@@ -213,6 +215,7 @@ struct NotificationRowView: View {
         case .pushTest: return .plan
         case .bookedOntoJob: return .plan
         case .materialOrderCreated: return .sites
+        case .overtimeRequestSubmitted, .overtimeRequestReviewed, .bookingHoursChangedByOwner: return .trade
         case .unknown: return .plan
         }
     }

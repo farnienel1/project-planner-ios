@@ -78,6 +78,10 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
     /// so each day is read under its own history entry, and the base document of the two-admin save guard
     /// (`payrollTimePolicySaveConflict`). Nil before a document was read (the typed fields above are used then).
     var payrollPolicyStateJSON: String? = nil
+    /// RULEBOOK 1.29.0 §4.5: JSON text of `invoicing.payePayday` and `invoicing.payePaydayHistory` exactly as stored
+    /// (`OvertimeOrganizationDocument.payePaydayJSON`), read by CanonicalBusinessEngine.payePayrunPeriod / payePaydayWriteFields. Nil when
+    /// no PAYE payday is stored.
+    var payePaydayJSON: String? = nil
     /// JSON text of `organizations/{id}.billing`, or nil when that nested map is absent.
     var billingJSON: String?
     /// JSON text of `organizations/{id}.deletion` (RULEBOOK 1.15.0 §20), or nil when the organisation is not being
@@ -144,7 +148,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         case id, firestoreDocumentId, name, settings, officeAddressLine1, officeAddressLine2, officeCity, officeCounty, officePostcode
         case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, documentAbbreviation, createdAt, updatedAt, creatorUserId
         case payrollTimePolicyPrior, payrollTimePolicyEffectiveFrom, payrollTimePolicyScheduled
-        case billingJSON, billingResolved, deletionJSON, payrollPolicyStateJSON
+        case billingJSON, billingResolved, deletionJSON, payrollPolicyStateJSON, payePaydayJSON
     }
 
     init(from decoder: Decoder) throws {
@@ -173,6 +177,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         billingResolved = try c.decodeIfPresent(Bool.self, forKey: .billingResolved) ?? false
         deletionJSON = try c.decodeIfPresent(String.self, forKey: .deletionJSON)
         payrollPolicyStateJSON = try c.decodeIfPresent(String.self, forKey: .payrollPolicyStateJSON)
+        payePaydayJSON = try c.decodeIfPresent(String.self, forKey: .payePaydayJSON)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -201,6 +206,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         try c.encode(billingResolved, forKey: .billingResolved)
         try c.encodeIfPresent(deletionJSON, forKey: .deletionJSON)
         try c.encodeIfPresent(payrollPolicyStateJSON, forKey: .payrollPolicyStateJSON)
+        try c.encodeIfPresent(payePaydayJSON, forKey: .payePaydayJSON)
     }
 
     /// Script result for this company's nested billing map. A missing map stays open. A script failure stays open.

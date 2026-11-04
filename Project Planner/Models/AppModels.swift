@@ -2152,6 +2152,8 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .pushTest: return nil
         case .bookedOntoJob: return .bookingCreated
         case .materialOrderCreated: return .materialAdded
+        // RULEBOOK 1.29.0: the `overtime` toggle (CanonicalBusinessEngine.notificationPreferenceAllowsDelivery), not a legacy toggle.
+        case .overtimeRequestSubmitted, .overtimeRequestReviewed, .bookingHoursChangedByOwner: return nil
         case .unknown: return nil
         }
     }

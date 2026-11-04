@@ -25,6 +25,8 @@ struct InvoicingView: View {
     @State private var pushMyTimesheets = false
     @State private var pushTeamTimesheets = false
     @State private var teamListSurface = "awaiting"
+    /// RULEBOOK 1.29.0 §25: a notification tap into the Overtime screens (`overtimeMine` / `overtimeUser`).
+    @State private var overtimeDeepLink: OvertimeDeepLink?
     /// Scope the landing sync last ran for. Nil until the first sync.
     @State private var landingScopeIds: [String]?
 
@@ -53,19 +55,28 @@ struct InvoicingView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
                             timesheetsDisabledMessageCard
+                            overtimeHubCard
                         } else if !userStore.canAccessTimesheetsSurface() {
+                            if overtimeAccess.showButton {
+                                overtimeHubCard
+                            } else {
                             ContentUnavailableView(
                                 "Timesheets unavailable",
                                 systemImage: "lock.fill",
                                 description: Text("No timesheet section is available for this account.")
                             )
+                            }
                         } else {
                             if canShowOperativeTimesheets {
                                 managerLandingCards
                             } else if canShowMyTimesheets {
                                 operativeLandingCard
+                                overtimeHubCard
                             } else if showTimesheetsDisabledMessage {
                                 timesheetsDisabledMessageCard
+                                overtimeHubCard
+                            } else {
+                                overtimeHubCard
                             }
                         }
                     }
@@ -80,6 +91,16 @@ struct InvoicingView: View {
             .ppNavyNavigationBar()
             .navigationDestination(isPresented: $pushMyTimesheets) {
                 MyTimesheetsHubView(settings: settings)
+                    .environmentObject(firebaseBackend)
+                    .environmentObject(userStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(managerScheduleStore)
+                    .environmentObject(notificationService)
+            }
+            .navigationDestination(item: $overtimeDeepLink) { link in
+                OvertimeDeepLinkView(link: link)
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
                     .environmentObject(bookingStore)
@@ -241,6 +262,47 @@ struct InvoicingView: View {
         .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
+    /// RULEBOOK 1.29.0 §25: `overtimeHubAccess` — My… for a PAYE person, Users'… for admins and line managers.
+    private var overtimeAccess: OvertimeHubAccess {
+        userStore.overtimeHubAccess()
+    }
+
+    private var overtimeHubSubtitle: String {
+        let access = overtimeAccess
+        if access.mine && access.users { return "Your PAYE overtime, and your team's" }
+        if access.mine { return "Your PAYE overtime" }
+        return "Your team's overtime, expenses and price work"
+    }
+
+    private var overtimeHubDestination: some View {
+        OvertimeHubView()
+            .environmentObject(firebaseBackend)
+            .environmentObject(userStore)
+            .environmentObject(bookingStore)
+            .environmentObject(operativeStore)
+            .environmentObject(projectStore)
+            .environmentObject(managerScheduleStore)
+            .environmentObject(notificationService)
+    }
+
+    /// The hub card on the landings that have no manager tiles (PAYE operative, self-employed operative).
+    @ViewBuilder
+    private var overtimeHubCard: some View {
+        if overtimeAccess.showButton {
+            NavigationLink {
+                overtimeHubDestination
+            } label: {
+                timesheetEntryCard(
+                    title: CanonicalBusinessEngine.overtimeText("OVERTIME_HUB_LABEL", fallback: "Overtime, Expenses & Price Work"),
+                    detail: overtimeHubSubtitle,
+                    symbol: "clock.badge.checkmark"
+                )
+            }
+            .accessibilityIdentifier("invoicing.overtimeCard")
+            .buttonStyle(PPPressableButtonStyle())
+        }
+    }
+
     @ViewBuilder
     private var operativeLandingCard: some View {
         NavigationLink {
@@ -336,6 +398,22 @@ struct InvoicingView: View {
                         managerTile(title: "My Timesheets", subtitle: "Your own hours, expenses and price work", symbol: "clock.fill", badge: nil)
                     }
                     .accessibilityIdentifier("invoicing.myTimesheets2")
+                    .buttonStyle(PPMenuRowButtonStyle())
+                    PPRowDivider()
+                }
+                // RULEBOOK 1.29.0 §25 `overtimeHubAccess`: below My Timesheets, above User Timesheets.
+                if overtimeAccess.showButton {
+                    NavigationLink {
+                        overtimeHubDestination
+                    } label: {
+                        managerTile(
+                            title: CanonicalBusinessEngine.overtimeText("OVERTIME_HUB_LABEL", fallback: "Overtime, Expenses & Price Work"),
+                            subtitle: overtimeHubSubtitle,
+                            symbol: "clock.badge.checkmark",
+                            badge: nil
+                        )
+                    }
+                    .accessibilityIdentifier("invoicing.overtime")
                     .buttonStyle(PPMenuRowButtonStyle())
                     PPRowDivider()
                 }
@@ -548,6 +626,10 @@ struct InvoicingView: View {
         case "teamSigned":
             teamListSurface = "signed"
             pushTeamTimesheets = true
+        case "overtimeMine":
+            overtimeDeepLink = .mine
+        case "overtimeUser":
+            overtimeDeepLink = rawId.isEmpty ? nil : .user(rawId)
         default:
             break
         }

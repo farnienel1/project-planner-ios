@@ -26,6 +26,9 @@ struct ManagerSiteBooking: Identifiable, Codable, Hashable {
     var isBreakRemoved: Bool
     /// Optional stable id when several docs were created as one group action (dissolve-on-diverge is future UI).
     var bookingGroupId: String?
+    /// RULEBOOK 1.29.0 §25: the booking's own overtime rate (`otMultiplierOverride`, 1–3; nil = the organisation's),
+    /// as `parseManagerSiteBookingDocument` reads it (CanonicalBusinessEngine, `OvertimeBookingInputs.managerSiteRates`).
+    var otMultiplierOverride: Double? = nil
     var createdAt: Date
     var updatedAt: Date
     /// The Firestore document id when `id.uuidString` would not spell it the same way (RULEBOOK 1.7.0 §1:
@@ -137,14 +140,16 @@ extension ManagerSiteBooking {
                 timeSlot: .customHours,
                 workStartTime: s,
                 workEndTime: e,
-                isBreakRemoved: isBreakRemoved
+                isBreakRemoved: isBreakRemoved,
+                otMultiplierOverride: otMultiplierOverride
             )
         }
         return OperativeDayBookingChoice(
             timeSlot: .customHours,
             workStartTime: policy.standardDayStart,
             workEndTime: policy.standardDayEnd,
-            isBreakRemoved: isBreakRemoved
+            isBreakRemoved: isBreakRemoved,
+            otMultiplierOverride: otMultiplierOverride
         )
     }
 }

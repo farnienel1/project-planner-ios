@@ -996,6 +996,20 @@ struct WeeklyReportView: View {
             )
         )
 
+        // RULEBOOK 1.29.0 §7: PAYE overtime per person per job (hours only).
+        let payeRows = payeOvertimeRows()
+        let payeTotal = (payeRows.reduce(0) { $0 + $1.overtimeHours } * 100).rounded() / 100
+        sections.append(
+            WeeklyReportExportBuilder.Section(
+                title: "⏱  PAYE overtime",
+                headers: ["Person", "Job No.", "Job", "Overtime hours"],
+                rows: payeRows.isEmpty
+                    ? [["No PAYE overtime in this period", "", "", ""]]
+                    : payeRows.map { [$0.name, $0.jobNumber, $0.jobName, "\(ScheduleCoverageFormat.hours($0.overtimeHours))h"] },
+                totalRow: payeRows.isEmpty ? nil : ["", "", "Total", "\(ScheduleCoverageFormat.hours(payeTotal))h"]
+            )
+        )
+
         let priceWorkRows = timesheetMoneyRows(\.priceWork)
         var priceWorkTotal = 0.0
         let priceWorkExportRows = priceWorkRows.map { row -> [String] in
@@ -1143,6 +1157,21 @@ struct WeeklyReportView: View {
         rows.append(["", "", "Total", "", formatDays(additionalScheduleTotal)])
         rows.append([])
 
+        // RULEBOOK 1.29.0 §7: PAYE overtime per person per job (hours only).
+        rows.append(["PAYE OVERTIME"])
+        rows.append(["Person", "Job Number", "Job", "Overtime hours"])
+        let payeRows = payeOvertimeRows()
+        if payeRows.isEmpty {
+            rows.append(["No PAYE overtime in this period", "", "", ""])
+        } else {
+            for row in payeRows {
+                rows.append([row.name, row.jobNumber, row.jobName, "\(ScheduleCoverageFormat.hours(row.overtimeHours))h"])
+            }
+            let total = (payeRows.reduce(0) { $0 + $1.overtimeHours } * 100).rounded() / 100
+            rows.append(["", "", "Total", "\(ScheduleCoverageFormat.hours(total))h"])
+        }
+        rows.append([])
+
         rows.append(["PRICE WORK"])
         rows.append(["Person", "Title", "Job Number", "Date", "Details", "Amount"])
         var priceWorkTotal = 0.0
@@ -1214,6 +1243,8 @@ struct WeeklyReportView: View {
             let person = reportPerson(for: booking, people: people)
             let linkedUser = person.user
             if timesheetFeed.covers(userId: linkedUser?.id, day: booking.date) { continue }
+            // RULEBOOK 1.29.0 §7: a PAYE day leaves the hours and pay rows (it is in the PAYE overtime section).
+            if payeReportDay(linkedUser, on: booking.date) { continue }
             let project = projectStore.projects.first(where: { $0.id == booking.projectId })
                 ?? projectStore.smallWorks.first(where: { $0.id == booking.projectId })
             let projectName = project?.siteName ?? "Unknown"
@@ -1251,6 +1282,7 @@ struct WeeklyReportView: View {
             guard let user = reportingUser(for: booking.userId) else { continue }
             if timesheetFeed.covers(userId: user.id, day: booking.date)
                 || timesheetFeed.covers(userId: booking.userId, day: booking.date) { continue }
+            if payeReportDay(user, on: booking.date) { continue }
             let project = projectStore.projects.first(where: { $0.id == booking.locationId })
                 ?? projectStore.smallWorks.first(where: { $0.id == booking.locationId })
             let projectName = project?.siteName ?? "Unknown"
@@ -1329,6 +1361,7 @@ struct WeeklyReportView: View {
             let person = reportPerson(for: booking, people: people)
             let user = person.user
             if timesheetFeed.covers(userId: user?.id, day: booking.date) { continue }
+            if payeReportDay(user, on: booking.date) { continue }
             let rate = resolvedPayrollRate(user: user, operative: person.operative, on: booking.date).reportRateValue()
             let days = bookingDayValue(from: booking)
             let key = labourRateKey(name: person.name, role: "Operative", rate: rate)
@@ -1342,6 +1375,7 @@ struct WeeklyReportView: View {
             guard let manager = reportingUser(for: booking.userId) else { continue }
             if timesheetFeed.covers(userId: manager.id, day: booking.date)
                 || timesheetFeed.covers(userId: booking.userId, day: booking.date) { continue }
+            if payeReportDay(manager, on: booking.date) { continue }
             let managerName = manager.fullName.isEmpty ? manager.email : manager.fullName
             let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.hourlyRate ?? manager.dayRate, date: booking.date)
             let days = managerDayValue(from: booking)
@@ -1367,6 +1401,7 @@ struct WeeklyReportView: View {
         }
         let liveRows = filtered.compactMap { booking -> ManagerAdditionalScheduleRow? in
             guard let person = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { return nil }
+            if payeReportDay(person, on: booking.date) { return nil }
             let personName = person.fullName.isEmpty ? person.email : person.fullName
             let roleLabel = reportRoleLabel(for: person, fallback: "Manager")
             let locationName: String
@@ -1504,6 +1539,48 @@ struct WeeklyReportView: View {
         user?.employmentType(on: day) == .paye
     }
 
+    /// RULEBOOK 1.29.0 §7 `weeklyReportPayeDay`: the person is PAYE on that day, so the day leaves the hours, pay and
+    /// additional-schedule rows (it is in the PAYE overtime section instead).
+    private func payeReportDay(_ user: AppUser?, on day: Date) -> Bool {
+        guard let user else { return false }
+        return CanonicalBusinessEngine.weeklyReportPayeDay(
+            employment: user.overtimeEmploymentPayload,
+            dayKey: OrganizationRulebookContext.dayKey(day)
+        )
+    }
+
+    /// RULEBOOK 1.29.0 §7 `weeklyReportPayeOvertime`: one row per PAYE person per job with their overtime hours in the
+    /// range, live from the labour and job-linked manager site bookings.
+    private func payeOvertimeRows() -> [WeeklyReportPayeOvertimeRow] {
+        let cal = CanonicalBusinessEngine.businessCalendar
+        let labour = bookingStore.bookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= reportStartDay && day <= reportEndDay
+        }.map { OvertimeBookingInputs.labour($0) }
+        let manager = managerScheduleStore.managerSiteBookings.filter {
+            let day = cal.startOfDay(for: $0.date)
+            return day >= reportStartDay && day <= reportEndDay
+                && ($0.locationType == .project || $0.locationType == .smallWork) && $0.locationId != nil
+        }.map { OvertimeBookingInputs.managerSite($0) }
+        let bookings = OvertimeBookingInputs.withJobs(labour + manager, jobs: projectStore.projects + projectStore.smallWorks)
+        let users = userStore.organizationUsers
+        let operatives = operativeStore.allOperatives
+        let people: [[String: Any]] = users.compactMap { user in
+            guard !user.isAnonymisedDeletedProfile else { return nil }
+            var row = user.overtimeEmploymentPayload
+            row["id"] = user.id
+            row["name"] = user.fullName.isEmpty ? user.email : user.fullName
+            row["ids"] = OvertimeScreenSupport.personIds(for: user, users: users, operatives: operatives)
+            return row
+        }
+        return CanonicalBusinessEngine.weeklyReportPayeOvertime(
+            people: people,
+            bookings: bookings,
+            organization: OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization),
+            range: (OrganizationRulebookContext.dayKey(reportStartDay), OrganizationRulebookContext.dayKey(reportEndDay))
+        )
+    }
+
     /// Pay cells and the person total from the rulebook (`reportPayCell`, `reportPersonPayCell`):
     /// a PAYE line shows PAYE, no figure, and adds nothing to the totals.
     private func settledSummary(name: String, role: String, lines: [PayrollRateLine]) -> PayrollPersonSummary {
@@ -1602,6 +1679,7 @@ struct WeeklyReportView: View {
             let person = reportPerson(for: booking, people: people)
             let linkedUser = person.user
             if timesheetFeed.covers(userId: linkedUser?.id, day: booking.date) { continue }
+            if payeReportDay(linkedUser, on: booking.date) { continue }
             let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let role = reportRoleLabel(for: linkedUser, fallback: "Operative")
             let name = person.name
@@ -1641,6 +1719,7 @@ struct WeeklyReportView: View {
             guard let manager = reportingUser(for: booking.userId) else { continue }
             if timesheetFeed.covers(userId: manager.id, day: booking.date)
                 || timesheetFeed.covers(userId: booking.userId, day: booking.date) { continue }
+            if payeReportDay(manager, on: booking.date) { continue }
             let policy = firebaseBackend.payrollPolicy(for: booking.date)
             let role = reportRoleLabel(for: manager, fallback: "Manager")
             let name = manager.fullName.isEmpty ? manager.email : manager.fullName
@@ -1754,6 +1833,7 @@ struct WeeklyReportView: View {
             guard !line.isOvertime else { continue }
             guard projectKinds.contains(line.locationKind) else { continue }
             guard line.days > 0.0001 else { continue }
+            if payeReportDay(userStore.organizationUsers.first { $0.id == week.userId }, on: line.date) { continue }
             let projectName = line.projectName.isEmpty ? "Unknown" : line.projectName
             let jobNumber = line.jobNumber.isEmpty ? "N/A" : line.jobNumber
             let key = "\(projectName)|\(jobNumber)|\(week.personName)|\(week.role)"
@@ -1786,6 +1866,7 @@ struct WeeklyReportView: View {
             guard !line.isOvertime else { return nil }
             guard additionalKinds.contains(line.locationKind) else { return nil }
             guard line.days > 0.0001 else { return nil }
+            if payeReportDay(userStore.organizationUsers.first { $0.id == week.userId }, on: line.date) { return nil }
             let location: String
             if line.locationKind == ManagerLocationType.custom.rawValue {
                 let name = line.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1850,8 +1931,9 @@ struct WeeklyReportView: View {
             map[key] = acc
         }
         for (week, line) in timesheetFeed.labourLines(in: reportDateRange) {
-            // A PAYE day keeps its hours on the report with no pay (`reportPayCell`).
             let weekUser = userStore.organizationUsers.first { $0.id == week.userId }
+            // RULEBOOK 1.29.0 §7: PAYE days leave the pay rows (they are in the PAYE overtime section).
+            if payeReportDay(weekUser, on: line.date) { continue }
             let paye = isPaye(weekUser, on: line.date)
             guard line.amount > 0.0001 || (paye && line.days > 0.0001) else { continue }
             let rate = !paye && line.days > 0.0001 ? line.amount / line.days : nil

@@ -74,7 +74,7 @@ enum BookingWritePatch {
 
     static let managerFieldNames: [String] = [
         "userId", "date", "timeSlot", "locationType", "locationId", "customLocationName",
-        "workStartTime", "workEndTime", "isBreakRemoved", "bookingGroupId"
+        "workStartTime", "workEndTime", "isBreakRemoved", "bookingGroupId", "otMultiplierOverride"
     ]
 
     static func managerValues(_ booking: ManagerSiteBooking, deletesClearedFields: Bool) -> [String: Any] {
@@ -97,6 +97,7 @@ enum BookingWritePatch {
         optional("workStartTime", nonEmpty(booking.workStartTime))
         optional("workEndTime", nonEmpty(booking.workEndTime))
         optional("bookingGroupId", nonEmpty(booking.bookingGroupId))
+        optional("otMultiplierOverride", booking.otMultiplierOverride)
         // RULEBOOK 1.11.0: a job-linked manager site booking carries `jobCollection` (from the loaded job, else its
         // `locationType`); office, home, survey and custom never do.
         for (key, value) in BookingJobCollectionContext.fields(
@@ -121,6 +122,7 @@ enum BookingWritePatch {
         if nonEmpty(old.workEndTime) != nonEmpty(new.workEndTime) { changed.insert("workEndTime") }
         if old.isBreakRemoved != new.isBreakRemoved { changed.insert("isBreakRemoved") }
         if nonEmpty(old.bookingGroupId) != nonEmpty(new.bookingGroupId) { changed.insert("bookingGroupId") }
+        if old.otMultiplierOverride != new.otMultiplierOverride { changed.insert("otMultiplierOverride") }
         return changed
     }
 
