@@ -10,6 +10,7 @@
 //
 
 import Foundation
+import FirebaseAuth
 @preconcurrency import FirebaseFirestore
 
 extension Notification.Name {
