@@ -412,7 +412,7 @@ class UserStore: ObservableObject {
     private func provisionalSessionUser(firebaseUser: FirebaseAuth.User, organizationId: String) -> AppUser {
         let email = firebaseUser.email ?? ""
         let namePart = email.components(separatedBy: "@").first ?? ""
-        return AppUser(
+        var placeholder = AppUser(
             id: firebaseUser.uid,
             email: email,
             organizationId: organizationId,
@@ -435,6 +435,9 @@ class UserStore: ObservableObject {
             ),
             policyAccepted: true
         )
+        // Not read from `users/{uid}`: the legal gate waits for the real document (`AppUser.showsLegalPackGate`).
+        placeholder.isProvisional = true
+        return placeholder
     }
     
     /// Puts the last roster saved on this phone on screen before a network load.

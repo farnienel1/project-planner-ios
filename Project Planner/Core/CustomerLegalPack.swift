@@ -303,4 +303,12 @@ extension AppUser {
             currentVersion: CustomerLegalPack.version
         ) ?? !policyAccepted
     }
+
+    /// Whether the root view shows the legal gate. Only a profile read from `users/{uid}` by the rulebook reader
+    /// decides it: the launch placeholder (`isProvisional`) and the identity-only copy (`parsedWithoutRulebook`)
+    /// carry no stored acceptance, so they never show the gate; the real document decides once it arrives.
+    var showsLegalPackGate: Bool {
+        guard !isProvisional, !parsedWithoutRulebook else { return false }
+        return needsLegalPackAcceptance
+    }
 }

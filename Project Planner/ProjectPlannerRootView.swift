@@ -331,8 +331,9 @@ struct ProjectPlannerRootView: View {
             NoOrganisationView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
-        } else if let currentUser = userStore.currentUser, currentUser.needsLegalPackAcceptance {
-            // `legalPackNeedsAcceptance`: not accepted, or an older pack accepted.
+        } else if let currentUser = userStore.currentUser, currentUser.showsLegalPackGate {
+            // `legalPackNeedsAcceptance`: not accepted, or an older pack accepted. Decided only from a profile read
+            // from `users/{uid}`; the launch placeholder never flashes the gate (`showsLegalPackGate`).
             PolicyAcceptanceView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
