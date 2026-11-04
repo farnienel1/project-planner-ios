@@ -233,4 +233,26 @@ final class RulebookSweepTests: XCTestCase {
             []
         )
     }
+
+    // MARK: 11. Timesheet pay-run zone (`organizationTimeZone`)
+
+    /// Pay-run day keys use the open organisation's zone, not a fixed Europe/London.
+    func testTimesheetPayRunZoneIsTheOrganisationZone() {
+        var org = Organization(firestoreDocumentId: "TEST-ORG-IE", name: "TEST-Ireland", creatorUserId: "TEST-FOUNDER")
+        org.countryCode = "IE"
+        OrganizationRulebookContext.update(from: org)
+        defer { OrganizationRulebookContext.update(from: nil) }
+        XCTAssertEqual(TimesheetPayrollPolicy.organizationTimeZone, "Europe/Dublin")
+        XCTAssertEqual(TimesheetPayrollPolicy.organizationTimeZone, OrganizationRulebookContext.timeZoneIdentifier)
+    }
+
+    // MARK: 12. Monday-first weeks (`OrganizationRulebookContext.calendar`)
+
+    /// Materials week strips start on Monday in the organisation zone whatever the phone's locale says.
+    func testMaterialsWeekStartsOnMonday() {
+        let days = MaterialsWeekHelpers.weekDays(containing: orgDay("2026-11-08"))
+        XCTAssertEqual(days.count, 7)
+        XCTAssertEqual(days.first.map(OrganizationRulebookContext.dayKey), "2026-11-02")
+        XCTAssertEqual(days.last.map(OrganizationRulebookContext.dayKey), "2026-11-08")
+    }
 }
