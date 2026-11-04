@@ -213,6 +213,24 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertFalse(WarningOperativeAccess.canOpen(actor: managerWith, target: managerWithout))
     }
 
+    /// Book labour: a candidate in operative mode (an admin included) is booked as an operative, never at other
+    /// locations; a manager or an admin outside operative mode is.
+    func testBookLabourOtherLocationsExcludeOperativeModeCandidates() {
+        func candidate(_ user: AppUser) -> BookLabourCandidate {
+            BookLabourCandidate(user: user, linkedOperative: nil, usesOperativeProjectBookings: false)
+        }
+        let manager = levelUser(id: "mgr", role: .manager, permissions: UserPermissions(manager: true))
+        let admin = levelUser(id: "adm", role: .admin, permissions: UserPermissions(adminAccess: true, manager: true))
+        let adminInOperativeMode = levelUser(
+            id: "adm-op", role: .admin, permissions: UserPermissions(adminAccess: true, manager: true, operativeMode: true)
+        )
+        let operative = levelUser(id: "op", role: .operative, permissions: UserPermissions(operativeMode: true))
+        XCTAssertTrue(candidate(manager).canBookOtherLocations)
+        XCTAssertTrue(candidate(admin).canBookOtherLocations)
+        XCTAssertFalse(candidate(adminInOperativeMode).canBookOtherLocations)
+        XCTAssertFalse(candidate(operative).canBookOtherLocations)
+    }
+
     // MARK: 10. Leave decision notices (`resolveBookingPerson`, then `holidayDecisionRecipients`)
 
     /// A request stored only under a catalogue row reaches the account on that row's email whatever its level (the
