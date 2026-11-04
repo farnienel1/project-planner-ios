@@ -2231,7 +2231,9 @@ class FirebaseBackend: ObservableObject {
             "endDate": Timestamp(date: job.endDate),
             "jobType": job.jobType.rawValue,
             "customJobType": orDelete(job.customJobType),
-            "manager": job.manager.rawValue,
+            // The primary manager's name (web `managerLegacy`), else the legacy label as read; never "Custom"
+            // (`parseJobDocument` reads "Custom" as no name).
+            "manager": JobManagerLabel.storedValue(job) ?? FieldValue.delete(),
             "managerId": orDelete(primaryManager),
             "managerIds": managerIds.isEmpty ? FieldValue.delete() as Any : managerIds as Any,
             "isLive": job.isLive,
@@ -2368,6 +2370,11 @@ class FirebaseBackend: ObservableObject {
                 hiddenManagerUserIds: hiddenManagerUserIds,
                 hiddenOperativeUserIds: hiddenOperativeUserIds
             )
+        }
+        // `parseJobDocument` `managerName`: the stored label as a name ("Custom" reads as none).
+        job.managerName = row.optionalText("managerName") ?? (storedManagerName as? String).flatMap { name in
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty || trimmed.lowercased() == "custom" ? nil : trimmed
         }
         job.usesMapPinForLocation = row.bool("usesMapPinForLocation")
         job.latitude = row.number("latitude")
@@ -4811,7 +4818,8 @@ class FirebaseBackend: ObservableObject {
             users: uniqueUsers,
             claimedEmails: claimedEmails,
             userIdAliases: userIdAliases,
-            anchoredUserIds: Set(anchoredUserIds)
+            anchoredUserIds: Set(anchoredUserIds),
+            documents: users
         )
     }
 
@@ -11428,5 +11436,21 @@ class FirebaseConfig {
     static func configure() {
         // Firebase is configured in AppDelegate or App struct
         // This class can be used for additional configuration
+    }
+}
+
+/// The `manager` label a job save writes (RULEBOOK 1.31.0 §21, web `buildProjectFirestorePayload` `managerLegacy`):
+/// the primary manager's name when known, else the legacy label as read; nil (no field) instead of "Custom" or "N/A".
+/// A label only — who manages the job is `managerIds` / `managerUserIds`.
+enum JobManagerLabel {
+    static func storedValue(_ job: Project) -> String? {
+        if let name = job.managerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty, name.lowercased() != "custom" {
+            return name
+        }
+        switch job.manager {
+        case .custom, .na: return nil
+        default: return job.manager.rawValue
+        }
     }
 }
