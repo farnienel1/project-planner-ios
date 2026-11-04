@@ -350,9 +350,10 @@ class BookingStore: ObservableObject {
         return bookings.filter { remove.contains($0.documentKey.uppercased()) }
     }
 
-    /// RULEBOOK 1.10.0 §2, §16 `canDeleteBooking` for this labour booking, the same check `deleteBooking` makes
-    /// (admins only for `bookings`; managers cancel instead). True before the profile loads; the security rules still
-    /// decide. Screens offer Delete only when this is true.
+    /// RULEBOOK 1.10.0 §2, §16 `canDeleteBooking` for this labour booking, the same check `deleteBooking` makes: an
+    /// admin deletes any labour booking, a manager deletes bookings on jobs they manage (as `canWriteBooking`), an
+    /// operative never. True before the profile loads; the security rules still decide. Screens offer Delete only when
+    /// this is true.
     func canDeleteBooking(_ booking: Booking) -> Bool {
         writeRefusal([booking], isDelete: true) == nil
     }

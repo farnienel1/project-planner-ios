@@ -1580,7 +1580,8 @@ struct ProjectDetailView: View {
     }
 
     /// Delete on a labour booking only when the rulebook allows it (`canDeleteBooking` via
-    /// `BookingStore.canDeleteBooking`: admins; managers cancel instead). A refused delete is reported, not hidden.
+    /// `BookingStore.canDeleteBooking`: admins on any job, managers on jobs they manage, never operatives). A refused
+    /// delete is reported, not hidden.
     private func labourBookingDeleteAction(_ booking: Booking) -> (() -> Void)? {
         guard bookingStore.canDeleteBooking(booking) else { return nil }
         return {
@@ -2002,14 +2003,7 @@ struct ProjectDetailView: View {
     }
 
     private func isPayeOperativeBooking(_ booking: Booking) -> Bool {
-        guard let operative = operativeStore.allOperatives.first(where: { $0.id == booking.operativeId }) else {
-            return false
-        }
-        let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let user = userStore.organizationUsers.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
-        }) else { return false }
-        return user.employmentType(on: booking.date) == .paye
+        LabourBookingEditOptions.isPaye(booking, operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
     }
     
     private var siteLocationSection: some View {

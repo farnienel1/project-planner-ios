@@ -745,7 +745,8 @@ struct ManagerScheduleContentView: View {
     @EnvironmentObject private var smartCache: SmartCacheService
 
     /// Delete on a labour booking only when the rulebook allows it (`canDeleteBooking` via
-    /// `BookingStore.canDeleteBooking`: admins; managers cancel instead). A refused delete is reported, not hidden.
+    /// `BookingStore.canDeleteBooking`: admins on any job, managers on jobs they manage, never operatives). A refused
+    /// delete is reported, not hidden.
     private func labourBookingDeleteAction(_ booking: Booking) -> (() -> Void)? {
         guard bookingStore.canDeleteBooking(booking) else { return nil }
         return {

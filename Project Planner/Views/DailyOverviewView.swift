@@ -1209,7 +1209,8 @@ private extension DailyOverviewView {
     }
 
     /// Delete on a labour booking only when the rulebook allows it (`canDeleteBooking` via
-    /// `BookingStore.canDeleteBooking`: admins; managers cancel instead). A refused delete is reported, not hidden.
+    /// `BookingStore.canDeleteBooking`: admins on any job, managers on jobs they manage, never operatives). A refused
+    /// delete is reported, not hidden.
     private func labourBookingDeleteAction(_ booking: Booking) -> (() -> Void)? {
         guard bookingStore.canDeleteBooking(booking) else { return nil }
         return {
@@ -1231,6 +1232,12 @@ private extension DailyOverviewView {
     func dailyOverviewEditSheet(for target: DailyOverviewEditTarget) -> some View {
         switch target {
         case .operative(let booking, let project, let personName):
+            // Same options as Scheduling (`LabourBookingEditOptions`): every control for everyone, plus the PAYE line.
+            let options = LabourBookingEditOptions.forOperative(
+                booking: booking,
+                operatives: operativeStore.allOperatives,
+                users: userStore.organizationUsers
+            )
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
                 referenceDay: booking.date,
@@ -1238,7 +1245,11 @@ private extension DailyOverviewView {
                 subtitle: editSheetSubtitle(date: booking.date, locationTitle: "\(project.jobNumber) \(project.siteName)"),
                 headerName: personName,
                 headerInitials: PlannerUIInitials.from(personName),
-                allowsOtMultiplierOverride: true,
+                allowsOtMultiplierOverride: options.allowsOtMultiplierOverride,
+                showsBreakControls: options.showsBreakControls,
+                showsBreakdown: options.showsBreakdown,
+                showsFooterNote: options.showsFooterNote,
+                showsPayeNote: options.showsPayeNote,
                 initialChoice: OperativeDayBookingChoice(from: booking),
                 onSave: { start, end, breakRemoved, otMult in
                     bookingEditTarget = nil

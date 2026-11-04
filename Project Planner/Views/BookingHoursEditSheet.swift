@@ -1891,7 +1891,8 @@ private struct UnpaidBreakWarningSheet: View {
 
 // MARK: - Edit booking options for a labour booking
 
-/// What Edit booking shows for a labour (`bookings`) booking, the same from Scheduling and Daily Overview: the break
+/// What Edit booking shows for a labour (`bookings`) booking, the same from Scheduling and Daily Overview (both show the
+/// PAYE line for a PAYE operative): the break
 /// controls, breakdown, footer and overtime rate for every person (RULEBOOK 1.29.0 §25: the rate applies to PAYE
 /// bookings too), with the PAYE note added for a PAYE operative. Hiding the controls for PAYE also opened the sheet
 /// with the break off, so Save rewrote `isBreakRemoved = true` on a booking nobody changed.
@@ -1901,6 +1902,22 @@ struct LabourBookingEditOptions: Equatable {
     let showsFooterNote: Bool
     let showsPayeNote: Bool
     let allowsOtMultiplierOverride: Bool
+
+    /// The options for this booking's person: PAYE on the booking's day (`isPaye`).
+    static func forOperative(booking: Booking, operatives: [Operative], users: [AppUser]) -> LabourBookingEditOptions {
+        forOperative(isPaye: isPaye(booking, operatives: operatives, users: users))
+    }
+
+    /// Whether the booking's operative is PAYE on the booking's day: the roster account with the operative's email,
+    /// read through `AppUser.employmentType(on:)` (`employmentTypeOnDay`). False when no account matches.
+    static func isPaye(_ booking: Booking, operatives: [Operative], users: [AppUser]) -> Bool {
+        guard let operative = operatives.first(where: { $0.id == booking.operativeId }) else { return false }
+        let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let user = users.first(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+        }) else { return false }
+        return user.employmentType(on: booking.date) == .paye
+    }
 
     static func forOperative(isPaye: Bool) -> LabourBookingEditOptions {
         LabourBookingEditOptions(
