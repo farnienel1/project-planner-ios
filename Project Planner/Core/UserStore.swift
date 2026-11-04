@@ -1149,7 +1149,12 @@ class UserStore: ObservableObject {
                 user.isActive && user.isLineManager(viewer.id)
             }
         }
-        return users.sorted(by: { $0.fullName < $1.fullName })
+        // RULEBOOK 1.30.2 `userTimesheetSubjects`: never the viewer (their own sheet is My Timesheets). The script
+        // already leaves them out; the fallback lists (script did not answer) must not add them back.
+        let viewerIds = Set(RulebookPeople.ownerIds(for: viewer, users: organizationUsers).map { $0.lowercased() })
+        return users
+            .filter { !viewerIds.contains($0.id.lowercased()) }
+            .sorted(by: { $0.fullName < $1.fullName })
     }
 
     func canAccessTimesheetsSurface() -> Bool {
