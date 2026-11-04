@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import Project_Planner
 
 /// RULEBOOK 1.30.0 on iOS through `CanonicalBusinessEngine` (`Rulebook+PayeClaims.swift`): PAYE price work and
@@ -109,6 +110,61 @@ final class Rulebook1300Tests: XCTestCase {
         let forMia = CanonicalBusinessEngine.priceWorkApproverCandidates(person: person("mia"), roster: roster, organizationId: org)
         XCTAssertFalse(forMia.contains { $0.id == "mia" }, "never the person")
         XCTAssertEqual(forMia.map(\.id), ["ada"])
+    }
+
+    /// Review fix: the approver row carries the organisation the users document STORES (`storedOrganizationId`, web
+    /// `homeOrganizationId`), never the open organisation a roster reader fills in when the field is missing — the
+    /// rules' `homeOrgIs` reads the stored field, so such a person must not be offered.
+    func testApproverRowsUseTheStoredOrganisationSoAPersonWithNoneIsNotOffered() {
+        func user(_ id: String, role: String, extra: [String: Any]) -> AppUser {
+            var data: [String: Any] = [
+                "email": "\(id)@test.example", "firstName": id.capitalized, "surname": "Test",
+                "role": role, "isActive": true, "passwordSet": true,
+            ]
+            data.merge(extra) { $1 }
+            return FirebaseBackend.parseAppUserDocument(userId: id, data: data)
+        }
+        let sam = user("sam", role: "operative", extra: ["operativeMode": true, "organizationId": org, "assignedManagerUserIds": ["mia"]])
+        let mia = user("mia", role: "manager", extra: ["manager": true, "organizationId": org])
+        var noOrg = user("nox", role: "manager", extra: ["manager": true])
+        XCTAssertNil(noOrg.storedOrganizationId)
+        // What `getOrganizationUsers` and the roster listener do for a document with no `organizationId`.
+        noOrg.organizationId = org
+        let viaPath = user("pat", role: "manager", extra: ["manager": true, "organizationId": "organizations/\(org)"])
+        XCTAssertEqual(mia.storedOrganizationId, org)
+        let ids = Set(CanonicalBusinessEngine.priceWorkApproverCandidates(
+            person: PayeClaimPeople.approverRow(sam),
+            roster: PayeClaimPeople.approverRoster([sam, mia, noOrg, viaPath]),
+            organizationId: org
+        ).map(\.id))
+        XCTAssertTrue(ids.contains("mia"))
+        XCTAssertFalse(ids.contains("nox"), "no stored organisation: the rules refuse them, so they are not offered")
+        XCTAssertTrue(ids.contains("pat"), "a stored organisation path names this organisation")
+        XCTAssertFalse(ids.contains("sam"))
+    }
+
+    /// Review fix: the frozen audit copy draws photos downscaled, and a copy over the claim folder's 10 MB limit is
+    /// refused before any upload with a clear message.
+    func testFrozenAuditCopiesAreDownscaledAndSizeGuarded() throws {
+        XCTAssertNil(PersonalSiteAuditPDF.attachRefusal(byteCount: StorageUploadPolicy.standardMaxBytes))
+        XCTAssertEqual(
+            PersonalSiteAuditPDF.attachRefusal(byteCount: StorageUploadPolicy.standardMaxBytes + 1),
+            "This audit is too large to attach — remove some photos or attach it as separate photos."
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let big = UIGraphicsImageRenderer(size: CGSize(width: 4000, height: 3000), format: format).image { context in
+            UIColor.orange.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4000, height: 3000))
+        }
+        let small = try XCTUnwrap(PersonalSiteAuditPDF.downscaledPhoto(big))
+        let pixels = max(small.image.size.width * small.image.scale, small.image.size.height * small.image.scale)
+        XCTAssertLessThanOrEqual(pixels, 1600.5)
+        XCTAssertGreaterThan(pixels, 1500, "scaled to the limit, not further")
+        let tiny = UIGraphicsImageRenderer(size: CGSize(width: 300, height: 200), format: format).image { _ in }
+        let kept = try XCTUnwrap(PersonalSiteAuditPDF.downscaledPhoto(tiny))
+        XCTAssertEqual(kept.image.size.width * kept.image.scale, 300, accuracy: 0.5, "never enlarged")
+        XCTAssertEqual(UIImage(data: small.jpeg)?.cgImage?.width, Int(pixels.rounded()))
     }
 
     // MARK: Validation

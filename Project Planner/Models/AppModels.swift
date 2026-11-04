@@ -426,6 +426,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     var id: String
     var email: String
     var organizationId: String
+    /// RULEBOOK 1.30.0 §26: `organizationId` exactly as the users document stores it (web `homeOrganizationId`), nil when
+    /// the document has none. Readers may fill `organizationId` with the open organisation; this is never filled. The
+    /// price work approver must have a users document naming this organisation (`priceWorkApproverCandidates`, rules).
+    var storedOrganizationId: String? = nil
     var role: UserRole
     var createdAt: Date
     var firstName: String
@@ -650,6 +654,7 @@ extension AppUser {
         case timesheetsEnabled, vatNumber, utrNumber, sameEmailUserIds
         case documentName, documentDisplayName, formerUserIds, documentUpdatedAt
         case status, payBasis, profilePhotoUpdatedAt, operativeModeStored, storedLevelFlags, storedRoleText
+        case storedOrganizationId
     }
 
     init(from decoder: Decoder) throws {
@@ -657,6 +662,7 @@ extension AppUser {
         id = try container.decode(String.self, forKey: .id)
         email = try container.decode(String.self, forKey: .email)
         organizationId = try container.decode(String.self, forKey: .organizationId)
+        storedOrganizationId = try container.decodeIfPresent(String.self, forKey: .storedOrganizationId)
         role = try container.decode(UserRole.self, forKey: .role)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         firstName = try container.decode(String.self, forKey: .firstName)
@@ -709,6 +715,7 @@ extension AppUser {
         try container.encode(id, forKey: .id)
         try container.encode(email, forKey: .email)
         try container.encode(organizationId, forKey: .organizationId)
+        try container.encodeIfPresent(storedOrganizationId, forKey: .storedOrganizationId)
         try container.encode(role, forKey: .role)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(firstName, forKey: .firstName)

@@ -22,11 +22,13 @@ import FirebaseStorage
 
 @MainActor
 enum PayeClaimPeople {
-    /// A roster row as `priceWorkApproverCandidates` reads it: the line-manager row plus the users document's stored
-    /// organisation (the approver must belong to this organisation, as the security rules check).
+    /// A roster row as `priceWorkApproverCandidates` reads it: the line-manager row plus the organisation the users
+    /// document STORES (`AppUser.storedOrganizationId`, web `homeOrganizationId`) — never `organizationId`, which the
+    /// roster readers fill with the open organisation when the document has none. The rules' `homeOrgIs` reads the
+    /// stored field, so a person whose document names no organisation (or another one) is never offered.
     static func approverRow(_ user: AppUser) -> [String: Any] {
         var row = LineManagerRulebook.row(user)
-        row["organizationId"] = user.organizationId
+        row["organizationId"] = user.storedOrganizationId ?? ""
         return row
     }
 
@@ -847,6 +849,27 @@ struct AddPayeClaimSheet: View {
     private func submit() async {
         guard draftError == nil, saving == nil else { return }
         error = nil
+        // Frozen audit copies are built (and size-checked) before anything is uploaded, so a copy over the claim
+        // folder's 10 MB limit is refused with a clear message and nothing is left behind.
+        var auditCopies: [UUID: Data] = [:]
+        for entry in evidence {
+            guard case .audit(let audit) = entry.source else { continue }
+            saving = "Making the personal site audit copy"
+            let backend = firebaseBackend
+            guard let pdf = await PersonalSiteAuditPDF.makeData(audit: audit, readFile: { path in
+                try await backend.payeClaimStoredFileData(path: path)
+            }) else {
+                saving = nil
+                error = "The personal site audit copy could not be made."
+                return
+            }
+            if let refusal = PersonalSiteAuditPDF.attachRefusal(byteCount: pdf.count) {
+                saving = nil
+                error = refusal
+                return
+            }
+            auditCopies[entry.id] = pdf
+        }
         var uploaded: [PayeClaimEvidence] = []
         do {
             for (index, entry) in evidence.enumerated() {
@@ -860,10 +883,7 @@ struct AddPayeClaimSheet: View {
                         kind: kind
                     ))
                 case .audit(let audit):
-                    let backend = firebaseBackend
-                    guard let pdf = await PersonalSiteAuditPDF.makeData(audit: audit, readFile: { path in
-                        try await backend.payeClaimStoredFileData(path: path)
-                    }) else {
+                    guard let pdf = auditCopies[entry.id] else {
                         throw PayeClaimRefused(message: "The personal site audit copy could not be made.")
                     }
                     uploaded.append(try await firebaseBackend.attachPersonalSiteAuditCopy(audit, pdfData: pdf))
@@ -1197,16 +1217,54 @@ enum PayeClaimReportPDF {
     }
 }
 
-/// The frozen PDF copy of a personal site audit (`personalSiteAuditPdfRows`), also its Share PDF.
+/// The frozen PDF copy of a personal site audit (`personalSiteAuditPdfRows`), also its Share PDF. Photos are drawn
+/// downscaled (longest side `maxPhotoPixels`, JPEG `photoQuality`) so the copy fits the claim folder's 10 MB Storage
+/// limit; a copy still over `StorageUploadPolicy.standardMaxBytes` is never uploaded (`attachRefusal`).
 @MainActor
 enum PersonalSiteAuditPDF {
+    static let maxPhotoPixels: CGFloat = 1600
+    static let photoQuality: CGFloat = 0.7
+    static let tooLargeMessage = "This audit is too large to attach — remove some photos or attach it as separate photos."
+
+    /// Nil when a frozen copy of `byteCount` bytes may be uploaded to the claim folder, else the message to show.
+    static func attachRefusal(byteCount: Int) -> String? {
+        byteCount > StorageUploadPolicy.standardMaxBytes ? tooLargeMessage : nil
+    }
+
+    /// `image` with its longest side at most `maxPixels` (never enlarged), re-encoded as JPEG at `quality`, and the
+    /// image to draw, backed by that JPEG so the PDF embeds the compressed bytes. Nil when it cannot be encoded.
+    static func downscaledPhoto(_ image: UIImage, maxPixels: CGFloat = maxPhotoPixels, quality: CGFloat = photoQuality) -> (jpeg: Data, image: UIImage)? {
+        let pixelWidth = image.size.width * image.scale
+        let pixelHeight = image.size.height * image.scale
+        guard pixelWidth > 0, pixelHeight > 0 else { return nil }
+        let factor = min(1, maxPixels / max(pixelWidth, pixelHeight))
+        let target = CGSize(width: max(1, (pixelWidth * factor).rounded()), height: max(1, (pixelHeight * factor).rounded()))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let redrawn = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        guard let jpeg = redrawn.jpegData(compressionQuality: quality) else { return nil }
+        if let provider = CGDataProvider(data: jpeg as CFData),
+           let cgImage = CGImage(jpegDataProviderSource: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) {
+            return (jpeg, UIImage(cgImage: cgImage))
+        }
+        return UIImage(data: jpeg).map { (jpeg, $0) }
+    }
+
     static func makeData(audit: PersonalSiteAudit, readFile: (String) async throws -> Data) async -> Data? {
         guard let rows = CanonicalBusinessEngine.personalSiteAuditPdfRows(audit) else { return nil }
-        var photos: [String: Data] = [:]
+        var photos: [String: UIImage] = [:]
         var unreadable = Set<String>()
-        for item in rows.items where !item.imagePath.isEmpty {
+        for item in rows.items where !item.imagePath.isEmpty && photos[item.imagePath] == nil {
             do {
-                photos[item.imagePath] = try await readFile(item.imagePath)
+                let data = try await readFile(item.imagePath)
+                if let image = UIImage(data: data), let small = downscaledPhoto(image) {
+                    photos[item.imagePath] = small.image
+                } else {
+                    unreadable.insert(item.imagePath)
+                }
             } catch {
                 unreadable.insert(item.imagePath)
             }
@@ -1224,7 +1282,7 @@ enum PersonalSiteAuditPDF {
                 writer.text(item.heading, size: 12, bold: true)
                 for line in item.lines { writer.text(line, size: 10, color: .darkGray) }
                 guard !item.imagePath.isEmpty else { continue }
-                if let data = photos[item.imagePath], let image = UIImage(data: data) {
+                if let image = photos[item.imagePath] {
                     writer.image(image)
                 } else if unreadable.contains(item.imagePath) {
                     writer.text(unreadableNote, size: 9, color: UIColor(red: 0.6, green: 0.3, blue: 0, alpha: 1))
