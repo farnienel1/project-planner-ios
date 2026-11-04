@@ -735,13 +735,20 @@ struct HomeView: View {
                 Button {
                     showingHomeProfileCard = true
                 } label: {
-                    Text(profileInitials)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .background(homeBlue)
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 0.5))
+                    // RULEBOOK §12: the signed-in profile's photo (live `users/{uid}` listener), initials until it loads.
+                    ProfilePhotoAvatar(
+                        urlString: userStore.currentUser?.profilePhotoURL,
+                        updatedAt: userStore.currentUser?.profilePhotoUpdatedAt
+                    ) {
+                        Text(profileInitials)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                            .background(homeBlue)
+                    }
+                    .frame(width: 40, height: 40)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 0.5))
                 }
                 .accessibilityIdentifier("home.\(AccessibilityID.token(profileInitials))")
                 .buttonStyle(.plain)
@@ -1946,24 +1953,13 @@ private struct HomeProfileCardSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack(spacing: 12) {
-                        if let url = URL(string: user?.profilePhotoURL ?? "") {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image.resizable().scaledToFill()
-                                default:
-                                    Circle().fill(Color.blue.opacity(0.2))
-                                        .overlay(Text(initials).font(.headline).foregroundStyle(.blue))
-                                }
-                            }
-                            .frame(width: 62, height: 62)
-                            .clipShape(Circle())
-                        } else {
-                            Circle()
-                                .fill(Color.blue.opacity(0.2))
-                                .frame(width: 62, height: 62)
+                        // `profilePhotoUpdatedAt` refreshes the cached picture; a failed load is retried (§12).
+                        ProfilePhotoAvatar(urlString: user?.profilePhotoURL, updatedAt: user?.profilePhotoUpdatedAt) {
+                            Circle().fill(Color.blue.opacity(0.2))
                                 .overlay(Text(initials).font(.headline).foregroundStyle(.blue))
                         }
+                        .frame(width: 62, height: 62)
+                        .clipShape(Circle())
                         VStack(alignment: .leading, spacing: 3) {
                             Text(displayName).font(.headline)
                             Text(user?.email ?? "—").font(.subheadline).foregroundStyle(.secondary)
