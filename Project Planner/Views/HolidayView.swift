@@ -703,7 +703,7 @@ struct HolidayView: View {
         let person = teamPerson(for: request)
         let name = person?.displayName ?? requesterName(for: request)
         let trade = person?.tradeLabel ?? ""
-        let days = AnnualLeaveDateFormat.consumedDays(from: request.startDate, to: request.endDate, slot: request.timeSlot)
+        let days = AnnualLeaveDateFormat.leaveDays(request)
         let isCancellation = request.cancellationRequestedAt != nil
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
@@ -1138,7 +1138,7 @@ struct HolidayView: View {
 
     private func remainingAfterNote(for request: HolidayBooking, person: AnnualLeavePerson?) -> String? {
         guard let person, let balance = teamBalance(for: person), balance.hasAllowance else { return nil }
-        let days = AnnualLeaveDateFormat.consumedDays(from: request.startDate, to: request.endDate, slot: request.timeSlot)
+        let days = AnnualLeaveDateFormat.leaveDays(request)
         let after = request.cancellationRequestedAt != nil
             ? balance.allowance - balance.taken + days
             : balance.allowance - balance.taken - days

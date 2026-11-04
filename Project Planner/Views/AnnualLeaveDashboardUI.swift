@@ -97,11 +97,13 @@ enum AnnualLeaveDateFormat {
     static func singleDay(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_GB")
+        // Leave days are organisation-zone days (§1), never the phone's zone.
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "EEE d MMM"
         return formatter.string(from: date)
     }
 
-    static func bookingTitle(_ booking: HolidayBooking, calendar: Calendar = .current) -> String {
+    static func bookingTitle(_ booking: HolidayBooking, calendar: Calendar = OrganizationRulebookContext.calendar) -> String {
         let start = calendar.startOfDay(for: booking.startDate)
         let end = calendar.startOfDay(for: booking.endDate)
         if calendar.isDate(start, inSameDayAs: end) {
@@ -113,24 +115,25 @@ enum AnnualLeaveDateFormat {
         }
         let startText = singleDay(start)
         let endText = singleDay(end)
-        let days = consumedDays(from: start, to: end, slot: booking.timeSlot, calendar: calendar)
-        return "\(startText) – \(endText) · \(dayCount(days))"
+        return "\(startText) – \(endText) · \(dayCount(leaveDays(booking)))"
     }
 
-    static func consumedDays(from start: Date, to end: Date, slot: HolidayTimeSlot, calendar: Calendar = .current) -> Double {
-        var day = calendar.startOfDay(for: start)
-        let last = calendar.startOfDay(for: end)
-        var count = 0
-        while day <= last {
-            count += 1
-            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
-            day = next
-        }
-        return Double(count) * slot.dayValue
+    /// RULEBOOK §9 `leaveDaysInRange` over the record's own range: the days the record takes
+    /// (`leaveRecordDayKeys` — a multi-day record skips weekends and bank holidays), 0.5 each for AM / PM. The
+    /// same count the balance (`annualLeaveBalance`) and the weekly report use. 0 when the script did not answer.
+    static func leaveDays(_ booking: HolidayBooking) -> Double {
+        CanonicalBusinessEngine.leaveDaysInRange(
+            startDayKey: booking.startDayKey,
+            endDayKey: booking.endDayKey,
+            timeSlot: booking.timeSlot.rawValue,
+            rangeStartDayKey: booking.startDayKey,
+            rangeEndDayKey: max(booking.startDayKey, booking.endDayKey),
+            nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
+        ) ?? 0
     }
 
     /// Collapses consecutive per-day records of the same status and portion for display only.
-    static func displaySpans(from bookings: [HolidayBooking], calendar: Calendar = .current) -> [AnnualLeaveDisplaySpan] {
+    static func displaySpans(from bookings: [HolidayBooking], calendar: Calendar = OrganizationRulebookContext.calendar) -> [AnnualLeaveDisplaySpan] {
         let sorted = bookings.sorted { $0.startDate < $1.startDate }
         var spans: [AnnualLeaveDisplaySpan] = []
         for booking in sorted {
@@ -155,12 +158,12 @@ struct AnnualLeaveDisplaySpan: Identifiable {
 
     var dayTotal: Double {
         bookings.reduce(0) { partial, booking in
-            partial + AnnualLeaveDateFormat.consumedDays(from: booking.startDate, to: booking.endDate, slot: booking.timeSlot)
+            partial + AnnualLeaveDateFormat.leaveDays(booking)
         }
     }
 
     var title: String {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         guard let first = bookings.first, let last = bookings.last else { return "" }
         if bookings.count == 1 {
             return AnnualLeaveDateFormat.bookingTitle(first, calendar: calendar)
