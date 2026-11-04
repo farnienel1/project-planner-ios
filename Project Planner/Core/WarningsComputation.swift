@@ -1533,19 +1533,6 @@ enum WarningsComputation {
         return "\(clock(start))–\(clock(end))"
     }
 
-    nonisolated private static func workingDaysBetween(_ start: Date, _ end: Date, calendar: Calendar) -> Int {
-        var count = 0
-        var current = calendar.startOfDay(for: start)
-        let endDay = calendar.startOfDay(for: end)
-        while current <= endDay {
-            let w = calendar.component(.weekday, from: current)
-            if w >= 2 && w <= 6 { count += 1 }
-            guard let next = calendar.date(byAdding: .day, value: 1, to: current) else { break }
-            current = next
-        }
-        return count
-    }
-
     nonisolated private static func clashPersonKind(
         for user: WarningsComputationSnapshot.UserSnapshot?
     ) -> Warning.ClashPersonKind {

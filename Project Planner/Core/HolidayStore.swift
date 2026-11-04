@@ -209,8 +209,6 @@ class HolidayStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: HolidayStore resolved org \(orgId); fetching holidayBookings…")
             bookings = try await fb.loadHolidayBookings(organizationId: orgId)
             print("🔥🔥🔥 DEBUG: HolidayStore loaded \(bookings.count) holiday bookings")
-            // Do not auto-purge weekends on load — sequential deletes freeze Simulator launch.
-            // Purge remains available via `purgeInvalidWeekendBookingsIfNeeded()` for explicit cleanup.
         } catch {
             let nsError = error as NSError
             print("🔥🔥🔥 DEBUG: HolidayStore loadData failed: \(error.localizedDescription)")
@@ -342,19 +340,6 @@ class HolidayStore: ObservableObject {
             bookings.removeAll { $0.id == booking.id }
         } catch {
             errorMessage = error.localizedDescription
-        }
-    }
-
-    /// Removes single-day annual leave records that fall on a weekend (early-days cleanup; restores allowance).
-    /// A multi-day record (one document per request, §9) may span a weekend and is kept.
-    func purgeInvalidWeekendBookingsIfNeeded() async {
-        let cal = OrganizationRulebookContext.calendar
-        let invalid = bookings.filter {
-            cal.isDate($0.startDate, inSameDayAs: $0.endDate) &&
-            AnnualLeaveCalendarRules.bookingContainsWeekend($0, calendar: cal)
-        }
-        for booking in invalid {
-            await deleteBooking(booking)
         }
     }
 

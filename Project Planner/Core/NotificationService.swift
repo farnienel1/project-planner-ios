@@ -763,51 +763,6 @@ class NotificationService: ObservableObject {
         }
     }
     
-    func notifyBookingClash(
-        booking1Id: UUID,
-        booking2Id: UUID,
-        operativeName: String,
-        date: Date,
-        userId1: String,
-        userId2: String,
-        projectId: UUID? = nil,
-        catalogue: String? = nil
-    ) async {
-        guard let firebaseBackend = firebaseBackend,
-              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        
-        let message = "Booking clash detected for \(operativeName) on \(date.formatted(date: .abbreviated, time: .omitted))"
-        
-        // Send notification to both users involved in the clash
-        let dayKey = CanonicalBusinessEngine.dayKey(for: date)
-        let notification1 = AppNotification(
-            organizationId: organizationId,
-            type: .bookingClash,
-            title: "Booking Clash",
-            message: message,
-            userId: userId1,
-            relatedId: projectId ?? booking1Id,
-            requiresPermission: "canBookWork",
-            dayKey: dayKey,
-            catalogue: catalogue
-        )
-        
-        let notification2 = AppNotification(
-            organizationId: organizationId,
-            type: .bookingClash,
-            title: "Booking Clash",
-            message: message,
-            userId: userId2,
-            relatedId: projectId ?? booking2Id,
-            requiresPermission: "canBookWork",
-            dayKey: dayKey,
-            catalogue: catalogue
-        )
-        
-        await saveNotification(notification1)
-        await saveNotification(notification2)
-    }
-
     /// Notifies the admins (`companyActivityRecipients`, never the person who dismissed it) when a warning is
     /// dismissed. Appears in their notification centre.
     func notifyWarningRemoved(warning: Warning, removedBy: String) async {

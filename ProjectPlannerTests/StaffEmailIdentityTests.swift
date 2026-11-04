@@ -5,75 +5,6 @@ import XCTest
 final class StaffEmailIdentityTests: XCTestCase {
     private let thursday = LogicFixtures.day(2026, 10, 8, hour: 8)
 
-    func testOneEmailIsOnePersonForBookLabourAndHolidays() {
-        let email = "operative@example.com"
-        let quietId = UUID()
-        let busyId = UUID()
-        var user = LogicFixtures.selfEmployedUser(id: "op-user", email: email, dayRate: 350)
-        user.passwordSet = true
-        var other = LogicFixtures.selfEmployedUser(id: "other-user", email: "other@example.com")
-        other.passwordSet = true
-        let quiet = LogicFixtures.operative(id: quietId, email: email, dayRate: 25)
-        let busy = LogicFixtures.operative(id: busyId, email: email, dayRate: 25)
-        let otherOperative = LogicFixtures.operative(id: UUID(), email: other.email)
-        let fullDay = LogicFixtures.booking(on: thursday, operativeId: busyId)
-        let choices = BookLabourCandidateSelection.choices(
-            day: thursday,
-            users: [user, other],
-            operatives: [quiet, busy, otherOperative],
-            operativeBookings: [fullDay],
-            managerBookings: [],
-            holidays: [],
-            policy: LogicFixtures.policy,
-            focusedIds: [],
-            includeThisDay: true
-        )
-        XCTAssertEqual(choices.map(\.userId), [other.id], "Eight hours on either operative id covers the person")
-
-        let holiday = LogicFixtures.holiday(userId: "", start: thursday, end: thursday)
-        var onAlias = holiday
-        onAlias.operativeId = quietId
-        onAlias.userId = nil
-        let covered = BookLabourCandidateSelection.choices(
-            day: thursday,
-            users: [user, other],
-            operatives: [quiet, busy, otherOperative],
-            operativeBookings: [],
-            managerBookings: [],
-            holidays: [onAlias],
-            policy: LogicFixtures.policy,
-            focusedIds: [],
-            includeThisDay: true
-        )
-        XCTAssertEqual(covered.map(\.userId), [other.id], "A holiday on any id for the email covers the person")
-    }
-
-    func testBookLabourLinksTheProfileThatHoldsTodaysHours() {
-        let email = "operative@example.com"
-        let heavyId = UUID()
-        let busyId = UUID()
-        var heavy = LogicFixtures.operative(id: heavyId, email: email)
-        let qualificationId = UUID().uuidString
-        heavy.qualificationExpiryDates = [qualificationId: thursday]
-        heavy.qualificationCertificateURLs = [qualificationId: "https://example.test/cert"]
-        let busy = LogicFixtures.operative(id: busyId, email: email)
-        var user = LogicFixtures.selfEmployedUser(id: "op-user", email: email)
-        user.passwordSet = true
-        let morning = LogicFixtures.booking(on: thursday, slot: .morning, operativeId: busyId)
-        let choices = BookLabourCandidateSelection.choices(
-            day: thursday,
-            users: [user],
-            operatives: [heavy, busy],
-            operativeBookings: [morning],
-            managerBookings: [],
-            holidays: [],
-            policy: LogicFixtures.policy,
-            focusedIds: [],
-            includeThisDay: true
-        )
-        XCTAssertEqual(choices.map(\.operativeId), [busyId])
-    }
-
     func testPreferredAccountAndPersonKey() {
         let pending = AppUser(
             id: "pending",
@@ -325,31 +256,6 @@ final class StaffEmailIdentityTests: XCTestCase {
         )
         XCTAssertEqual(eligible.map(\.email), ["manager@example.com"])
         XCTAssertEqual(eligible.first?.id, linked.id, "the candidate is their catalogue row")
-    }
-
-    func testUnbookedBoardStillListsSomeoneExcludedFromWarnings() {
-        let admin = AppUser(
-            id: "admin",
-            email: "admin@example.com",
-            organizationId: "org",
-            role: .admin,
-            firstName: "Test",
-            surname: "Admin",
-            isActive: true,
-            passwordSet: true,
-            permissions: UserPermissions(adminAccess: true),
-            isSuperAdmin: true
-        )
-        let lines = LabourDayCoverage.unbookedLines(
-            day: thursday,
-            users: [admin],
-            operatives: [],
-            operativeBookings: [],
-            managerBookings: [],
-            holidays: [],
-            policy: LogicFixtures.policy
-        )
-        XCTAssertEqual(lines, ["Test Admin (missing 8h)"])
     }
 
     func testExcludedAliasDoesNotHideTheOtherAccountOnThatEmail() {

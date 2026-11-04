@@ -93,54 +93,6 @@ enum WorkAccess {
         return CanonicalBusinessEngine.canSeeVariations(UserStore.staffAccountRole(for: user))
     }
 
-    static func isAssignedManager(
-        on project: Project,
-        user: AppUser,
-        operativeStore: OperativeStore
-    ) -> Bool {
-        let assigned = Set(project.allAssignedManagerIds)
-        let email = normalizedEmail(user.email)
-        if let manager = operativeStore.allManagers.first(where: { normalizedEmail($0.email) == email }),
-           assigned.contains(manager.id) {
-            return true
-        }
-        return assigned.contains(ProjectManagerPickerSupport.stableManagerId(email: user.email))
-    }
-
-    static func isAssignedOrBookedOnto(
-        _ project: Project,
-        user: AppUser,
-        operativeStore: OperativeStore,
-        bookingStore: BookingStore,
-        managerBookings: [ManagerSiteBooking]
-    ) -> Bool {
-        let email = normalizedEmail(user.email)
-
-        if let manager = operativeStore.allManagers.first(where: { normalizedEmail($0.email) == email }),
-           project.allAssignedManagerIds.contains(manager.id) {
-            return true
-        }
-
-        let accountIds = managerBookingUserIds(for: user)
-        if managerBookings.contains(where: { booking in
-            accountIds.contains(booking.userId)
-                && (booking.locationType == .project || booking.locationType == .smallWork)
-                && booking.locationId == project.id
-        }) {
-            return true
-        }
-
-        // Every id this person's bookings may carry (`bookingIdsForAccount`), not only the catalogue row on their email.
-        let bookingIds = labourBookingIds(for: user, operatives: operativeStore.allOperatives)
-        if bookingStore.bookings.contains(where: {
-            bookingIds.contains($0.operativeId) && $0.projectId == project.id && $0.occupiesDay
-        }) {
-            return true
-        }
-
-        return false
-    }
-
     /// Home "active projects" — RULEBOOK 1.21.0 §21 `activeJobsCount(jobs, viewer, context, now, timeZone)`: projects
     /// and small works together that the viewer sees (`visibleJobs`, hide lists applied) and that are active today in
     /// the organisation zone — the jobs the lists show under Active. Manager site bookings count only for an account

@@ -33,45 +33,10 @@ fileprivate struct CustomHoursEditorContext: Identifiable {
 
 // MARK: - Hours / overtime (project_planner_hours_and_overtime_system.html)
 
-fileprivate func segmentHoursForManager(_ b: ManagerSiteBooking, day: Date, policy: OrgPayrollTimePolicy) -> (early: Double, mid: Double, late: Double) {
-    guard let iv = ManagerScheduleInterval.clashInterval(for: b, policy: policy) else {
-        return (0, b.totalBookedHours(policy: policy), 0)
-    }
-    let sm = iv.0, em = iv.1
-    let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
-    guard let ds = timeline.standardWindowStartMinutes,
-          let de = timeline.standardWindowEndMinutes, de > ds else {
-        return (0, Double(em - sm) / 60.0, 0)
-    }
-    let earlyM = max(0, min(em, ds) - sm)
-    let lateM = max(0, em - max(sm, de))
-    let midM = max(0, min(em, de) - max(sm, ds))
-    return (Double(earlyM) / 60.0, Double(midM) / 60.0, Double(lateM) / 60.0)
-}
-
-fileprivate func segmentHoursForOperative(_ b: Booking, day: Date, policy: OrgPayrollTimePolicy) -> (early: Double, mid: Double, late: Double) {
-    guard let iv = OperativeBookingInterval.clashInterval(for: b, policy: policy) else {
-        return (0, b.totalBookedHours(policy: policy), 0)
-    }
-    let sm = iv.0, em = iv.1
-    let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: day, policy: policy)
-    guard let ds = timeline.standardWindowStartMinutes,
-          let de = timeline.standardWindowEndMinutes, de > ds else {
-        return (0, Double(em - sm) / 60.0, 0)
-    }
-    let earlyM = max(0, min(em, ds) - sm)
-    let lateM = max(0, em - max(sm, de))
-    let midM = max(0, min(em, de) - max(sm, ds))
-    return (Double(earlyM) / 60.0, Double(midM) / 60.0, Double(lateM) / 60.0)
-}
-
 fileprivate struct DayHoursSegmentTotals {
     /// Hours shown in the day summary: `payrollHoursResult.totalPaidHours` summed — the pay rule's hours for that day
     /// (a Saturday window counting 8h is 8h; Sunday every hour ×2 is 13h), never the clock duration.
     var totalPaidHours: Double
-    var early: Double
-    var mid: Double
-    var late: Double
     var otReported: Double
 }
 
@@ -81,28 +46,20 @@ fileprivate func mergedDaySegments(
     day: Date,
     policy: OrgPayrollTimePolicy
 ) -> DayHoursSegmentTotals {
-    var early: Double = 0, mid: Double = 0, late: Double = 0, ot: Double = 0, paidSum: Double = 0
+    var ot: Double = 0, paidSum: Double = 0
     for b in manager {
-        let s = segmentHoursForManager(b, day: day, policy: policy)
-        early += s.early
-        mid += s.mid
-        late += s.late
         // Same figures as web and Daily Overview: `workedHoursSplit(payrollHoursResult)` (never multiplied).
         let split = b.workedHoursSplit(policy: policy)
         paidSum += b.payrollHoursResult(policy: policy).totalPaidHours
         ot += split?.outsideWorkedHours ?? 0
     }
     for b in operative {
-        let s = segmentHoursForOperative(b, day: day, policy: policy)
-        early += s.early
-        mid += s.mid
-        late += s.late
         // Same figures as web and Daily Overview: `workedHoursSplit(payrollHoursResult)` (never multiplied).
         let split = b.workedHoursSplit(policy: policy)
         paidSum += b.payrollHoursResult(policy: policy).totalPaidHours
         ot += split?.outsideWorkedHours ?? 0
     }
-    return DayHoursSegmentTotals(totalPaidHours: paidSum, early: early, mid: mid, late: late, otReported: ot)
+    return DayHoursSegmentTotals(totalPaidHours: paidSum, otReported: ot)
 }
 
 /// Icon tile colour family per location type (Midnight design). Display only.

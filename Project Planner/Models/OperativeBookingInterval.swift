@@ -41,18 +41,6 @@ enum OperativeBookingInterval {
         return !ids.isEmpty
     }
 
-    /// Wall-clock hours overlapping the org standard day window for the booking's calendar day.
-    static func hoursInsideStandardClockWindow(booking: Booking, policy: OrgPayrollTimePolicy) -> Double {
-        guard let iv = clashInterval(for: booking, policy: policy) else { return 0 }
-        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
-        guard let ds = timeline.standardWindowStartMinutes,
-              let de = timeline.standardWindowEndMinutes, de > ds else { return 0 }
-        let overlapStart = max(iv.0, ds)
-        let overlapEnd = min(iv.1, de)
-        guard overlapEnd > overlapStart else { return 0 }
-        return Double(overlapEnd - overlapStart) / 60.0
-    }
-
     static func coversFullStandardDay(_ booking: Booking, policy: OrgPayrollTimePolicy) -> Bool {
         guard let iv = clashInterval(for: booking, policy: policy) else { return false }
         let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
