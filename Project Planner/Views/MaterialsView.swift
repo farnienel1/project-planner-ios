@@ -473,12 +473,18 @@ struct MaterialItemRow: View {
     }
 
     private var shouldShowBookingTime: Bool {
-        Calendar.current.isDate(material.date, inSameDayAs: material.addedAt)
+        OrganizationRulebookContext.dayKey(material.date) == OrganizationRulebookContext.dayKey(material.addedAt)
     }
-    
+
+    /// Green when the line was added from 07:00 up to the organisation's material cut-off (RULEBOOK §4.7
+    /// `resolveMaterialCutOffClock` / `materialCutOffClockMinutes`; it used to be a fixed 16:00 on the phone's clock).
     private var bookingTimeColor: Color {
-        let hour = Calendar.current.component(.hour, from: material.addedAt)
-        return (hour >= 7 && hour < 16) ? .green : .red
+        guard let cutOff = OrgMaterialCutOff.clockMinutes(
+            stored: firebaseBackend.currentOrganization?.settings.materialCutOff,
+            organizationLoaded: firebaseBackend.currentOrganization != nil
+        ) else { return .secondary }
+        let added = OrgMaterialCutOff.organizationMinuteOfDay(material.addedAt)
+        return (added >= 7 * 60 && added < cutOff) ? .green : .red
     }
     
     var body: some View {
@@ -647,7 +653,7 @@ struct AddMaterialView: View {
             Button("Change Date", role: .cancel) { }
                 .accessibilityIdentifier("addMaterial.changeDate")
         } message: {
-            Text("Some materials are being added for today after 4:00 PM. Continue or change the date.")
+            Text("Some materials are being added for today after the \(OrgMaterialCutOff.clockLabel(stored: firebaseBackend.currentOrganization?.settings.materialCutOff, organizationLoaded: firebaseBackend.currentOrganization != nil) ?? "material") cut-off. Continue or change the date.")
         }
         .alert("Could Not Save Materials", isPresented: $showingSaveErrorAlert) {
             Button("OK", role: .cancel) { }
@@ -665,12 +671,18 @@ struct AddMaterialView: View {
         saveAllMaterials()
     }
 
+    /// Lines for today added once the organisation's material cut-off has passed (RULEBOOK §4.7
+    /// `resolveMaterialCutOffClock` / `materialCutOffClockMinutes`, organisation zone). It used to be 16:00 on the
+    /// phone's clock whatever the organisation set.
     private func hasTodayEntriesAfterCutoff() -> Bool {
-        let calendar = Calendar.current
         let now = Date()
-        guard calendar.component(.hour, from: now) >= 16 else { return false }
+        guard let cutOff = OrgMaterialCutOff.clockMinutes(
+            stored: firebaseBackend.currentOrganization?.settings.materialCutOff,
+            organizationLoaded: firebaseBackend.currentOrganization != nil
+        ), OrgMaterialCutOff.organizationMinuteOfDay(now) >= cutOff else { return false }
+        let todayKey = OrganizationRulebookContext.dayKey(now)
         return materialEntries.contains {
-            calendar.isDate($0.selectedDate, inSameDayAs: now) &&
+            OrganizationRulebookContext.dayKey($0.selectedDate) == todayKey &&
             !$0.materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }

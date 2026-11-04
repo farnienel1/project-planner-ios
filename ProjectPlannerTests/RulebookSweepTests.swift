@@ -165,4 +165,23 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertFalse(CanonicalBusinessEngine.isTaskOverdue(status: ProjectTask.Status.completed.rawValue, dueDate: lateYesterday, now: now))
         XCTAssertFalse(CanonicalBusinessEngine.isTaskOverdue(status: ProjectTask.Status.todo.rawValue, dueDate: now, now: now))
     }
+
+    // MARK: 7. Material cut-off clock (`resolveMaterialCutOffClock`, `materialCutOffClockMinutes`)
+
+    /// The late-entry check and the line colour read the organisation's clock: a saved 15:30 stays 15:30; with no
+    /// saved map the rulebook default (16:00) applies; nothing before the organisation is loaded.
+    func testMaterialCutOffIsTheOrganisationClock() {
+        let saved = OrgMaterialCutOff(
+            materialOrderCutOff: true,
+            materialCutOffHour: 15,
+            materialCutOffMinute: 30,
+            materialCutOffOnSaturday: false,
+            materialCutOffOnSunday: false
+        )
+        XCTAssertEqual(OrgMaterialCutOff.clockMinutes(stored: saved, organizationLoaded: true), 15 * 60 + 30)
+        XCTAssertEqual(OrgMaterialCutOff.clockLabel(stored: saved, organizationLoaded: true), "15:30")
+        XCTAssertEqual(OrgMaterialCutOff.clockMinutes(stored: nil, organizationLoaded: true), 16 * 60)
+        XCTAssertNil(OrgMaterialCutOff.clockMinutes(stored: saved, organizationLoaded: false))
+        XCTAssertEqual(OrgMaterialCutOff.organizationMinuteOfDay(orgDay("2026-11-04").addingTimeInterval(15.5 * 3600)), 930)
+    }
 }

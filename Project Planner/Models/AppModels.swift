@@ -1029,6 +1029,26 @@ nonisolated struct OrgMaterialCutOff: Codable, Hashable, Sendable {
         return CanonicalBusinessEngine.resolveMaterialCutOffClock([:])
     }
 
+    /// RULEBOOK §4.7 `materialCutOffClockMinutes(resolveMaterialCutOffClock(...))`: minutes after organisation-zone
+    /// midnight of the open organisation's cut-off (a missing hour is 16:00; a saved 15:30 stays 15:30). Nil when the
+    /// organisation is not loaded or the script did not answer.
+    static func clockMinutes(stored: OrgMaterialCutOff?, organizationLoaded: Bool) -> Int? {
+        resolve(stored: stored, organizationLoaded: organizationLoaded)
+            .flatMap { CanonicalBusinessEngine.materialCutOffClockMinutes($0) }
+    }
+
+    /// `formatMaterialCutOffClock` for the open organisation's clock ("16:00"). Nil as `clockMinutes`.
+    static func clockLabel(stored: OrgMaterialCutOff?, organizationLoaded: Bool) -> String? {
+        resolve(stored: stored, organizationLoaded: organizationLoaded)
+            .flatMap { CanonicalBusinessEngine.formatMaterialCutOffClock($0) }
+    }
+
+    /// Minutes after organisation-zone midnight of `date` (§1: one business time zone, never the phone's).
+    static func organizationMinuteOfDay(_ date: Date) -> Int {
+        let parts = OrganizationRulebookContext.calendar.dateComponents([.hour, .minute], from: date)
+        return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+    }
+
     static func fromFirestore(_ data: [String: Any]) -> OrgMaterialCutOff? {
         guard let clock = CanonicalBusinessEngine.parseMaterialCutOff(data) else { return nil }
         return OrgMaterialCutOff(
