@@ -740,6 +740,24 @@ struct ManagerScheduleContentView: View {
     @State private var customHoursContext: CustomHoursEditorContext?
     @State private var managerBookingEditTarget: ManagerSiteBooking?
     @State private var operativeBookingEditTarget: Booking?
+    /// Why a labour booking delete did not happen (refused or offline), shown once the edit sheet has closed.
+    @State private var labourDeleteRefusalMessage: String?
+    @EnvironmentObject private var smartCache: SmartCacheService
+
+    /// Delete on a labour booking only when the rulebook allows it (`canDeleteBooking` via
+    /// `BookingStore.canDeleteBooking`: admins on any job, managers on jobs they manage, never operatives). A refused
+    /// delete is reported, not hidden.
+    private func labourBookingDeleteAction(_ booking: Booking) -> (() -> Void)? {
+        guard bookingStore.canDeleteBooking(booking) else { return nil }
+        return {
+            operativeBookingEditTarget = nil
+            Task {
+                if let message = await bookingStore.deleteBookingReportingRefusal(booking) {
+                    labourDeleteRefusalMessage = message
+                }
+            }
+        }
+    }
     /// RULEBOOK 1.16.0 `bookingLeaveConflicts`: annual leave on the booked days is ticked or dropped first.
     @StateObject private var leaveGate = BookingConflictGate()
     @State private var secondBookingDialog: SecondBookingDialog?
@@ -1111,11 +1129,22 @@ struct ManagerScheduleContentView: View {
                     }
                 },
                 onCancel: { operativeBookingEditTarget = nil },
-                onDelete: {
-                    operativeBookingEditTarget = nil
-                    Task { await bookingStore.deleteBooking(booking) }
-                }
+                onDelete: labourBookingDeleteAction(booking),
+                deleteDisabledReason: OfflinePolicy.isEnabled(.deleteBooking, isOnline: smartCache.isOnline)
+                    ? nil : OfflinePolicy.onlineOnlyMessage
             )
+        }
+        .alert(
+            "Booking not deleted",
+            isPresented: Binding(
+                get: { labourDeleteRefusalMessage != nil },
+                set: { if !$0 { labourDeleteRefusalMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { labourDeleteRefusalMessage = nil }
+                .accessibilityIdentifier("mySchedule.deleteRefused.ok")
+        } message: {
+            Text(labourDeleteRefusalMessage ?? "")
         }
         .confirmationDialog(
             secondBookingDialog?.title ?? "",

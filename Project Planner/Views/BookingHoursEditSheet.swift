@@ -56,6 +56,9 @@ struct BookingEditHoursBreakdown {
     /// RULEBOOK 1.20.4 `multipliedHoursText` over `payrollMultipliedHours`: "2h × 1.5 = 3h", or with an unpaid break in
     /// the multiplied hours "6.5h × 2 − 0.5h break = 12.5h". Empty when no hours are at a multiplier.
     let overtimeText: String
+    /// The `payrollHoursResult` these figures were read from (standard hours, `multipliedHours`, unpaid break), so the
+    /// Edit booking header binds to the rulebook's own values. Display only.
+    let result: PayrollHoursResult
 
     static func compute(
         booking: Booking,
@@ -87,7 +90,8 @@ struct BookingEditHoursBreakdown {
             overtimeMultiplier: otMult,
             breakDeductionHours: breakH,
             showsBreakLine: breakH > 0.05,
-            overtimeText: result.multipliedHours?.text ?? ""
+            overtimeText: result.multipliedHours?.text ?? "",
+            result: result
         )
     }
 }
@@ -495,6 +499,9 @@ struct OperativeCustomHoursSheet: View {
     var showsBreakControls: Bool
     var showsBreakdown: Bool
     var showsFooterNote: Bool
+    /// Shows "This user is PAYE and is not paid hourly." while keeping the break and overtime controls (a PAYE
+    /// operative's booking still has hours, a break and an overtime rate). Without break controls the line shows too.
+    var showsPayeNote: Bool
     var forceSolidBlueTimeline: Bool
     /// When false, content is shown in the parent `NavigationStack` (avoids nested covers).
     var embedsNavigation: Bool
@@ -503,6 +510,9 @@ struct OperativeCustomHoursSheet: View {
     let onCancel: () -> Void
     /// Set when this sheet is editing a booking that already exists. Create flows leave it nil.
     var onDelete: (() -> Void)?
+    /// When set, Delete is shown but disabled with this reason (RULEBOOK §2: deleting a booking is online only,
+    /// `OfflinePolicy.onlineOnlyMessage`).
+    var deleteDisabledReason: String?
 
     @State private var startHour: Int
     @State private var startMinute: Int
@@ -531,6 +541,14 @@ struct OperativeCustomHoursSheet: View {
     /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for `noteDays` at the times on screen; empty on weekdays. Worked
     /// out when the times change, never per redraw.
     @State private var weekendBreakdownLines: [String] = []
+    /// Which time tile has its wheel open (none until a tile is tapped).
+    @State private var expandedTimeField: TimeField? = nil
+    @State private var showingRateSheet = false
+    /// The Unpaid break warning button pressed; run once that sheet has gone.
+    @State private var breakWarningChoice: BreakWarningChoice? = nil
+    /// Per-rate figures from re-running the probe at each offered rate (`refreshRateFigures`), keyed by rate
+    /// (nil = the organisation's).
+    @State private var rateFigures: [Double?: OvertimeRateFigure] = [:]
 
     init(
         policy callerPolicy: OrgPayrollTimePolicy,
@@ -544,12 +562,14 @@ struct OperativeCustomHoursSheet: View {
         showsBreakControls: Bool = true,
         showsBreakdown: Bool = true,
         showsFooterNote: Bool = true,
+        showsPayeNote: Bool = false,
         forceSolidBlueTimeline: Bool = false,
         embedsNavigation: Bool = true,
         initialChoice: OperativeDayBookingChoice?,
         onSave: @escaping (String, String, Bool, Double?) -> Void,
         onCancel: @escaping () -> Void,
-        onDelete: (() -> Void)? = nil
+        onDelete: (() -> Void)? = nil,
+        deleteDisabledReason: String? = nil
     ) {
         // RULEBOOK 1.19.0 §4.3: the working hours in effect on the booking day (history first), whatever policy the
         // caller had at hand; `policy` is the fallback before an organisation is loaded.
@@ -570,12 +590,14 @@ struct OperativeCustomHoursSheet: View {
         self.showsBreakControls = showsBreakControls
         self.showsBreakdown = showsBreakdown
         self.showsFooterNote = showsFooterNote
+        self.showsPayeNote = showsPayeNote
         self.forceSolidBlueTimeline = forceSolidBlueTimeline
         self.embedsNavigation = embedsNavigation
         self.initialChoice = initialChoice
         self.onSave = onSave
         self.onCancel = onCancel
         self.onDelete = onDelete
+        self.deleteDisabledReason = deleteDisabledReason
 
         let bookedDays = (noteDays?.isEmpty == false ? noteDays : nil) ?? [referenceDay]
         let applies = bookedDays.contains { day in
@@ -630,7 +652,7 @@ struct OperativeCustomHoursSheet: View {
                     fallbackMinute: 30
                 )
             }
-            included = showsBreakControls ? !ic.isBreakRemoved : false
+            included = Self.initialBreakIncluded(initialChoice: ic, showsBreakControls: showsBreakControls)
             if let m = ic.otMultiplierOverride {
                 otm = m
             }
@@ -647,7 +669,7 @@ struct OperativeCustomHoursSheet: View {
             )
             // A new booking starts with the unpaid break on, as web (`breakRemoved` false); it only matters on a day whose
             // break is unpaid (`unpaidBreakAppliesOnDay`).
-            included = showsBreakControls
+            included = Self.initialBreakIncluded(initialChoice: nil, showsBreakControls: showsBreakControls)
         }
 
         _startHour = State(initialValue: startHM.0)
@@ -661,6 +683,16 @@ struct OperativeCustomHoursSheet: View {
         _breakIncluded = State(initialValue: included)
         _otRate = State(initialValue: otm)
         initialOtRate = otm
+    }
+
+    /// The Unpaid break state the sheet opens with: an existing booking's own stored state (`isBreakRemoved`), on for
+    /// a new booking (web `breakRemoved` false), and off only when the sheet shows no break controls at all (a
+    /// subcontractor, a timesheet overtime line). Save writes `isBreakRemoved = !breakIncluded`, so a booking opened
+    /// and saved unchanged keeps its stored break.
+    static func initialBreakIncluded(initialChoice: OperativeDayBookingChoice?, showsBreakControls: Bool) -> Bool {
+        guard showsBreakControls else { return false }
+        guard let initialChoice else { return true }
+        return !initialChoice.isBreakRemoved
     }
 
     private var startMinutes: Int {
@@ -742,59 +774,42 @@ struct OperativeCustomHoursSheet: View {
         }
     }
 
+    // MARK: Layout (docs/design/booking-ui 3.5 Edit booking; the Hours sheet is the same layout without a person row)
+
+    /// The breakdown figures move into the navy header ("AT A GLANCE" + stat row) when there is one breakdown for the
+    /// day on screen. A weekend selection keeps its per-day rows (`weekendBookingBreakdown`) in the sheet instead.
+    private var showsGlance: Bool {
+        showsBreakdown && weekendBreakdownLines.isEmpty && endMinutes > startMinutes
+    }
+
+    /// "· break included" in THE DAY card: the old footer "The break is included within this booking." (same condition).
+    private var showsBreakIncludedNote: Bool {
+        showsFooterNote && breakApplies && breakIncluded
+    }
+
+    /// On site = finish − start, clock time (owner decision 2). Display arithmetic on the times on screen.
+    private var onSiteHours: Double {
+        Double(max(0, endMinutes - startMinutes)) / 60.0
+    }
+
+    private var paidPerDaySuffix: String {
+        noteDays.count > 1 ? " per day" : ""
+    }
+
+    private var saveButtonTitle: String {
+        showsGlance ? "Save · \(formatHours(breakdown.totalHours))h paid" : "Save"
+    }
+
     private var customHoursForm: some View {
-        ZStack(alignment: .top) {
+        let bd = breakdown
+        return ZStack(alignment: .top) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if timeValidationBanner != nil {
-                        Color.clear.frame(height: 44)
-                    }
-                    headerSection
-                    WeekendBookingNoteView(days: noteDays, policy: policy)
-                        .padding(.horizontal, 4)
-                    if !showsBreakControls {
-                        Text("This user is PAYE and is not paid hourly.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 4)
-                    }
-                    hoursCard
-                    if showsBreakControls && (breakApplies || allowsOtMultiplierOverride) {
-                        breakToggleCard
-                    }
-                    if showsBreakdown {
-                        breakdownCard
-                    }
-                    // RULEBOOK 1.20.0: the footer talks about the unpaid break, so it shows only on a day that takes one
-                    // off (`unpaidBreakAppliesOnDay`); a paid-break day or a weekend day with a paid break has none.
-                    if showsFooterNote && breakApplies {
-                        footerNoteCard
-                    }
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.red)
-                    }
-                    if onDelete != nil {
-                        Button(role: .destructive) {
-                            confirmDelete = true
-                        } label: {
-                            Text("Delete booking")
-                                .font(.system(size: 15, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .foregroundStyle(.red)
-                                .background(Color.red.opacity(0.1))
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-                        .accessibilityIdentifier("operativeCustomHours.deleteBooking")
-                        .buttonStyle(.plain)
-                        .padding(.top, 4)
-                    }
+                VStack(alignment: .leading, spacing: 0) {
+                    navyHeader(bd)
+                    sheetContent(bd)
+                        .padding(.bottom, 24)
+                        .ppContentSheet()
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 16)
             }
             .background(PPColor.page.ignoresSafeArea())
 
@@ -805,9 +820,20 @@ struct OperativeCustomHoursSheet: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            PPBottomActionBar(
+                title: saveButtonTitle,
+                isEnabled: true,
+                accessibilityIdentifier: "operativeCustomHours.save",
+                action: { validateAndSave() }
+            )
+        }
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: timeValidationBanner)
         .onChange(of: weekendBreakdownInput, initial: true) { _, _ in
             refreshWeekendBreakdown()
+        }
+        .onChange(of: rateFiguresInput, initial: true) { _, _ in
+            refreshRateFigures()
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -815,14 +841,30 @@ struct OperativeCustomHoursSheet: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel", action: onCancel)
+                    .buttonStyle(PPOnNavyPillButtonStyle())
                     .accessibilityIdentifier("operativeCustomHours.cancel")
-                    .foregroundStyle(.white)
             }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") { validateAndSave() }
-                    .accessibilityIdentifier("operativeCustomHours.save")
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.white)
+            if onDelete != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        confirmDelete = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(PPOnNavyPillButtonStyle(tint: Color(ppHex: 0xFF6B70)))
+                    .disabled(deleteDisabledReason != nil)
+                    .opacity(deleteDisabledReason != nil ? 0.5 : 1)
+                    .accessibilityIdentifier("operativeCustomHours.deleteBooking")
+                    .accessibilityLabel("Delete booking")
+                }
+            } else {
+                // Hours sheet and other create / no-delete callers (3.5 "Hours sheet"): Cancel and Save in the header,
+                // no delete. Same validateAndSave as the bottom bar.
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { validateAndSave() }
+                        .buttonStyle(PPOnNavyPillButtonStyle())
+                        .accessibilityIdentifier("operativeCustomHours.saveTop")
+                }
             }
         }
         .confirmationDialog(
@@ -839,103 +881,119 @@ struct OperativeCustomHoursSheet: View {
         } message: {
             Text("This removes it from the schedule, daily overview, warnings, weekly report, timesheets, and My Schedule.")
         }
-        .alert(
-            "Unpaid break",
+        .sheet(isPresented: $showingRateSheet) {
+            overtimeRateSheet(bd)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(
             isPresented: Binding(
                 get: { breakWarningMessage != nil },
                 set: { if !$0 { breakWarningMessage = nil } }
-            )
+            ),
+            onDismiss: { runBreakWarningChoice() }
         ) {
-            Button("Go back", role: .cancel) { breakWarningMessage = nil }
-                .accessibilityIdentifier("operativeCustomHours.breakWarning.back")
-            Button("Save anyway") {
-                breakWarningMessage = nil
-                validateAndSave(breakWarningConfirmed: true)
-            }
-                .accessibilityIdentifier("operativeCustomHours.breakWarning.save")
-        } message: {
-            Text(breakWarningMessage ?? "")
+            breakWarningSheet(bd)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
+    }
+
+    // MARK: Navy header
+
+    private func navyHeader(_ bd: BookingEditHoursBreakdown) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if timeValidationBanner != nil {
+                Color.clear.frame(height: 36)
+            }
+            headerSection
+            if showsGlance {
+                PPGlanceHeadline(
+                    eyebrow: onDelete != nil || headerName != nil ? "This booking at a glance" : "At a glance",
+                    primary: "\(formatHours(bd.totalHours))h paid\(paidPerDaySuffix)",
+                    secondary: "\(formatHours(onSiteHours))h on site"
+                )
+                PPStatRow(items: glanceStats(bd))
+            }
+            theDayCard
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
+    /// Standard `payrollHoursResult.standardHours`; OT `payrollMultipliedHours` (clock hours, and its "× rate = paid"
+    /// text); unpaid break `payrollHoursResult.unpaidBreakHours`. Bound, never recalculated here.
+    private func glanceStats(_ bd: BookingEditHoursBreakdown) -> [PPStatItem] {
+        let multiplied = bd.result.multipliedHours
+        let breakHours = bd.result.unpaidBreakHours
+        return [
+            PPStatItem(id: "standard", value: formatHours(bd.result.standardHours), label: "Standard hrs"),
+            PPStatItem(
+                id: "overtime",
+                value: formatHours(multiplied?.clockHours ?? 0),
+                label: "OT",
+                detail: multiplied?.text,
+                tint: PPColor.warningAmber
+            ),
+            PPStatItem(
+                id: "break",
+                value: breakHours > 0.005 ? "−\(formatHours(breakHours))" : "0",
+                label: "Unpaid break"
+            ),
+        ]
     }
 
     @ViewBuilder
     private var headerSection: some View {
         if let headerName, !headerName.isEmpty {
-            HStack(spacing: 10) {
-                Text(headerInitials ?? PlannerUIInitials.from(headerName))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 32, height: 32)
-                    .background(
-                        LinearGradient(
-                            colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .clipShape(Circle())
+            HStack(spacing: 12) {
+                PPInitialsAvatar(
+                    initials: headerInitials ?? PlannerUIInitials.from(headerName),
+                    family: .plan,
+                    size: 44
+                )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(headerName)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
+                        .font(.system(.title3, design: .rounded))
+                        .fontWeight(.bold)
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
                     if let subtitle, !subtitle.isEmpty {
                         Text(subtitle)
-                            .font(.system(size: 10))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
+                            .font(.subheadline)
+                            .foregroundStyle(PPColor.onNavySecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer(minLength: 0)
             }
-            .padding(10)
-            .background(PPColor.card)
-            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+            .accessibilityElement(children: .combine)
         } else if let subtitle, !subtitle.isEmpty {
             Text(subtitle)
-                .font(.system(size: 11))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .padding(.horizontal, 4)
+                .font(.subheadline)
+                .foregroundStyle(PPColor.onNavySecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private func timeValidationBannerView(_ text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 14))
-                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-            Text(text)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-                .multilineTextAlignment(.leading)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .shadow(color: Color.black.opacity(0.08), radius: 8, y: 2)
-    }
-
-    private var hoursCard: some View {
+    /// THE DAY: the times, "· break included", and the existing 24h timeline with its legend.
+    private var theDayCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("HOURS")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .tracking(0.8)
-                .padding(.leading, 4)
-
-            HStack(spacing: 8) {
-                BookingHMTimePickerColumn(
-                    title: "START",
-                    hour: startHourBinding,
-                    minute: startMinuteBinding
-                )
-                BookingHMTimePickerColumn(
-                    title: "END",
-                    hour: endHourBinding,
-                    minute: endMinuteBinding
-                )
+            PPOnNavyEyebrow(text: "The day")
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("\(startText) – \(endText)")
+                    .font(.headline)
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                if showsBreakIncludedNote {
+                    Text("· break included")
+                        .font(.subheadline)
+                        .foregroundStyle(PPColor.onNavySecondary)
+                }
             }
-
             if endMinutes > startMinutes {
                 BookingHoursTimelineBar(
                     policy: policy,
@@ -945,11 +1003,120 @@ struct OperativeCustomHoursSheet: View {
                     breakIncluded: breakIncluded,
                     forceSolidBlue: forceSolidBlueTimeline
                 )
+                if !forceSolidBlueTimeline {
+                    PPTimelineLegend(
+                        showsBreak: showsBreakControls && breakApplies && breakIncluded,
+                        textColor: PPColor.onNavySecondary
+                    )
+                }
             }
         }
-        .padding(12)
-        .background(PPColor.card)
-        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
+        )
+    }
+
+    private func timeValidationBannerView(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.body)
+                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+            Text(text)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(ProjectWorksRevampColors.ink)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(ProjectWorksRevampColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .shadow(color: Color.black.opacity(0.12), radius: 8, y: 2)
+    }
+
+    // MARK: Sheet
+
+    private func sheetContent(_ bd: BookingEditHoursBreakdown) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            WeekendBookingNoteView(days: noteDays, policy: policy)
+                .padding(.top, 14)
+            if onDelete != nil, let deleteDisabledReason {
+                Label(deleteDisabledReason, systemImage: "wifi.slash")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+            }
+            if !showsBreakControls || showsPayeNote {
+                Label("This user is PAYE and is not paid hourly.", systemImage: "info.circle")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            PPSheetSectionTitle("Hours")
+            hoursCard
+            if showsBreakControls && breakApplies {
+                breakToggleCard
+                if showsFooterNote && !breakIncluded {
+                    breakRemovedNote
+                }
+            }
+            if showsBreakControls, allowsOtMultiplierOverride, let control = overtimeRateControl, control.show || otRate != nil {
+                overtimeRateCard(control)
+            }
+            if showsBreakdown && !weekendBreakdownLines.isEmpty {
+                weekendBreakdownCard
+            }
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(PPColor.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private enum TimeField: Hashable {
+        case start, end
+    }
+
+    private func toggleTimeField(_ field: TimeField) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            expandedTimeField = expandedTimeField == field ? nil : field
+        }
+    }
+
+    /// Start / End tiles open the existing quarter-hour wheel (same bindings, same start-before-end guard).
+    private var hoursCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Button { toggleTimeField(.start) } label: {
+                    PPTimeTileLabel(title: "Start", value: startText, isActive: expandedTimeField == .start)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("operativeCustomHours.startTile")
+                .accessibilityHint("Opens the start time picker")
+                Button { toggleTimeField(.end) } label: {
+                    PPTimeTileLabel(title: "End", value: endText, isActive: expandedTimeField == .end)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("operativeCustomHours.endTile")
+                .accessibilityHint("Opens the end time picker")
+            }
+            if let field = expandedTimeField {
+                BookingHMTimePickerColumn(
+                    title: field == .start ? "START" : "END",
+                    hour: field == .start ? startHourBinding : endHourBinding,
+                    minute: field == .start ? startMinuteBinding : endMinuteBinding
+                )
+                .id(field)
+                .transition(.opacity)
+            }
+        }
+        .ppBookingCard(padding: 12)
     }
 
     private var startHourBinding: Binding<Int> {
@@ -1030,63 +1197,269 @@ struct OperativeCustomHoursSheet: View {
     }
 
     private var breakToggleCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if breakApplies {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(breakIncluded ? ProjectWorksRevampColors.amberTint : ProjectWorksRevampColors.grayTint)
-                        .frame(width: 32, height: 32)
-                    Image(systemName: "cup.and.saucer.fill")
-                        .font(.system(size: 15))
-                        .foregroundStyle(breakIncluded ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.muted)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Unpaid break")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                    Text(
-                        breakIncluded
-                            ? "\(dayBreakMinutes) mins deducted around midday"
-                            : "Removed · full hours in total"
-                    )
-                    .font(.system(size: 10))
-                    .foregroundStyle(breakIncluded ? ProjectWorksRevampColors.muted : ProjectWorksRevampColors.endDateFg)
-                }
-                Spacer()
-                Toggle("", isOn: $breakIncluded)
-                    .accessibilityIdentifier("operativeCustomHours.toggle")
-                    .labelsHidden()
+        HStack(spacing: 12) {
+            PPIconTile(symbol: "cup.and.saucer.fill", family: breakIncluded ? .trade : .system, size: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Unpaid break")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(
+                    breakIncluded
+                        ? "\(dayBreakMinutes) mins deducted around midday"
+                        : "Removed · full hours in total"
+                )
+                .font(.footnote)
+                .foregroundStyle(breakIncluded ? Color.secondary : PPChipTone.amber.ink)
             }
-            }
+            Spacer(minLength: 8)
+            Toggle("Unpaid break", isOn: $breakIncluded)
+                .accessibilityIdentifier("operativeCustomHours.toggle")
+                .labelsHidden()
+        }
+        .ppBookingCard(padding: 12)
+    }
 
-            if allowsOtMultiplierOverride, let control = overtimeRateControl, control.show || otRate != nil {
-                if breakApplies {
-                    Divider().overlay(ProjectWorksRevampColors.border)
-                }
-                // RULEBOOK 1.29.0 §25 `overtimeRateControl`: "Organisation (×1.5)" or "Custom ×__" (1–3 in 0.25 steps).
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("OVERTIME RATE")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .tracking(0.8)
-                    Picker("Overtime rate", selection: $otRate) {
-                        Text(control.organizationLabel).tag(Double?.none)
-                        ForEach(overtimeRateChoices(control), id: \.self) { step in
-                            Text("Custom ×\(ScheduleCoverageFormat.hours(step))").tag(Double?.some(step))
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .accessibilityIdentifier("operativeCustomHours.overtimeRate")
-                    Text("Prices this booking's overtime hours only. Signed timesheets keep their figures.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-            }
+    /// The old footer's amber note when the unpaid break is removed (same condition, same text).
+    private var breakRemovedNote: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(PPBookingColor.overtimeDeep)
+            Text("Operative will be paid for the full elapsed hours. This time will be included within the weekly report and invoicing.")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(PPChipTone.amber.ink)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
-        .background(PPColor.card)
-        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PPChipTone.amber.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    // MARK: Overtime rate (RULEBOOK 1.29.0 §25 `overtimeRateControl`)
+
+    /// One rate the booking can take: nil = the organisation's (follows a later Org settings change), else a custom
+    /// value. The figures come from re-running the existing probe at that rate (`refreshRateFigures`).
+    private func rateOption(_ value: Double?, control: OvertimeRateControl) -> OvertimeRateOption {
+        OvertimeRateOption(
+            value: value,
+            title: "×\(ScheduleCoverageFormat.hours(value ?? control.organizationMultiplier))",
+            figure: rateFigures[value]
+        )
+    }
+
+    /// ×1, Org, ×2, ×3 (owner decision 5), plus the booking's own rate when it is none of those.
+    private func quickRateOptions(_ control: OvertimeRateControl) -> [OvertimeRateOption] {
+        let choices = overtimeRateChoices(control)
+        func offered(_ v: Double) -> Bool { choices.contains { abs($0 - v) < 0.0001 } }
+        var out: [OvertimeRateOption] = []
+        if offered(1) { out.append(rateOption(1, control: control)) }
+        out.append(rateOption(nil, control: control))
+        if offered(2) { out.append(rateOption(2, control: control)) }
+        if offered(3) { out.append(rateOption(3, control: control)) }
+        if let current = otRate, !out.contains(where: { $0.matches(current) }) {
+            out.append(rateOption(current, control: control))
+        }
+        return out
+    }
+
+    private func overtimeRateCard(_ control: OvertimeRateControl) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Overtime rate")
+                    .font(.headline)
+                Spacer(minLength: 8)
+                Button("More rates") { showingRateSheet = true }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(PPColor.brand)
+                    .accessibilityIdentifier("operativeCustomHours.overtimeRate")
+                    .accessibilityHint("Shows every overtime rate for this booking")
+            }
+            HStack(spacing: 8) {
+                ForEach(quickRateOptions(control)) { option in
+                    rateChip(option, isSelected: option.isSelected(otRate))
+                }
+            }
+            Text("Only prices this booking's overtime. Signed timesheets keep their figures.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .ppBookingCard(padding: 12)
+    }
+
+    private func rateChip(_ option: OvertimeRateOption, isSelected: Bool) -> some View {
+        let caption = rateChipCaption(option)
+        return Button {
+            otRate = option.value
+        } label: {
+            VStack(spacing: 2) {
+                Text(option.title)
+                    .font(.subheadline.weight(.bold))
+                    .monospacedDigit()
+                Text(caption)
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                    .opacity(0.85)
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(
+                isSelected ? PPBookingColor.selected : PPBookingColor.field,
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("operativeCustomHours.overtimeRate.\(option.id)")
+        .accessibilityLabel(option.value == nil ? "Organisation rate \(option.title)" : "Rate \(option.title)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// The chip's second line: the paid overtime hours at that rate ("6h"), "Org · 6h" on the organisation chip.
+    private func rateChipCaption(_ option: OvertimeRateOption) -> String {
+        var paid: String? = nil
+        if let figure = option.figure, let multiplied = figure.multiplied {
+            paid = "\(formatHours(multiplied.paidHours))h"
+        }
+        if option.value == nil {
+            if let paid { return "Org · \(paid)" }
+            return "Org default"
+        }
+        return paid ?? "–"
+    }
+
+    /// What the per-rate figures depend on; they are re-run only when it changes (memoised, never per redraw).
+    private var rateFiguresInput: String {
+        "\(startText)|\(endText)|\(breakIncluded)|\(allowsOtMultiplierOverride)"
+    }
+
+    /// Re-runs the existing probe (`OperativeDayBookingChoice.bookingProbe` → `PayrollHoursEngine.compute`, the
+    /// rulebook's `payrollHoursResult`) once per offered rate. Nothing is multiplied in the view.
+    private func refreshRateFigures() {
+        guard allowsOtMultiplierOverride, endMinutes > startMinutes, let control = overtimeRateControl else {
+            rateFigures = [:]
+            return
+        }
+        var rates: [Double?] = [nil]
+        rates.append(contentsOf: overtimeRateChoices(control).map { Optional($0) })
+        var out: [Double?: OvertimeRateFigure] = [:]
+        for rate in rates {
+            let probe = OperativeDayBookingChoice(
+                timeSlot: .customHours,
+                workStartTime: startText,
+                workEndTime: endText,
+                isBreakRemoved: !breakIncluded,
+                otMultiplierOverride: rate
+            ).bookingProbe(operativeId: UUID(), projectId: UUID(), date: referenceDay, bookedBy: "")
+            let result = PayrollHoursEngine.compute(booking: probe, day: referenceDay, policy: policy)
+            out[rate] = OvertimeRateFigure(
+                multiplied: result.multipliedHours,
+                totalPaidHours: probe.paidBookedHours(policy: policy)
+            )
+        }
+        rateFigures = out
+    }
+
+    /// "This booking has 4h of overtime (16:00 – 20:00)", from the result's multiplied segments.
+    private func overtimeSummary(_ bd: BookingEditHoursBreakdown) -> String {
+        guard let multiplied = bd.result.multipliedHours, multiplied.clockHours > 0.005 else {
+            return "This booking has no overtime at these times."
+        }
+        let spans = bd.result.segments
+            .filter { $0.kind != .standardWindow }
+            .compactMap { segment -> String? in
+                guard let s = segment.clockStart, let e = segment.clockEnd else { return nil }
+                return "\(s) – \(e)"
+            }
+            .joined(separator: ", ")
+        let base = "This booking has \(formatHours(multiplied.clockHours))h of overtime"
+        return spans.isEmpty ? base : "\(base) (\(spans))"
+    }
+
+    @ViewBuilder
+    private func overtimeRateSheet(_ bd: BookingEditHoursBreakdown) -> some View {
+        if let control = overtimeRateControl {
+            OvertimeRateSheet(
+                organization: rateOption(nil, control: control),
+                organizationLabel: control.organizationLabel,
+                customOptions: overtimeRateChoices(control).map { rateOption($0, control: control) },
+                overtimeSummary: overtimeSummary(bd),
+                initial: otRate,
+                onUse: { picked in
+                    otRate = picked
+                    showingRateSheet = false
+                },
+                onClose: { showingRateSheet = false }
+            )
+        } else {
+            Text("Overtime rates are not available for this booking.")
+                .padding()
+        }
+    }
+
+    // MARK: Unpaid break warning (3.7; RULEBOOK 1.13.0 §8 `customHoursBreakWarning`)
+
+    private enum BreakWarningChoice {
+        case payFullDay
+        case keepBreak
+    }
+
+    private func breakWarningSheet(_ bd: BookingEditHoursBreakdown) -> some View {
+        // "Pay the full day": the same probe with the unpaid break off (`BookingEditHoursBreakdown.compute`).
+        let fullDay = BookingEditHoursBreakdown.compute(
+            booking: probeBooking,
+            policy: policy,
+            day: referenceDay,
+            breakIncluded: false
+        )
+        let range = ScheduleHoursTimelineSupport.breakRange(
+            policy: policy,
+            day: referenceDay,
+            workStart: startMinutes,
+            workEnd: endMinutes,
+            breakIncluded: true
+        )
+        let deductedMinutes = Int((bd.result.unpaidBreakHours * 60).rounded())
+        return UnpaidBreakWarningSheet(
+            message: breakWarningMessage ?? "",
+            startText: startText,
+            endText: endText,
+            workStart: startMinutes,
+            workEnd: endMinutes,
+            breakStart: range?.0,
+            breakEnd: range?.1,
+            breakMinutes: deductedMinutes > 0 ? deductedMinutes : dayBreakMinutes,
+            payFullDayHours: fullDay.totalHours,
+            keepBreakHours: bd.totalHours,
+            onPayFullDay: {
+                breakWarningChoice = .payFullDay
+                breakWarningMessage = nil
+            },
+            onKeepBreak: {
+                breakWarningChoice = .keepBreak
+                breakWarningMessage = nil
+            },
+            onGoBack: {
+                breakWarningChoice = nil
+                breakWarningMessage = nil
+            }
+        )
+    }
+
+    /// Runs after the warning has gone, as the old alert's buttons did. "Keep the break" is the old "Save anyway";
+    /// "Pay the full day" is the Unpaid break toggle switched off and then that same save (both view state only).
+    private func runBreakWarningChoice() {
+        guard let choice = breakWarningChoice else { return }
+        breakWarningChoice = nil
+        switch choice {
+        case .payFullDay:
+            breakIncluded = false
+            validateAndSave(breakWarningConfirmed: true)
+        case .keepBreak:
+            validateAndSave(breakWarningConfirmed: true)
+        }
     }
 
     /// What the weekend rows depend on; they are recomputed only when it changes.
@@ -1113,117 +1486,17 @@ struct OperativeCustomHoursSheet: View {
         )
     }
 
-    @ViewBuilder
-    private var breakdownCard: some View {
-        if weekendBreakdownLines.isEmpty {
-            standardBreakdownCard
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                WeekendBookingBreakdownView(lines: weekendBreakdownLines, title: "Breakdown")
-                if let override = resolvedOtMultiplierOverride {
-                    // 1.18 gap: the per-day rows are the organisation's rule; the typed rate applies to this booking.
-                    Text("Rows show the organisation rate. This booking's overtime hours are paid at ×\(ScheduleCoverageFormat.hours(override)) instead.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("operativeCustomHours.overrideNote")
-                }
+    private var weekendBreakdownCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            WeekendBookingBreakdownView(lines: weekendBreakdownLines, title: "Breakdown")
+            if let override = resolvedOtMultiplierOverride {
+                // 1.18 gap: the per-day rows are the organisation's rule; the typed rate applies to this booking.
+                Text("Rows show the organisation rate. This booking's overtime hours are paid at ×\(ScheduleCoverageFormat.hours(override)) instead.")
+                    .font(.footnote)
+                    .foregroundStyle(PPChipTone.amber.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("operativeCustomHours.overrideNote")
             }
-        }
-    }
-
-    private var standardBreakdownCard: some View {
-        let bd = breakdown
-
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Breakdown")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("Total")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                    Text("\(formatHours(bd.totalHours))h")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                }
-            }
-
-            Divider().overlay(ProjectWorksRevampColors.border)
-
-            HStack {
-                Text("Standard rate")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
-                Spacer()
-                Text("\(formatHours(bd.standardRateHours))h · 1×")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.blue)
-            }
-
-            if bd.overtimeHours > 0.05 {
-                HStack {
-                    Text("Overtime")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                    Spacer()
-                    Text(bd.overtimeText)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                }
-            }
-
-            if bd.showsBreakLine {
-                HStack {
-                    Text("Break")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                    Spacer()
-                    Text("−\(formatHours(bd.breakDeductionHours))h")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.requiredPillFg)
-                }
-            }
-        }
-        .padding(14)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-        )
-    }
-
-    @ViewBuilder
-    private var footerNoteCard: some View {
-        if breakIncluded {
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 12))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                Text("The break is included within this booking.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(ProjectWorksRevampColors.muted)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ProjectWorksRevampColors.canvas)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else {
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                Text("Operative will be paid for the full elapsed hours. This time will be included within the weekly report and invoicing.")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ProjectWorksRevampColors.amberTint)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }
 
@@ -1256,5 +1529,403 @@ struct OperativeCustomHoursSheet: View {
             otOut = otRate
         }
         onSave(startText, endText, !breakIncluded, otOut)
+    }
+}
+
+// MARK: - Overtime rate sheet (docs/design/booking-ui 3.6)
+
+/// The figures of one rate, read from the probe re-run at that rate: `payrollMultipliedHours` (clock hours → paid
+/// hours) and the booking's paid total.
+private struct OvertimeRateFigure: Equatable {
+    let multiplied: RulebookMultipliedHours?
+    let totalPaidHours: Double
+}
+
+/// One overtime rate: nil `value` is the organisation's rate (stored as no override), anything else a custom rate.
+/// The organisation rate and an equal custom value stay two different options.
+private struct OvertimeRateOption: Identifiable {
+    let value: Double?
+    let title: String
+    let figure: OvertimeRateFigure?
+
+    var id: String { value.map { "custom-\($0)" } ?? "org" }
+
+    func matches(_ rate: Double) -> Bool {
+        guard let value else { return false }
+        return abs(value - rate) < 0.0001
+    }
+
+    func isSelected(_ current: Double?) -> Bool {
+        guard let current else { return value == nil }
+        return matches(current)
+    }
+
+    /// "4h → 6h" (overtime clock hours → paid hours at this rate).
+    var figureLine: String {
+        guard let figure, let multiplied = figure.multiplied, multiplied.clockHours > 0.005 else { return "No overtime" }
+        return "\(ScheduleCoverageFormat.hours(multiplied.clockHours))h → \(ScheduleCoverageFormat.hours(multiplied.paidHours))h"
+    }
+}
+
+/// Every rate the old menu offered: the organisation rate, then each custom step (and an older stored rate).
+/// "Use" sets the same `otMultiplierOverride` value the old Picker set.
+private struct OvertimeRateSheet: View {
+    let organization: OvertimeRateOption
+    let organizationLabel: String
+    let customOptions: [OvertimeRateOption]
+    let overtimeSummary: String
+    let onUse: (Double?) -> Void
+    let onClose: () -> Void
+
+    @State private var picked: Double?
+
+    init(
+        organization: OvertimeRateOption,
+        organizationLabel: String,
+        customOptions: [OvertimeRateOption],
+        overtimeSummary: String,
+        initial: Double?,
+        onUse: @escaping (Double?) -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.organization = organization
+        self.organizationLabel = organizationLabel
+        self.customOptions = customOptions
+        self.overtimeSummary = overtimeSummary
+        self.onUse = onUse
+        self.onClose = onClose
+        _picked = State(initialValue: initial)
+    }
+
+    private var pickedOption: OvertimeRateOption {
+        guard let picked else { return organization }
+        return customOptions.first { $0.matches(picked) } ?? organization
+    }
+
+    private var useTitle: String {
+        let option = pickedOption
+        if let total = option.figure?.totalPaidHours {
+            return "Use \(option.title) · \(ScheduleCoverageFormat.hours(total))h paid"
+        }
+        return "Use \(option.title)"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .top, spacing: 12) {
+                        PPIconTile(symbol: "bolt.fill", family: .trade, size: 40)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Overtime rate")
+                                .font(.system(.title3, design: .rounded))
+                                .fontWeight(.bold)
+                            Text(overtimeSummary)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 8)
+                        Button(action: onClose) {
+                            Image(systemName: "xmark")
+                                .font(.footnote.weight(.bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 30, height: 30)
+                                .background(PPColor.well, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Close")
+                        .accessibilityIdentifier("operativeCustomHours.rateSheet.close")
+                    }
+
+                    organisationCard
+
+                    Text("OR A CUSTOM RATE FOR THIS BOOKING")
+                        .font(.footnote.weight(.semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(.secondary)
+
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+                        ForEach(customOptions) { option in
+                            customCell(option)
+                        }
+                    }
+
+                    Label("Signed timesheets keep their figures. Only this booking is re-priced.", systemImage: "info.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(PPMetrics.screenGutter)
+                .padding(.top, 8)
+            }
+            PPBottomActionBar(
+                title: useTitle,
+                isEnabled: true,
+                accessibilityIdentifier: "operativeCustomHours.rateSheet.use",
+                action: { onUse(picked) }
+            )
+        }
+        .background(PPColor.page.ignoresSafeArea())
+    }
+
+    private var organisationCard: some View {
+        let selected = picked == nil
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        return Button {
+            picked = nil
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(organizationLabel)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("From Org settings · follows any future change")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text(organization.figureLine)
+                        .font(.footnote.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(PPChipTone.amber.ink)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(selected ? PPColor.brand : Color.secondary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(PPColor.card, in: shape)
+            .overlay(shape.strokeBorder(selected ? PPColor.brand : PPBookingColor.cardBorder, lineWidth: selected ? 1.5 : 0.5))
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("operativeCustomHours.rateSheet.org")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func customCell(_ option: OvertimeRateOption) -> some View {
+        let selected = option.isSelected(picked) && picked != nil
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        return Button {
+            picked = option.value
+        } label: {
+            VStack(spacing: 3) {
+                Text(option.title)
+                    .font(.headline)
+                    .monospacedDigit()
+                Text(option.figureLine)
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                    .opacity(0.85)
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(selected ? PPBookingColor.selected : PPColor.card, in: shape)
+            .overlay(shape.strokeBorder(PPBookingColor.cardBorder, lineWidth: selected ? 0 : 0.5))
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("operativeCustomHours.rateSheet.\(option.id)")
+        .accessibilityLabel("Rate \(option.title), \(option.figureLine)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+// MARK: - Unpaid break warning sheet (docs/design/booking-ui 3.7)
+
+/// Replaces the "Unpaid break" alert. The body is the rulebook's `customHoursBreakWarning` text; the buttons only
+/// report the choice, and the sheet's owner runs it once this sheet has gone (as the old alert did).
+private struct UnpaidBreakWarningSheet: View {
+    let message: String
+    let startText: String
+    let endText: String
+    let workStart: Int
+    let workEnd: Int
+    let breakStart: Int?
+    let breakEnd: Int?
+    let breakMinutes: Int
+    let payFullDayHours: Double
+    let keepBreakHours: Double
+    let onPayFullDay: () -> Void
+    let onKeepBreak: () -> Void
+    let onGoBack: () -> Void
+
+    private func clock(_ minutes: Int) -> String {
+        BookingHMTimePickerSupport.format(hour: minutes / 60, minute: minutes % 60)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                PPIconTile(symbol: "exclamationmark.triangle.fill", family: .alert, size: 44, lifted: true)
+                Text("HEADS UP")
+                    .font(.caption.weight(.bold))
+                    .tracking(1.1)
+                    .foregroundStyle(PPColor.danger)
+                Text("This booking runs through lunch")
+                    .font(.system(.title2, design: .rounded))
+                    .fontWeight(.bold)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                Text(message)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                miniTimeline
+
+                Button(action: onPayFullDay) {
+                    choiceLabel(
+                        title: "Pay the full day",
+                        subtitle: "Turns off the unpaid break for this booking",
+                        hours: payFullDayHours,
+                        prominent: true
+                    )
+                }
+                .buttonStyle(PPPressableButtonStyle())
+                .accessibilityIdentifier("operativeCustomHours.breakWarning.payFullDay")
+
+                Button(action: onKeepBreak) {
+                    choiceLabel(
+                        title: "Keep the break",
+                        subtitle: "\(breakMinutes) mins deducted, as set",
+                        hours: keepBreakHours,
+                        prominent: false
+                    )
+                }
+                .buttonStyle(PPPressableButtonStyle())
+                .accessibilityIdentifier("operativeCustomHours.breakWarning.save")
+
+                Button(action: onGoBack) {
+                    Text("Go back and change the hours")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(PPColor.brand)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("operativeCustomHours.breakWarning.back")
+            }
+            .padding(PPMetrics.screenGutter)
+            .padding(.top, 10)
+        }
+        .background(PPColor.page.ignoresSafeArea())
+    }
+
+    /// Navy strip: the booked span with the unpaid-break span (`ScheduleHoursTimelineSupport.breakRange`) in red.
+    private var miniTimeline: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            PPOnNavyEyebrow(text: "The day")
+            GeometryReader { geo in
+                let width = geo.size.width
+                let span = CGFloat(max(1, workEnd - workStart))
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.22))
+                    if let breakStart, let breakEnd, breakEnd > breakStart {
+                        let left = CGFloat(breakStart - workStart) / span * width
+                        let w = max(4, CGFloat(breakEnd - breakStart) / span * width)
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(Color(ppHex: 0xFF5A60))
+                            .frame(width: w)
+                            .offset(x: left)
+                    }
+                }
+            }
+            .frame(height: 12)
+            HStack {
+                Text(startText)
+                Spacer(minLength: 8)
+                if let breakStart, let breakEnd {
+                    Text("\(clock(breakStart)) – \(clock(breakEnd)) unpaid")
+                        .foregroundStyle(Color(ppHex: 0xFF8A8F))
+                }
+                Spacer(minLength: 8)
+                Text(endText)
+            }
+            .font(.caption.weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+        }
+        .padding(14)
+        .background(PPNavyBackdrop())
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func choiceLabel(title: String, subtitle: String, hours: Double, prominent: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 15, style: .continuous)
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.footnote)
+                    .opacity(0.85)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Text("\(ScheduleCoverageFormat.hours(hours))h")
+                .font(.headline)
+                .monospacedDigit()
+        }
+        .foregroundStyle(prominent ? Color.white : Color.primary)
+        .multilineTextAlignment(.leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        .background {
+            if prominent {
+                shape.fill(PPBookingColor.primaryGradient)
+            } else {
+                shape.fill(PPColor.card)
+            }
+        }
+        .overlay(shape.strokeBorder(prominent ? Color.clear : PPBookingColor.cardBorder, lineWidth: 0.5))
+        .contentShape(shape)
+    }
+}
+
+// MARK: - Edit booking options for a labour booking
+
+/// What Edit booking shows for a labour (`bookings`) booking, the same from Scheduling and Daily Overview (both show the
+/// PAYE line for a PAYE operative): the break
+/// controls, breakdown, footer and overtime rate for every person (RULEBOOK 1.29.0 §25: the rate applies to PAYE
+/// bookings too), with the PAYE note added for a PAYE operative. Hiding the controls for PAYE also opened the sheet
+/// with the break off, so Save rewrote `isBreakRemoved = true` on a booking nobody changed.
+struct LabourBookingEditOptions: Equatable {
+    let showsBreakControls: Bool
+    let showsBreakdown: Bool
+    let showsFooterNote: Bool
+    let showsPayeNote: Bool
+    let allowsOtMultiplierOverride: Bool
+
+    /// The options for this booking's person: PAYE on the booking's day (`isPaye`).
+    static func forOperative(booking: Booking, operatives: [Operative], users: [AppUser]) -> LabourBookingEditOptions {
+        forOperative(isPaye: isPaye(booking, operatives: operatives, users: users))
+    }
+
+    /// Whether the booking's operative is PAYE on the booking's day: the roster account with the operative's email,
+    /// read through `AppUser.employmentType(on:)` (`employmentTypeOnDay`). False when no account matches.
+    static func isPaye(_ booking: Booking, operatives: [Operative], users: [AppUser]) -> Bool {
+        guard let operative = operatives.first(where: { $0.id == booking.operativeId }) else { return false }
+        let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let user = users.first(where: {
+            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+        }) else { return false }
+        return user.employmentType(on: booking.date) == .paye
+    }
+
+    static func forOperative(isPaye: Bool) -> LabourBookingEditOptions {
+        LabourBookingEditOptions(
+            showsBreakControls: true,
+            showsBreakdown: true,
+            showsFooterNote: true,
+            showsPayeNote: isPaye,
+            allowsOtMultiplierOverride: true
+        )
     }
 }

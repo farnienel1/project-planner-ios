@@ -61,6 +61,8 @@ struct ScheduleOperativeView: View {
     @State private var didShowHoursClashAlertThisSession = false
     /// RULEBOOK 1.18.0 `customHoursPrefillForDays`: the selection kind the shared hours were last reset for.
     @State private var customHoursKind = CustomHoursKindTracker()
+    /// Steps folded into a summary card while the booking is in progress (1 Dates, 2 Hours). Display only.
+    @State private var collapsedBookingSteps: Set<Int> = []
     @EnvironmentObject var notificationService: NotificationService
     
     private var payrollTimePolicy: OrgPayrollTimePolicy {
@@ -269,20 +271,16 @@ struct ScheduleOperativeView: View {
                     .ignoresSafeArea()
 
                 ScrollView {
-                    VStack(spacing: 12) {
-                        scheduleBookingProjectCard
-                        scheduleBookingCalendarCardCompact
-                        quickSelectSectionCompact
-                        scheduleBookingBulkHoursCard
-                        scheduleBookingOperativesSection
-                        if !selectedOperatives.isEmpty {
-                            scheduleBookingReviewSection
+                    VStack(alignment: .leading, spacing: 0) {
+                        scheduleBookingHeader
+                        VStack(alignment: .leading, spacing: 4) {
+                            scheduleBookingDatesSection
+                            scheduleBookingHoursSection
+                            scheduleBookingOperativesSection
                         }
-                        Spacer(minLength: 24)
+                        .padding(.bottom, 24)
+                        .ppContentSheet()
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 10)
-                    .padding(.bottom, 100)
                 }
 
                 if mainScreenHasUnactionedConflicts {
@@ -668,8 +666,8 @@ struct ScheduleOperativeView: View {
                 line += " · no break"
             }
             if let m = c.otMultiplierOverride {
-                let ms = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
-                line += " · OT \(ms)×"
+                // The rate as stored, to the hundredth (×1.25 stays "1.25", never "1.2").
+                line += " · OT \(ScheduleCoverageFormat.hours(m))×"
             }
             return line
         }
@@ -697,354 +695,242 @@ struct ScheduleOperativeView: View {
         }
     }
 
-    private var bottomBarHoursCaption: String {
-        guard !selectedOperatives.isEmpty, !selectedDates.isEmpty else { return "" }
-        let ops = selectedOperatives.count
-        let dCount = totalEffectiveBookingDays
-        let h = totalPlannedHours
-        let hStr = formatHoursOneDecimal(h)
-        return "\(ops) people · \(dCount) booking day\(dCount == 1 ? "" : "s") · \(hStr)h total"
+    // MARK: - Layout (docs/design/booking-ui 3.3 in progress / 3.4 ready)
+
+    /// Ready = there are dates and people, so the header shows the booking at a glance instead of the step tracker.
+    private var isReadyToReview: Bool {
+        !selectedDates.isEmpty && !selectedOperatives.isEmpty
     }
 
-    private var bottomBarStandardCaption: String {
-        if hasAnyOperativeOverrides { return "Mixed / custom" }
-        switch currentBulkChoice().timeSlot {
+    /// Steps the booker folded into a summary card (1 Dates, 2 Hours). Only used while the booking is in progress.
+    private func isStepCollapsed(_ step: Int) -> Bool {
+        !isReadyToReview && !selectedDates.isEmpty && collapsedBookingSteps.contains(step)
+    }
+
+    private func setStep(_ step: Int, collapsed: Bool) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if collapsed {
+                collapsedBookingSteps.insert(step)
+            } else {
+                collapsedBookingSteps.remove(step)
+            }
+        }
+    }
+
+    private var bookingJobTypeLabel: String {
+        project.jobType == .smallWorks ? "Small works" : (project.customJobType ?? "Project")
+    }
+
+    private var scheduleBookingHeader: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            PPJobHeaderBlock(
+                code: project.jobNumber,
+                name: project.siteName,
+                detail: "\(project.client.name) · \(bookingJobTypeLabel)",
+                address: project.siteAddress,
+                isSmallWorks: project.jobType == .smallWorks
+            )
+            if isReadyToReview {
+                // Derived display arithmetic on existing values: total = `totalPlannedHours` (each person's
+                // `paidBookedHours` per effective day), shifts = `totalEffectiveBookingDays`.
+                PPGlanceHeadline(
+                    eyebrow: "Booking at a glance",
+                    primary: "\(ScheduleCoverageFormat.hours(totalPlannedHours))h paid",
+                    secondary: "\(totalEffectiveBookingDays) shift\(totalEffectiveBookingDays == 1 ? "" : "s")"
+                )
+                PPStatRow(items: [
+                    PPStatItem(id: "days", value: "\(selectedDates.count)", label: selectedDates.count == 1 ? "Day" : "Days"),
+                    PPStatItem(id: "people", value: "\(selectedOperatives.count)", label: "People"),
+                    PPStatItem(id: "perDay", value: paidHoursPerDayText, label: "Paid hrs / day"),
+                ])
+            } else {
+                PPStepTracker(steps: bookingStepItems)
+            }
+        }
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .ppNavyHeader()
+    }
+
+    private var bookingStepItems: [PPStepTrackerItem] {
+        let datesDone = !selectedDates.isEmpty
+        let hoursDone = !selectedDates.isEmpty
+        let peopleDone = !selectedOperatives.isEmpty
+        let current = !datesDone ? 1 : (!peopleDone ? 3 : 0)
+        return [
+            PPStepTrackerItem(id: 1, title: "Dates", isDone: datesDone, isCurrent: current == 1),
+            PPStepTrackerItem(id: 2, title: "Hours", isDone: hoursDone, isCurrent: current == 2),
+            PPStepTrackerItem(id: 3, title: "Operatives", isDone: peopleDone, isCurrent: current == 3),
+        ]
+    }
+
+    /// One paid-hours figure per day when every selected day books the same paid hours (each day's
+    /// `paidBookedHours` under the rules in effect that day), else "Mixed / custom".
+    private var paidHoursPerDay: Double? {
+        guard !selectedDates.isEmpty, !hasAnyOperativeOverrides else { return nil }
+        var values = Set<String>()
+        var first: Double?
+        for day in selectedDates {
+            let probe = baseChoice(for: day).bookingProbe(operativeId: UUID(), projectId: project.id, date: day, bookedBy: "")
+            let hours = probe.paidBookedHours(policy: payrollPolicy(for: day))
+            values.insert(ScheduleCoverageFormat.hours(hours))
+            if first == nil { first = hours }
+        }
+        return values.count == 1 ? first : nil
+    }
+
+    private var paidHoursPerDayText: String {
+        if selectedDates.isEmpty { return "–" }
+        if let hours = paidHoursPerDay { return ScheduleCoverageFormat.hours(hours) }
+        return "Mixed / custom"
+    }
+
+    private static let bookingDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE d MMM"
+        return f
+    }()
+
+    private func bookingDayText(_ date: Date) -> String {
+        let f = Self.bookingDayFormatter
+        f.timeZone = OrganizationRulebookContext.timeZone
+        return f.string(from: date)
+    }
+
+    /// "Tue 17 Nov – Wed 18 Nov" for a run of days; "3 dates · Tue 17 Nov – Fri 20 Nov" when there are gaps.
+    private var selectedDateRangeText: String {
+        let dates = selectedDates.sorted()
+        guard let first = dates.first, let last = dates.last else { return "No dates" }
+        if dates.count == 1 { return bookingDayText(first) }
+        let calendar = OrganizationRulebookContext.calendar
+        let consecutive = zip(dates, dates.dropFirst()).allSatisfy { pair in
+            calendar.dateComponents([.day], from: pair.0, to: pair.1).day == 1
+        }
+        let range = "\(bookingDayText(first)) – \(bookingDayText(last))"
+        return consecutive ? range : "\(dates.count) dates · \(range)"
+    }
+
+    /// Every selected date (was the review's "Selected dates" row).
+    private var selectedDatesListText: String {
+        selectedDates.sorted()
+            .map { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)) }
+            .joined(separator: ", ")
+    }
+
+    private func stepDoneButton(_ step: Int) -> some View {
+        Button("Done") { setStep(step, collapsed: true) }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(PPColor.brand)
+            .accessibilityIdentifier("scheduleOperative.step\(step).done")
+            .accessibilityHint("Folds this step into a summary")
+    }
+
+    private func stepSummaryCard(step: Int, title: String, value: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title3)
+                .foregroundStyle(PPFamily.sites.top)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.body.weight(.semibold))
+                    .monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Edit") { setStep(step, collapsed: false) }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(PPColor.brand)
+                .accessibilityIdentifier("scheduleOperative.step\(step).edit")
+        }
+        .ppBookingCard(padding: 14)
+        .padding(.top, 14)
+    }
+
+    // MARK: Dates
+
+    @ViewBuilder
+    private var scheduleBookingDatesSection: some View {
+        if isStepCollapsed(1) {
+            stepSummaryCard(
+                step: 1,
+                title: "Dates · \(selectedDates.count) day\(selectedDates.count == 1 ? "" : "s")",
+                value: selectedDateRangeText
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                PPSheetSectionTitle("Dates") {
+                    HStack(spacing: 10) {
+                        PPChip(text: "\(selectedDates.count) selected", tone: .blue)
+                        if !isReadyToReview && !selectedDates.isEmpty {
+                            stepDoneButton(1)
+                        }
+                    }
+                }
+                scheduleBookingCalendarCardCompact
+                quickSelectSectionCompact
+                if !selectedDates.isEmpty {
+                    Text(selectedDatesListText)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 2)
+                }
+            }
+        }
+    }
+
+    // MARK: Hours
+
+    private var bulkHoursSegmentItems: [PPSegmentItem<TimeSlot>] {
+        let refDay = selectedDates.sorted().first ?? Date()
+        // RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: Saturday and Sunday are custom hours only (AM / PM / FULL DAY
+        // hidden). A stored weekend FULL DAY / AM / PM being edited still shows its own slot.
+        let offered = RulebookBookingSlot.allCases.filter {
+            CanonicalBusinessEngine.slotOffered($0, on: refDay, storedTimeSlot: editingBooking?.timeSlot.rawValue)
+        }
+        var items: [PPSegmentItem<TimeSlot>] = []
+        if offered.contains(.am) {
+            items.append(PPSegmentItem(id: .morning, title: "AM", isEnabled: canBookStandardDayWindow,
+                                       accessibilityIdentifier: "scheduleOperative.\(AccessibilityID.token("AM"))"))
+        }
+        if offered.contains(.pm) {
+            items.append(PPSegmentItem(id: .afternoon, title: "PM", isEnabled: canBookStandardDayWindow,
+                                       accessibilityIdentifier: "scheduleOperative.\(AccessibilityID.token("PM"))"))
+        }
+        if offered.contains(.fullDay) {
+            items.append(PPSegmentItem(id: .fullDay, title: "Full day", isEnabled: canBookStandardDayWindow,
+                                       accessibilityIdentifier: "scheduleOperative.\(AccessibilityID.token("FULL DAY"))"))
+        }
+        items.append(PPSegmentItem(id: .customHours, title: "Custom", isEnabled: true,
+                                   accessibilityIdentifier: "scheduleOperative.custom"))
+        return items
+    }
+
+    /// Custom, a time tile, or the summary's hours open the existing Hours sheet for every selected person and date.
+    private func openBulkHoursSheet() {
+        operativeCustomHoursPick = OperativeCustomHoursPick(
+            operativeId: nil,
+            operativeName: nil,
+            initialChoice: sharedBulkChoice
+        )
+    }
+
+    private func bulkSlotSummary(_ choice: OperativeDayBookingChoice) -> String {
+        switch choice.timeSlot {
         case .morning: return "AM"
         case .afternoon: return "PM"
-        case .fullDay: return "FULL DAY"
-        case .customHours:
-            return isBulkStandardDay ? "All standard" : "Custom hours"
-        default:
-            return currentBulkChoice().timeSlot.displayName
-        }
-    }
-
-    private func formatHoursOneDecimal(_ h: Double) -> String {
-        let r = (h * 2).rounded() / 2
-        if abs(r - r.rounded(.towardZero)) < 0.01 { return String(format: "%.0f", r) }
-        return String(format: "%.1f", r)
-    }
-
-    private var scheduleBookingProjectCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text(project.jobNumber)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(project.jobType == .smallWorks ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.blue)
-                        Text(project.siteName)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                            .lineLimit(2)
-                    }
-                    Text(project.client.name)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink.opacity(0.85))
-                    Text(project.jobType == .smallWorks ? "Small works" : (project.customJobType ?? "Project"))
-                        .font(.system(size: 10))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                }
-                Spacer(minLength: 0)
-                if project.jobType == .smallWorks {
-                    Text("SMALL WORKS")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(ProjectWorksRevampColors.upcomingAmber.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                }
-            }
-            Text(project.siteAddress)
-                .font(.system(size: 10))
-                .foregroundStyle(ProjectWorksRevampColors.muted)
-                .lineLimit(2)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PPColor.card)
-        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
-    }
-
-    private var scheduleBookingOperativesSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("OPERATIVES")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .tracking(0.8)
-                .padding(.leading, 4)
-                .padding(.bottom, 8)
-            VStack(spacing: 0) {
-                if selectedOperatives.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Choose who is on this job. You can set hours per person after they’re selected.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button { openPeoplePicker() } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "person.badge.plus")
-                                    .font(.system(size: 15, weight: .medium))
-                                Text("Add people")
-                                    .font(.system(size: 13, weight: .semibold))
-                            }
-                            .foregroundStyle(canOpenPeoplePicker ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(ProjectWorksRevampColors.blueTint.opacity(canOpenPeoplePicker ? 1 : 0.5))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(ProjectWorksRevampColors.blue.opacity(canOpenPeoplePicker ? 0.35 : 0.15), lineWidth: 1)
-                            )
-                        }
-                        .accessibilityIdentifier("scheduleOperative.personBadgePlus")
-                        .buttonStyle(.plain)
-                        .disabled(!canOpenPeoplePicker)
-                    }
-                    .padding(14)
-                } else {
-                    let ordered = bookablePeople.filter { selectedOperatives.contains($0.operativeId) }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-                    ForEach(Array(ordered.enumerated()), id: \.element.id) { idx, person in
-                        let op = selectableOperatives.first(where: { $0.id == person.operativeId }) ?? Operative(
-                            firstName: person.name,
-                            lastName: "",
-                            email: person.email,
-                            startDate: Date()
-                        )
-                        if idx > 0 {
-                            Divider().overlay(ProjectWorksRevampColors.border)
-                        }
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 10) {
-                                Button {
-                                    let initial: OperativeDayBookingChoice
-                                    if let d = selectedDates.sorted().first {
-                                        initial = resolvedChoice(operativeId: op.id, date: d)
-                                    } else {
-                                        initial = operativeDefaultChoice[op.id] ?? sharedBulkChoice
-                                    }
-                                    operativeCustomHoursPick = OperativeCustomHoursPick(
-                                        operativeId: op.id,
-                                        operativeName: op.name,
-                                        initialChoice: initial
-                                    )
-                                } label: {
-                                    HStack(spacing: 10) {
-                                        Text(PlannerUIInitials.from(op.name))
-                                            .font(.system(size: 10, weight: .medium))
-                                            .foregroundStyle(.white)
-                                            .frame(width: 30, height: 30)
-                                            .background(
-                                                LinearGradient(
-                                                    colors: [ProjectWorksRevampColors.blue, ProjectWorksRevampColors.blueLight],
-                                                    startPoint: .topLeading,
-                                                    endPoint: .bottomTrailing
-                                                )
-                                            )
-                                            .clipShape(Circle())
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            HStack(spacing: 6) {
-                                                Text(op.name)
-                                                    .font(.system(size: 13, weight: .semibold))
-                                                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                                                Text(person.roleLabel)
-                                                    .font(.system(size: 9, weight: .medium))
-                                                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                                            }
-                                            Text(operativeHoursSubtitle(for: op.id))
-                                                .font(.system(size: 11, weight: .medium))
-                                                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                                            if let days = personConflictSummary(person)?.effectiveSelectedDates, !days.isEmpty {
-                                                Text(days.map { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)) }.joined(separator: ", "))
-                                                    .font(.system(size: 10))
-                                                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                                            }
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .accessibilityIdentifier("scheduleOperative.row.\(person.id)")
-                                .buttonStyle(.plain)
-                                Button {
-                                    clearOverrides(for: op.id)
-                                    selectedOperatives.remove(op.id)
-                                    expandedMainConflictPersonIds.remove(op.id)
-                                } label: {
-                                    Image(systemName: "xmark")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(ProjectWorksRevampColors.placeholderInk)
-                                        .frame(width: 32, height: 32)
-                                }
-                                .accessibilityIdentifier("scheduleOperative.row.\(person.id).close")
-                                .buttonStyle(.plain)
-                            }
-                            if let summary = personConflictSummary(person), !summary.rows.isEmpty {
-                                ScheduleOperativeMainConflictBlock(
-                                    person: person,
-                                    summary: summary,
-                                    isExpanded: expandedMainConflictPersonIds.contains(person.operativeId),
-                                    acknowledgedIds: acknowledgedConflictIds,
-                                    struckIds: struckConflictIds,
-                                    onToggleExpand: {
-                                        if expandedMainConflictPersonIds.contains(person.operativeId) {
-                                            expandedMainConflictPersonIds.remove(person.operativeId)
-                                        } else {
-                                            expandedMainConflictPersonIds.insert(person.operativeId)
-                                        }
-                                    },
-                                    onAcknowledge: { acknowledgedConflictIds.insert($0); struckConflictIds.remove($0) },
-                                    onStrike: { struckConflictIds.insert($0); acknowledgedConflictIds.remove($0) }
-                                )
-                                .padding(.leading, 4)
-                            }
-                        }
-                        .padding(.vertical, 10)
-                    }
-                    Divider().overlay(ProjectWorksRevampColors.border)
-                    Button { openPeoplePicker() } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 16, weight: .medium))
-                            Text(selectedOperatives.count <= 1 ? "Add another person" : "Add another person")
-                                .font(.system(size: 13, weight: .semibold))
-                        }
-                        .foregroundStyle(ProjectWorksRevampColors.blue)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                    }
-                    .accessibilityIdentifier("scheduleOperative.plusCircleFill")
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 4)
-                }
-            }
-            .padding(.horizontal, 12)
-        }
-        .padding(.vertical, 6)
-        .background(PPColor.card)
-        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
-    }
-
-    private var scheduleMainClashNotice: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.red)
-            Text("Acknowledge each clash above before you can confirm booking.")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.red)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.red.opacity(0.08))
-        .overlay(alignment: .bottom) {
-            Divider()
-        }
-    }
-
-    private var scheduleBookingReviewSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("CONFIRM BOOKING")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .tracking(0.8)
-                .padding(.leading, 4)
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Hours")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                    Text(operativeLineForChoice(sharedBulkChoice))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                    // RULEBOOK 1.18.0: a weekend booking confirms with its per-day hours (`weekendBookingBreakdown`).
-                    if let refDay = selectedDates.sorted().first {
-                        let window = displayClockWindow(for: sharedBulkChoice, day: refDay, policy: payrollPolicy(for: refDay))
-                        WeekendBookingBreakdownView(
-                            lines: weekendBreakdownLines(start: window.start, end: window.end, isBreakRemoved: sharedBulkChoice.isBreakRemoved)
-                        )
-                    }
-                    if hasAnyOperativeOverrides {
-                        Text("Some people have custom hours — tap a name above to review.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                    }
-                }
-                Divider().overlay(ProjectWorksRevampColors.border)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Selected dates")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                    Text(selectedDates.sorted().map { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)) }.joined(separator: ", "))
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Divider().overlay(ProjectWorksRevampColors.border)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("People")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
-                    let ordered = bookablePeople
-                        .filter { selectedOperatives.contains($0.operativeId) }
-                        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-                    ForEach(ordered) { person in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 6) {
-                                Text(person.name)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                                if let summary = personConflictSummary(person), summary.triangle != .none {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.caption2)
-                                        .foregroundStyle(summary.triangle == .red ? .red : .orange)
-                                }
-                            }
-                            if let days = personConflictSummary(person)?.effectiveSelectedDates, !days.isEmpty {
-                                Text(days.map { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)) }.joined(separator: ", "))
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(ProjectWorksRevampColors.muted)
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(PPColor.card)
-            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        case .fullDay: return "Full day"
+        default: return isBulkStandardDay ? "Standard" : "Custom"
         }
     }
 
     @ViewBuilder
-    private func bulkHoursSlotChip(title: String, slot: TimeSlot, enabled: Bool) -> some View {
-        let selected = isBulkSelectedSlot(slot)
-        Button {
-            guard enabled else { return }
-            applyBulkTimeSlot(slot)
-        } label: {
-            Text(title)
-                .font(.system(size: 10, weight: .medium))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .background(selected ? ProjectWorksRevampColors.blueTint : ProjectWorksRevampColors.chipSurface)
-                .foregroundStyle(selected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(selected ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.searchBorder, lineWidth: selected ? 1.5 : 0.5)
-                )
-        }
-        .accessibilityIdentifier("scheduleOperative.\(AccessibilityID.token(title))")
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-    }
-
-    private var scheduleBookingBulkHoursCard: some View {
+    private var scheduleBookingHoursSection: some View {
         let refDay = selectedDates.sorted().first ?? Date()
         let p = payrollPolicy(for: refDay)
         let choice = selectedDates.isEmpty ? sharedBulkChoice : baseChoice(for: refDay)
@@ -1064,139 +950,317 @@ struct ScheduleOperativeView: View {
             bookedBy: ""
         )
         let paidH = probe.paidBookedHours(policy: p)
-        let otH = probe.overtimeHoursBeyondPaidStandard(policy: p)
-        let breakdown = probe.payrollHoursResult(policy: p)
-        // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a weekend selection shows each day as the pay rule prices it
-        // instead of the standard-day summary (memoised by input in the wrapper).
-        let weekendLines = weekendBreakdownLines(start: start, end: end, isBreakRemoved: choice.isBreakRemoved)
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("HOURS · AM / PM / FULL DAY / CUSTOM")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .tracking(0.8)
-                .padding(.leading, 4)
+        if isStepCollapsed(2) {
+            stepSummaryCard(
+                step: 2,
+                title: "Hours · \(bulkSlotSummary(choice))",
+                value: "\(start) – \(end) · \(ScheduleCoverageFormat.hours(paidH))h paid"
+            )
+        } else {
             VStack(alignment: .leading, spacing: 10) {
-                VStack(spacing: 8) {
-                    // RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: Saturday and Sunday are custom hours only.
-                    // A stored weekend FULL DAY / AM / PM being edited still shows its own slot.
-                    let offered = RulebookBookingSlot.allCases.filter {
-                        CanonicalBusinessEngine.slotOffered($0, on: refDay, storedTimeSlot: editingBooking?.timeSlot.rawValue)
+                PPSheetSectionTitle("Hours") {
+                    if !isReadyToReview && !selectedDates.isEmpty {
+                        stepDoneButton(2)
                     }
-                    if offered.contains(.am) || offered.contains(.pm) || offered.contains(.fullDay) {
-                        HStack(spacing: 8) {
-                            if offered.contains(.am) {
-                                bulkHoursSlotChip(title: "AM", slot: .morning, enabled: canBookStandardDayWindow)
-                            }
-                            if offered.contains(.pm) {
-                                bulkHoursSlotChip(title: "PM", slot: .afternoon, enabled: canBookStandardDayWindow)
-                            }
-                            if offered.contains(.fullDay) {
-                                bulkHoursSlotChip(title: "FULL DAY", slot: .fullDay, enabled: canBookStandardDayWindow)
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    PPSegmentedPills(
+                        items: bulkHoursSegmentItems,
+                        isSelected: { isBulkSelectedSlot($0) },
+                        onSelect: { slot in
+                            if slot == .customHours {
+                                openBulkHoursSheet()
+                            } else {
+                                applyBulkTimeSlot(slot)
                             }
                         }
-                    }
+                    )
                     // RULEBOOK 1.17.0 `weekendBookingNotes`: the note covers every selected day.
                     WeekendBookingNoteView(days: selectedDates.isEmpty ? [refDay] : selectedDates.sorted(), policy: p)
-                    Button {
-                        operativeCustomHoursPick = OperativeCustomHoursPick(
-                            operativeId: nil,
-                            operativeName: nil,
-                            initialChoice: sharedBulkChoice
-                        )
-                    } label: {
-                        Text("Custom")
-                            .font(.system(size: 10, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                            .background(isBulkSelectedSlot(.customHours) ? ProjectWorksRevampColors.blueTint : ProjectWorksRevampColors.chipSurface)
-                            .foregroundStyle(isBulkSelectedSlot(.customHours) ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.ink)
-                            .clipShape(Capsule())
-                            .overlay(
-                                Capsule()
-                                    .stroke(isBulkSelectedSlot(.customHours) ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.searchBorder, lineWidth: isBulkSelectedSlot(.customHours) ? 1.5 : 0.5)
-                            )
+                    HStack(spacing: 10) {
+                        Button { openBulkHoursSheet() } label: {
+                            PPTimeTileLabel(title: "Start", value: start)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("scheduleOperative.startTile")
+                        .accessibilityHint("Opens the hours for every selected person and date")
+                        Button { openBulkHoursSheet() } label: {
+                            PPTimeTileLabel(title: "End", value: end)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("scheduleOperative.endTile")
+                        .accessibilityHint("Opens the hours for every selected person and date")
                     }
-                    .accessibilityIdentifier("scheduleOperative.custom")
+                    PPDayTimelineBar(
+                        day: refDay,
+                        policy: p,
+                        workStart: start,
+                        workEnd: end,
+                        breakIncluded: !choice.isBreakRemoved,
+                        centerLabel: ScheduleCoverageFormat.hours(paidH) + "h"
+                    )
+                }
+                .ppBookingCard(padding: 12)
+                bulkHoursConfirmation(probe: probe, policy: p, start: start, end: end, isBreakRemoved: choice.isBreakRemoved, paidHours: paidH)
+            }
+        }
+    }
+
+    /// The green line "8.5h paid · 9h on site less 30m unpaid break" (amber with the overtime sum when the day has
+    /// overtime). Paid = `paidBookedHours`, break = `payrollHoursResult.unpaidBreakHours`, overtime =
+    /// `payrollMultipliedHours` text; on site = finish − start (owner decision 2). A weekend selection shows its
+    /// per-day rows (`weekendBookingBreakdown`) instead, as before.
+    @ViewBuilder
+    private func bulkHoursConfirmation(
+        probe: Booking,
+        policy p: OrgPayrollTimePolicy,
+        start: String,
+        end: String,
+        isBreakRemoved: Bool,
+        paidHours paidH: Double
+    ) -> some View {
+        let weekendLines = weekendBreakdownLines(start: start, end: end, isBreakRemoved: isBreakRemoved)
+        if !weekendLines.isEmpty {
+            WeekendBookingBreakdownView(lines: weekendLines)
+        } else {
+            let otH = probe.overtimeHoursBeyondPaidStandard(policy: p)
+            let result = probe.payrollHoursResult(policy: p)
+            let tone: PPChipTone = otH < 0.05 ? .green : .amber
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(tone.ink)
+                Text(bulkHoursConfirmationText(result: result, start: start, end: end, paidHours: paidH, hasOvertime: otH >= 0.05))
+                    .font(.footnote.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(tone.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(tone.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func bulkHoursConfirmationText(
+        result: PayrollHoursResult,
+        start: String,
+        end: String,
+        paidHours: Double,
+        hasOvertime: Bool
+    ) -> String {
+        var text = "\(ScheduleCoverageFormat.hours(paidHours))h paid"
+        if let s = ManagerScheduleInterval.parseMinutes(start),
+           let e = ManagerScheduleInterval.parseMinutes(end), e > s {
+            text += " · \(ScheduleCoverageFormat.hours(Double(e - s) / 60))h on site"
+        }
+        let breakMinutes = Int((result.unpaidBreakHours * 60).rounded())
+        if breakMinutes > 0 {
+            text += " less \(breakMinutes)m unpaid break"
+        }
+        if hasOvertime, let multiplied = result.multipliedHours {
+            text += " · OT \(multiplied.text)"
+        }
+        return text
+    }
+
+    // MARK: Operatives
+
+    /// One person's paid hours over their effective days: the same `paidBookedHours` sum as `totalPlannedHours`.
+    private func personPaidHours(_ operativeId: UUID) -> Double {
+        var sum = 0.0
+        for day in effectiveDates(for: operativeId) {
+            let choice = resolvedChoice(operativeId: operativeId, date: day)
+            let probe = choice.bookingProbe(operativeId: operativeId, projectId: project.id, date: day, bookedBy: loggedInUserName)
+            sum += probe.paidBookedHours(policy: payrollPolicy(for: day))
+        }
+        return sum
+    }
+
+    private func openPersonHours(_ op: Operative) {
+        let initial: OperativeDayBookingChoice
+        if let d = selectedDates.sorted().first {
+            initial = resolvedChoice(operativeId: op.id, date: d)
+        } else {
+            initial = operativeDefaultChoice[op.id] ?? sharedBulkChoice
+        }
+        operativeCustomHoursPick = OperativeCustomHoursPick(
+            operativeId: op.id,
+            operativeName: op.name,
+            initialChoice: initial
+        )
+    }
+
+    private var scheduleBookingOperativesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            PPSheetSectionTitle("Operatives") {
+                if !selectedOperatives.isEmpty {
+                    Button { openPeoplePicker() } label: {
+                        Label("Add people", systemImage: "plus")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(PPColor.brand)
+                    }
+                    .accessibilityIdentifier("scheduleOperative.plusCircleFill")
                     .buttonStyle(.plain)
                 }
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("START")
-                            .font(.system(size: 9))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                        Text(start)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
-                    .background(ProjectWorksRevampColors.canvas)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("END")
-                            .font(.system(size: 9))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                        Text(end)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
-                    .background(ProjectWorksRevampColors.canvas)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                ScheduleHoursTimelineBar(
-                    day: refDay,
-                    policy: p,
-                    workIntervals: [],
-                    workStart: start,
-                    workEnd: end,
-                    breakIncluded: !choice.isBreakRemoved,
-                    centerLabel: formatHoursOneDecimal(paidH) + "h",
-                    clipLo: 6 * 60,
-                    clipHi: 21 * 60,
-                    barHeight: 22
-                )
-                HStack {
-                    ForEach(["6", "9", "12", "15", "18", "21"], id: \.self) { t in
-                        Text(t)
-                            .font(.system(size: 7))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                            .frame(maxWidth: .infinity)
-                    }
-                }
             }
-            .padding(12)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-            )
-            if !weekendLines.isEmpty {
-                WeekendBookingBreakdownView(lines: weekendLines)
+            if selectedOperatives.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 12) {
+                        PPIconTile(symbol: "person.2.fill", family: .people, size: 36)
+                        Text("Choose who is on this job. You can set hours per person after they’re selected.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button { openPeoplePicker() } label: {
+                        Label("Add people", systemImage: "person.badge.plus")
+                            .font(.headline)
+                            .foregroundStyle(canOpenPeoplePicker ? Color.white : Color.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                            .background(
+                                canOpenPeoplePicker ? AnyShapeStyle(PPBookingColor.primaryGradient) : AnyShapeStyle(PPColor.well),
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            )
+                    }
+                    .accessibilityIdentifier("scheduleOperative.personBadgePlus")
+                    .buttonStyle(PPPressableButtonStyle())
+                    .disabled(!canOpenPeoplePicker)
+                    if !canOpenPeoplePicker {
+                        Text("Select dates first.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .ppBookingCard(padding: 14)
             } else {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(otH < 0.05 ? ProjectWorksRevampColors.activeGreen : ProjectWorksRevampColors.upcomingAmber)
-                    Group {
-                        if otH < 0.05 {
-                            Text("\(formatHoursOneDecimal(paidH))h paid · \(breakdown.breakdownSummary)")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                        } else {
-                            Text(breakdown.breakdownSummary)
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                let ordered = bookablePeople
+                    .filter { selectedOperatives.contains($0.operativeId) }
+                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                VStack(spacing: 0) {
+                    ForEach(Array(ordered.enumerated()), id: \.element.id) { idx, person in
+                        if idx > 0 {
+                            Divider().padding(.leading, 60)
                         }
+                        scheduleBookingPersonRow(person)
                     }
                 }
-                .padding(EdgeInsets(top: 8, leading: 11, bottom: 8, trailing: 11))
+                .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(otH < 0.05 ? ProjectWorksRevampColors.greenTint : ProjectWorksRevampColors.amberTint)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(PPColor.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(PPBookingColor.cardBorder, lineWidth: 0.5)
+                )
             }
+        }
+    }
+
+    private func scheduleBookingPersonRow(_ person: ScheduleBookablePerson) -> some View {
+        let op = selectableOperatives.first(where: { $0.id == person.operativeId }) ?? Operative(
+            firstName: person.name,
+            lastName: "",
+            email: person.email,
+            startDate: Date()
+        )
+        let summary = personConflictSummary(person)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button { openPersonHours(op) } label: {
+                    HStack(spacing: 12) {
+                        PPInitialsAvatar(initials: PlannerUIInitials.from(op.name), family: .plan, size: 38)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(op.name)
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                if let summary, summary.triangle != .none {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(summary.triangle == .red ? Color.red : Color.orange)
+                                        .accessibilityLabel("Has a clash")
+                                }
+                            }
+                            Text("\(person.roleLabel) · \(operativeHoursSubtitle(for: op.id))")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if let days = summary?.effectiveSelectedDates, !days.isEmpty {
+                                Text(days.map { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)) }.joined(separator: ", "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("\(ScheduleCoverageFormat.hours(personPaidHours(op.id)))h")
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.primary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("scheduleOperative.row.\(person.id)")
+                .accessibilityHint("Sets hours for this person")
+                .buttonStyle(.plain)
+                Button {
+                    clearOverrides(for: op.id)
+                    selectedOperatives.remove(op.id)
+                    expandedMainConflictPersonIds.remove(op.id)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .background(PPColor.well, in: Circle())
+                }
+                .accessibilityIdentifier("scheduleOperative.row.\(person.id).close")
+                .accessibilityLabel("Remove \(op.name)")
+                .buttonStyle(.plain)
+            }
+            if let summary, !summary.rows.isEmpty {
+                ScheduleOperativeMainConflictBlock(
+                    person: person,
+                    summary: summary,
+                    isExpanded: expandedMainConflictPersonIds.contains(person.operativeId),
+                    acknowledgedIds: acknowledgedConflictIds,
+                    struckIds: struckConflictIds,
+                    onToggleExpand: {
+                        if expandedMainConflictPersonIds.contains(person.operativeId) {
+                            expandedMainConflictPersonIds.remove(person.operativeId)
+                        } else {
+                            expandedMainConflictPersonIds.insert(person.operativeId)
+                        }
+                    },
+                    onAcknowledge: { acknowledgedConflictIds.insert($0); struckConflictIds.remove($0) },
+                    onStrike: { struckConflictIds.insert($0); acknowledgedConflictIds.remove($0) }
+                )
+                .padding(.leading, 4)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    private var scheduleMainClashNotice: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.red)
+            Text("Acknowledge each clash above before you can confirm booking.")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.08))
+        .background(Color(.systemBackground))
+        .overlay(alignment: .bottom) {
+            Divider()
         }
     }
 
@@ -1216,83 +1280,76 @@ struct ScheduleOperativeView: View {
     }
 
     private var scheduleBookingCalendarCardCompact: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("DATES · \(selectedDates.count) selected")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .tracking(0.8)
-                .padding(.leading, 4)
-            VStack(spacing: 8) {
-                HStack {
-                    Button(action: { changeMonth(by: -1) }) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                    }
-                    .accessibilityIdentifier("scheduleOperative.back2")
-                    .buttonStyle(.plain)
-                    Spacer()
-                    Text(monthYearString)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                    Spacer()
-                    Button(action: { changeMonth(by: 1) }) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(ProjectWorksRevampColors.muted)
-                    }
-                    .accessibilityIdentifier("scheduleOperative.chevronRight")
-                    .buttonStyle(.plain)
+        VStack(spacing: 10) {
+            HStack {
+                Button(action: { changeMonth(by: -1) }) {
+                    Image(systemName: "chevron.left")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 32, height: 32)
+                        .background(PPBookingColor.field, in: Circle())
                 }
-                calendarGridCompact
+                .accessibilityIdentifier("scheduleOperative.back2")
+                .accessibilityLabel("Previous month")
+                .buttonStyle(.plain)
+                Spacer()
+                Text(monthYearString)
+                    .font(.headline)
+                Spacer()
+                Button(action: { changeMonth(by: 1) }) {
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 32, height: 32)
+                        .background(PPBookingColor.field, in: Circle())
+                }
+                .accessibilityIdentifier("scheduleOperative.chevronRight")
+                .accessibilityLabel("Next month")
+                .buttonStyle(.plain)
             }
-            .padding(8)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
-            )
+            calendarGridCompact
         }
+        .ppBookingCard(padding: 12)
     }
 
+    /// Today / Next 3 working days / Next 5 working days: the existing Today / 3d / 5d actions (owner decision 7), with
+    /// their old accessibility identifiers.
     private var quickSelectSectionCompact: some View {
-        HStack(spacing: 8) {
-            quickSelectChip(days: 1, label: "Today")
-            quickSelectChip(days: 3, label: "3d")
-            quickSelectChip(days: 5, label: "5d")
+        PPChipRow {
+            quickSelectChip(days: 1, label: "Today", idLabel: "Today")
+            quickSelectChip(days: 3, label: "Next 3 working days", idLabel: "3d")
+            quickSelectChip(days: 5, label: "Next 5 working days", idLabel: "5d")
         }
     }
 
-    private func quickSelectChip(days: Int, label: String) -> some View {
-        Button {
+    private func quickSelectChip(days: Int, label: String, idLabel: String) -> some View {
+        let selected = quickSelectDays == days
+        return Button {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 quickSelectDays(days: days)
             }
         } label: {
             Text(label)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(quickSelectDays == days ? .white : ProjectWorksRevampColors.blue)
+                .font(.footnote.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(selected ? Color.white : PPColor.brand)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(quickSelectDays == days ? ProjectWorksRevampColors.blueFill : ProjectWorksRevampColors.chipSurface)
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5)
-                )
+                .padding(.vertical, 8)
+                .background(selected ? PPBookingColor.selected : PPColor.card, in: Capsule())
+                .overlay(Capsule().strokeBorder(PPBookingColor.cardBorder, lineWidth: selected ? 0 : 0.5))
         }
-        .accessibilityIdentifier("scheduleOperative.\(AccessibilityID.token(label))")
+        .accessibilityIdentifier("scheduleOperative.\(AccessibilityID.token(idLabel))")
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .buttonStyle(.plain)
     }
-    
+
     private var calendarGridCompact: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             HStack(spacing: 0) {
                 ForEach(MondayFirstCalendarSupport.weekdayHeaderItems, id: \.id) { day in
                     Text(day.label)
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -1301,7 +1358,7 @@ struct ScheduleOperativeView: View {
             let days = MondayFirstCalendarSupport.days(from: range.start, through: range.end, calendar: calendar)
             let weeks = days.chunked(into: 7)
             ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
-                HStack(spacing: 4) {
+                HStack(spacing: 0) {
                     ForEach(week, id: \.self) { date in
                         calendarDayButtonCompact(for: date, isCurrentMonth: calendar.isDate(date, equalTo: currentMonth, toGranularity: .month))
                     }
@@ -1310,103 +1367,135 @@ struct ScheduleOperativeView: View {
         }
     }
 
+    /// Today ringed, selected days filled, and a light band joining consecutive selected days.
     private func calendarDayButtonCompact(for date: Date, isCurrentMonth: Bool) -> some View {
         let calendar = OrganizationRulebookContext.calendar
         let normalizedDate = calendar.startOfDay(for: date)
         let isSelected = selectedDates.contains(normalizedDate)
         let isToday = calendar.isDateInToday(date)
+        let previousSelected = isSelected && (calendar.date(byAdding: .day, value: -1, to: normalizedDate)
+            .map { selectedDates.contains(calendar.startOfDay(for: $0)) } ?? false)
+        let nextSelected = isSelected && (calendar.date(byAdding: .day, value: 1, to: normalizedDate)
+            .map { selectedDates.contains(calendar.startOfDay(for: $0)) } ?? false)
+        let band = PPColor.brand.opacity(0.14)
         return Button(action: {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 toggleDateSelection(date)
             }
         }) {
-            Text("\(OrganizationRulebookContext.calendar.component(.day, from: date))")
-                .font(.system(size: 11, weight: isSelected ? .bold : (isToday ? .semibold : .regular)))
-                .foregroundColor(
-                    isSelected ? .white :
-                        (isCurrentMonth ? (isToday ? ProjectWorksRevampColors.blue : Color.primary) : Color.secondary)
+            Text("\(calendar.component(.day, from: date))")
+                .font(.subheadline.weight(isSelected ? .bold : (isToday ? .semibold : .regular)))
+                .monospacedDigit()
+                .foregroundStyle(
+                    isSelected ? Color.white :
+                        (isCurrentMonth ? (isToday ? PPColor.brand : Color.primary) : Color.secondary)
                 )
-                .frame(width: 28, height: 28)
-                .background(
-                    Group {
-                        if isSelected {
-                            Circle()
-                                .fill(ProjectWorksRevampColors.blueFill)
-                        } else if isToday {
-                            Circle()
-                                .stroke(ProjectWorksRevampColors.blue, lineWidth: 1.5)
-                                .background(Circle().fill(ProjectWorksRevampColors.blue.opacity(0.08)))
-                        } else {
-                            Circle().fill(Color.clear)
-                        }
+                .frame(width: 34, height: 34)
+                .background {
+                    if isSelected {
+                        Circle().fill(PPColor.brand)
+                    } else if isToday {
+                        Circle().strokeBorder(PPColor.brand, lineWidth: 1.5)
                     }
-                )
+                }
+                .frame(maxWidth: .infinity)
+                .background {
+                    HStack(spacing: 0) {
+                        Rectangle().fill(previousSelected ? band : Color.clear)
+                        Rectangle().fill(nextSelected ? band : Color.clear)
+                    }
+                    .frame(height: 34)
+                }
+                .contentShape(Rectangle())
         }
         .accessibilityIdentifier("scheduleOperative.calendarDayButtonCompact")
+        .accessibilityLabel(date.formatted(Date.FormatStyle(date: .complete, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
         .opacity(isCurrentMonth ? 1.0 : 0.35)
     }
-    
+
     // MARK: - Bottom Action Bar
-    
+
+    /// Why Confirm is off, one line per check `canConfirmBooking` makes, in the order the booker meets them.
+    private var confirmDisabledReason: String? {
+        if selectedDates.isEmpty { return "Choose dates to confirm" }
+        if selectedOperatives.isEmpty { return "Add operatives to confirm" }
+        if isBooking { return "Booking…" }
+        if !ScheduleDateSelectionPolicy.saturdaySundaySelectionAllowed(selected: selectedDates, policy: primarySelectedDatePolicy) {
+            return "Book Saturday and Sunday separately to confirm"
+        }
+        if !canConfirmBooking { return "Acknowledge each clash to confirm" }
+        return nil
+    }
+
+    /// The amber "still needed" chip.
+    private var confirmMissingChip: String? {
+        if selectedDates.isEmpty { return "No dates yet" }
+        if selectedOperatives.isEmpty { return "No one added yet" }
+        if isBooking { return nil }
+        if !ScheduleDateSelectionPolicy.saturdaySundaySelectionAllowed(selected: selectedDates, policy: primarySelectedDatePolicy) {
+            return "Saturday and Sunday rules differ"
+        }
+        if !canConfirmBooking { return "Clashes to acknowledge" }
+        return nil
+    }
+
+    /// The hours chip: the shared hours line (was the review's "Hours" row), or "Mixed / custom" with per-person hours.
+    private var bookingTimesChipText: String {
+        if hasAnyOperativeOverrides { return "Mixed / custom" }
+        return operativeLineForChoice(sharedBulkChoice)
+    }
+
+    private var confirmButtonTitle: String {
+        let shifts = totalEffectiveBookingDays
+        guard shifts > 0 else { return "Confirm booking" }
+        return "Confirm \(shifts) shift\(shifts == 1 ? "" : "s")"
+    }
+
     private var bottomActionBar: some View {
-        VStack(spacing: 0) {
-            Divider()
-            VStack(spacing: 10) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if !bottomBarHoursCaption.isEmpty {
-                            Text(bottomBarHoursCaption)
-                                .font(.system(size: 10))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                            Text(bottomBarStandardCaption)
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.blue)
-                        } else {
-                            Text("Select operatives and dates")
-                                .font(.system(size: 12))
-                                .foregroundStyle(ProjectWorksRevampColors.muted)
-                        }
+        PPBottomActionBar(
+            title: confirmButtonTitle,
+            trailingValue: totalEffectiveBookingDays > 0 ? "\(ScheduleCoverageFormat.hours(totalPlannedHours))h" : nil,
+            isEnabled: canConfirmBooking,
+            disabledTitle: confirmDisabledReason,
+            isBusy: isBooking,
+            accessibilityIdentifier: "scheduleOperative.checkmark",
+            action: { bookOperatives() }
+        ) {
+            PPChipRow {
+                if !selectedDates.isEmpty {
+                    PPChip(
+                        text: isReadyToReview ? selectedDateRangeText : "\(selectedDates.count) day\(selectedDates.count == 1 ? "" : "s")",
+                        symbol: "checkmark",
+                        tone: .blue
+                    )
+                    if isReadyToReview {
+                        PPChip(text: bookingTimesChipText, symbol: "clock", tone: .blue)
+                    } else if let perDay = paidHoursPerDay {
+                        PPChip(text: "\(ScheduleCoverageFormat.hours(perDay))h / day", symbol: "checkmark", tone: .blue)
+                    } else {
+                        PPChip(text: "Mixed / custom", symbol: "checkmark", tone: .blue)
                     }
-                    Spacer()
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .frame(maxWidth: .infinity)
-                .background(ProjectWorksRevampColors.canvas)
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .padding(.horizontal, 14)
-                Button(action: { bookOperatives() }) {
-                    HStack(spacing: 6) {
-                        if isBooking {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.85)
-                        } else {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 13, weight: .semibold))
-                        }
-                        Text(isBooking ? "Booking…" : "Confirm booking")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .fill(canConfirmBooking ? ProjectWorksRevampColors.blueFill : ProjectWorksRevampColors.muted.opacity(0.45))
+                if !selectedOperatives.isEmpty {
+                    PPChip(
+                        text: "\(selectedOperatives.count) \(selectedOperatives.count == 1 ? "person" : "people")",
+                        symbol: "person.2.fill",
+                        tone: .blue
                     )
                 }
-                .accessibilityIdentifier("scheduleOperative.checkmark")
-                .buttonStyle(.plain)
-                .disabled(!canConfirmBooking)
-                .padding(.horizontal, 14)
+                if let missing = confirmMissingChip {
+                    PPChip(text: missing, symbol: "exclamationmark.circle", tone: .amber)
+                }
+                if hasAnyOperativeOverrides {
+                    PPChip(text: "Some people have custom hours — tap a name above to review.", symbol: "slider.horizontal.3", tone: .amber)
+                }
             }
-            .padding(.vertical, 12)
-            .background(ProjectWorksRevampColors.surface)
         }
     }
-    
+
     // MARK: - Helper Methods
     
     private var monthYearString: String {

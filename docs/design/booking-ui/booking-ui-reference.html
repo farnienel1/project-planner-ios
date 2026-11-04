@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Booking UI Reference</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#E9EDF3;--ink:#0F1B33;--muted:#475569}
+body{margin:0;background:var(--bg);font-family:Inter,sans-serif;color:var(--ink)}
+header.top{padding:32px 24px 8px;max-width:1800px;margin:0 auto}
+header.top h1{margin:0 0 6px;font-size:28px}
+header.top p{margin:0;color:var(--muted);max-width:900px;line-height:1.5}
+.grid{display:flex;flex-wrap:wrap;gap:40px 32px;padding:24px;max-width:1800px;margin:0 auto;align-items:flex-start}
+.screen{margin:0;width:390px;display:flex;flex-direction:column;gap:12px}
+.screen figcaption{display:flex;flex-direction:column;gap:4px;min-height:84px}
+.screen figcaption b{font-size:16px}
+.screen figcaption span{font-size:13px;color:var(--muted);line-height:1.45}
+.phone{border-radius:44px;overflow:hidden;box-shadow:0 20px 50px rgba(15,27,51,.18),0 0 0 8px #0B1220;width:390px}
+@media (max-width:440px){.grid{padding:16px}.screen,.phone{width:100%}.phone{overflow-x:auto}}
+
+a{color:#1F56C9}a:hover{color:#17398A}
+.pp-navy{background-color:#0E1B36;background-image:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);background-size:28px 28px}
+</style></head><body>
+<header class="top"><h1>Project Planner: Scheduling &amp; Booking UI</h1>
+<p>A visual reference for the iOS UI-only upgrade. Values shown are sample data taken from the current app. Read it alongside <code>booking-ui-spec.md</code>, which lists every data field and where it now lives.</p></header>
+<div class="grid">
+<figure class="screen"><figcaption><b>Scheduling — week view</b><span>Replaces the white Scheduling page. Project, week, counts, both booking buttons, the day strip, per-person day chips, subcontractor section and legend are all kept.</span></figcaption><div class="phone">
+<div class="pp-navy" style="position: relative; width: 390px; height: 1000px; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <header style="padding: 54px 16px 0; display: flex; flex-direction: column; gap: 14px; color: #FFFFFF">
+    <div style="display: flex; align-items: center; gap: 8px">
+      <button aria-label="Back" style="width: 40px; height: 40px; background: rgba(255,255,255,0.14); border: 0; border-radius: 20px; color: #FFFFFF; display: flex; align-items: center; justify-content: center; cursor: pointer">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
+      </button>
+      <h1 style="flex-grow: 1; margin: 0; text-align: center; font-size: 17px; font-weight: 600">Scheduling</h1>
+      <span style="width: 40px"></span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <div style="display: flex; align-items: center; justify-content: space-between">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.14em; color: #93A1BC">RED CONSTRUCTION · LONDON W1F 9QY</span>
+        <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: #FFFFFF; background: rgba(255,255,255,0.12); padding: 4px 9px; border-radius: 999px">DECARBONISATION</span>
+      </div>
+      <span style="font-size: 30px; font-weight: 700; line-height: 1.1">C646</span>
+      <span style="font-size: 15px; color: #C7D0E1">1 Carnaby Street</span>
+    </div>
+
+    <div style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.10); border-radius: 16px; padding: 8px; display: flex; align-items: center; gap: 8px">
+      <button aria-label="Previous week" style="width: 40px; height: 40px; border-radius: 12px; background: rgba(255,255,255,0.10); border: 0; color: #FFFFFF; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
+      <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 1px">
+        <span style="font-size: 10.5px; font-weight: 600; letter-spacing: 0.14em; color: #93A1BC">WEEK OF</span>
+        <span style="font-size: 16px; font-weight: 600">2 Nov 2026</span>
+      </div>
+      <button aria-label="Next week" style="width: 40px; height: 40px; border-radius: 12px; background: rgba(255,255,255,0.10); border: 0; color: #FFFFFF; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr))">
+      <div style="display: flex; flex-direction: column; gap: 2px; padding-right: 12px"><span style="font-size: 26px; font-weight: 700; line-height: 1.1">1</span><span style="font-size: 12px; color: #93A1BC">Operatives &amp; managers</span></div>
+      <div style="display: flex; flex-direction: column; gap: 2px; padding-left: 12px; border-left: 1px solid rgba(255,255,255,0.12)"><span style="font-size: 26px; font-weight: 700; line-height: 1.1">0</span><span style="font-size: 12px; color: #93A1BC">Subcontractors</span></div>
+    </div>
+  </header>
+
+  <div style="flex-grow: 1; margin-top: 18px; background: #F2F4F8; border-radius: 28px 28px 0 0; padding: 16px 16px 0; display: flex; flex-direction: column; gap: 12px; min-height: 0">
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+      <button style="height: 64px; border-radius: 16px; background: #FFFFFF; border: 1px solid #E3E8F0; padding: 0 12px; display: flex; align-items: center; gap: 10px; font: inherit; color: #0F1B33; cursor: pointer; text-align: left">
+        <span style="width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF; display: flex; align-items: center; justify-content: center; flex-shrink: 0"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2 20a7 7 0 0 1 14 0M16 4.5a3.5 3.5 0 0 1 0 6.5M18 14a6 6 0 0 1 4 6"></path></svg></span>
+        <span style="display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 600">Book people</span><span style="font-size: 11.5px; color: #64748B">Operatives &amp; managers</span></span>
+      </button>
+      <button style="height: 64px; border-radius: 16px; background: #FFFFFF; border: 1px solid #E3E8F0; padding: 0 12px; display: flex; align-items: center; gap: 10px; font: inherit; color: #0F1B33; cursor: pointer; text-align: left">
+        <span style="width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; flex-shrink: 0"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V4h11v17M15 9h5v12M8 8h3M8 12h3M8 16h3M3 21h18"></path></svg></span>
+        <span style="display: flex; flex-direction: column"><span style="font-size: 14px; font-weight: 600">Book a sub</span><span style="font-size: 11.5px; color: #64748B">Subcontractors</span></span>
+      </button>
+    </div>
+
+    <section aria-label="Week" style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; padding: 10px 10px 12px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px">
+        
+          <div style="height: 70px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: #F6F8FC; color: #0F1B33;">
+            <span style="font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em">MON</span>
+            <span style="font-size: 17px; font-weight: 700">2</span>
+            <span style="font-size: 10.5px; font-weight: 700; min-width: 20px; padding: 1px 6px; border-radius: 999px; text-align: center; background: #E6EEFC; color: #17398A;">1</span>
+          </div>
+        
+          <div style="height: 70px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: #F6F8FC; color: #0F1B33;">
+            <span style="font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em">TUE</span>
+            <span style="font-size: 17px; font-weight: 700">3</span>
+            <span style="font-size: 10.5px; font-weight: 700; min-width: 20px; padding: 1px 6px; border-radius: 999px; text-align: center; background: #E6EEFC; color: #17398A;">1</span>
+          </div>
+        
+          <div style="height: 70px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: #0E1B36; color: #FFFFFF;">
+            <span style="font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em">WED</span>
+            <span style="font-size: 17px; font-weight: 700">4</span>
+            <span style="font-size: 10.5px; font-weight: 700; min-width: 20px; padding: 1px 6px; border-radius: 999px; text-align: center; background: #3B7BF0; color: #FFFFFF;">1</span>
+          </div>
+        
+          <div style="height: 70px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: #F6F8FC; color: #0F1B33;">
+            <span style="font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em">THU</span>
+            <span style="font-size: 17px; font-weight: 700">5</span>
+            <span style="font-size: 10.5px; font-weight: 700; min-width: 20px; padding: 1px 6px; border-radius: 999px; text-align: center; background: #E6EEFC; color: #17398A;">1</span>
+          </div>
+        
+          <div style="height: 70px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: #F6F8FC; color: #0F1B33;">
+            <span style="font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em">FRI</span>
+            <span style="font-size: 17px; font-weight: 700">6</span>
+            <span style="font-size: 10.5px; font-weight: 700; min-width: 20px; padding: 1px 6px; border-radius: 999px; text-align: center; background: #E6EEFC; color: #17398A;">1</span>
+          </div>
+        
+          <div style="height: 70px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: #F6F8FC; color: #94A3B8;">
+            <span style="font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em">SAT</span>
+            <span style="font-size: 17px; font-weight: 700">7</span>
+            <span style="font-size: 10.5px; font-weight: 700; min-width: 20px; padding: 1px 6px; border-radius: 999px; text-align: center; color: #94A3B8;">–</span>
+          </div>
+        
+          <div style="height: 70px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; background: #F6F8FC; color: #94A3B8;">
+            <span style="font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em">SUN</span>
+            <span style="font-size: 17px; font-weight: 700">8</span>
+            <span style="font-size: 10.5px; font-weight: 700; min-width: 20px; padding: 1px 6px; border-radius: 999px; text-align: center; color: #94A3B8;">–</span>
+          </div>
+        
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid #EEF1F6">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0 2px">
+          <h2 style="margin: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; color: #64748B">OPERATIVES &amp; MANAGERS</h2>
+          <span style="font-size: 11.5px; color: #64748B">1 person</span>
+        </div>
+        <button style="background: transparent; border: 0; padding: 0; font: inherit; color: #0F1B33; text-align: left; display: flex; flex-direction: column; gap: 7px; cursor: pointer">
+          <span style="display: flex; align-items: center; gap: 8px; padding: 0 2px">
+            <span style="width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700">TM</span>
+            <span style="font-size: 14px; font-weight: 600">Test Manager</span>
+            <span style="font-size: 10.5px; font-weight: 700; color: #17398A; background: #E6EEFC; padding: 2px 7px; border-radius: 999px">Mgr</span>
+          </span>
+          <span style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; width: 100%">
+            
+              <span style="height: 50px; border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; ">
+                
+                  <span style="flex: 1; background: #3B7BF0; color: #FFFFFF; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05"><span style="font-size: 12px; font-weight: 700">8.5h</span><span style="font-size: 8.5px; font-weight: 600; opacity: 0.85">STD</span></span>
+                  <span style="flex: 1; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #E39412 3px 6px); color: #2B1A00; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05"><span style="font-size: 12px; font-weight: 700">6h</span><span style="font-size: 8.5px; font-weight: 700">OT</span></span>
+                
+              </span>
+            
+              <span style="height: 50px; border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; ">
+                
+                  <span style="flex: 1; background: #3B7BF0; color: #FFFFFF; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05"><span style="font-size: 12px; font-weight: 700">8.5h</span><span style="font-size: 8.5px; font-weight: 600; opacity: 0.85">STD</span></span>
+                  <span style="flex: 1; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #E39412 3px 6px); color: #2B1A00; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05"><span style="font-size: 12px; font-weight: 700">6h</span><span style="font-size: 8.5px; font-weight: 700">OT</span></span>
+                
+              </span>
+            
+              <span style="height: 50px; border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; ">
+                
+                  <span style="flex: 1; background: #3B7BF0; color: #FFFFFF; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05"><span style="font-size: 12px; font-weight: 700">8.5h</span><span style="font-size: 8.5px; font-weight: 600; opacity: 0.85">STD</span></span>
+                  <span style="flex: 1; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #E39412 3px 6px); color: #2B1A00; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05"><span style="font-size: 12px; font-weight: 700">6h</span><span style="font-size: 8.5px; font-weight: 700">OT</span></span>
+                
+              </span>
+            
+              <span style="height: 50px; border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; ">
+                
+                  <span style="flex: 1; background: #3B7BF0; color: #FFFFFF; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05"><span style="font-size: 12px; font-weight: 700">8.5h</span><span style="font-size: 8.5px; font-weight: 600; opacity: 0.85">STD</span></span>
+                  <span style="flex: 1; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #E39412 3px 6px); color: #2B1A00; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05"><span style="font-size: 12px; font-weight: 700">6h</span><span style="font-size: 8.5px; font-weight: 700">OT</span></span>
+                
+              </span>
+            
+              <span style="height: 50px; border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; ">
+                
+                  <span style="flex: 1; background: #3B7BF0; color: #FFFFFF; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05"><span style="font-size: 12px; font-weight: 700">8.5h</span><span style="font-size: 8.5px; font-weight: 600; opacity: 0.85">STD</span></span>
+                  <span style="flex: 1; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #E39412 3px 6px); color: #2B1A00; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05"><span style="font-size: 12px; font-weight: 700">6h</span><span style="font-size: 8.5px; font-weight: 700">OT</span></span>
+                
+              </span>
+            
+              <span style="height: 50px; border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; border: 1.5px dashed #D3D9E3; box-sizing: border-box;">
+                
+              </span>
+            
+              <span style="height: 50px; border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; border: 1.5px dashed #D3D9E3; box-sizing: border-box;">
+                
+              </span>
+            
+          </span>
+        </button>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid #EEF1F6">
+        <h2 style="margin: 0; padding: 0 2px; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; color: #64748B">SUBCONTRACTORS</h2>
+        <div style="border: 1.5px dashed #D3D9E3; border-radius: 12px; padding: 12px; display: flex; align-items: center; gap: 10px">
+          <span style="width: 32px; height: 32px; border-radius: 10px; background: #F0EDFD; color: #5B46D6; display: flex; align-items: center; justify-content: center; flex-shrink: 0"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V4h11v17M15 9h5v12M8 8h3M8 12h3M8 16h3M3 21h18"></path></svg></span>
+          <span style="font-size: 13px; color: #475569; flex-grow: 1">No subcontractors booked this week</span>
+          <a href="#" style="font-size: 13px; font-weight: 600; text-decoration: none">Book</a>
+        </div>
+      </div>
+    </section>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 0 4px; font-size: 11.5px; color: #475569">
+      <span style="display: flex; align-items: center; gap: 5px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #3B7BF0"></span>Standard</span>
+      <span style="display: flex; align-items: center; gap: 5px"><span style="width: 10px; height: 10px; border-radius: 3px; background: linear-gradient(180deg, #3B7BF0 50%, #F5A524 50%)"></span>Std + OT</span>
+      <span style="display: flex; align-items: center; gap: 5px"><span style="width: 10px; height: 10px; border-radius: 3px; background: repeating-linear-gradient(-45deg, #F5A524 0 2px, #E39412 2px 4px)"></span>OT only</span>
+      <span style="display: flex; align-items: center; gap: 5px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #B4632F"></span>Ann. leave</span>
+      <span style="display: flex; align-items: center; gap: 5px"><span style="width: 10px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, #3B7BF0 50%, #C9D8F8 50%)"></span>Half day</span>
+    </div>
+  </div>
+
+  <nav aria-label="Tabs" style="position: absolute; left: 12px; right: 12px; bottom: 22px; height: 66px; background: rgba(255,255,255,0.96); border: 1px solid #E3E8F0; border-radius: 33px; box-shadow: 0 8px 24px rgba(15,27,51,0.12); display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: center; padding: 0 6px">
+    
+      <a href="#" style="height: 54px; border-radius: 27px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10.5px; font-weight: 600; text-decoration: none; color: #334155;">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7v10h-6v-6H9v6H3z"></path></svg>Home
+      </a>
+    
+      <a href="#" style="height: 54px; border-radius: 27px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10.5px; font-weight: 600; text-decoration: none; background: #E6EEFC; color: #1F56C9;">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3z"></path></svg>Projects
+      </a>
+    
+      <a href="#" style="height: 54px; border-radius: 27px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10.5px; font-weight: 600; text-decoration: none; color: #334155;">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 4h6l2 3-4 1-1 2h-6zM12 10l-8 8 2 2 8-8"></path></svg>Small Works
+      </a>
+    
+      <a href="#" style="height: 54px; border-radius: 27px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10.5px; font-weight: 600; text-decoration: none; color: #334155;">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"></path></svg>Annual Leave
+      </a>
+    
+      <a href="#" style="height: 54px; border-radius: 27px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10.5px; font-weight: 600; text-decoration: none; color: #334155;">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM8 12h.5M12 12h.5M16 12h.5"></path></svg>More
+      </a>
+    
+  </nav>
+</div>
+</div></figure>
+<figure class="screen"><figcaption><b>Choose subcontractor</b><span>Replaces "Schedule Sub Contractor". Search, trade filters, every row field (initials, name, trade, ops count, radio) and the bottom status and confirm are all kept.</span></figcaption><div class="phone">
+<div class="pp-navy" style="width: 390px; height: 844px; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <header style="padding: 54px 16px 0; display: flex; flex-direction: column; gap: 14px; color: #FFFFFF">
+    <div style="display: flex; align-items: center; gap: 8px">
+      <button aria-label="Back" style="width: 40px; height: 40px; background: rgba(255,255,255,0.14); border: 0; border-radius: 20px; color: #FFFFFF; display: flex; align-items: center; justify-content: center; cursor: pointer">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
+      </button>
+      <h1 style="flex-grow: 1; margin: 0; text-align: center; font-size: 17px; font-weight: 600">Schedule subcontractor</h1>
+      <span style="width: 40px"></span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px">
+      <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(160deg, #34C38F, #12936A); display: flex; align-items: center; justify-content: center; color: #FFFFFF; flex-shrink: 0">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3z"></path></svg>
+      </div>
+      <div style="display: flex; flex-direction: column">
+        <span style="font-size: 15px; font-weight: 600"><span style="color: #7FA8F5">C983</span> Cadent Gas Disconnection</span>
+        <span style="font-size: 12.5px; color: #93A1BC">Shaftesbury · Shaftesbury Capital PLC</span>
+        <span style="font-size: 12.5px; color: #93A1BC">Regal House, London, WC2E 8BU</span>
+      </div>
+    </div>
+  </header>
+
+  <div style="flex-grow: 1; margin-top: 18px; background: #F2F4F8; border-radius: 28px 28px 0 0; padding: 18px 16px 0; display: flex; flex-direction: column; gap: 10px; min-height: 0">
+    <h2 style="margin: 0; font-size: 19px; font-weight: 700">Choose subcontractor</h2>
+    <label style="height: 44px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E8F0; display: flex; align-items: center; gap: 8px; padding: 0 12px; color: #64748B">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5"></path></svg>
+      <input aria-label="Search subcontractors" placeholder="Search subcontractors" style="border: 0; outline: 0; background: transparent; font: inherit; font-size: 15px; flex-grow: 1; color: #0F1B33">
+    </label>
+    <div style="display: flex; gap: 6px; overflow-x: auto; margin: 0 -16px; padding: 0 16px">
+      
+        <button style="height: 34px; padding: 0 13px; border-radius: 17px; font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; flex-shrink: 0; background: #0E1B36; color: #FFFFFF; border: 1px solid #0E1B36;">All trades</button>
+      
+        <button style="height: 34px; padding: 0 13px; border-radius: 17px; font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; flex-shrink: 0; background: #FFFFFF; color: #0F1B33; border: 1px solid #E3E8F0;">BMS</button>
+      
+        <button style="height: 34px; padding: 0 13px; border-radius: 17px; font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; flex-shrink: 0; background: #FFFFFF; color: #0F1B33; border: 1px solid #E3E8F0;">CCTV</button>
+      
+        <button style="height: 34px; padding: 0 13px; border-radius: 17px; font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; flex-shrink: 0; background: #FFFFFF; color: #0F1B33; border: 1px solid #E3E8F0;">Dry Lining</button>
+      
+        <button style="height: 34px; padding: 0 13px; border-radius: 17px; font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; flex-shrink: 0; background: #FFFFFF; color: #0F1B33; border: 1px solid #E3E8F0;">Graphic Design</button>
+      
+        <button style="height: 34px; padding: 0 13px; border-radius: 17px; font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; flex-shrink: 0; background: #FFFFFF; color: #0F1B33; border: 1px solid #E3E8F0;">Roofer</button>
+      
+    </div>
+
+    <ul style="list-style: none; margin: 0; padding: 0; background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; overflow: hidden">
+      
+        <li style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 60px; box-sizing: border-box; cursor: pointer; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700; flex-shrink: 0">B</span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 15px; font-weight: 600">BGES</span><span style="font-size: 12.5px; color: #64748B">BMS</span></span>
+          <span style="font-size: 12px; font-weight: 600; color: #475569; background: #F2F4F8; padding: 4px 8px; border-radius: 999px">2 ops</span>
+          <span style="width: 22px; height: 22px; border-radius: 50%; border: 2px solid #C5CDD9; box-sizing: border-box; flex-shrink: 0"></span>
+        </li>
+      
+        <li style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 60px; box-sizing: border-box; cursor: pointer; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700; flex-shrink: 0">L</span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 15px; font-weight: 600">Learnd</span><span style="font-size: 12.5px; color: #64748B">BMS</span></span>
+          <span style="font-size: 12px; font-weight: 600; color: #475569; background: #F2F4F8; padding: 4px 8px; border-radius: 999px">1 op</span>
+          <span style="width: 22px; height: 22px; border-radius: 50%; border: 2px solid #C5CDD9; box-sizing: border-box; flex-shrink: 0"></span>
+        </li>
+      
+        <li style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 60px; box-sizing: border-box; cursor: pointer; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700; flex-shrink: 0">Rd</span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 15px; font-weight: 600">Red door</span><span style="font-size: 12.5px; color: #64748B">Graphic Design</span></span>
+          <span style="font-size: 12px; font-weight: 600; color: #475569; background: #F2F4F8; padding: 4px 8px; border-radius: 999px">1 op</span>
+          <span style="width: 22px; height: 22px; border-radius: 50%; border: 2px solid #C5CDD9; box-sizing: border-box; flex-shrink: 0"></span>
+        </li>
+      
+        <li style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 60px; box-sizing: border-box; cursor: pointer; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700; flex-shrink: 0">SR</span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 15px; font-weight: 600">Steele Roofing</span><span style="font-size: 12.5px; color: #64748B">Roofer</span></span>
+          <span style="font-size: 12px; font-weight: 600; color: #475569; background: #F2F4F8; padding: 4px 8px; border-radius: 999px">2 ops</span>
+          <span style="width: 22px; height: 22px; border-radius: 50%; border: 2px solid #C5CDD9; box-sizing: border-box; flex-shrink: 0"></span>
+        </li>
+      
+        <li style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 60px; box-sizing: border-box; cursor: pointer; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700; flex-shrink: 0">TS</span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 15px; font-weight: 600">TEST SUB</span><span style="font-size: 12.5px; color: #64748B">Dry Lining</span></span>
+          <span style="font-size: 12px; font-weight: 600; color: #475569; background: #F2F4F8; padding: 4px 8px; border-radius: 999px">0 ops</span>
+          <span style="width: 22px; height: 22px; border-radius: 50%; border: 2px solid #C5CDD9; box-sizing: border-box; flex-shrink: 0"></span>
+        </li>
+      
+        <li style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 60px; box-sizing: border-box; cursor: pointer; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700; flex-shrink: 0">T</span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 15px; font-weight: 600">TLott</span><span style="font-size: 12.5px; color: #64748B">Dry Lining</span></span>
+          <span style="font-size: 12px; font-weight: 600; color: #475569; background: #F2F4F8; padding: 4px 8px; border-radius: 999px">3 ops</span>
+          <span style="width: 22px; height: 22px; border-radius: 50%; border: 2px solid #C5CDD9; box-sizing: border-box; flex-shrink: 0"></span>
+        </li>
+      
+        <li style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 60px; box-sizing: border-box; cursor: pointer; ">
+          <span style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700; flex-shrink: 0">TS</span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 15px; font-weight: 600">Tester Sub</span><span style="font-size: 12.5px; color: #64748B">CCTV</span></span>
+          <span style="font-size: 12px; font-weight: 600; color: #475569; background: #F2F4F8; padding: 4px 8px; border-radius: 999px">1 op</span>
+          <span style="width: 22px; height: 22px; border-radius: 50%; border: 2px solid #C5CDD9; box-sizing: border-box; flex-shrink: 0"></span>
+        </li>
+      
+    </ul>
+
+    <div style="flex-grow: 1"></div>
+    <div style="margin: 0 -16px; background: #FFFFFF; border-top: 1px solid #E3E8F0; padding: 12px 16px 30px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; gap: 6px">
+        <span style="font-size: 12.5px; font-weight: 600; color: #8A5300; background: #FDF1DC; padding: 6px 10px; border-radius: 999px">No subcontractor selected</span>
+        <span style="font-size: 12.5px; font-weight: 600; color: #475569; background: #F2F4F8; padding: 6px 10px; border-radius: 999px">0 days</span>
+      </div>
+      <button disabled style="height: 52px; border-radius: 16px; background: #EEF1F6; color: #475569; border: 0; font: inherit; font-size: 15.5px; font-weight: 600; cursor: not-allowed">Choose a subcontractor to confirm</button>
+    </div>
+  </div>
+</div>
+</div></figure>
+<figure class="screen"><figcaption><b>Schedule booking — in progress</b><span>Shows the step tracker and the readable incomplete state that replaces "Select operatives and dates" plus a greyed button.</span></figcaption><div class="phone">
+<div class="pp-navy" style="width: 390px; height: 844px; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <header style="padding: 54px 16px 0; display: flex; flex-direction: column; gap: 14px; color: #FFFFFF">
+    <div style="display: flex; align-items: center; gap: 8px">
+      <button style="height: 40px; padding: 0 14px 0 10px; background: rgba(255,255,255,0.14); border: 0; border-radius: 20px; color: #FFFFFF; font: inherit; font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 4px; cursor: pointer">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>Back
+      </button>
+      <h1 style="flex-grow: 1; margin: 0; text-align: center; font-size: 17px; font-weight: 600">Schedule booking</h1>
+      <span style="width: 78px"></span>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 10px">
+      <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(160deg, #34C38F, #12936A); display: flex; align-items: center; justify-content: center; color: #FFFFFF">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3z"></path></svg>
+      </div>
+      <div style="display: flex; flex-direction: column">
+        <span style="font-size: 15px; font-weight: 600"><span style="color: #7FA8F5">C646</span> 1 Carnaby Street</span>
+        <span style="font-size: 12.5px; color: #93A1BC">RED Construction · Decarbonisation</span>
+        <span style="font-size: 12.5px; color: #93A1BC">71 Broadwick Street, London W1F 9QY</span>
+      </div>
+    </div>
+
+    <ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+      <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: #3B7BF0"></span><span style="font-size: 12px; color: #C7D0E1; display: flex; align-items: center; gap: 5px"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#7FA8F5" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Dates</span></li>
+      <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: #3B7BF0"></span><span style="font-size: 12px; color: #C7D0E1; display: flex; align-items: center; gap: 5px"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#7FA8F5" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Hours</span></li>
+      <li aria-current="step" style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #B97810 3px 6px)"></span><span style="font-size: 12px; font-weight: 600; color: #FFFFFF">3 · Operatives</span></li>
+    </ol>
+  </header>
+
+  <div style="flex-grow: 1; margin-top: 18px; background: #F2F4F8; border-radius: 28px 28px 0 0; padding: 18px 16px 0; display: flex; flex-direction: column; gap: 10px; min-height: 0">
+    <button style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 16px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; font: inherit; color: #0F1B33; text-align: left; cursor: pointer">
+      <div style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF; display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16v14H4zM4 10h16M8 3v4M16 3v4"></path></svg></div>
+      <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 12px; color: #64748B">Dates · 2 days</span><span style="font-size: 15.5px; font-weight: 600">Tue 17 – Wed 18 Nov</span></span>
+      <span style="font-size: 14px; font-weight: 600; color: #1F56C9">Edit</span>
+    </button>
+    <button style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 16px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; font: inherit; color: #0F1B33; text-align: left; cursor: pointer">
+      <div style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF; display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"></path></svg></div>
+      <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 12px; color: #64748B">Hours · Full day</span><span style="font-size: 15.5px; font-weight: 600">07:00 – 16:00 · 8.5h paid</span></span>
+      <span style="font-size: 14px; font-weight: 600; color: #1F56C9">Edit</span>
+    </button>
+
+    <h2 style="margin: 8px 0 0; font-size: 19px; font-weight: 700">Operatives</h2>
+    <div style="background: #FFFFFF; border: 1.5px dashed #C3D1F2; border-radius: 18px; padding: 22px 18px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center">
+      <div style="width: 56px; height: 56px; border-radius: 16px; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 14px rgba(91,70,214,0.28)">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2 20a7 7 0 0 1 14 0M16 4.5a3.5 3.5 0 0 1 0 6.5M18 14a6 6 0 0 1 4 6"></path></svg>
+      </div>
+      <span style="font-size: 16px; font-weight: 600">Who's on this job?</span>
+      <span style="font-size: 13px; line-height: 1.45; color: #64748B">Pick operatives and managers. You can set hours per person once they're added.</span>
+      <button style="height: 46px; padding: 0 20px; border-radius: 14px; background: #0E1B36; color: #FFFFFF; border: 0; font: inherit; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; cursor: pointer">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Add people
+      </button>
+    </div>
+
+    <div style="flex-grow: 1"></div>
+    <div style="margin: 0 -16px; background: #FFFFFF; border-top: 1px solid #E3E8F0; padding: 12px 16px 30px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; gap: 6px">
+        <span style="font-size: 12.5px; font-weight: 600; color: #17398A; background: #E6EEFC; padding: 6px 10px; border-radius: 999px; display: flex; align-items: center; gap: 4px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>2 days</span>
+        <span style="font-size: 12.5px; font-weight: 600; color: #17398A; background: #E6EEFC; padding: 6px 10px; border-radius: 999px; display: flex; align-items: center; gap: 4px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>8.5h / day</span>
+        <span style="font-size: 12.5px; font-weight: 600; color: #8A5300; background: #FDF1DC; padding: 6px 10px; border-radius: 999px">No one added yet</span>
+      </div>
+      <button disabled style="height: 52px; border-radius: 16px; background: #EEF1F6; color: #475569; border: 0; font: inherit; font-size: 15.5px; font-weight: 600; cursor: not-allowed">Add operatives to confirm</button>
+    </div>
+  </div>
+</div>
+</div></figure>
+<figure class="screen"><figcaption><b>Schedule booking — ready (full scroll)</b><span>Dates, Hours (AM / PM / Full day / Custom), Operatives, and a summary bar with a confirm button that shows the totals.</span></figcaption><div class="phone">
+<div class="pp-navy" style="width: 390px; height: 1330px; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <header style="padding: 54px 16px 0; display: flex; flex-direction: column; gap: 14px; color: #FFFFFF">
+    <div style="display: flex; align-items: center; gap: 8px">
+      <button style="height: 40px; padding: 0 14px 0 10px; background: rgba(255,255,255,0.14); border: 0; border-radius: 20px; color: #FFFFFF; font: inherit; font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 4px; cursor: pointer">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>Back
+      </button>
+      <h1 style="flex-grow: 1; margin: 0; text-align: center; font-size: 17px; font-weight: 600">Schedule booking</h1>
+      <span style="width: 78px"></span>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 10px">
+      <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(160deg, #34C38F, #12936A); display: flex; align-items: center; justify-content: center; color: #FFFFFF">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3z"></path></svg>
+      </div>
+      <div style="display: flex; flex-direction: column">
+        <span style="font-size: 15px; font-weight: 600"><span style="color: #7FA8F5">C646</span> 1 Carnaby Street</span>
+        <span style="font-size: 12.5px; color: #93A1BC">RED Construction · Decarbonisation</span>
+        <span style="font-size: 12.5px; color: #93A1BC">71 Broadwick Street, London W1F 9QY</span>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.14em; color: #93A1BC">BOOKING AT A GLANCE</span>
+      <span style="font-size: 22px; font-weight: 700">34h paid <span style="font-weight: 500; color: #93A1BC; font-size: 16px">· 4 shifts</span></span>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr))">
+      <div style="display: flex; flex-direction: column; gap: 2px; padding-right: 10px"><span style="font-size: 26px; font-weight: 700; line-height: 1.1">2</span><span style="font-size: 12px; color: #93A1BC">Days</span></div>
+      <div style="display: flex; flex-direction: column; gap: 2px; padding: 0 10px; border-left: 1px solid rgba(255,255,255,0.12)"><span style="font-size: 26px; font-weight: 700; line-height: 1.1">2</span><span style="font-size: 12px; color: #93A1BC">People</span></div>
+      <div style="display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 1px solid rgba(255,255,255,0.12)"><span style="font-size: 26px; font-weight: 700; line-height: 1.1">8.5</span><span style="font-size: 12px; color: #93A1BC">Paid hrs / day</span></div>
+    </div>
+  </header>
+
+  <div style="flex-grow: 1; margin-top: 18px; background: #F2F4F8; border-radius: 28px 28px 0 0; padding: 18px 16px 0; display: flex; flex-direction: column; gap: 10px; min-height: 0">
+    <div style="display: flex; justify-content: space-between; align-items: baseline"><h2 style="margin: 0; font-size: 19px; font-weight: 700">Dates</h2><span style="font-size: 13px; font-weight: 600; color: #17398A; background: #E6EEFC; padding: 4px 10px; border-radius: 999px">2 selected</span></div>
+    <section style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; padding: 12px 12px 14px; display: flex; flex-direction: column; gap: 8px">
+      <div style="display: flex; align-items: center; justify-content: space-between">
+        <button aria-label="Previous month" style="width: 36px; height: 36px; border-radius: 18px; background: #F2F4F8; border: 0; color: #0F1B33; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
+        <span style="font-size: 15px; font-weight: 600">November 2026</span>
+        <button aria-label="Next month" style="width: 36px; height: 36px; border-radius: 18px; background: #F2F4F8; border: 0; color: #0F1B33; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); font-size: 11.5px; font-weight: 600; color: #64748B; text-align: center">
+        <span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 4px">
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">26</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">27</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">28</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">29</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">30</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">31</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">1</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">2</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">3</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #17398A; font-weight: 700; box-shadow: inset 0 0 0 2px #3B7BF0;">4</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">5</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">6</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">7</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">8</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">9</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">10</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">11</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">12</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">13</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">14</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">15</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">16</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px; background: linear-gradient(90deg, transparent 50%, #E6EEFC 50%);"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: #2F6FE0; color: #FFFFFF; font-weight: 700;">17</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px; background: linear-gradient(90deg, #E6EEFC 50%, transparent 50%);"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: #2F6FE0; color: #FFFFFF; font-weight: 700;">18</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">19</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">20</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">21</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">22</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">23</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">24</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">25</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">26</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">27</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">28</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">29</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #0F1B33; font-weight: 500;">30</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">1</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">2</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">3</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">4</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">5</button></div>
+        
+          <div style="display: flex; justify-content: center; height: 38px;"><button style="width: 38px; height: 38px; border-radius: 19px; border: 0; font: inherit; font-size: 14px; cursor: pointer; background: transparent; color: #B4BCC8; font-weight: 400;">6</button></div>
+        
+      </div>
+      <div style="display: flex; gap: 6px; padding-top: 4px; border-top: 1px solid #EEF1F6">
+        <button style="height: 34px; padding: 0 12px; margin-top: 8px; border-radius: 17px; background: #F2F4F8; border: 0; font: inherit; font-size: 13px; font-weight: 600; color: #0F1B33; cursor: pointer">Today</button>
+        <button style="height: 34px; padding: 0 12px; margin-top: 8px; border-radius: 17px; background: #F2F4F8; border: 0; font: inherit; font-size: 13px; font-weight: 600; color: #0F1B33; cursor: pointer">Next 3 days</button>
+        <button style="height: 34px; padding: 0 12px; margin-top: 8px; border-radius: 17px; background: #F2F4F8; border: 0; font: inherit; font-size: 13px; font-weight: 600; color: #0F1B33; cursor: pointer">Next 5 days</button>
+      </div>
+    </section>
+
+    <h2 style="margin: 8px 0 0; font-size: 19px; font-weight: 700">Hours</h2>
+    <section style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; padding: 12px; display: flex; flex-direction: column; gap: 12px">
+      <div role="radiogroup" aria-label="Shift" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; background: #F2F4F8; border-radius: 12px; padding: 4px">
+        <button style="height: 36px; border-radius: 9px; background: transparent; border: 0; font: inherit; font-size: 13.5px; font-weight: 500; color: #475569; cursor: pointer">AM</button>
+        <button style="height: 36px; border-radius: 9px; background: transparent; border: 0; font: inherit; font-size: 13.5px; font-weight: 500; color: #475569; cursor: pointer">PM</button>
+        <button aria-pressed="true" style="height: 36px; border-radius: 9px; background: #0E1B36; border: 0; font: inherit; font-size: 13.5px; font-weight: 600; color: #FFFFFF; cursor: pointer">Full day</button>
+        <button style="height: 36px; border-radius: 9px; background: transparent; border: 0; font: inherit; font-size: 13.5px; font-weight: 500; color: #475569; cursor: pointer">Custom</button>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+        <button style="height: 58px; background: #F6F8FC; border: 1px solid #E3E8F0; border-radius: 14px; padding: 0 14px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; font: inherit; color: #0F1B33; cursor: pointer"><span style="font-size: 12px; color: #64748B">Start</span><span style="font-size: 21px; font-weight: 700">07:00</span></button>
+        <button style="height: 58px; background: #F6F8FC; border: 1px solid #E3E8F0; border-radius: 14px; padding: 0 14px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; font: inherit; color: #0F1B33; cursor: pointer"><span style="font-size: 12px; color: #64748B">End</span><span style="font-size: 21px; font-weight: 700">16:00</span></button>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 5px">
+        <div style="position: relative; height: 10px; border-radius: 5px; background: #EEF1F6; overflow: hidden">
+          <div style="position: absolute; left: 29.17%; width: 37.5%; top: 0; bottom: 0; background: #3B7BF0"></div>
+          <div style="position: absolute; left: 52.08%; width: 2.08%; top: 0; bottom: 0; background: #FFFFFF"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 11px; color: #64748B"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; background: #EAF7F1; border-radius: 12px; padding: 9px 12px; font-size: 13px; color: #0B6B47; font-weight: 500">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>8.5h paid · 9h on site less 30m unpaid break
+      </div>
+    </section>
+
+    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 8px"><h2 style="margin: 0; font-size: 19px; font-weight: 700">Operatives</h2><a href="#" style="font-size: 14px; font-weight: 600; text-decoration: none">+ Add people</a></div>
+    <section style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; overflow: hidden">
+      <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid #EEF1F6">
+        <div style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700">FN</div>
+        <div style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 15px; font-weight: 600">Farnie Nel</span><span style="font-size: 12.5px; color: #64748B">Operative · 07:00–16:00</span></div>
+        <span style="font-size: 14px; font-weight: 700">8.5h</span>
+        <button aria-label="Remove Farnie Nel" style="width: 32px; height: 32px; border-radius: 16px; background: #F2F4F8; border: 0; color: #64748B; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px">
+        <div style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 700">TA</div>
+        <div style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 15px; font-weight: 600">Test Admin</span><span style="font-size: 12.5px; color: #64748B">Admin · 07:00–16:00</span></div>
+        <span style="font-size: 14px; font-weight: 700">8.5h</span>
+        <button aria-label="Remove Test Admin" style="width: 32px; height: 32px; border-radius: 16px; background: #F2F4F8; border: 0; color: #64748B; display: flex; align-items: center; justify-content: center; cursor: pointer"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      </div>
+    </section>
+
+    <div style="flex-grow: 1"></div>
+    <div style="margin: 0 -16px; background: #FFFFFF; border-top: 1px solid #E3E8F0; padding: 12px 16px 30px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 -6px 20px rgba(15,27,51,0.06)">
+      <div style="display: flex; justify-content: space-between; align-items: center">
+        <div style="display: flex; gap: 6px">
+          <span style="font-size: 12.5px; font-weight: 600; color: #17398A; background: #E6EEFC; padding: 6px 10px; border-radius: 999px">17–18 Nov</span>
+          <span style="font-size: 12.5px; font-weight: 600; color: #17398A; background: #E6EEFC; padding: 6px 10px; border-radius: 999px">07:00–16:00</span>
+          <span style="font-size: 12.5px; font-weight: 600; color: #17398A; background: #E6EEFC; padding: 6px 10px; border-radius: 999px">2 people</span>
+        </div>
+      </div>
+      <button style="height: 54px; border-radius: 16px; background: linear-gradient(180deg, #3B7BF0, #2559D6); color: #FFFFFF; border: 0; padding: 0 18px; font: inherit; display: flex; align-items: center; justify-content: space-between; cursor: pointer; box-shadow: 0 4px 12px rgba(37,89,214,0.30)">
+        <span style="font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Confirm 4 shifts</span>
+        <span style="font-size: 16px; font-weight: 700">34h</span>
+      </button>
+    </div>
+  </div>
+</div>
+</div></figure>
+<figure class="screen"><figcaption><b>Edit booking</b><span>The Breakdown card moves up into the navy header. Save moves to the bottom and Delete becomes the bin in the header.</span></figcaption><div class="phone">
+<div class="pp-navy" style="width: 390px; height: 844px; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <header style="padding: 54px 16px 0; display: flex; flex-direction: column; gap: 14px; color: #FFFFFF">
+    <div style="display: flex; align-items: center; gap: 8px">
+      <button style="height: 40px; padding: 0 16px; background: rgba(255,255,255,0.14); border: 0; border-radius: 20px; color: #FFFFFF; font: inherit; font-size: 15px; font-weight: 500; cursor: pointer">Cancel</button>
+      <h1 style="flex-grow: 1; margin: 0; text-align: center; font-size: 17px; font-weight: 600">Edit booking</h1>
+      <button aria-label="Delete booking" style="width: 40px; height: 40px; background: rgba(229,72,77,0.18); border: 0; border-radius: 20px; color: #FF8A8E; display: flex; align-items: center; justify-content: center; cursor: pointer">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg>
+      </button>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 10px">
+      <div style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px">TM</div>
+      <div style="display: flex; flex-direction: column; flex-grow: 1">
+        <span style="font-size: 15px; font-weight: 600">Test Manager</span>
+        <span style="font-size: 12.5px; color: #93A1BC">Mon 2 Nov · C646 1 Carnaby Street</span>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 2px">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.14em; color: #93A1BC">THIS BOOKING AT A GLANCE</span>
+      <span style="font-size: 22px; font-weight: 700">14.5h paid <span style="font-weight: 500; color: #93A1BC; font-size: 16px">· 12.5h on site</span></span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr))">
+      <div style="display: flex; flex-direction: column; gap: 2px; padding-right: 10px"><span style="font-size: 26px; font-weight: 700; line-height: 1.1">8.5</span><span style="font-size: 12px; color: #93A1BC">Standard hrs</span></div>
+      <div style="display: flex; flex-direction: column; gap: 2px; padding: 0 10px; border-left: 1px solid rgba(255,255,255,0.12)"><span style="font-size: 26px; font-weight: 700; line-height: 1.1; color: #F5A524">4</span><span style="font-size: 12px; color: #93A1BC">OT × 1.5 = 6h</span></div>
+      <div style="display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 1px solid rgba(255,255,255,0.12)"><span style="font-size: 26px; font-weight: 700; line-height: 1.1">−0.5</span><span style="font-size: 12px; color: #93A1BC">Unpaid break</span></div>
+    </div>
+
+    <div style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.10); border-radius: 14px; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px">
+      <div style="display: flex; justify-content: space-between; font-size: 10.5px; font-weight: 600; letter-spacing: 0.12em; color: #93A1BC"><span>THE DAY</span><span style="letter-spacing: 0; font-weight: 500">07:00 – 20:00 · break included</span></div>
+      <div style="position: relative; height: 10px; border-radius: 5px; background: rgba(255,255,255,0.08); overflow: hidden">
+        <div style="position: absolute; left: 29.17%; width: 37.5%; top: 0; bottom: 0; background: #3B7BF0"></div>
+        <div style="position: absolute; left: 52.08%; width: 2.08%; top: 0; bottom: 0; background: #0E1B36"></div>
+        <div style="position: absolute; left: 66.67%; width: 16.67%; top: 0; bottom: 0; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #B97810 3px 6px)"></div>
+      </div>
+      <div style="display: flex; gap: 14px; font-size: 11.5px; color: #C7D0E1">
+        <span style="display: flex; align-items: center; gap: 5px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #3B7BF0"></span>Standard</span>
+        <span style="display: flex; align-items: center; gap: 5px"><span style="width: 8px; height: 8px; border-radius: 2px; background: #F5A524"></span>Overtime</span>
+        <span style="display: flex; align-items: center; gap: 5px"><span style="width: 8px; height: 8px; border-radius: 2px; border: 1px solid #93A1BC; box-sizing: border-box"></span>Break 12:30</span>
+      </div>
+    </div>
+  </header>
+
+  <div style="flex-grow: 1; margin-top: 16px; background: #F2F4F8; border-radius: 28px 28px 0 0; padding: 18px 16px 0; display: flex; flex-direction: column; gap: 10px; min-height: 0">
+    <h2 style="margin: 0; font-size: 19px; font-weight: 700">Hours</h2>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+      <button style="height: 62px; background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 16px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; font: inherit; color: #0F1B33; cursor: pointer">
+        <span style="display: flex; flex-direction: column; align-items: flex-start"><span style="font-size: 12px; color: #64748B">Start</span><span style="font-size: 23px; font-weight: 700">07:00</span></span>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#2F6FE0" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"></path></svg>
+      </button>
+      <button style="height: 62px; background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 16px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; font: inherit; color: #0F1B33; cursor: pointer">
+        <span style="display: flex; flex-direction: column; align-items: flex-start"><span style="font-size: 12px; color: #64748B">End</span><span style="font-size: 23px; font-weight: 700">20:00</span></span>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#2F6FE0" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"></path></svg>
+      </button>
+    </div>
+
+    <div style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 16px; padding: 11px 12px; display: flex; align-items: center; gap: 12px">
+      <div style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF; display: flex; align-items: center; justify-content: center">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5zM17 10h1.5a2.5 2.5 0 0 1 0 5H17M8 3v3M12 3v3"></path></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 15px; font-weight: 600">Unpaid break</span><span style="font-size: 12.5px; color: #64748B">30 mins, deducted around midday</span></div>
+      <button aria-label="Unpaid break" aria-pressed="true" style="width: 51px; height: 31px; border-radius: 16px; background: #2F6FE0; border: 0; position: relative; cursor: pointer; padding: 0">
+        <span style="position: absolute; top: 2px; right: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span>
+      </button>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px">
+      <h2 style="margin: 0; font-size: 19px; font-weight: 700">Overtime rate</h2>
+      <a href="#" style="font-size: 14px; font-weight: 600; text-decoration: none">More rates</a>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
+      
+        <button style="height: 54px; border-radius: 14px; font: inherit; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; cursor: pointer; background: #FFFFFF; border: 1px solid #E3E8F0; color: #0F1B33;">
+          <span style="font-size: 16px; font-weight: 700">×1</span>
+          <span style="font-size: 11px; opacity: 0.8">4h</span>
+        </button>
+      
+        <button style="height: 54px; border-radius: 14px; font: inherit; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; cursor: pointer; background: #0E1B36; border: 1px solid #0E1B36; color: #FFFFFF;">
+          <span style="font-size: 16px; font-weight: 700">×1.5</span>
+          <span style="font-size: 11px; opacity: 0.8">Org default</span>
+        </button>
+      
+        <button style="height: 54px; border-radius: 14px; font: inherit; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; cursor: pointer; background: #FFFFFF; border: 1px solid #E3E8F0; color: #0F1B33;">
+          <span style="font-size: 16px; font-weight: 700">×2</span>
+          <span style="font-size: 11px; opacity: 0.8">8h</span>
+        </button>
+      
+        <button style="height: 54px; border-radius: 14px; font: inherit; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; cursor: pointer; background: #FFFFFF; border: 1px solid #E3E8F0; color: #0F1B33;">
+          <span style="font-size: 16px; font-weight: 700">×3</span>
+          <span style="font-size: 11px; opacity: 0.8">12h</span>
+        </button>
+      
+    </div>
+    <p style="margin: 0; font-size: 12px; line-height: 1.4; color: #64748B">Only prices this booking's overtime. Signed timesheets keep their figures.</p>
+
+    <div style="flex-grow: 1"></div>
+    <div style="margin: 0 -16px; background: #FFFFFF; border-top: 1px solid #E3E8F0; padding: 12px 16px 30px">
+      <button style="width: 100%; height: 52px; border-radius: 16px; background: linear-gradient(180deg, #3B7BF0, #2559D6); color: #FFFFFF; border: 0; font: inherit; font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; box-shadow: 0 4px 12px rgba(37,89,214,0.30)">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Save · 14.5h paid
+      </button>
+    </div>
+  </div>
+</div>
+</div></figure>
+<figure class="screen"><figcaption><b>Overtime rate sheet</b><span>Replaces the system pop-up menu. The Organisation rate and all custom multipliers ×1 to ×3 are listed, each showing the resulting hours.</span></figcaption><div class="phone">
+<div class="pp-navy" style="position: relative; width: 390px; height: 844px; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <div aria-hidden="true" style="padding: 54px 16px 0; color: #FFFFFF; display: flex; flex-direction: column; gap: 14px">
+    <div style="display: flex; align-items: center"><span style="height: 40px; padding: 0 16px; background: rgba(255,255,255,0.14); border-radius: 20px; display: flex; align-items: center; font-size: 15px">Cancel</span><span style="flex-grow: 1; text-align: center; font-size: 17px; font-weight: 600">Edit booking</span><span style="width: 40px"></span></div>
+    <span style="font-size: 22px; font-weight: 700">14.5h paid</span>
+  </div>
+  <div aria-hidden="true" style="position: absolute; left: 0; right: 0; top: 190px; bottom: 0; background: #F2F4F8; border-radius: 28px 28px 0 0"></div>
+  <div style="position: absolute; inset: 0; background: rgba(6,12,26,0.55)"></div>
+
+  <section aria-label="Overtime rate" style="position: absolute; left: 0; right: 0; bottom: 0; background: #FFFFFF; border-radius: 28px 28px 0 0; padding: 10px 16px 30px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 -10px 40px rgba(0,0,0,0.25)">
+    <div style="width: 38px; height: 5px; border-radius: 3px; background: #D3D9E3; align-self: center"></div>
+    <div style="display: flex; align-items: flex-start; gap: 12px">
+      <div style="width: 42px; height: 42px; border-radius: 12px; background: linear-gradient(160deg, #FBBF4A, #E08A0B); color: #FFFFFF; display: flex; align-items: center; justify-content: center; flex-shrink: 0">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 3L5 13h6l-1 8 8-10h-6z"></path></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1">
+        <h2 style="margin: 0; font-size: 19px; font-weight: 700">Overtime rate</h2>
+        <span style="font-size: 13px; color: #64748B">This booking has 4h of overtime (16:00 – 20:00)</span>
+      </div>
+      <button aria-label="Close" style="width: 32px; height: 32px; border-radius: 16px; background: #EEF1F6; border: 0; color: #475569; display: flex; align-items: center; justify-content: center; cursor: pointer">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+
+    <button style="height: 64px; border-radius: 16px; background: #EEF3FD; border: 2px solid #2F6FE0; padding: 0 14px; display: flex; align-items: center; gap: 12px; font: inherit; color: #0F1B33; cursor: pointer; text-align: left">
+      <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 16px; font-weight: 700">Organisation rate · ×1.5</span><span style="font-size: 12.5px; color: #475569">From Org settings · follows any future change</span></span>
+      <span style="font-size: 15px; font-weight: 700; color: #17398A">6h</span>
+      <span style="width: 22px; height: 22px; border-radius: 50%; background: #2F6FE0; color: #FFFFFF; display: flex; align-items: center; justify-content: center"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span>
+    </button>
+
+    <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.14em; color: #64748B">OR A CUSTOM RATE FOR THIS BOOKING</span>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+      
+        <button style="height: 58px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E8F0; font: inherit; color: #0F1B33; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer">
+          <span style="font-size: 16px; font-weight: 700">×1</span>
+          <span style="font-size: 11.5px; color: #64748B">4h → 4h</span>
+        </button>
+      
+        <button style="height: 58px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E8F0; font: inherit; color: #0F1B33; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer">
+          <span style="font-size: 16px; font-weight: 700">×1.25</span>
+          <span style="font-size: 11.5px; color: #64748B">4h → 5h</span>
+        </button>
+      
+        <button style="height: 58px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E8F0; font: inherit; color: #0F1B33; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer">
+          <span style="font-size: 16px; font-weight: 700">×1.5</span>
+          <span style="font-size: 11.5px; color: #64748B">4h → 6h</span>
+        </button>
+      
+        <button style="height: 58px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E8F0; font: inherit; color: #0F1B33; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer">
+          <span style="font-size: 16px; font-weight: 700">×1.75</span>
+          <span style="font-size: 11.5px; color: #64748B">4h → 7h</span>
+        </button>
+      
+        <button style="height: 58px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E8F0; font: inherit; color: #0F1B33; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer">
+          <span style="font-size: 16px; font-weight: 700">×2</span>
+          <span style="font-size: 11.5px; color: #64748B">4h → 8h</span>
+        </button>
+      
+        <button style="height: 58px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E8F0; font: inherit; color: #0F1B33; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer">
+          <span style="font-size: 16px; font-weight: 700">×2.25</span>
+          <span style="font-size: 11.5px; color: #64748B">4h → 9h</span>
+        </button>
+      
+        <button style="height: 58px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E8F0; font: inherit; color: #0F1B33; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer">
+          <span style="font-size: 16px; font-weight: 700">×2.5</span>
+          <span style="font-size: 11.5px; color: #64748B">4h → 10h</span>
+        </button>
+      
+        <button style="height: 58px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E8F0; font: inherit; color: #0F1B33; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer">
+          <span style="font-size: 16px; font-weight: 700">×2.75</span>
+          <span style="font-size: 11.5px; color: #64748B">4h → 11h</span>
+        </button>
+      
+        <button style="height: 58px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E3E8F0; font: inherit; color: #0F1B33; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer">
+          <span style="font-size: 16px; font-weight: 700">×3</span>
+          <span style="font-size: 11.5px; color: #64748B">4h → 12h</span>
+        </button>
+      
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 10px; background: #F6F8FC; border-radius: 14px; padding: 10px 12px">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#2F6FE0" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8v.5"></path></svg>
+      <span style="font-size: 12.5px; line-height: 1.4; color: #334155">Signed timesheets keep their figures. Only this booking is re-priced.</span>
+    </div>
+
+    <button style="height: 52px; border-radius: 16px; background: linear-gradient(180deg, #3B7BF0, #2559D6); color: #FFFFFF; border: 0; font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(37,89,214,0.30)">Use ×1.5 · 14.5h paid</button>
+  </section>
+</div>
+</div></figure>
+<figure class="screen"><figcaption><b>Unpaid break warning</b><span>Replaces the system alert. "Go back" and "Save anyway" become three explicit choices.</span></figcaption><div class="phone">
+<div class="pp-navy" style="position: relative; width: 390px; height: 844px; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <div aria-hidden="true" style="padding: 54px 16px 0; color: #FFFFFF; display: flex; flex-direction: column; gap: 14px">
+    <div style="display: flex; align-items: center"><span style="height: 40px; padding: 0 16px; background: rgba(255,255,255,0.14); border-radius: 20px; display: flex; align-items: center; font-size: 15px">Cancel</span><span style="flex-grow: 1; text-align: center; font-size: 17px; font-weight: 600">Hours</span><span style="height: 40px; padding: 0 16px; background: rgba(255,255,255,0.14); border-radius: 20px; display: flex; align-items: center; font-size: 15px">Save</span></div>
+    <span style="font-size: 22px; font-weight: 700">8.5h paid per day</span>
+  </div>
+  <div aria-hidden="true" style="position: absolute; left: 0; right: 0; top: 190px; bottom: 0; background: #F2F4F8; border-radius: 28px 28px 0 0"></div>
+  <div style="position: absolute; inset: 0; background: rgba(6,12,26,0.6)"></div>
+
+  <section role="alertdialog" aria-labelledby="bw-title" style="position: absolute; left: 0; right: 0; bottom: 0; background: #FFFFFF; border-radius: 28px 28px 0 0; padding: 10px 18px 30px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 -10px 40px rgba(0,0,0,0.25)">
+    <div style="width: 38px; height: 5px; border-radius: 3px; background: #D3D9E3; align-self: center"></div>
+
+    <div style="display: flex; align-items: center; gap: 12px">
+      <div style="width: 48px; height: 48px; border-radius: 14px; background: linear-gradient(160deg, #F2666B, #D92D35); color: #FFFFFF; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 4px 12px rgba(217,45,53,0.3)">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l10 18H2zM12 10v5M12 17.5v.5"></path></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.14em; color: #D92D35">HEADS UP</span>
+        <h2 id="bw-title" style="margin: 0; font-size: 20px; font-weight: 700; line-height: 1.2">This booking runs through lunch</h2>
+      </div>
+    </div>
+
+    <p style="margin: 0; font-size: 14.5px; line-height: 1.5; color: #334155">07:00 – 16:00 covers the unpaid break, so 30 minutes will be deducted. Is that right for this job?</p>
+
+    <div style="background: #0E1B36; border-radius: 16px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; color: #FFFFFF">
+      <div style="display: flex; justify-content: space-between; font-size: 10.5px; font-weight: 600; letter-spacing: 0.12em; color: #93A1BC"><span>THE DAY</span><span style="letter-spacing: 0; font-weight: 500">07:00 – 16:00</span></div>
+      <div style="position: relative; height: 12px; border-radius: 6px; background: rgba(255,255,255,0.08)">
+        <div style="position: absolute; left: 0%; width: 100%; top: 0; bottom: 0; border-radius: 6px; background: #3B7BF0"></div>
+        <div style="position: absolute; left: 61.1%; width: 5.6%; top: -3px; bottom: -3px; border-radius: 3px; background: repeating-linear-gradient(-45deg, #F2666B 0 3px, #A51D24 3px 6px); box-shadow: 0 0 0 2px #0E1B36"></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-size: 11px; color: #93A1BC"><span>07:00</span><span style="color: #FF9EA2; font-weight: 600">12:30 – 13:00 unpaid</span><span>16:00</span></div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <button style="min-height: 60px; border-radius: 16px; background: linear-gradient(180deg, #3B7BF0, #2559D6); color: #FFFFFF; border: 0; padding: 10px 16px; font: inherit; display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; text-align: left; box-shadow: 0 4px 12px rgba(37,89,214,0.30)">
+        <span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 600">Pay the full day</span><span style="font-size: 12.5px; color: #D6E3FC">Turns off the unpaid break for this booking</span></span>
+        <span style="font-size: 18px; font-weight: 700">9h</span>
+      </button>
+      <button style="min-height: 60px; border-radius: 16px; background: #FFFFFF; color: #0F1B33; border: 1px solid #D3D9E3; padding: 10px 16px; font: inherit; display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; text-align: left">
+        <span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 600">Keep the break</span><span style="font-size: 12.5px; color: #64748B">30 mins deducted, as set</span></span>
+        <span style="font-size: 18px; font-weight: 700">8.5h</span>
+      </button>
+      <button style="height: 44px; background: transparent; border: 0; font: inherit; font-size: 15px; font-weight: 600; color: #1F56C9; cursor: pointer">Go back and change the hours</button>
+    </div>
+  </section>
+</div>
+</div></figure>
+</div></body></html>

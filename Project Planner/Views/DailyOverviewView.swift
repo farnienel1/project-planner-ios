@@ -43,6 +43,8 @@ struct DailyOverviewView: View {
     @State private var showingPastBookings = false
     @State private var showingBookLabour = false
     @State private var bookingEditTarget: DailyOverviewEditTarget?
+    /// Why a labour booking delete did not happen (refused or offline), shown once the edit sheet has closed.
+    @State private var labourDeleteRefusalMessage: String?
     /// RULEBOOK 1.16.0 `bookingLeaveConflicts`: leave on a changed booking's day is ticked or dropped first.
     @StateObject private var leaveGate = BookingConflictGate()
     @State private var scheduleRefreshTask: Task<Void, Never>?
@@ -1106,6 +1108,18 @@ struct DailyOverviewView: View {
         .sheet(item: $bookingEditTarget) { target in
             dailyOverviewEditSheet(for: target)
         }
+        .alert(
+            "Booking not deleted",
+            isPresented: Binding(
+                get: { labourDeleteRefusalMessage != nil },
+                set: { if !$0 { labourDeleteRefusalMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { labourDeleteRefusalMessage = nil }
+                .accessibilityIdentifier("dailyOverview.deleteRefused.ok")
+        } message: {
+            Text(labourDeleteRefusalMessage ?? "")
+        }
         .bookingConflictSheet(leaveGate)
     }
 
@@ -1194,10 +1208,36 @@ private extension DailyOverviewView {
         "\(Self.editDateFormatter.string(from: date)) · \(locationTitle)"
     }
 
+    /// Delete on a labour booking only when the rulebook allows it (`canDeleteBooking` via
+    /// `BookingStore.canDeleteBooking`: admins on any job, managers on jobs they manage, never operatives). A refused
+    /// delete is reported, not hidden.
+    private func labourBookingDeleteAction(_ booking: Booking) -> (() -> Void)? {
+        guard bookingStore.canDeleteBooking(booking) else { return nil }
+        return {
+            bookingEditTarget = nil
+            Task {
+                if let message = await bookingStore.deleteBookingReportingRefusal(booking) {
+                    labourDeleteRefusalMessage = message
+                }
+            }
+        }
+    }
+
+    /// RULEBOOK §2 `offlineAvailability("booking.delete")`: online only, with the standard message.
+    private var labourBookingDeleteDisabledReason: String? {
+        OfflinePolicy.isEnabled(.deleteBooking, isOnline: smartCache.isOnline) ? nil : OfflinePolicy.onlineOnlyMessage
+    }
+
     @ViewBuilder
     func dailyOverviewEditSheet(for target: DailyOverviewEditTarget) -> some View {
         switch target {
         case .operative(let booking, let project, let personName):
+            // Same options as Scheduling (`LabourBookingEditOptions`): every control for everyone, plus the PAYE line.
+            let options = LabourBookingEditOptions.forOperative(
+                booking: booking,
+                operatives: operativeStore.allOperatives,
+                users: userStore.organizationUsers
+            )
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
                 referenceDay: booking.date,
@@ -1205,7 +1245,11 @@ private extension DailyOverviewView {
                 subtitle: editSheetSubtitle(date: booking.date, locationTitle: "\(project.jobNumber) \(project.siteName)"),
                 headerName: personName,
                 headerInitials: PlannerUIInitials.from(personName),
-                allowsOtMultiplierOverride: true,
+                allowsOtMultiplierOverride: options.allowsOtMultiplierOverride,
+                showsBreakControls: options.showsBreakControls,
+                showsBreakdown: options.showsBreakdown,
+                showsFooterNote: options.showsFooterNote,
+                showsPayeNote: options.showsPayeNote,
                 initialChoice: OperativeDayBookingChoice(from: booking),
                 onSave: { start, end, breakRemoved, otMult in
                     bookingEditTarget = nil
@@ -1218,10 +1262,8 @@ private extension DailyOverviewView {
                     )
                 },
                 onCancel: { bookingEditTarget = nil },
-                onDelete: {
-                    bookingEditTarget = nil
-                    Task { await bookingStore.deleteBooking(booking) }
-                }
+                onDelete: labourBookingDeleteAction(booking),
+                deleteDisabledReason: labourBookingDeleteDisabledReason
             )
         case .manager(let booking, let locationTitle, let personName):
             OperativeCustomHoursSheet(

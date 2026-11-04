@@ -350,6 +350,24 @@ class BookingStore: ObservableObject {
         return bookings.filter { remove.contains($0.documentKey.uppercased()) }
     }
 
+    /// RULEBOOK 1.10.0 §2, §16 `canDeleteBooking` for this labour booking, the same check `deleteBooking` makes: an
+    /// admin deletes any labour booking, a manager deletes bookings on jobs they manage (as `canWriteBooking`), an
+    /// operative never. True before the profile loads; the security rules still decide. Screens offer Delete only when
+    /// this is true.
+    func canDeleteBooking(_ booking: Booking) -> Bool {
+        writeRefusal([booking], isDelete: true) == nil
+    }
+
+    /// `deleteBooking`, then the message to show when the booking is still there afterwards (refused by the rulebook
+    /// or the server, or offline: deletes are online only), else nil. Lets Edit booking report a refused delete
+    /// instead of closing as if it had worked.
+    func deleteBookingReportingRefusal(_ booking: Booking) async -> String? {
+        errorMessage = nil
+        await deleteBooking(booking)
+        guard bookings.contains(where: { $0.id == booking.id }) else { return nil }
+        return errorMessage ?? "This booking could not be deleted."
+    }
+
     func deleteBooking(_ booking: Booking) async {
         // RULEBOOK §2 (`offlineAvailability("booking.delete")`): deleting a booking is online only; the
         // delete and its tombstone are never queued.
