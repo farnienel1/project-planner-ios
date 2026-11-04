@@ -184,4 +184,31 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertNil(OrgMaterialCutOff.clockMinutes(stored: saved, organizationLoaded: false))
         XCTAssertEqual(OrgMaterialCutOff.organizationMinuteOfDay(orgDay("2026-11-04").addingTimeInterval(15.5 * 3600)), 930)
     }
+
+    // MARK: 9. Permission bridges (`canManageOperatives`, `canScheduleOperatives`, `canSendMaterialOrders`)
+
+    private func levelUser(id: String, role: UserRole, permissions: UserPermissions) -> AppUser {
+        AppUser(
+            id: id, email: "\(id)@example.test", organizationId: "org-test", role: role,
+            firstName: id, surname: "Test", isActive: true, passwordSet: true, permissions: permissions
+        )
+    }
+
+    /// Operatives management and booking at other locations come from the level rules, never role flags in a screen.
+    func testPermissionGatesComeFromTheRulebook() {
+        let managerWith = levelUser(id: "mgr-on", role: .manager, permissions: UserPermissions(manager: true, operatives: true))
+        let managerWithout = levelUser(id: "mgr-off", role: .manager, permissions: UserPermissions(manager: true, operatives: false))
+        let operative = levelUser(id: "op", role: .operative, permissions: UserPermissions(operatives: true, operativeMode: true))
+        XCTAssertTrue(CanonicalBusinessEngine.canManageOperatives(managerWith.permissionSubject))
+        XCTAssertFalse(CanonicalBusinessEngine.canManageOperatives(managerWithout.permissionSubject))
+        XCTAssertFalse(CanonicalBusinessEngine.canManageOperatives(operative.permissionSubject))
+        XCTAssertTrue(CanonicalBusinessEngine.canScheduleOperatives(managerWithout.permissionSubject))
+        XCTAssertFalse(CanonicalBusinessEngine.canScheduleOperatives(operative.permissionSubject))
+        XCTAssertTrue(CanonicalBusinessEngine.canSendMaterialOrders(UserStore.staffAccountRole(for: managerWithout)))
+        XCTAssertFalse(CanonicalBusinessEngine.canSendMaterialOrders(UserStore.staffAccountRole(for: operative)))
+
+        XCTAssertTrue(WarningOperativeAccess.canOpen(actor: managerWith, target: operative))
+        XCTAssertFalse(WarningOperativeAccess.canOpen(actor: managerWithout, target: operative))
+        XCTAssertFalse(WarningOperativeAccess.canOpen(actor: managerWith, target: managerWithout))
+    }
 }

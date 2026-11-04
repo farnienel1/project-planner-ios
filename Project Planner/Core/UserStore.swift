@@ -1050,11 +1050,10 @@ class UserStore: ObservableObject {
     func canViewOperatives() -> Bool {
         if isOperativeMode() { return false }
         guard let u = displayUser else { return false }
-        // Super admin keeps the Operatives page. Everyone else, including admins, follows the Operatives toggle.
+        // Super admin keeps the Operatives page. Everyone else follows `canManageOperatives` (RULEBOOK §11: above
+        // operative level with the Operatives toggle in effect; admins have it on and locked).
         if u.isSuperAdmin { return true }
-        let canHoldTheToggle = u.permissions.manager || u.permissions.adminAccess || u.role == .admin || u.role == .manager
-        // RULEBOOK 1.11.0 §11: `effectivePermissions` — admins have Operatives on and locked.
-        return canHoldTheToggle && u.effectivePermissions.operatives
+        return CanonicalBusinessEngine.canManageOperatives(u.permissionSubject)
     }
     
     /// Organisation material catalogue (batch upload, CRUD). Admins and managers only — not operatives with project materials access.
@@ -1530,9 +1529,9 @@ class UserStore: ObservableObject {
     /// and add a new operative. They cannot add managers or admins.
     func isActingManagerOperativeManagementOnly() -> Bool {
         guard let u = displayUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if u.isSuperAdmin || u.permissions.adminAccess { return false }
-        return u.permissions.manager && u.effectivePermissions.operatives
+        // A manager-level account (`permissionLevelOf`) that `canManageOperatives`.
+        guard u.permissionLevel == .manager else { return false }
+        return CanonicalBusinessEngine.canManageOperatives(u.permissionSubject)
     }
 
     /// Admins and managers with operative management can open the team annual leave directory.
@@ -1540,7 +1539,7 @@ class UserStore: ObservableObject {
         if isOperativeMode() { return false }
         if hasAdminAccess() { return true }
         guard let u = displayUser else { return false }
-        return u.permissions.manager && u.effectivePermissions.operatives
+        return CanonicalBusinessEngine.canManageOperatives(u.permissionSubject)
     }
     
     /// Whether the signed-in user may change permissions for `target` in **Manage / edit user**.

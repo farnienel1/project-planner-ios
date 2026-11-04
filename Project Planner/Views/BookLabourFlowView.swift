@@ -54,8 +54,9 @@ struct BookLabourCandidate: Identifiable {
         AccountLabourBooking.operative(for: user)
     }
 
+    /// `canScheduleOperatives`: anyone above operative level (`permissionLevelOf`) is booked at other locations too.
     var canBookOtherLocations: Bool {
-        !user.permissions.operativeMode && (user.permissions.manager || user.permissions.adminAccess || user.isSuperAdmin)
+        CanonicalBusinessEngine.canScheduleOperatives(user.permissionSubject)
     }
 }
 

@@ -39,9 +39,8 @@ struct ManageUsersView: View {
 
     private var isManagerOperativeManagement: Bool {
         guard let u = userStore.displayUser else { return false }
-        if u.permissions.operativeMode { return false }
         if userStore.hasAdminAccess() { return false }
-        return u.permissions.manager && u.permissions.operatives
+        return CanonicalBusinessEngine.canManageOperatives(u.permissionSubject)
     }
 
     /// Signed in with Firebase Auth but org user doc not in memory yet — show spinner instead of “access denied”.
