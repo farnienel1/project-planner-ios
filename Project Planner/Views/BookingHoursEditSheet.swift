@@ -891,7 +891,7 @@ struct OperativeCustomHoursSheet: View {
                 get: { breakWarningMessage != nil },
                 set: { if !$0 { breakWarningMessage = nil } }
             ),
-            onDismiss: runBreakWarningChoice
+            onDismiss: { runBreakWarningChoice() }
         ) {
             breakWarningSheet(bd)
                 .presentationDetents([.medium, .large])
