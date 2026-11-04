@@ -510,6 +510,9 @@ struct OperativeCustomHoursSheet: View {
     let onCancel: () -> Void
     /// Set when this sheet is editing a booking that already exists. Create flows leave it nil.
     var onDelete: (() -> Void)?
+    /// When set, Delete is shown but disabled with this reason (RULEBOOK §2: deleting a booking is online only,
+    /// `OfflinePolicy.onlineOnlyMessage`).
+    var deleteDisabledReason: String?
 
     @State private var startHour: Int
     @State private var startMinute: Int
@@ -565,7 +568,8 @@ struct OperativeCustomHoursSheet: View {
         initialChoice: OperativeDayBookingChoice?,
         onSave: @escaping (String, String, Bool, Double?) -> Void,
         onCancel: @escaping () -> Void,
-        onDelete: (() -> Void)? = nil
+        onDelete: (() -> Void)? = nil,
+        deleteDisabledReason: String? = nil
     ) {
         // RULEBOOK 1.19.0 §4.3: the working hours in effect on the booking day (history first), whatever policy the
         // caller had at hand; `policy` is the fallback before an organisation is loaded.
@@ -593,6 +597,7 @@ struct OperativeCustomHoursSheet: View {
         self.onSave = onSave
         self.onCancel = onCancel
         self.onDelete = onDelete
+        self.deleteDisabledReason = deleteDisabledReason
 
         let bookedDays = (noteDays?.isEmpty == false ? noteDays : nil) ?? [referenceDay]
         let applies = bookedDays.contains { day in
@@ -847,6 +852,8 @@ struct OperativeCustomHoursSheet: View {
                         Image(systemName: "trash")
                     }
                     .buttonStyle(PPOnNavyPillButtonStyle(tint: Color(ppHex: 0xFF6B70)))
+                    .disabled(deleteDisabledReason != nil)
+                    .opacity(deleteDisabledReason != nil ? 0.5 : 1)
                     .accessibilityIdentifier("operativeCustomHours.deleteBooking")
                     .accessibilityLabel("Delete booking")
                 }
@@ -1037,6 +1044,12 @@ struct OperativeCustomHoursSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             WeekendBookingNoteView(days: noteDays, policy: policy)
                 .padding(.top, 14)
+            if onDelete != nil, let deleteDisabledReason {
+                Label(deleteDisabledReason, systemImage: "wifi.slash")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
+            }
             if !showsBreakControls || showsPayeNote {
                 Label("This user is PAYE and is not paid hourly.", systemImage: "info.circle")
                     .font(.footnote)

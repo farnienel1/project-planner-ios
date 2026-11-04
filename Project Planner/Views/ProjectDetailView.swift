@@ -87,6 +87,9 @@ struct ProjectDetailView: View {
     @State private var scheduleOperativeSeedBooking: Booking? = nil
     @State private var scheduleOperativeGroupId: String? = nil
     @State private var bookingEditTarget: DailyOverviewEditTarget?
+    /// Why a labour booking delete did not happen (refused or offline), shown once the edit sheet has closed.
+    @State private var labourDeleteRefusalMessage: String?
+    @EnvironmentObject private var smartCache: SmartCacheService
     @State private var lastSchedulingDataRefreshAt: Date?
     @State private var subcontractorEditBooking: SubcontractorBooking?
     @State private var expandedSchedulingDayKeys: Set<TimeInterval> = []
@@ -226,6 +229,18 @@ struct ProjectDetailView: View {
         .sheet(item: $bookingEditTarget) { target in
             projectDetailBookingEditSheet(for: target)
                 .preference(key: HideBottomMenuKey.self, value: true)
+        }
+        .alert(
+            "Booking not deleted",
+            isPresented: Binding(
+                get: { labourDeleteRefusalMessage != nil },
+                set: { if !$0 { labourDeleteRefusalMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { labourDeleteRefusalMessage = nil }
+                .accessibilityIdentifier("projectDetail.deleteRefused.ok")
+        } message: {
+            Text(labourDeleteRefusalMessage ?? "")
         }
         .sheet(isPresented: $showingScheduleSubcontractor) {
             ScheduleSubcontractorView(project: project)
@@ -1564,6 +1579,25 @@ struct ProjectDetailView: View {
         "\(Self.bookingEditDateFormatter.string(from: date)) · \(project.jobNumber) \(project.siteName)"
     }
 
+    /// Delete on a labour booking only when the rulebook allows it (`canDeleteBooking` via
+    /// `BookingStore.canDeleteBooking`: admins; managers cancel instead). A refused delete is reported, not hidden.
+    private func labourBookingDeleteAction(_ booking: Booking) -> (() -> Void)? {
+        guard bookingStore.canDeleteBooking(booking) else { return nil }
+        return {
+            bookingEditTarget = nil
+            Task {
+                if let message = await bookingStore.deleteBookingReportingRefusal(booking) {
+                    labourDeleteRefusalMessage = message
+                }
+            }
+        }
+    }
+
+    /// RULEBOOK §2 `offlineAvailability("booking.delete")`: online only, with the standard message.
+    private var labourBookingDeleteDisabledReason: String? {
+        OfflinePolicy.isEnabled(.deleteBooking, isOnline: smartCache.isOnline) ? nil : OfflinePolicy.onlineOnlyMessage
+    }
+
     @ViewBuilder
     private func projectDetailBookingEditSheet(for target: DailyOverviewEditTarget) -> some View {
         switch target {
@@ -1612,10 +1646,8 @@ struct ProjectDetailView: View {
                     }
                 },
                 onCancel: { bookingEditTarget = nil },
-                onDelete: {
-                    bookingEditTarget = nil
-                    Task { await bookingStore.deleteBooking(booking) }
-                }
+                onDelete: labourBookingDeleteAction(booking),
+                deleteDisabledReason: labourBookingDeleteDisabledReason
             )
         case .manager(let booking, _, let personName):
             OperativeCustomHoursSheet(
@@ -2933,6 +2965,7 @@ private struct ProjectVisibilitySettingsView: View {
         .environmentObject(NotificationService())
         .environmentObject(AppSettingsStore())
         .environmentObject(ProjectTaskStore())
+        .environmentObject(SmartCacheService())
     }
 }
 
