@@ -668,8 +668,8 @@ struct ScheduleOperativeView: View {
                 line += " · no break"
             }
             if let m = c.otMultiplierOverride {
-                let ms = abs(m - m.rounded()) < 0.05 ? String(format: "%.0f", m) : String(format: "%.1f", m)
-                line += " · OT \(ms)×"
+                // The rate as stored, to the hundredth (×1.25 stays "1.25", never "1.2").
+                line += " · OT \(ScheduleCoverageFormat.hours(m))×"
             }
             return line
         }
@@ -702,7 +702,7 @@ struct ScheduleOperativeView: View {
         let ops = selectedOperatives.count
         let dCount = totalEffectiveBookingDays
         let h = totalPlannedHours
-        let hStr = formatHoursOneDecimal(h)
+        let hStr = ScheduleCoverageFormat.hours(h)
         return "\(ops) people · \(dCount) booking day\(dCount == 1 ? "" : "s") · \(hStr)h total"
     }
 
@@ -717,12 +717,6 @@ struct ScheduleOperativeView: View {
         default:
             return currentBulkChoice().timeSlot.displayName
         }
-    }
-
-    private func formatHoursOneDecimal(_ h: Double) -> String {
-        let r = (h * 2).rounded() / 2
-        if abs(r - r.rounded(.towardZero)) < 0.01 { return String(format: "%.0f", r) }
-        return String(format: "%.1f", r)
     }
 
     private var scheduleBookingProjectCard: some View {
@@ -1152,7 +1146,7 @@ struct ScheduleOperativeView: View {
                     workStart: start,
                     workEnd: end,
                     breakIncluded: !choice.isBreakRemoved,
-                    centerLabel: formatHoursOneDecimal(paidH) + "h",
+                    centerLabel: ScheduleCoverageFormat.hours(paidH) + "h",
                     clipLo: 6 * 60,
                     clipHi: 21 * 60,
                     barHeight: 22
@@ -1182,7 +1176,7 @@ struct ScheduleOperativeView: View {
                         .foregroundStyle(otH < 0.05 ? ProjectWorksRevampColors.activeGreen : ProjectWorksRevampColors.upcomingAmber)
                     Group {
                         if otH < 0.05 {
-                            Text("\(formatHoursOneDecimal(paidH))h paid · \(breakdown.breakdownSummary)")
+                            Text("\(ScheduleCoverageFormat.hours(paidH))h paid · \(breakdown.breakdownSummary)")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                         } else {
