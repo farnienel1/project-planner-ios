@@ -1525,7 +1525,10 @@ struct EditUserView: View {
     /// `payEditorStartingValues`) — the starting value AND the save baseline. Nil until read; while `privatePay` is off
     /// it is never read and the stored document is used, as before.
     @State private var payRecord: AppUser?
-    @State private var payRecordLoaded = false
+    /// RULEBOOK 1.26.1 §8: read again when the security switches change while the editor is open (`PayEditorLoadGate`).
+    @State private var payLoadGate = PayEditorLoadGate()
+    /// The record the pay drafts were last seeded from; an untouched draft follows a re-read (nil: the opened row).
+    @State private var payDraftSeed: AppUser?
     /// RULEBOOK 1.14.0 `payRateRequiredError`, shown under the rate field after a refused save.
     @State private var payRateFieldError: String?
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
@@ -2347,7 +2350,11 @@ struct EditUserView: View {
         }
         .onAppear(perform: syncEditUserDraftsFromStore)
         .onAppear(perform: followStoredPermissionsIfDraftUnchanged)
-        .task(id: user.id) { await refreshPayFromPayProfile() }
+        .task(id: "\(user.id)#\(payLoadGate.generation)") { await refreshPayFromPayProfile() }
+        // RULEBOOK 1.26.1 §8: a switch change re-reads the `CanonicalBusinessEngine.payEditorStartingValues` record.
+        .onReceive(NotificationCenter.default.publisher(for: .securitySwitchesDidChange)) { _ in
+            payLoadGate.switchChanged()
+        }
         .onChange(of: displayedUser.permissions) { _, _ in
             followStoredPermissionsIfDraftUnchanged()
         }
@@ -3427,20 +3434,29 @@ struct EditUserView: View {
     /// starting value and every save baseline (`payBaselineUser`). While `privatePay` is on the form and Save wait for it
     /// (`payRecordLoading`), so no save runs on the pre-read value.
     private func refreshPayFromPayProfile() async {
+        let started = payLoadGate.generation
         let before = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
-        let untouchedRate = dayRateText == Self.formatPayrollRateText(user: before)
-        let untouchedType = employmentTypeDraft == before.employmentType
         let after = await userStore.refreshPayFromPayProfile(of: before)
+        // A switch change since this read began starts a newer read; this one is dropped.
+        guard !Task.isCancelled, payLoadGate.finish(generation: started) else { return }
+        let seed = payDraftSeed ?? before
         payRecord = SecuritySwitchContext.privatePay ? after : nil
-        payRecordLoaded = true
-        guard after != before else { return }
-        if untouchedRate { dayRateText = Self.formatPayrollRateText(user: after) }
-        if untouchedType { employmentTypeDraft = after.employmentType }
+        payDraftSeed = after
+        dayRateText = PayEditorLoadGate.reseeded(
+            draft: dayRateText,
+            seededWith: Self.formatPayrollRateText(user: seed),
+            record: Self.formatPayrollRateText(user: after)
+        )
+        employmentTypeDraft = PayEditorLoadGate.reseeded(
+            draft: employmentTypeDraft,
+            seededWith: seed.employmentType,
+            record: after.employmentType
+        )
     }
 
     /// True while `privatePay` is on and the editor's starting record has not been read yet.
     private var payRecordLoading: Bool {
-        SecuritySwitchContext.privatePay && !payRecordLoaded
+        payLoadGate.isLoading(privatePay: SecuritySwitchContext.privatePay)
     }
 
     /// The save baseline (RULEBOOK 1.26.1 §8): the stored person with the pay fields of the editor's record — the same
