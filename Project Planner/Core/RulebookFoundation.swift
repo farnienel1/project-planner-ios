@@ -22,6 +22,10 @@ nonisolated enum OrganizationRulebookContext {
     /// The open organisation's document id (trimmed), or nil before one is loaded. Device caches that hold one
     /// company's data (timesheet drafts) put it in their keys so another company never reads them (§1).
     nonisolated(unsafe) private(set) static var organizationId: String? = nil
+    /// RULEBOOK 1.28.0: the open organisation's `creatorUserId` (from the live organisation listener), for
+    /// `isOrganizationSuperAdmin` — the creator is the Super Admin even without the `isSuperAdmin` flag. Nil until an
+    /// organisation is loaded.
+    nonisolated(unsafe) private(set) static var creatorUserId: String? = nil
     /// The open organisation's stored working-hours fields (`payrollTimePolicy`, `payrollTimePolicyPrior`,
     /// `payrollTimePolicyEffectiveFrom`, `payrollTimePolicyScheduled`, 1.19.0 `payrollTimePolicyHistory` and
     /// `payrollTimePolicyRevision`) in the raw document shape the script reads
@@ -43,7 +47,14 @@ nonisolated enum OrganizationRulebookContext {
             ?? "GBP"
         annualLeaveDefaults = org?.settings.annualLeaveDefaults
         let orgId = org?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let previousOrganizationId = organizationId
         organizationId = orgId.isEmpty ? nil : orgId
+        let creator = org?.creatorUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let nextCreator: String? = creator.isEmpty ? nil : creator
+        let identityChanged = nextCreator != creatorUserId || previousOrganizationId != organizationId
+        creatorUserId = nextCreator
+        // RULEBOOK 1.28.0: who is this organisation's Super Admin changed — self-sign answers are read again.
+        if identityChanged { RulebookRosterSnapshot.invalidateAnswers() }
         payrollPolicyDocument = org.map { PayrollTimePolicyCatalog.payrollPolicyDocument(for: $0) }
         payrollPolicyDocumentKey = payrollPolicyDocument.flatMap { document in
             guard JSONSerialization.isValidJSONObject(document),

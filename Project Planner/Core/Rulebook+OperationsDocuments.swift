@@ -445,6 +445,47 @@ extension CanonicalBusinessEngine {
         opsRow("parseVariationDocument", [documentId, peopleDocumentJSON(data)])
     }
 
+    /// `variationEvidenceRemovalWriteFields(stored, { evidenceId, removedBy, removedAt, variationId })` (rulebook 1.27.0
+    /// §24): the `set` map that unlinks one evidence file and records `{ path, name, removedBy, removedAt }` on
+    /// `removedEvidence` — exactly `evidence`, `evidenceCount` and `removedEvidence`, built from the STORED document,
+    /// in Firestore values (`removedAt` and every stored instant back as a `Timestamp`). `.some(nil)` when the evidence
+    /// is not on the variation; nil when the script did not answer.
+    nonisolated static func variationEvidenceRemovalWriteFields(
+        stored: [String: Any],
+        evidenceId: String,
+        removedBy: String,
+        removedAt: Timestamp,
+        variationId: String
+    ) -> [String: Any]?? {
+        let input: [String: Any] = [
+            "evidenceId": evidenceId,
+            "removedBy": removedBy,
+            "removedAt": FirebaseBackend.firestoreJSON(removedAt),
+            "variationId": variationId,
+        ]
+        guard let value = callJSON("variationEvidenceRemovalWriteFields", arguments: [peopleDocumentJSON(stored), input]) else { return nil }
+        if value is NSNull { return .some(nil) }
+        guard let set = (value as? [String: Any])?["set"] as? [String: Any] else { return nil }
+        var fields: [String: Any] = [:]
+        for (key, entry) in set { fields[key] = ScriptFirestoreValue.native(entry) }
+        return .some(fields)
+    }
+
+    /// `canViewRemovedEvidence(role)` (rulebook 1.27.0 §24): admins and super admins outside operative mode.
+    nonisolated static func canViewRemovedEvidence(role: CanonicalStaffAccountRole) -> Bool {
+        let input: [String: Any] = [
+            "isSuperAdmin": role.isSuperAdmin,
+            "isAdmin": role.isAdmin,
+            "isOperativeMode": role.isOperativeMode,
+        ]
+        return callJSON("canViewRemovedEvidence", arguments: [input]) as? Bool ?? false
+    }
+
+    /// `removedEvidenceHeading(count)`: "Removed evidence (n)".
+    nonisolated static func removedEvidenceHeading(_ count: Int) -> String {
+        callJSON("removedEvidenceHeading", arguments: [count]) as? String ?? "Removed evidence (\(max(0, count)))"
+    }
+
     /// `parseVariationTrackerDocument(parentId, data)`: a missing document is a disabled tracker.
     nonisolated static func parseVariationTrackerDocument(parentId: String, data: [String: Any]?) -> CanonicalDocumentRow? {
         let arg: Any = data.map { peopleDocumentJSON($0) as Any } ?? NSNull()

@@ -169,21 +169,28 @@ struct SettingsView: View {
     /// Home-style navy header: avatar, name, organisation and role.
     private var settingsHubProfileCard: some View {
         HStack(alignment: .center, spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [PPColor.glow, PPColor.brand],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+            // RULEBOOK §12: the signed-in profile's photo, initials until it loads.
+            ProfilePhotoAvatar(
+                urlString: userStore.currentUser?.profilePhotoURL,
+                updatedAt: userStore.currentUser?.profilePhotoUpdatedAt
+            ) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [PPColor.glow, PPColor.brand],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
-                    .frame(width: 64, height: 64)
-                Text(settingsHubInitials)
-                    .font(.system(.title2, design: .rounded))
-                    .fontWeight(.bold)
-                    .foregroundStyle(.white)
+                    Text(settingsHubInitials)
+                        .font(.system(.title2, design: .rounded))
+                        .fontWeight(.bold)
+                        .foregroundStyle(.white)
+                }
             }
+            .frame(width: 64, height: 64)
+            .clipShape(Circle())
             .overlay(Circle().strokeBorder(PPColor.onNavyStroke, lineWidth: 1))
             VStack(alignment: .leading, spacing: 6) {
                 PPNavyPageTitle(title: settingsHubDisplayName, subtitle: settingsHubOrgLine)

@@ -27,7 +27,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
         writerIsReviewer: Bool? = nil
     ) {
         // `timesheetOwnerWriteFields`: the owner writes the approved snapshot only when the sheet is self-signed
-        // (`CanonicalBusinessEngine.timesheetSelfSigned` through `TimesheetApprovalPolicy`), i.e. no line manager. An owner save (writerIsReviewer == false) with a line manager leaves the
+        // (`CanonicalBusinessEngine.timesheetSelfSigned` through `TimesheetApprovalPolicy`; 1.28.0: Timesheet self-sign on, or the Super Admin). An owner save (writerIsReviewer == false) with a line manager leaves the
         // stored snapshot exactly as the line manager wrote it.
         if writerIsReviewer == false, TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) { return }
         guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else {

@@ -965,6 +965,14 @@ struct EditOperativeView: View {
     @State private var showingDeleteConfirmation = false
     @State private var tradePresetRaw: String
     @State private var tradeCustomText: String
+    /// RULEBOOK 1.26.1 §8 (`CanonicalBusinessEngine.payEditorStartingValues`): the row with `payProfiles/{rowId}` laid
+    /// over while `privatePay` is on — the rate field's starting value and the save's pay baseline. Nil until read;
+    /// with the switch off it stays nil and the row is used exactly as before.
+    @State private var payRecord: Operative?
+    /// RULEBOOK 1.26.1 §8: read again when the security switches change while the editor is open (`PayEditorLoadGate`).
+    @State private var payLoadGate = PayEditorLoadGate()
+    /// The record the rate field was last seeded from; an untouched field follows a re-read (nil: the row).
+    @State private var payDraftSeed: Operative?
     
     init(operative: Operative) {
         self.operative = operative
@@ -1010,6 +1018,16 @@ struct EditOperativeView: View {
                     .foregroundColor(.blue)
                     .padding(.bottom)
                 
+                if payRecordLoading {
+                    // RULEBOOK 1.26.1 §8: with `privatePay` on, nothing is edited or saved before the starting record.
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Loading pay…")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                    .accessibilityIdentifier("editOperative.payLoading")
+                }
                 Form {
                     Section("Personal Information") {
                         TextField("First Name", text: $firstName)
@@ -1081,6 +1099,7 @@ struct EditOperativeView: View {
                     )
                     TextField("Day rate (\(OrgMoney.symbol()))", text: $dayRate)
                         .accessibilityIdentifier("editOperative.dayRateEG4550")
+                        .disabled(payRecordLoading)
                     if let payErrorMessage {
                         Text(payErrorMessage)
                             .font(.footnote)
@@ -1120,9 +1139,14 @@ struct EditOperativeView: View {
                                 updateOperative()
                             }
                             .accessibilityIdentifier("editOperative.save")
-                            .disabled(!isFormValid)
+                            .disabled(!isFormValid || payRecordLoading)
                         }
             }
+        }
+        .task(id: "\(operative.id)#\(payLoadGate.generation)") { await loadPayRecord() }
+        // RULEBOOK 1.26.1 §8: a switch change re-reads the `CanonicalBusinessEngine.payEditorStartingValues` record.
+        .onReceive(NotificationCenter.default.publisher(for: .securitySwitchesDidChange)) { _ in
+            payLoadGate.switchChanged()
         }
         .alert("Delete Operative", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -1151,6 +1175,41 @@ struct EditOperativeView: View {
         StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
     }
     
+    /// True while `privatePay` is on and the starting record has not been read yet.
+    private var payRecordLoading: Bool {
+        payLoadGate.isLoading(privatePay: SecuritySwitchContext.privatePay)
+    }
+
+    /// The pay baseline (RULEBOOK 1.26.1 §8): the record the rate field started from; the row itself while the switch
+    /// is off.
+    private var payBaseline: Operative { payRecord ?? operative }
+
+    private static func rateText(_ row: Operative) -> String {
+        guard let amount = row.dayRate ?? row.hourlyRate else { return "" }
+        return OrgMoney.format(amount)
+    }
+
+    /// RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: with `privatePay` on, reads
+    /// `payProfiles/{rowId}` and lays it over the row (a refused or missing read keeps the row). With it off nothing is
+    /// read. An untouched rate field follows the record.
+    ///
+    /// Re-run on every `securitySwitchesDidChange` (`PayEditorLoadGate`): Save waits again while `privatePay` is on, a
+    /// read begun before the change is dropped, and only an untouched field is re-seeded.
+    private func loadPayRecord() async {
+        let started = payLoadGate.generation
+        let privatePay = SecuritySwitchContext.privatePay
+        var record = operative
+        if privatePay {
+            let profile = await firebaseBackend.loadPayProfile(subjectId: operative.documentId)
+            record = operative.payShown(with: profile, privatePay: privatePay)
+        }
+        guard !Task.isCancelled, payLoadGate.finish(generation: started) else { return }
+        let seed = payDraftSeed ?? operative
+        payRecord = privatePay ? record : nil
+        payDraftSeed = record
+        dayRate = PayEditorLoadGate.reseeded(draft: dayRate, seededWith: Self.rateText(seed), record: Self.rateText(record))
+    }
+
     private func updateOperative() {
         // Parse the hourly rate, preserving currency symbols
         let parsedRate = parseCurrencyAmount(dayRate)
@@ -1166,8 +1225,11 @@ struct EditOperativeView: View {
         updatedOperative.skills = operative.skills  // skills UI removed; preserve existing
         updatedOperative.qualifications = selectedQualifications
         // One field edits the row's own basis: hourly when only an hourly rate is stored, else day (§8).
-        let rowIsHourly = operative.dayRate == nil && operative.hourlyRate != nil
-        let previousAmount = rowIsHourly ? operative.hourlyRate : operative.dayRate
+        // RULEBOOK 1.26.1 §8 (`CanonicalBusinessEngine.payEditorStartingValues`): basis and previous rate come from the
+        // record the field started from (the row while `privatePay` is off).
+        let baseline = payBaseline
+        let rowIsHourly = baseline.dayRate == nil && baseline.hourlyRate != nil
+        let previousAmount = rowIsHourly ? baseline.hourlyRate : baseline.dayRate
         let newAmount = parsedRate.amount
         let emailNorm = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let linkedUser = userStore.organizationUsers.first(where: {

@@ -27,7 +27,9 @@ var ProjectPlannerCanonical = (() => {
     ACCOUNT_TYPE_OUT_OF_SYNC_MESSAGE: () => ACCOUNT_TYPE_OUT_OF_SYNC_MESSAGE,
     ACCOUNT_TYPE_SUPER_ADMIN_MESSAGE: () => ACCOUNT_TYPE_SUPER_ADMIN_MESSAGE,
     ADMIN_EDITABLE_PERMISSION_FIELDS: () => ADMIN_EDITABLE_PERMISSION_FIELDS,
+    ADMIN_LINE_MANAGER_REQUIRED_MESSAGE: () => ADMIN_LINE_MANAGER_REQUIRED_MESSAGE,
     ADMIN_LOCKED_PERMISSION_MESSAGE: () => ADMIN_LOCKED_PERMISSION_MESSAGE,
+    ADMIN_ONLY_PERMISSION_FIELDS: () => ADMIN_ONLY_PERMISSION_FIELDS,
     ANNUAL_LEAVE_ALLOWANCE_COPY: () => ANNUAL_LEAVE_ALLOWANCE_COPY,
     ANNUAL_LEAVE_BOOKED_LABEL: () => ANNUAL_LEAVE_BOOKED_LABEL,
     ANNUAL_LEAVE_REQUESTED_LABEL: () => ANNUAL_LEAVE_REQUESTED_LABEL,
@@ -68,6 +70,7 @@ var ProjectPlannerCanonical = (() => {
     DEFAULT_VARIATION_PREFIX: () => DEFAULT_VARIATION_PREFIX,
     DEFAULT_WARNINGS_SORT_DIRECTION: () => DEFAULT_WARNINGS_SORT_DIRECTION,
     DEFAULT_WARNING_DETECTION: () => DEFAULT_WARNING_DETECTION,
+    DELETED_DATA_RETENTION_NOTICE: () => DELETED_DATA_RETENTION_NOTICE,
     DELETED_USER_DISPLAY_NAME: () => DELETED_USER_DISPLAY_NAME,
     DELETION_RESTORE_DAYS: () => DELETION_RESTORE_DAYS,
     DEVELOPER_PASSWORD_MIN_LENGTH: () => DEVELOPER_PASSWORD_MIN_LENGTH,
@@ -77,6 +80,8 @@ var ProjectPlannerCanonical = (() => {
     ENFORCED_READS_ACTIVE: () => ENFORCED_READS_ACTIVE,
     ERASED_ORGANIZATIONS_COLLECTION: () => ERASED_ORGANIZATIONS_COLLECTION,
     FALLBACK_LOOKAHEAD_DAYS: () => FALLBACK_LOOKAHEAD_DAYS,
+    FILE_KEPT_ON_REMOVE_COPY: () => FILE_KEPT_ON_REMOVE_COPY,
+    FILE_RECOVERY_RETENTION_DAYS: () => FILE_RECOVERY_RETENTION_DAYS,
     FILE_REPORT_DETAILS_MAX: () => FILE_REPORT_DETAILS_MAX,
     FILE_REPORT_FILE_NAME_MAX: () => FILE_REPORT_FILE_NAME_MAX,
     FILE_REPORT_LINK_LABEL: () => FILE_REPORT_LINK_LABEL,
@@ -84,6 +89,8 @@ var ProjectPlannerCanonical = (() => {
     FILE_REPORT_SENT_COPY: () => FILE_REPORT_SENT_COPY,
     FILE_REPORT_STATUSES: () => FILE_REPORT_STATUSES,
     FILE_REPORT_SURFACES: () => FILE_REPORT_SURFACES,
+    FILE_UNDO_WINDOW_MINUTES: () => FILE_UNDO_WINDOW_MINUTES,
+    FILE_UNDO_WINDOW_MS: () => FILE_UNDO_WINDOW_MS,
     FIRESTORE_IN_QUERY_LIMIT: () => FIRESTORE_IN_QUERY_LIMIT,
     HEALTH_SAFETY_ARRAY_FIELDS: () => HEALTH_SAFETY_ARRAY_FIELDS,
     HEALTH_SAFETY_FILE_FIELDS: () => HEALTH_SAFETY_FILE_FIELDS,
@@ -98,6 +105,7 @@ var ProjectPlannerCanonical = (() => {
     HS_SIGNATURE_STATUSES: () => HS_SIGNATURE_STATUSES,
     IDEMPOTENT_MIGRATION_WRITES: () => IDEMPOTENT_MIGRATION_WRITES,
     INBOX_CREATED_AT_SKEW_MS: () => INBOX_CREATED_AT_SKEW_MS,
+    INVITE_DRAFT_PERSON_ID: () => INVITE_DRAFT_PERSON_ID,
     INVITE_MEMBERSHIP_FIELDS: () => INVITE_MEMBERSHIP_FIELDS,
     IOS_SESSION_ORGANIZATION_STORAGE_KEY: () => IOS_SESSION_ORGANIZATION_STORAGE_KEY,
     JOBS_PER_BOOKING_QUERY: () => JOBS_PER_BOOKING_QUERY,
@@ -133,6 +141,10 @@ var ProjectPlannerCanonical = (() => {
     MATERIAL_ORDER_SEND_REFUSED_MESSAGE: () => MATERIAL_ORDER_SEND_REFUSED_MESSAGE,
     MATERIAL_ORDER_TYPED_RECIPIENTS_MAX: () => MATERIAL_ORDER_TYPED_RECIPIENTS_MAX,
     MATERIAL_ORDER_TYPED_RECIPIENTS_MESSAGE: () => MATERIAL_ORDER_TYPED_RECIPIENTS_MESSAGE,
+    MATERIAL_REQUEST_FROM_SUFFIX: () => MATERIAL_REQUEST_FROM_SUFFIX,
+    MATERIAL_REQUEST_JOB_NOT_FOUND_MESSAGE: () => MATERIAL_REQUEST_JOB_NOT_FOUND_MESSAGE,
+    MATERIAL_REQUEST_JOB_NOT_VISIBLE_MESSAGE: () => MATERIAL_REQUEST_JOB_NOT_VISIBLE_MESSAGE,
+    MATERIAL_REQUEST_JOB_NUMBER_MISMATCH_MESSAGE: () => MATERIAL_REQUEST_JOB_NUMBER_MISMATCH_MESSAGE,
     MATERIAL_STATUS_SYNONYMS: () => MATERIAL_STATUS_SYNONYMS,
     MATERIAL_UNITS: () => MATERIAL_UNITS,
     MATERIAL_WHATSAPP_ITEM_LIMIT: () => MATERIAL_WHATSAPP_ITEM_LIMIT,
@@ -165,7 +177,9 @@ var ProjectPlannerCanonical = (() => {
     ORPHAN_BOOKING_LABEL: () => ORPHAN_BOOKING_LABEL,
     OVERLAPPING_BOOKING_NOTE: () => OVERLAPPING_BOOKING_NOTE,
     OWN_BOOKING_IDS_PER_QUERY: () => OWN_BOOKING_IDS_PER_QUERY,
+    OWN_SELF_MANAGE_MESSAGE: () => OWN_SELF_MANAGE_MESSAGE,
     PASSWORD_MIN_LENGTH: () => PASSWORD_MIN_LENGTH,
+    PAYE_ADMIN_LINE_MANAGER_REQUIRED_MESSAGE: () => PAYE_ADMIN_LINE_MANAGER_REQUIRED_MESSAGE,
     PAYE_PAY_CELL_LABEL: () => PAYE_PAY_CELL_LABEL,
     PAYE_RATE_NOT_USED_NOTE: () => PAYE_RATE_NOT_USED_NOTE,
     PAYMENT_GRACE_MS: () => PAYMENT_GRACE_MS,
@@ -202,18 +216,22 @@ var ProjectPlannerCanonical = (() => {
     ROSTER_DOCUMENT_KEYS: () => ROSTER_DOCUMENT_KEYS,
     ROSTER_NAME_WRITE_GROUP: () => ROSTER_NAME_WRITE_GROUP,
     SCHEDULED_NOTIFICATION_TYPES: () => SCHEDULED_NOTIFICATION_TYPES,
+    SECURITY_SWITCHES: () => SECURITY_SWITCHES,
+    SECURITY_SWITCH_ORGANIZATION_FIELDS: () => SECURITY_SWITCH_ORGANIZATION_FIELDS,
     SELF_EMAIL_INVALID_MESSAGE: () => SELF_EMAIL_INVALID_MESSAGE,
     SENSITIVE_EXPORT_OPTION_LABEL: () => SENSITIVE_EXPORT_OPTION_LABEL,
     SENSITIVE_HELD_BY_ADMIN_COPY: () => SENSITIVE_HELD_BY_ADMIN_COPY,
     SENSITIVE_PROFILE_DOC_ID: () => SENSITIVE_PROFILE_DOC_ID,
     SENSITIVE_PROFILE_FIELDS: () => SENSITIVE_PROFILE_FIELDS,
     SENSITIVE_VALUE_MAX: () => SENSITIVE_VALUE_MAX,
+    STORED_FILE_KINDS: () => STORED_FILE_KINDS,
     SUBCONTRACTOR_BOOKING_DOCUMENT_KEYS: () => SUBCONTRACTOR_BOOKING_DOCUMENT_KEYS,
     SUBCONTRACTOR_BOOKING_PEOPLE_WRITE_GROUP: () => SUBCONTRACTOR_BOOKING_PEOPLE_WRITE_GROUP,
     SUBSCRIPTION_LAPSED_ADMIN_NOTE: () => SUBSCRIPTION_LAPSED_ADMIN_NOTE,
     SUBSCRIPTION_LAPSED_ADMIN_WEB_NOTE: () => SUBSCRIPTION_LAPSED_ADMIN_WEB_NOTE,
     SUBSCRIPTION_LAPSED_MESSAGE: () => SUBSCRIPTION_LAPSED_MESSAGE,
     SUGGESTED_MAX_CARRY_OVER_DAYS: () => SUGGESTED_MAX_CARRY_OVER_DAYS,
+    SUPER_ADMIN_SELF_MANAGE_MESSAGE: () => SUPER_ADMIN_SELF_MANAGE_MESSAGE,
     SYNC_WRITE_TRIGGERS: () => SYNC_WRITE_TRIGGERS,
     TASK_COMPLETION_WRITE_GROUP: () => TASK_COMPLETION_WRITE_GROUP,
     TASK_ITEMS_WRITE_GROUP: () => TASK_ITEMS_WRITE_GROUP,
@@ -235,6 +253,7 @@ var ProjectPlannerCanonical = (() => {
     TIMESHEET_PENDING_NOTICE_TYPE: () => TIMESHEET_PENDING_NOTICE_TYPE,
     TIMESHEET_REVIEWER_ONLY_FIELDS: () => TIMESHEET_REVIEWER_ONLY_FIELDS,
     TIMESHEET_SELF_SIGNED_OWNER_FIELDS: () => TIMESHEET_SELF_SIGNED_OWNER_FIELDS,
+    TIMESHEET_SELF_SIGN_PAYE_NOTE: () => TIMESHEET_SELF_SIGN_PAYE_NOTE,
     TIMESHEET_SIGNED_AFTER_MS: () => TIMESHEET_SIGNED_AFTER_MS,
     TIMESHEET_SIGNED_NOTICE_TYPE: () => TIMESHEET_SIGNED_NOTICE_TYPE,
     TIMESHEET_SUBMISSION_NOTICE_TITLE: () => TIMESHEET_SUBMISSION_NOTICE_TITLE,
@@ -347,11 +366,13 @@ var ProjectPlannerCanonical = (() => {
     canSendMaterialOrders: () => canSendMaterialOrders,
     canViewMaterialOrderHistory: () => canViewMaterialOrderHistory,
     canViewPersonPay: () => canViewPersonPay,
+    canViewRemovedEvidence: () => canViewRemovedEvidence,
     canViewSensitiveProfile: () => canViewSensitiveProfile,
     canViewStaffWarnings: () => canViewStaffWarnings,
     canWriteBooking: () => canWriteBooking,
     canonicalJobTypeName: () => canonicalJobTypeName,
     capitalizeTimesheetWeekday: () => capitalizeTimesheetWeekday,
+    catalogueOperativePaySubjects: () => catalogueOperativePaySubjects,
     catalogueRecordFromItem: () => catalogueRecordFromItem,
     chooseSessionOrganization: () => chooseSessionOrganization,
     clampMonthDayInZone: () => clampMonthDayInZone,
@@ -418,6 +439,7 @@ var ProjectPlannerCanonical = (() => {
     excludeActor: () => excludeActor,
     exclusiveRates: () => exclusiveRates,
     exportIncludesSensitiveFields: () => exportIncludesSensitiveFields,
+    fileDeletePermission: () => fileDeletePermission,
     fileReportCollectionPath: () => fileReportCollectionPath,
     fileReportFileName: () => fileReportFileName,
     fileReportReasonCopy: () => fileReportReasonCopy,
@@ -463,10 +485,12 @@ var ProjectPlannerCanonical = (() => {
     invitationRole: () => invitationRole,
     invitationUsedWriteFields: () => invitationUsedWriteFields,
     inviteAcceptWrites: () => inviteAcceptWrites,
+    inviteDraftLineManagerSubject: () => inviteDraftLineManagerSubject,
     inviteEmailHasLiveClaim: () => inviteEmailHasLiveClaim,
     inviteEmailOrgLookupConstraints: () => inviteEmailOrgLookupConstraints,
     inviteMembershipWrites: () => inviteMembershipWrites,
     inviteMigrationFormerIdWriteFields: () => inviteMigrationFormerIdWriteFields,
+    invitePayProfileCopyWrite: () => invitePayProfileCopyWrite,
     invitePlaceholderUserWriteFields: () => invitePlaceholderUserWriteFields,
     inviteWritesOperativeProfile: () => inviteWritesOperativeProfile,
     invoiceLines: () => invoiceLines,
@@ -489,6 +513,7 @@ var ProjectPlannerCanonical = (() => {
     isLegacyPlaceholderDocumentId: () => isLegacyPlaceholderDocumentId,
     isOpenBookingStatus: () => isOpenBookingStatus,
     isOrganizationSuperAdmin: () => isOrganizationSuperAdmin,
+    isPayeAccount: () => isPayeAccount,
     isPayrollTimePolicyState: () => isPayrollTimePolicyState,
     isPersonInWarningScope: () => isPersonInWarningScope,
     isPlatformOwnerEmail: () => isPlatformOwnerEmail,
@@ -498,6 +523,7 @@ var ProjectPlannerCanonical = (() => {
     isSiteLocationType: () => isSiteLocationType,
     isStaffAccount: () => isStaffAccount,
     isStandardWorkingWeekday: () => isStandardWorkingWeekday,
+    isSuperAdminAccount: () => isSuperAdminAccount,
     isTaskCompleted: () => isTaskCompleted,
     isTaskOverdue: () => isTaskOverdue,
     isTimesheetAwaitingSignOff: () => isTimesheetAwaitingSignOff,
@@ -557,6 +583,7 @@ var ProjectPlannerCanonical = (() => {
     lineManagerRequired: () => lineManagerRequired,
     lineManagerRequiredError: () => lineManagerRequiredError,
     lineManagerSelectedIds: () => lineManagerSelectedIds,
+    lineManagerSelectionAfterLevelChange: () => lineManagerSelectionAfterLevelChange,
     lineManagerSummary: () => lineManagerSummary,
     listedCurrentLabourPeople: () => listedCurrentLabourPeople,
     listedRosterUsers: () => listedRosterUsers,
@@ -585,6 +612,10 @@ var ProjectPlannerCanonical = (() => {
     materialOrderRecipients: () => materialOrderRecipients,
     materialQuantityLabel: () => materialQuantityLabel,
     materialRecordMatches: () => materialRecordMatches,
+    materialRequestEmailEnvelope: () => materialRequestEmailEnvelope,
+    materialRequestEmailSubject: () => materialRequestEmailSubject,
+    materialRequestJobCheck: () => materialRequestJobCheck,
+    materialRequestJobViewer: () => materialRequestJobViewer,
     materialSearchScore: () => materialSearchScore,
     materialSendRecordCreateFields: () => materialSendRecordCreateFields,
     materialSendStatusWriteFields: () => materialSendStatusWriteFields,
@@ -745,9 +776,11 @@ var ProjectPlannerCanonical = (() => {
     parseWholesalerDocument: () => parseWholesalerDocument,
     passwordMinLength: () => passwordMinLength,
     passwordPolicyError: () => passwordPolicyError,
+    payEditorStartingValues: () => payEditorStartingValues,
     payForHours: () => payForHours,
     payProfileBackfillWrites: () => payProfileBackfillWrites,
     payProfilePath: () => payProfilePath,
+    payProfileReadPlan: () => payProfileReadPlan,
     payProfileWriteFieldsFromProfileWrite: () => payProfileWriteFieldsFromProfileWrite,
     payRateChangeWrites: () => payRateChangeWrites,
     payRateHistoryWriteFields: () => payRateHistoryWriteFields,
@@ -808,12 +841,14 @@ var ProjectPlannerCanonical = (() => {
     qualificationSectionChipLabel: () => qualificationSectionChipLabel,
     rankMaterialRecords: () => rankMaterialRecords,
     rankQualificationRecords: () => rankQualificationRecords,
+    rateHistoryQueryPlan: () => rateHistoryQueryPlan,
     readCrossPlatformSample: () => readCrossPlatformSample,
     readStoredRates: () => readStoredRates,
     readsEveryBooking: () => readsEveryBooking,
     receivesJobNotification: () => receivesJobNotification,
     recordsToSave: () => recordsToSave,
     rememberedOrganizationSurvivesSignOut: () => rememberedOrganizationSurvivesSignOut,
+    removedEvidenceHeading: () => removedEvidenceHeading,
     removedQualificationCertificateIds: () => removedQualificationCertificateIds,
     replayRefusedIsFinal: () => replayRefusedIsFinal,
     reportDayValue: () => reportDayValue,
@@ -842,14 +877,18 @@ var ProjectPlannerCanonical = (() => {
     rulebookStamp: () => rulebookStamp,
     scheduleOptionsWriteFields: () => scheduleOptionsWriteFields,
     screenMustListen: () => screenMustListen,
+    securitySwitchOn: () => securitySwitchOn,
+    securitySwitches: () => securitySwitches,
     seesEveryJob: () => seesEveryJob,
     seesEveryUserTimesheet: () => seesEveryUserTimesheet,
     selectableTimesheetPaymentRunPeriods: () => selectableTimesheetPaymentRunPeriods,
     selfEmailChangeAction: () => selfEmailChangeAction,
     selfEmailChangeSentMessage: () => selfEmailChangeSentMessage,
+    selfManageToggles: () => selfManageToggles,
     sensitiveProfileDocPath: () => sensitiveProfileDocPath,
     sensitiveProfileWriteFields: () => sensitiveProfileWriteFields,
     sessionMembershipIds: () => sessionMembershipIds,
+    sharedDocumentPayWrite: () => sharedDocumentPayWrite,
     sharedWarningResolutionKey: () => sharedWarningResolutionKey,
     shouldClearRememberedOrganization: () => shouldClearRememberedOrganization,
     showsMyTimesheets: () => showsMyTimesheets,
@@ -866,6 +905,9 @@ var ProjectPlannerCanonical = (() => {
     standardDayOn: () => standardDayOn,
     standardDayWindow: () => standardDayWindow,
     starterCollectionShouldSeed: () => starterCollectionShouldSeed,
+    storedFileKind: () => storedFileKind,
+    storedFileObjectName: () => storedFileObjectName,
+    storedFileUploader: () => storedFileUploader,
     storedJobIdForKey: () => storedJobIdForKey,
     storedPermissionFlag: () => storedPermissionFlag,
     stringFromJobTypeField: () => stringFromJobTypeField,
@@ -951,6 +993,7 @@ var ProjectPlannerCanonical = (() => {
     validateInvoicingSettings: () => validateInvoicingSettings,
     validateLeaveYearMonths: () => validateLeaveYearMonths,
     validatePayrollTimePolicy: () => validatePayrollTimePolicy,
+    variationEvidenceRemovalWriteFields: () => variationEvidenceRemovalWriteFields,
     variationLineId: () => variationLineId,
     variationLogItemId: () => variationLogItemId,
     variationLogItems: () => variationLogItems,
@@ -1261,8 +1304,8 @@ var ProjectPlannerCanonical = (() => {
     if (typeof value === "number") {
       return Number.isFinite(value) && value >= 0 && value <= 24 * 60 ? Math.round(value) : null;
     }
-    const text23 = String(value ?? "").trim();
-    const match = /^(\d{1,2}):(\d{2})$/.exec(text23);
+    const text24 = String(value ?? "").trim();
+    const match = /^(\d{1,2}):(\d{2})$/.exec(text24);
     if (!match) return null;
     const hours = Number(match[1]);
     const minutes = Number(match[2]);
@@ -3445,15 +3488,15 @@ var ProjectPlannerCanonical = (() => {
   }
   var COVERAGE_CLOCK_RE = /^\d{1,2}:\d{2}$/;
   function clockMinutesOf(value) {
-    const text23 = coverageClock(value);
-    if (!text23) return null;
-    const [h, m] = text23.split(":").map(Number);
+    const text24 = coverageClock(value);
+    if (!text24) return null;
+    const [h, m] = text24.split(":").map(Number);
     return h * 60 + m;
   }
   function coverageClock(value) {
-    const text23 = typeof value === "string" ? value.trim() : "";
-    if (!COVERAGE_CLOCK_RE.test(text23)) return null;
-    const [h, m] = text23.split(":").map(Number);
+    const text24 = typeof value === "string" ? value.trim() : "";
+    if (!COVERAGE_CLOCK_RE.test(text24)) return null;
+    const [h, m] = text24.split(":").map(Number);
     return h >= 0 && h < 24 && m >= 0 && m < 60 ? `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}` : null;
   }
   function parseWeekendCoverage(value, includeWeekends) {
@@ -3785,8 +3828,8 @@ var ProjectPlannerCanonical = (() => {
     const total = plainHoursText(Math.max(0, clock * n - brk));
     return roundHundredths(brk) > 0 ? `${multiplied} \u2212 ${plainHoursText(brk)} break = ${total}` : `${multiplied} = ${total}`;
   }
-  function parseMultipliedHoursText(text23) {
-    const match = /(\d+(?:\.\d+)?)h × (\d+(?:\.\d+)?)(?: − (\d+(?:\.\d+)?)h break)? = \d+(?:\.\d+)?h/.exec(String(text23 ?? ""));
+  function parseMultipliedHoursText(text24) {
+    const match = /(\d+(?:\.\d+)?)h × (\d+(?:\.\d+)?)(?: − (\d+(?:\.\d+)?)h break)? = \d+(?:\.\d+)?h/.exec(String(text24 ?? ""));
     if (!match) return null;
     const clockHours = Number(match[1]);
     const multiplier = Number(match[2]);
@@ -4999,8 +5042,8 @@ var ProjectPlannerCanonical = (() => {
   }
   function formatHours(hours) {
     const rounded = Math.round(hours * 4) / 4;
-    const text23 = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace(/0+$/, "");
-    return `${text23} hour${rounded === 1 ? "" : "s"}`;
+    const text24 = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace(/0+$/, "");
+    return `${text24} hour${rounded === 1 ? "" : "s"}`;
   }
   function joinRanges(intervals) {
     const labels = intervals.map(rangeLabel);
@@ -5231,6 +5274,8 @@ var ProjectPlannerCanonical = (() => {
     "subContractors",
     "wholesalersOrderHistory",
     "annualLeaveSelfBook",
+    // 1.28.0: admins only (`ADMIN_ONLY_PERMISSION_FIELDS`); reads off for a manager or operative.
+    "timesheetSelfSign",
     "weeklyReports",
     "dailyOverview"
   ];
@@ -5903,18 +5948,35 @@ var ProjectPlannerCanonical = (() => {
     const named = roleText(user.role);
     return flagOn2(user, "isSuperAdmin") || flagOn2(user, "adminAccess") || named === "admin" || named === "super_admin" || named === "superadmin";
   }
+  function isSuperAdminAccount(user) {
+    if (!user) return false;
+    if (typeof user.organizationSuperAdmin === "boolean") return user.organizationSuperAdmin;
+    const role = roleObject(user.role);
+    if (role?.isSuperAdmin === true) return true;
+    const named = roleText(user.role);
+    return flagOn2(user, "isSuperAdmin") || named === "super_admin" || named === "superadmin";
+  }
+  function isPayeAccount(user) {
+    return text(user?.employmentType).toLowerCase() === "paye";
+  }
+  function selfManageToggles(user) {
+    const admin = isAdminOutsideOperativeMode(user) || user?.organizationSuperAdmin === true;
+    const superAdmin = admin && isSuperAdminAccount(user);
+    const annualLeaveSelfBook = !!user && !inOperativeMode(user) && (superAdmin || flagOn2(user, "annualLeaveSelfBook"));
+    const timesheetSelfSign = admin && (superAdmin || flagOn2(user, "timesheetSelfSign"));
+    const timesheetApplies = !isPayeAccount(user);
+    const satisfied = admin && annualLeaveSelfBook && (timesheetSelfSign || !timesheetApplies);
+    return { annualLeaveSelfBook, timesheetSelfSign, timesheetApplies, superAdmin, satisfied };
+  }
   function lineManagerRequired(user) {
     if (!user || user.isActive === false) return false;
-    return !isAdminOutsideOperativeMode(user);
+    return !selfManageToggles(user).satisfied;
   }
-  function timesheetSelfSigned(user, roster) {
-    return isAdminOutsideOperativeMode(user) && !hasActiveLineManager(user, roster);
+  function timesheetSelfSigned(user, _roster) {
+    return selfManageToggles(user).timesheetSelfSign;
   }
-  function canSelfBookAnnualLeave(user, roster) {
-    if (!user) return false;
-    if (inOperativeMode(user)) return false;
-    if (flagOn2(user, "annualLeaveSelfBook")) return true;
-    return timesheetSelfSigned(user, roster);
+  function canSelfBookAnnualLeave(user, _roster) {
+    return selfManageToggles(user).annualLeaveSelfBook;
   }
   var LEAVE_SUBMIT_LABEL = "Submit";
   var LEAVE_SUBMIT_REQUEST_LABEL = "Submit request";
@@ -5922,9 +5984,13 @@ var ProjectPlannerCanonical = (() => {
     return canSelfBookAnnualLeave(user, roster) ? LEAVE_SUBMIT_LABEL : LEAVE_SUBMIT_REQUEST_LABEL;
   }
   var LINE_MANAGER_REQUIRED_MESSAGE = "Set a line manager \u2014 this person's timesheets and annual leave need approval.";
+  var ADMIN_LINE_MANAGER_REQUIRED_MESSAGE = "Set a line manager, or turn on both Annual Leave Management and Timesheet self-sign \u2014 this person's timesheets and annual leave need approval.";
+  var PAYE_ADMIN_LINE_MANAGER_REQUIRED_MESSAGE = "Set a line manager, or turn on Annual Leave Management \u2014 this person's annual leave needs approval.";
   function lineManagerRequiredError(user, roster) {
     if (!lineManagerRequired(user)) return null;
-    return hasActiveLineManager(user, roster) ? null : LINE_MANAGER_REQUIRED_MESSAGE;
+    if (hasActiveLineManager(user, roster)) return null;
+    if (!isAdminOutsideOperativeMode(user)) return LINE_MANAGER_REQUIRED_MESSAGE;
+    return isPayeAccount(user) ? PAYE_ADMIN_LINE_MANAGER_REQUIRED_MESSAGE : ADMIN_LINE_MANAGER_REQUIRED_MESSAGE;
   }
   function usersMissingLineManager(roster) {
     const members = (roster || []).filter((member) => member && text(member.id));
@@ -7700,7 +7766,8 @@ var ProjectPlannerCanonical = (() => {
   }
 
   // lib/canonical/permissionLevels.ts
-  var ADMIN_EDITABLE_PERMISSION_FIELDS = ["annualLeaveSelfBook"];
+  var ADMIN_EDITABLE_PERMISSION_FIELDS = ["annualLeaveSelfBook", "timesheetSelfSign"];
+  var ADMIN_ONLY_PERMISSION_FIELDS = ["timesheetSelfSign"];
   var MANAGER_LOCKED_ON_PERMISSION_FIELDS = ["materials", "siteAudit"];
   var PERMISSION_DEFAULT_ON = [
     "materials",
@@ -7709,6 +7776,9 @@ var ProjectPlannerCanonical = (() => {
     "dailyOverview"
   ];
   var ADMIN_LOCKED_PERMISSION_MESSAGE = "Administrators have this on. Change user type to remove admin access.";
+  var SUPER_ADMIN_SELF_MANAGE_MESSAGE = "The Super Admin always books their own leave and signs their own timesheet.";
+  var OWN_SELF_MANAGE_MESSAGE = "You cannot change your own self-manage toggles. Ask another admin.";
+  var TIMESHEET_SELF_SIGN_PAYE_NOTE = "Not used while PAYE \u2014 PAYE has no timesheets.";
   function bool(value) {
     if (value === true || value === false) return value;
     if (typeof value === "number" && Number.isFinite(value)) return value !== 0;
@@ -7732,6 +7802,16 @@ var ProjectPlannerCanonical = (() => {
     const role = record2(user).role;
     return typeof role === "string" ? role.trim().toLowerCase().replace(/[\s-]/g, "_") : "";
   }
+  function storedSuperAdmin(user) {
+    const perOrganization = record2(user).organizationSuperAdmin;
+    if (typeof perOrganization === "boolean") return perOrganization;
+    const role = roleToken(user);
+    return storedPermissionFlag(user, "isSuperAdmin") === true || role === "super_admin" || role === "superadmin";
+  }
+  function storedPaye(user) {
+    const value = record2(user).employmentType;
+    return typeof value === "string" && value.trim().toLowerCase() === "paye";
+  }
   function permissionLevelOf(user) {
     const role = roleToken(user);
     if (storedPermissionFlag(user, "isSuperAdmin") === true || storedPermissionFlag(user, "adminAccess") === true || role === "admin" || role === "super_admin" || role === "superadmin") {
@@ -7742,8 +7822,9 @@ var ProjectPlannerCanonical = (() => {
   }
   function lockedPermissionFields(user, level) {
     const resolved = level ?? permissionLevelOf(user);
-    if (resolved === "manager") return [...MANAGER_LOCKED_ON_PERMISSION_FIELDS];
-    if (resolved !== "admin") return [];
+    if (resolved === "manager") return [...MANAGER_LOCKED_ON_PERMISSION_FIELDS, ...ADMIN_ONLY_PERMISSION_FIELDS];
+    if (resolved !== "admin") return [...ADMIN_ONLY_PERMISSION_FIELDS];
+    if (storedSuperAdmin(user)) return [...USER_PERMISSION_FIELDS];
     return USER_PERMISSION_FIELDS.filter((key3) => !ADMIN_EDITABLE_PERMISSION_FIELDS.includes(key3));
   }
   function effectivePermissions(user, level) {
@@ -7753,12 +7834,15 @@ var ProjectPlannerCanonical = (() => {
     if (resolved === "admin") {
       for (const key3 of USER_PERMISSION_FIELDS) out[key3] = true;
       out.operativeMode = false;
-      out.annualLeaveSelfBook = stored("annualLeaveSelfBook", false);
+      const superAdmin = storedSuperAdmin(user);
+      out.annualLeaveSelfBook = superAdmin || stored("annualLeaveSelfBook", false);
+      out.timesheetSelfSign = superAdmin || stored("timesheetSelfSign", false);
       return out;
     }
     for (const key3 of USER_PERMISSION_FIELDS) out[key3] = stored(key3, PERMISSION_DEFAULT_ON.includes(key3));
     out.skills = false;
     out.adminAccess = false;
+    for (const key3 of ADMIN_ONLY_PERMISSION_FIELDS) out[key3] = false;
     if (resolved === "operative") {
       out.operativeMode = true;
       out.manager = false;
@@ -7805,8 +7889,8 @@ var ProjectPlannerCanonical = (() => {
   function keepStoredLockedPermissions(before, next) {
     if (!before || !next || typeof next !== "object") return next;
     const level = permissionLevelOf(before);
-    if (permissionLevelOf({ ...before, ...next }) !== level) return next;
-    const locked = lockedPermissionFields(before, level);
+    const nextLevel = permissionLevelOf({ ...before, ...next });
+    const locked = nextLevel !== level ? nextLevel === "admin" ? [] : [...ADMIN_ONLY_PERMISSION_FIELDS] : lockedPermissionFields(before, level);
     if (locked.length === 0) return next;
     const out = { ...next };
     for (const key3 of locked) {
@@ -7855,6 +7939,12 @@ var ProjectPlannerCanonical = (() => {
       levels: ["admin", "manager"]
     },
     {
+      field: "timesheetSelfSign",
+      label: "Timesheet self-sign",
+      help: "Sign your own timesheet and generate the invoice without a line manager's signature.",
+      levels: ["admin"]
+    },
+    {
       field: "operatives",
       label: "Operatives",
       help: "Can add and manage operatives and view their details. If off, they can still schedule active operatives onto the jobs they manage, but do not see Manage Operatives or full operative profiles.",
@@ -7894,15 +7984,22 @@ var ProjectPlannerCanonical = (() => {
     const level = input?.level === "admin" || input?.level === "operative" ? input.level : "manager";
     const values = input?.user != null ? effectivePermissions(input.user, level) : addUserPermissionDefaults(level);
     const locked = lockedPermissionFields(input?.user ?? {}, level);
+    const superAdmin = level === "admin" && storedSuperAdmin(input?.user);
+    const paye = storedPaye(input?.user);
     return PERMISSION_TOGGLE_CATALOGUE.map((row2) => {
       const visible = row2.levels.includes(level);
+      const selfManage = level === "admin" && ADMIN_EDITABLE_PERMISSION_FIELDS.includes(row2.field);
+      const payeTimesheet = level === "admin" && row2.field === "timesheetSelfSign" && paye && !superAdmin;
+      const own = selfManage && input?.viewerIsSubject === true && !superAdmin;
+      const note = selfManage && superAdmin ? SUPER_ADMIN_SELF_MANAGE_MESSAGE : payeTimesheet ? TIMESHEET_SELF_SIGN_PAYE_NOTE : own ? OWN_SELF_MANAGE_MESSAGE : null;
       return {
         field: row2.field,
         label: row2.label,
         help: row2.help,
         visible,
-        editable: visible && input?.mode !== "summary" && !locked.includes(row2.field),
-        value: values[row2.field] === true
+        editable: visible && input?.mode !== "summary" && !locked.includes(row2.field) && !payeTimesheet && !own,
+        value: values[row2.field] === true,
+        note
       };
     });
   }
@@ -8945,8 +9042,8 @@ var ProjectPlannerCanonical = (() => {
     return typeof value === "string" ? value.trim().toLowerCase() : "";
   }
   function dayKeyText(value) {
-    const text23 = typeof value === "string" ? value.trim() : "";
-    return DAY_KEY2.test(text23) ? text23 : null;
+    const text24 = typeof value === "string" ? value.trim() : "";
+    return DAY_KEY2.test(text24) ? text24 : null;
   }
   function compareText(a, b) {
     if (a === b) return 0;
@@ -9074,8 +9171,8 @@ var ProjectPlannerCanonical = (() => {
   function personDayItems(input) {
     const managerIdByKey = /* @__PURE__ */ new Map();
     for (const id2 of input?.managerIds || []) {
-      const text23 = idText2(id2);
-      if (text23) managerIdByKey.set(text23.toLowerCase(), text23);
+      const text24 = idText2(id2);
+      if (text24) managerIdByKey.set(text24.toLowerCase(), text24);
     }
     const people = input?.people || { accounts: [], operatives: [] };
     const managerIdByEmail = /* @__PURE__ */ new Map();
@@ -10000,8 +10097,8 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/rulebookStamp.ts
   function rulebookStamp() {
     return {
-      version: true ? "1.23.1" : "",
-      sha256: true ? "d7182a37f2e5fd38def1f6f4c22c857e9eceef1af13792dd0b7fa4804fdead43" : ""
+      version: true ? "1.28.0" : "",
+      sha256: true ? "043412f948c2ed11e75d2d41b1316deb5fe4271056f28e27ce71a4b90d39a91a" : ""
     };
   }
 
@@ -12801,8 +12898,58 @@ var ProjectPlannerCanonical = (() => {
       })),
       submittedAtMs: documentInstantMs(row2.submittedAt),
       closedAtMs: documentInstantMs(row2.closedAt),
-      isDeleted: documentBool(row2.isDeleted) === true
+      isDeleted: documentBool(row2.isDeleted) === true,
+      removedEvidence: parseRemovedEvidence(row2.removedEvidence)
     };
+  }
+  function parseRemovedEvidence(value) {
+    const out = [];
+    for (const entry of rows2(value)) {
+      const path = text14(entry.path);
+      if (!path) continue;
+      out.push({ path, name: text14(entry.name) || "file", removedBy: text14(entry.removedBy), removedAtMs: documentInstantMs(entry.removedAt) });
+    }
+    return out;
+  }
+  function variationEvidenceRemovalWriteFields(stored, input) {
+    const row2 = record6(stored);
+    const evidenceId = text14(input?.evidenceId);
+    if (!evidenceId) return null;
+    const variationId = text14(input?.variationId) || text14(row2.id);
+    const raw = Array.isArray(row2.evidence) ? row2.evidence : [];
+    let removed = null;
+    const kept = [];
+    for (const [index, entry] of raw.entries()) {
+      const line = record6(entry);
+      const hasFile = Boolean(text14(line.storagePath) || text14(line.downloadURL));
+      const id2 = text14(line.id) || variationLineId(variationId, "evidence", index, line);
+      if (!removed && hasFile && id2 === evidenceId) {
+        removed = line;
+        continue;
+      }
+      kept.push(entry);
+    }
+    if (!removed) return null;
+    const removedEvidence = rows2(row2.removedEvidence).map((entry) => ({ ...entry }));
+    removedEvidence.push({
+      path: text14(removed.storagePath) || text14(removed.downloadURL),
+      name: text14(removed.fileName) || "file",
+      removedBy: text14(input?.removedBy),
+      removedAt: input?.removedAt ?? null
+    });
+    const evidenceCount = kept.filter((entry) => {
+      const line = record6(entry);
+      return Boolean(text14(line.storagePath) || text14(line.downloadURL));
+    }).length;
+    return { set: { evidence: kept, evidenceCount, removedEvidence } };
+  }
+  function canViewRemovedEvidence(role) {
+    if (!role || role.isOperativeMode === true) return false;
+    return role.isSuperAdmin === true || role.isAdmin === true;
+  }
+  function removedEvidenceHeading(count) {
+    const n = typeof count === "number" && Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+    return `Removed evidence (${n})`;
   }
   var VARIATION_LABOUR_WRITE_GROUP = ["labour", "totalLabourHours"];
   var VARIATION_MATERIALS_WRITE_GROUP = ["materials", "materialLineCount"];
@@ -13564,6 +13711,7 @@ var ProjectPlannerCanonical = (() => {
     "subContractors",
     "wholesalersOrderHistory",
     "annualLeaveSelfBook",
+    "timesheetSelfSign",
     "weeklyReports",
     "dailyOverview"
   ];
@@ -13952,6 +14100,31 @@ var ProjectPlannerCanonical = (() => {
     if (invitedBy) membership.invitedBy = invitedBy;
     return { organizationId, membership, membersField: `members.${authUid}`, role };
   }
+  var INVITED_PAY_FIELDS = [
+    "payBasis",
+    "dayRate",
+    "hourlyRate",
+    "employmentType",
+    "employmentTypeTransitionFrom",
+    "employmentTypeEffectiveAt"
+  ];
+  function invitePayProfileCopyWrite(input) {
+    if (input?.privatePay !== true) return null;
+    const authUid = text18(input.authUid);
+    const placeholderId = text18(input.placeholderId);
+    if (!authUid || !placeholderId || placeholderId === authUid) return null;
+    if (record7(input.accountProfile)) return null;
+    const source = record7(input.placeholderProfile);
+    if (!source) return null;
+    const set = { userId: authUid };
+    let copied = 0;
+    for (const key3 of INVITED_PAY_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(source, key3)) continue;
+      set[key3] = source[key3];
+      copied += 1;
+    }
+    return copied > 0 ? { subjectId: authUid, set } : null;
+  }
 
   // lib/canonical/lineManagers.ts
   var NO_LINE_MANAGER_LABEL = "No line manager";
@@ -14035,7 +14208,8 @@ var ProjectPlannerCanonical = (() => {
   }
   function lineManagerOptions(person) {
     const required = lineManagerRequired(person);
-    return { required, allowsNoLineManager: !required, noLineManagerLabel: NO_LINE_MANAGER_LABEL, noLineManagerHelp: NO_LINE_MANAGER_HELP };
+    const allowsNoLineManager = !required || isAdminOutsideOperativeMode(person);
+    return { required, allowsNoLineManager, noLineManagerLabel: NO_LINE_MANAGER_LABEL, noLineManagerHelp: NO_LINE_MANAGER_HELP };
   }
   var UNKNOWN_PERSON_LABEL = "Unknown person";
   function lineManagerSummary(person, roster) {
@@ -14058,6 +14232,50 @@ var ProjectPlannerCanonical = (() => {
     const moreCount = Math.max(0, ids.length - 1);
     const label = ids.length === 0 ? LINE_MANAGER_NOT_SET_LABEL : moreCount >= 1 ? `${ids[0].name} +${moreCount} more` : ids[0].name;
     return { label, ids, moreCount };
+  }
+  function lineManagerSelectionAfterLevelChange(picks, newLevel, roster, person) {
+    const level = text19(newLevel).toLowerCase();
+    const resolved = level === "admin" || level === "operative" ? level : "manager";
+    const levelSubject = {
+      isActive: true,
+      role: resolved,
+      adminAccess: resolved === "admin",
+      operativeMode: resolved === "operative"
+    };
+    const rows3 = (roster || []).filter((row2) => row2 && text19(row2.id));
+    const candidates = lineManagerCandidates(person || null, rows3);
+    const groups = rosterPersonGroups(rows3);
+    const lineManagerIds2 = [];
+    const dropped = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const raw of picks?.lineManagerIds || []) {
+      const id2 = text19(raw);
+      if (!id2) continue;
+      const group = groups.find((entry) => entry.keys.has(idKey2(id2)));
+      const candidate = group ? candidates.find((entry) => group.keys.has(idKey2(entry.id))) : candidates.find((entry) => idKey2(entry.id) === idKey2(id2));
+      if (!candidate) {
+        dropped.push(id2);
+        continue;
+      }
+      if (seen.has(idKey2(candidate.id))) continue;
+      seen.add(idKey2(candidate.id));
+      lineManagerIds2.push(candidate.id);
+    }
+    const hasNoLineManager = picks?.hasNoLineManager === true && lineManagerOptions(levelSubject).allowsNoLineManager;
+    return { lineManagerIds: lineManagerIds2, hasNoLineManager, dropped };
+  }
+  var INVITE_DRAFT_PERSON_ID = "invite-draft";
+  function inviteDraftLineManagerSubject(input) {
+    const level = text19(input?.level).toLowerCase();
+    const resolved = level === "admin" || level === "operative" ? level : "manager";
+    return {
+      id: INVITE_DRAFT_PERSON_ID,
+      email: text19(input?.email).toLowerCase(),
+      role: resolved,
+      isActive: true,
+      adminAccess: resolved === "admin",
+      operativeMode: resolved === "operative"
+    };
   }
 
   // lib/canonical/orgRoster.ts
@@ -14171,16 +14389,35 @@ var ProjectPlannerCanonical = (() => {
     }
     return false;
   }
+  var SECURITY_SWITCHES = ["enforcedReads", "privatePay"];
+  var SECURITY_SWITCH_ORGANIZATION_FIELDS = {
+    enforcedReads: "enforcedReadsOrganizationIds",
+    privatePay: "privatePayOrganizationIds"
+  };
+  function securitySwitchOn(config, organizationId, name) {
+    if (!config || typeof config !== "object") return false;
+    if (config[name] === true) return true;
+    const id2 = typeof organizationId === "string" ? organizationId : "";
+    if (!id2) return false;
+    const list = config[SECURITY_SWITCH_ORGANIZATION_FIELDS[name]];
+    return Array.isArray(list) && list.some((entry) => entry === id2);
+  }
+  function securitySwitches(config, organizationId) {
+    return {
+      enforcedReads: securitySwitchOn(config, organizationId, "enforcedReads"),
+      privatePay: securitySwitchOn(config, organizationId, "privatePay")
+    };
+  }
 
   // lib/canonical/bookingSlots.ts
   var WEEKDAY_TIME_SLOTS = ["FULL DAY", "CUSTOM"];
   var WEEKEND_TIME_SLOTS = ["CUSTOM"];
   function isoWeekdayOf(day, timeZone) {
     if (typeof day === "number") return day;
-    const text23 = String(day || "").trim().toLowerCase();
-    if (text23 === "saturday") return 6;
-    if (text23 === "sunday") return 7;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text23)) return isoWeekdayOfDayKey(text23, zoneOrLondon(timeZone));
+    const text24 = String(day || "").trim().toLowerCase();
+    if (text24 === "saturday") return 6;
+    if (text24 === "sunday") return 7;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text24)) return isoWeekdayOfDayKey(text24, zoneOrLondon(timeZone));
     return 0;
   }
   function isWeekendDayKey(dayKey, timeZone) {
@@ -14503,8 +14740,33 @@ var ProjectPlannerCanonical = (() => {
     if (viewer.isActive === false) return false;
     const level = permissionLevelOf(viewer);
     if (level === "admin") return true;
+    const operativesManager = level === "manager" && effectivePermissions(viewer).operatives === true;
+    if (subject.catalogueOperative === true) return operativesManager;
     if (lineManagerIds(subject, roster).some((id2) => viewerIds.has(idKey2(id2)))) return true;
-    return level === "manager" && effectivePermissions(viewer).operatives === true && permissionLevelOf(subject) === "operative";
+    return operativesManager && permissionLevelOf(subject) === "operative";
+  }
+  function catalogueOperativePaySubjects(operatives, roster) {
+    const rosterIds = /* @__PURE__ */ new Set();
+    const rosterEmails = /* @__PURE__ */ new Set();
+    for (const member of roster || []) {
+      if (!member) continue;
+      for (const id2 of personIdSet(member, null)) rosterIds.add(idKey2(id2));
+      const email = idKey2(member.email);
+      if (email) rosterEmails.add(email);
+    }
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const row2 of operatives || []) {
+      const id2 = typeof row2?.id === "string" ? row2.id.trim() : "";
+      if (!id2 || seen.has(idKey2(id2))) continue;
+      const linked = [row2.linkedUserId, row2.userId, row2.uid].some((value) => typeof value === "string" && value.trim() !== "");
+      if (linked || rosterIds.has(idKey2(id2))) continue;
+      const email = typeof row2.email === "string" ? row2.email.trim() : "";
+      if (email && rosterEmails.has(idKey2(email))) continue;
+      seen.add(idKey2(id2));
+      out.push({ id: id2, email: email || null, catalogueOperative: true });
+    }
+    return out;
   }
   function parsePayProfileDocument(docId, data) {
     const fields = {};
@@ -14545,6 +14807,69 @@ var ProjectPlannerCanonical = (() => {
       }
     }
     return { profileSet, sourceRemove };
+  }
+  function viewerSeesEveryPay(viewer) {
+    if (viewer.isPlatformOwner === true) return true;
+    if (viewer.isActive === false) return false;
+    return permissionLevelOf(viewer) === "admin";
+  }
+  function viewablePayIds(viewer, subjects, roster) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    const add = (raw) => {
+      const id2 = typeof raw === "string" ? raw.trim() : "";
+      if (!id2 || seen.has(id2)) return;
+      seen.add(id2);
+      out.push(id2);
+    };
+    add(viewer.id);
+    for (const subject of subjects || []) {
+      if (subject && canViewPersonPay(viewer, subject, roster)) add(subject.id);
+    }
+    return out;
+  }
+  function viewableCatalogueIds(viewer, subjects, roster) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const subject of subjects || []) {
+      if (!subject || subject.catalogueOperative !== true) continue;
+      const id2 = typeof subject.id === "string" ? subject.id.trim() : "";
+      if (!id2 || seen.has(id2) || !canViewPersonPay(viewer, subject, roster)) continue;
+      seen.add(id2);
+      out.push(id2);
+    }
+    return out;
+  }
+  function rateHistoryQueryPlan(viewer, subjects, roster, options) {
+    if (options?.privatePay !== true) return { kind: "all" };
+    if (!viewer) return { kind: "people", userIds: [], operativeIds: [] };
+    if (viewerSeesEveryPay(viewer)) return { kind: "all" };
+    const operativeIds = viewableCatalogueIds(viewer, subjects, roster);
+    const catalogue = new Set(operativeIds);
+    const userIds = viewablePayIds(viewer, subjects, roster).filter((id2) => !catalogue.has(id2));
+    return { kind: "people", userIds, operativeIds };
+  }
+  function payProfileReadPlan(viewer, subjects, roster) {
+    if (!viewer) return { kind: "documents", ids: [] };
+    if (viewerSeesEveryPay(viewer)) return { kind: "all" };
+    return { kind: "documents", ids: viewablePayIds(viewer, subjects, roster) };
+  }
+  function sharedDocumentPayWrite(write, options) {
+    if (options?.privatePay !== true || !write) return write;
+    const out = {};
+    for (const [key3, value] of Object.entries(write)) {
+      if (PAY_PROFILE_FIELDS.includes(key3)) continue;
+      out[key3] = value;
+    }
+    return out;
+  }
+  function payEditorStartingValues(person, profile, options) {
+    const overlaid = options?.privatePay === true && profile ? overlayPayProfile(person, profile) : person;
+    const record9 = overlaid || {};
+    const pay = readStoredRates(record9);
+    const rate = pay.payBasis === "hourly" ? pay.hourlyRate : pay.dayRate;
+    const employmentType = Object.prototype.hasOwnProperty.call(record9, "employmentType") ? record9.employmentType ?? null : null;
+    return { record: record9, pay, rate, employmentType, source: overlaid !== person ? "payProfile" : "users" };
   }
 
   // lib/canonical/emailChange.ts
@@ -14622,9 +14947,70 @@ var ProjectPlannerCanonical = (() => {
     }
     return { ok: true, saved: savedOut, typed, self: includesSelf };
   }
+  var MATERIAL_REQUEST_FROM_SUFFIX = " via Project Planner";
+  function materialRequestEmailSubject(requestType, jobNumber, companyName) {
+    const job = jobNumber == null ? "" : String(jobNumber);
+    const company = companyName == null ? "" : String(companyName);
+    return requestType === "quote" ? `Quote request \u2014 ${job} \u2014 ${company}` : `Material order request \u2014 ${job} \u2014 ${company}`;
+  }
+  function materialRequestEmailEnvelope(input) {
+    const name = typeof input?.caller?.name === "string" ? input.caller.name.trim() : "";
+    const email = normalizedEmail(input?.caller?.email);
+    const validEmail = email && looksLikeEmail(email) ? email : "";
+    const fromName = name && name.toLowerCase() !== email ? `${name}${MATERIAL_REQUEST_FROM_SUFFIX}` : "";
+    return {
+      subject: materialRequestEmailSubject(input?.requestType, input?.jobNumber, input?.companyName),
+      fromName,
+      replyTo: validEmail,
+      cc: validEmail ? [validEmail] : []
+    };
+  }
+  var MATERIAL_REQUEST_JOB_NOT_FOUND_MESSAGE = "Job not found in this organisation";
+  var MATERIAL_REQUEST_JOB_NOT_VISIBLE_MESSAGE = "You cannot send materials for this job.";
+  var MATERIAL_REQUEST_JOB_NUMBER_MISMATCH_MESSAGE = "The job number does not match this job. Reopen the job and send again.";
+  function materialRequestJobViewer(input) {
+    const level = typeof input?.level === "string" ? input.level.trim().toLowerCase() : "";
+    const resolved = level === "admin" || level === "manager" ? level : "operative";
+    const superAdmin = input?.isSuperAdmin === true && resolved === "admin";
+    const effective = effectivePermissions(input?.permissionSource || {}, resolved);
+    const ids = [];
+    for (const raw of [input?.userId, ...input?.formerUserIds || [], ...input?.sameEmailUserIds || []]) {
+      const id2 = typeof raw === "string" ? raw.trim() : "";
+      if (id2 && !ids.includes(id2)) ids.push(id2);
+    }
+    return {
+      role: {
+        isSuperAdmin: superAdmin,
+        isAdmin: resolved === "admin",
+        isManager: resolved === "manager",
+        isOperativeMode: resolved === "operative"
+      },
+      toggles: { projects: effective.projects === true, smallWorks: effective.smallWorks === true },
+      uid: ids[0] || null,
+      ids,
+      email: normalizedEmail(input?.email) || null
+    };
+  }
+  function jobNumberKey(value) {
+    const raw = typeof value === "number" && Number.isFinite(value) ? String(value) : typeof value === "string" ? value : "";
+    return raw.trim().replace(/\s+/g, " ").toLowerCase();
+  }
+  function materialRequestJobCheck(input) {
+    if (!input?.job) {
+      return { ok: false, reason: "job_not_found", status: 404, message: MATERIAL_REQUEST_JOB_NOT_FOUND_MESSAGE };
+    }
+    if (!canSeeJob(input.viewer ?? null, input.job, input.managers ?? null, input.kind ?? null)) {
+      return { ok: false, reason: "job_not_visible", status: 403, message: MATERIAL_REQUEST_JOB_NOT_VISIBLE_MESSAGE };
+    }
+    const sent = jobNumberKey(input.jobNumber);
+    if (!sent || sent !== jobNumberKey(input.job.jobNumber)) {
+      return { ok: false, reason: "job_number_mismatch", status: 409, message: MATERIAL_REQUEST_JOB_NUMBER_MISMATCH_MESSAGE };
+    }
+    return { ok: true };
+  }
 
   // lib/canonical/organizationDeletion.ts
-  var DELETION_RESTORE_DAYS = 60;
+  var DELETION_RESTORE_DAYS = 30;
   var DAY_MS = 24 * 60 * 60 * 1e3;
   var ORGANIZATION_DELETE_CONFIRMATION = "DELETE";
   var ORGANIZATION_DELETE_TITLE = "Delete organisation";
@@ -15844,6 +16230,101 @@ var ProjectPlannerCanonical = (() => {
   }
   function openVariationCount(rows3) {
     return (rows3 || []).filter((row2) => row2 && row2.isDeleted !== true && idKey2(row2.status) === "open").length;
+  }
+
+  // lib/canonical/storedFiles.ts
+  var FILE_UNDO_WINDOW_MINUTES = 15;
+  var FILE_UNDO_WINDOW_MS = FILE_UNDO_WINDOW_MINUTES * 60 * 1e3;
+  var FILE_KEPT_ON_REMOVE_COPY = "Removed from this list. The file itself is kept so an admin can restore it.";
+  var FILE_RECOVERY_RETENTION_DAYS = 30;
+  var DELETED_DATA_RETENTION_NOTICE = "A deleted company can be restored for 30 days, after which its data is erased. Deleted files, including the files of an erased company, are kept for up to 30 days so they can be recovered, then permanently removed.";
+  var STORED_FILE_KINDS = [
+    "profile_photo",
+    "company_logo",
+    "timesheet_export",
+    "qualification_certificate",
+    "variation_evidence",
+    "site_audit_photo",
+    "task_attachment",
+    "health_safety"
+  ];
+  function text23(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function storedFileKind(storagePath) {
+    const path = text23(storagePath);
+    if (!path || path.startsWith("/") || path.includes("..") || path.includes("//")) return null;
+    const parts = path.split("/");
+    if (parts.length < 4 || parts[0] !== "organizations" || !parts[1]) return null;
+    const organizationId = parts[1];
+    const objectName = parts[parts.length - 1];
+    if (!objectName) return null;
+    const rest = parts.slice(2);
+    const base = { organizationId, objectName, ownerUserId: null };
+    if (rest.length === 3 && rest[0] === "userProfiles" && rest[2] === "profile.jpg" && rest[1]) {
+      return { ...base, kind: "profile_photo", ownerUserId: rest[1] };
+    }
+    if (rest.length === 3 && rest[0] === "branding" && rest[1] === "company_logo") return { ...base, kind: "company_logo" };
+    if (rest.length === 2 && rest[0] === "timesheetExports") return { ...base, kind: "timesheet_export" };
+    if (rest.length === 6 && rest[0] === "operatives" && rest[2] === "qualifications" && rest[4] === "certificates") {
+      return { ...base, kind: "qualification_certificate" };
+    }
+    if (rest.length === 4 && rest[0] === "healthSafety" && (rest[2] === "variations" || rest[2] === "variationEvidence")) {
+      return { ...base, kind: "variation_evidence" };
+    }
+    if (rest.length === 3 && rest[0] === "variations") return { ...base, kind: "variation_evidence" };
+    if (rest.length >= 2 && rest[0] === "siteAudits") return { ...base, kind: "site_audit_photo" };
+    if (rest.length >= 2 && rest[0] === "tasks") return { ...base, kind: "task_attachment" };
+    if (rest.length >= 2 && rest[0] === "healthSafety") return { ...base, kind: "health_safety" };
+    return null;
+  }
+  var UID_PATTERN = /^[A-Za-z0-9-]+$/;
+  function storedFileObjectName(input) {
+    const uid = text23(input.uid);
+    if (!uid || !UID_PATTERN.test(uid)) return null;
+    const ms = Math.floor(Number(input.unixMs));
+    if (!Number.isFinite(ms) || ms < 0) return null;
+    const ext = text23(input.extension).toLowerCase().replace(/^\.+/, "").replace(/[^a-z0-9]/g, "");
+    return ext ? `${uid}_${ms}.${ext}` : `${uid}_${ms}`;
+  }
+  function storedFileUploader(storagePath) {
+    const parsed = storedFileKind(storagePath);
+    if (!parsed) return null;
+    if (parsed.kind === "profile_photo") return parsed.ownerUserId ? { uploaderUserId: parsed.ownerUserId, uploadedAtMs: null } : null;
+    if (parsed.kind === "timesheet_export") return null;
+    const match = parsed.objectName.match(/^([A-Za-z0-9-]+)_([0-9]{1,16})(?:\.[A-Za-z0-9]+)?$/);
+    if (!match) return null;
+    return { uploaderUserId: match[1], uploadedAtMs: Number(match[2]) };
+  }
+  function isFileAdmin(role) {
+    if (!role || role.isOperativeMode) return false;
+    return role.isSuperAdmin === true || role.isAdmin === true;
+  }
+  function fileDeletePermission(input) {
+    const viewer = text23(input.viewerUserId);
+    const deny = (reason, undoEndsAtMs2 = null) => ({
+      allowed: false,
+      reason,
+      undoEndsAtMs: undoEndsAtMs2
+    });
+    if (!viewer) return deny("signed_out");
+    const parsed = storedFileKind(input.storagePath);
+    if (!parsed) return deny("unknown_path");
+    const org = text23(input.organizationId);
+    if (!org || parsed.organizationId.toLowerCase() !== org.toLowerCase()) return deny("other_organization");
+    if (isFileAdmin(input.viewerRole)) return { allowed: true, reason: "admin", undoEndsAtMs: null };
+    if (parsed.kind === "profile_photo") {
+      return parsed.ownerUserId === viewer ? { allowed: true, reason: "own_profile_photo", undoEndsAtMs: null } : deny("not_uploader");
+    }
+    if (parsed.kind === "company_logo" || parsed.kind === "timesheet_export") return deny("admin_only");
+    const uploader = storedFileUploader(input.storagePath);
+    if (!uploader || uploader.uploaderUserId !== viewer) return deny("not_uploader");
+    const given = Number(input.uploadedAtMs);
+    const uploadedAtMs = input.uploadedAtMs != null && Number.isFinite(given) ? given : uploader.uploadedAtMs;
+    if (uploadedAtMs == null) return deny("undo_expired");
+    const undoEndsAtMs = uploadedAtMs + FILE_UNDO_WINDOW_MS;
+    if (Number(input.nowMs) < undoEndsAtMs) return { allowed: true, reason: "uploader_undo", undoEndsAtMs };
+    return deny("undo_expired", undoEndsAtMs);
   }
   return __toCommonJS(bundleEntry_exports);
 })();

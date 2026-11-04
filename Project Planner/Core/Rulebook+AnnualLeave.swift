@@ -263,16 +263,23 @@ extension CanonicalBusinessEngine {
 
     // MARK: - Self-booking, line-manager requirement, deciders (§8, §9, §11)
 
-    /// `canSelfBookAnnualLeave(user, roster)`: the self-book permission outside operative mode, or an admin /
-    /// super admin outside operative mode with no active line manager (§9). Nil when the script did not answer.
+    /// `canSelfBookAnnualLeave(user, roster)` (RULEBOOK 1.28.0 §9): Annual Leave Management outside operative mode, or
+    /// the organisation's Super Admin. Having no line manager never self-books anyone. Nil when the script did not answer.
     nonisolated static func canSelfBookAnnualLeave(user: [String: Any], roster: [[String: Any]]) -> Bool? {
         callJSON("canSelfBookAnnualLeave", arguments: [user, roster]) as? Bool
     }
 
-    /// `lineManagerRequiredError(user, roster)`: `LINE_MANAGER_REQUIRED_MESSAGE` when this person needs a
-    /// current line manager and has none, else nil.
+    /// `lineManagerRequiredError(user, roster)`: when this person needs a current line manager and has none, the
+    /// message for who they are (`LINE_MANAGER_REQUIRED_MESSAGE`; 1.28.0 `ADMIN_LINE_MANAGER_REQUIRED_MESSAGE` or
+    /// `PAYE_ADMIN_LINE_MANAGER_REQUIRED_MESSAGE` for an admin whose self-manage toggles are not both on), else nil.
     nonisolated static func lineManagerRequiredError(user: [String: Any], roster: [[String: Any]]) -> String? {
         callJSON("lineManagerRequiredError", arguments: [user, roster]) as? String
+    }
+
+    /// `lineManagerRequired(user)` (RULEBOOK 1.28.0 §8): every operative and manager, and every admin whose self-manage
+    /// toggles are not satisfied. Nil when the script did not answer.
+    nonisolated static func lineManagerRequired(user: [String: Any]) -> Bool? {
+        callJSON("lineManagerRequired", arguments: [user]) as? Bool
     }
 
     /// `usersMissingLineManager(roster)`: ids that fail `lineManagerRequiredError`. Nil when the script did not answer.

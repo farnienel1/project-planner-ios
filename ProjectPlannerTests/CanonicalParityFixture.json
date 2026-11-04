@@ -1421,7 +1421,7 @@
       "expected": "Set a line manager — this person's timesheets and annual leave need approval."
     },
     {
-      "name": "usersMissingLineManager: the admins clean-up list",
+      "name": "usersMissingLineManager: the admins clean-up list (1.28.0: an admin with no line manager and Timesheet self-sign off is on it)",
       "function": "usersMissingLineManager",
       "args": [
         [
@@ -1502,6 +1502,7 @@
         ]
       ],
       "expected": [
+        "ADMIN",
         "LM",
         "MGR2",
         "OP2",
@@ -2650,7 +2651,7 @@
       "expected": true
     },
     {
-      "name": "lineManagerRequired: an admin does not",
+      "name": "lineManagerRequired: 1.28.0 an admin with the self-manage toggles off needs one",
       "function": "lineManagerRequired",
       "args": [
         {
@@ -2658,7 +2659,7 @@
           "role": "admin"
         }
       ],
-      "expected": false
+      "expected": true
     },
     {
       "name": "lineManagerRequired: a super admin flag does not",
@@ -2672,7 +2673,7 @@
       "expected": false
     },
     {
-      "name": "lineManagerRequired: 1.11.0 an admin has no operative mode, so a stray flag does not make one required",
+      "name": "lineManagerRequired: 1.28.0 an admin with a stray operative-mode flag and the self-manage toggles off needs one",
       "function": "lineManagerRequired",
       "args": [
         {
@@ -2684,7 +2685,7 @@
           }
         }
       ],
-      "expected": false
+      "expected": true
     },
     {
       "name": "lineManagerRequired: an inactive person is not checked",
@@ -2933,7 +2934,7 @@
       "expected": "Set a line manager — this person's timesheets and annual leave need approval."
     },
     {
-      "name": "lineManagerRequiredError: an admin without a line manager passes",
+      "name": "lineManagerRequiredError: 1.28.0 an admin without a line manager and the self-manage toggles off is refused",
       "function": "lineManagerRequiredError",
       "args": [
         {
@@ -3117,7 +3118,7 @@
           }
         ]
       ],
-      "expected": null
+      "expected": "Set a line manager, or turn on both Annual Leave Management and Timesheet self-sign — this person's timesheets and annual leave need approval."
     },
     {
       "name": "lineManagerRequiredError: an admin with a line manager passes",
@@ -4863,7 +4864,7 @@
       ]
     },
     {
-      "name": "timesheetSelfSigned: an admin with no line manager",
+      "name": "timesheetSelfSigned: 1.28.0 an admin with Timesheet self-sign on",
       "function": "timesheetSelfSigned",
       "args": [
         {
@@ -4874,7 +4875,8 @@
             "isAdmin": true,
             "isManager": false,
             "isOperativeMode": false
-          }
+          },
+          "timesheetSelfSign": true
         },
         [
           {
@@ -5428,7 +5430,7 @@
       "expected": false
     },
     {
-      "name": "timesheetSelfSigned: 1.11.0 an admin with a stray operative-mode flag is (admins have no operative mode)",
+      "name": "timesheetSelfSigned: 1.11.0 an admin with a stray operative-mode flag and Timesheet self-sign on is (admins have no operative mode)",
       "function": "timesheetSelfSigned",
       "args": [
         {
@@ -5439,7 +5441,8 @@
             "isAdmin": true,
             "isManager": false,
             "isOperativeMode": true
-          }
+          },
+          "timesheetSelfSign": true
         },
         [
           {
@@ -5615,7 +5618,7 @@
       "expected": true
     },
     {
-      "name": "canSelfBookAnnualLeave: an admin with no line manager saves approved",
+      "name": "canSelfBookAnnualLeave: 1.28.0 an admin with no line manager and Annual Leave Management off asks",
       "function": "canSelfBookAnnualLeave",
       "args": [
         {
@@ -5799,7 +5802,7 @@
           }
         ]
       ],
-      "expected": true
+      "expected": false
     },
     {
       "name": "canSelfBookAnnualLeave: an admin with a line manager asks",
@@ -6185,7 +6188,7 @@
       "expected": true
     },
     {
-      "name": "leaveSubmitLabel: self-approved admin",
+      "name": "leaveSubmitLabel: 1.28.0 an admin with Annual Leave Management on",
       "function": "leaveSubmitLabel",
       "args": [
         {
@@ -6196,7 +6199,8 @@
             "isAdmin": true,
             "isManager": false,
             "isOperativeMode": false
-          }
+          },
+          "annualLeaveSelfBook": true
         },
         [
           {
@@ -7528,7 +7532,7 @@
       ]
     },
     {
-      "name": "timesheetSubmittedRecipients: a self-signed admin notifies nobody",
+      "name": "timesheetSubmittedRecipients: a self-signed admin (1.28.0 Timesheet self-sign on) notifies nobody",
       "function": "timesheetSubmittedRecipients",
       "args": [
         "ADMIN",
@@ -7541,7 +7545,8 @@
               "isAdmin": true,
               "isManager": false,
               "isOperativeMode": false
-            }
+            },
+            "timesheetSelfSign": true
           },
           {
             "id": "ADMIN_LM",
@@ -8972,7 +8977,7 @@
       ]
     },
     {
-      "name": "holidayRequestRecipients: self-booked leave notifies nobody",
+      "name": "holidayRequestRecipients: self-booked leave (1.28.0 Annual Leave Management on) notifies nobody",
       "function": "holidayRequestRecipients",
       "args": [
         "ADMIN",
@@ -8985,7 +8990,8 @@
               "isAdmin": true,
               "isManager": false,
               "isOperativeMode": false
-            }
+            },
+            "annualLeaveSelfBook": true
           },
           {
             "id": "ADMIN_LM",
@@ -18016,6 +18022,2430 @@
           "email": "a@x.com",
           "role": "admin"
         }
+      ],
+      "expected": false
+    },
+    {
+      "name": "1.24.0 lineManagerSelectionAfterLevelChange: admin to operative keeps the valid picks, drops No line manager",
+      "function": "lineManagerSelectionAfterLevelChange",
+      "args": [
+        {
+          "lineManagerIds": [
+            "MGR-OLD",
+            "gone",
+            "op",
+            "adm"
+          ],
+          "hasNoLineManager": true
+        },
+        "operative",
+        [
+          {
+            "id": "adm",
+            "email": "adm@x.com",
+            "firstName": "Ann",
+            "surname": "Admin",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "mgr",
+            "email": "mgr@x.com",
+            "firstName": "Max",
+            "surname": "Manager",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "MGR-OLD",
+            "email": "MGR@x.com",
+            "firstName": "Max",
+            "surname": "Manager",
+            "isActive": false,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "gone",
+            "email": "gone@x.com",
+            "firstName": "Gil",
+            "surname": "Gone",
+            "isActive": false,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op",
+            "email": "op@x.com",
+            "firstName": "Oli",
+            "surname": "Operative",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "operative",
+            "operativeMode": true
+          }
+        ]
+      ],
+      "expected": {
+        "lineManagerIds": [
+          "mgr",
+          "adm"
+        ],
+        "hasNoLineManager": false,
+        "dropped": [
+          "gone",
+          "op"
+        ]
+      }
+    },
+    {
+      "name": "1.24.0 lineManagerSelectionAfterLevelChange: to admin keeps No line manager",
+      "function": "lineManagerSelectionAfterLevelChange",
+      "args": [
+        {
+          "lineManagerIds": [],
+          "hasNoLineManager": true
+        },
+        "admin",
+        [
+          {
+            "id": "adm",
+            "email": "adm@x.com",
+            "firstName": "Ann",
+            "surname": "Admin",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "mgr",
+            "email": "mgr@x.com",
+            "firstName": "Max",
+            "surname": "Manager",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "MGR-OLD",
+            "email": "MGR@x.com",
+            "firstName": "Max",
+            "surname": "Manager",
+            "isActive": false,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "gone",
+            "email": "gone@x.com",
+            "firstName": "Gil",
+            "surname": "Gone",
+            "isActive": false,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op",
+            "email": "op@x.com",
+            "firstName": "Oli",
+            "surname": "Operative",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "operative",
+            "operativeMode": true
+          }
+        ]
+      ],
+      "expected": {
+        "lineManagerIds": [],
+        "hasNoLineManager": true,
+        "dropped": []
+      }
+    },
+    {
+      "name": "1.24.0 lineManagerSelectionAfterLevelChange: never the person being added (same email)",
+      "function": "lineManagerSelectionAfterLevelChange",
+      "args": [
+        {
+          "lineManagerIds": [
+            "mgr",
+            "adm"
+          ]
+        },
+        "manager",
+        [
+          {
+            "id": "adm",
+            "email": "adm@x.com",
+            "firstName": "Ann",
+            "surname": "Admin",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "mgr",
+            "email": "mgr@x.com",
+            "firstName": "Max",
+            "surname": "Manager",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "MGR-OLD",
+            "email": "MGR@x.com",
+            "firstName": "Max",
+            "surname": "Manager",
+            "isActive": false,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "gone",
+            "email": "gone@x.com",
+            "firstName": "Gil",
+            "surname": "Gone",
+            "isActive": false,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op",
+            "email": "op@x.com",
+            "firstName": "Oli",
+            "surname": "Operative",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "operative",
+            "operativeMode": true
+          }
+        ],
+        {
+          "id": "invite-draft",
+          "email": "mgr@x.com"
+        }
+      ],
+      "expected": {
+        "lineManagerIds": [
+          "adm"
+        ],
+        "hasNoLineManager": false,
+        "dropped": [
+          "mgr"
+        ]
+      }
+    },
+    {
+      "name": "1.24.0 materialRequestEmailEnvelope: quote",
+      "function": "materialRequestEmailEnvelope",
+      "args": [
+        {
+          "requestType": "quote",
+          "jobNumber": "J-101",
+          "companyName": "Acme Ltd",
+          "caller": {
+            "name": "Sam Smith",
+            "email": "Sam@Acme.com"
+          }
+        }
+      ],
+      "expected": {
+        "subject": "Quote request — J-101 — Acme Ltd",
+        "fromName": "Sam Smith via Project Planner",
+        "replyTo": "sam@acme.com",
+        "cc": [
+          "sam@acme.com"
+        ]
+      }
+    },
+    {
+      "name": "1.24.0 materialRequestEmailEnvelope: order, no caller name",
+      "function": "materialRequestEmailEnvelope",
+      "args": [
+        {
+          "requestType": "order",
+          "jobNumber": "J-101",
+          "companyName": "Acme Ltd",
+          "caller": {
+            "name": "",
+            "email": "sam@acme.com"
+          }
+        }
+      ],
+      "expected": {
+        "subject": "Material order request — J-101 — Acme Ltd",
+        "fromName": "",
+        "replyTo": "sam@acme.com",
+        "cc": [
+          "sam@acme.com"
+        ]
+      }
+    },
+    {
+      "name": "1.25.0 fileDeletePermission: uploader inside the 15-minute undo window",
+      "function": "fileDeletePermission",
+      "args": [
+        {
+          "storagePath": "organizations/org-a/operatives/op1/qualifications/q1/certificates/op-a_1762000000000.pdf",
+          "organizationId": "org-a",
+          "viewerUserId": "op-a",
+          "viewerRole": {
+            "isSuperAdmin": false,
+            "isAdmin": false,
+            "isManager": false,
+            "isOperativeMode": true
+          },
+          "nowMs": 1762000060000
+        }
+      ],
+      "expected": {
+        "allowed": true,
+        "reason": "uploader_undo",
+        "undoEndsAtMs": 1762000900000
+      }
+    },
+    {
+      "name": "1.25.0 fileDeletePermission: uploader after the undo window",
+      "function": "fileDeletePermission",
+      "args": [
+        {
+          "storagePath": "organizations/org-a/operatives/op1/qualifications/q1/certificates/op-a_1762000000000.pdf",
+          "organizationId": "org-a",
+          "viewerUserId": "op-a",
+          "viewerRole": {
+            "isSuperAdmin": false,
+            "isAdmin": false,
+            "isManager": false,
+            "isOperativeMode": true
+          },
+          "nowMs": 1762000900000
+        }
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "undo_expired",
+        "undoEndsAtMs": 1762000900000
+      }
+    },
+    {
+      "name": "1.25.0 fileDeletePermission: a manager never deletes another person's file",
+      "function": "fileDeletePermission",
+      "args": [
+        {
+          "storagePath": "organizations/org-a/operatives/op1/qualifications/q1/certificates/op-a_1762000000000.pdf",
+          "organizationId": "org-a",
+          "viewerUserId": "mgr",
+          "viewerRole": {
+            "isSuperAdmin": false,
+            "isAdmin": false,
+            "isManager": true,
+            "isOperativeMode": false
+          },
+          "nowMs": 1762000060000
+        }
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "not_uploader",
+        "undoEndsAtMs": null
+      }
+    },
+    {
+      "name": "1.25.0 fileDeletePermission: an admin of this organisation",
+      "function": "fileDeletePermission",
+      "args": [
+        {
+          "storagePath": "organizations/org-a/operatives/op1/qualifications/q1/certificates/op-a_1762000000000.pdf",
+          "organizationId": "ORG-A",
+          "viewerUserId": "adm",
+          "viewerRole": {
+            "isSuperAdmin": false,
+            "isAdmin": true,
+            "isManager": false,
+            "isOperativeMode": false
+          },
+          "nowMs": 1762086400000
+        }
+      ],
+      "expected": {
+        "allowed": true,
+        "reason": "admin",
+        "undoEndsAtMs": null
+      }
+    },
+    {
+      "name": "1.25.0 fileDeletePermission: company logo is admin only",
+      "function": "fileDeletePermission",
+      "args": [
+        {
+          "storagePath": "organizations/org-a/branding/company_logo/mgr_1762000000000.png",
+          "organizationId": "org-a",
+          "viewerUserId": "mgr",
+          "viewerRole": {
+            "isSuperAdmin": false,
+            "isAdmin": false,
+            "isManager": true,
+            "isOperativeMode": false
+          },
+          "nowMs": 1762000000000
+        }
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "admin_only",
+        "undoEndsAtMs": null
+      }
+    },
+    {
+      "name": "1.25.0 storedFileKind: iOS variation fallback path",
+      "function": "storedFileKind",
+      "args": [
+        "organizations/org-a/variations/V1/op-a_1.jpg"
+      ],
+      "expected": {
+        "organizationId": "org-a",
+        "objectName": "op-a_1.jpg",
+        "ownerUserId": null,
+        "kind": "variation_evidence"
+      }
+    },
+    {
+      "name": "1.25.0 storedFileObjectName: uid, upload time and extension",
+      "function": "storedFileObjectName",
+      "args": [
+        {
+          "uid": "op-a",
+          "unixMs": 1700000000000,
+          "extension": "PDF"
+        }
+      ],
+      "expected": "op-a_1700000000000.pdf"
+    },
+    {
+      "name": "1.25.0 storedFileUploader: from the object name",
+      "function": "storedFileUploader",
+      "args": [
+        "organizations/org-a/operatives/op1/qualifications/q1/certificates/op-a_1762000000000.pdf"
+      ],
+      "expected": {
+        "uploaderUserId": "op-a",
+        "uploadedAtMs": 1762000000000
+      }
+    },
+    {
+      "name": "1.26.1 payEditorStartingValues: privatePay off — the users document as stored, a stale pay profile ignored",
+      "function": "payEditorStartingValues",
+      "args": [
+        {
+          "firstName": "Pat",
+          "dayRate": 120,
+          "payBasis": "day",
+          "employmentType": "self_employed"
+        },
+        {
+          "subjectId": "u1",
+          "fields": {
+            "dayRate": 150,
+            "payBasis": "day"
+          }
+        },
+        {
+          "privatePay": false
+        }
+      ],
+      "expected": {
+        "record": {
+          "firstName": "Pat",
+          "dayRate": 120,
+          "payBasis": "day",
+          "employmentType": "self_employed"
+        },
+        "pay": {
+          "payBasis": "day",
+          "dayRate": 120,
+          "hourlyRate": null
+        },
+        "rate": 120,
+        "employmentType": "self_employed",
+        "source": "users"
+      }
+    },
+    {
+      "name": "1.26.1 payEditorStartingValues: privatePay on — the pay profile laid over a stale users rate",
+      "function": "payEditorStartingValues",
+      "args": [
+        {
+          "firstName": "Pat",
+          "dayRate": 120,
+          "payBasis": "day",
+          "employmentType": "self_employed"
+        },
+        {
+          "subjectId": "u1",
+          "fields": {
+            "dayRate": 150,
+            "payBasis": "day"
+          }
+        },
+        {
+          "privatePay": true
+        }
+      ],
+      "expected": {
+        "record": {
+          "firstName": "Pat",
+          "dayRate": 150,
+          "payBasis": "day",
+          "employmentType": "self_employed"
+        },
+        "pay": {
+          "payBasis": "day",
+          "dayRate": 150,
+          "hourlyRate": null
+        },
+        "rate": 150,
+        "employmentType": "self_employed",
+        "source": "payProfile"
+      }
+    },
+    {
+      "name": "1.26.1 payEditorStartingValues: privatePay on after the strip — hourly profile, PAYE, no pay on users",
+      "function": "payEditorStartingValues",
+      "args": [
+        {
+          "firstName": "Pat"
+        },
+        {
+          "subjectId": "u1",
+          "fields": {
+            "hourlyRate": 30,
+            "payBasis": "hourly",
+            "employmentType": "paye"
+          }
+        },
+        {
+          "privatePay": true
+        }
+      ],
+      "expected": {
+        "record": {
+          "firstName": "Pat",
+          "hourlyRate": 30,
+          "payBasis": "hourly",
+          "employmentType": "paye"
+        },
+        "pay": {
+          "payBasis": "hourly",
+          "dayRate": null,
+          "hourlyRate": 30
+        },
+        "rate": 30,
+        "employmentType": "paye",
+        "source": "payProfile"
+      }
+    },
+    {
+      "name": "1.26.1 payEditorStartingValues: privatePay on, no readable pay profile — the users document",
+      "function": "payEditorStartingValues",
+      "args": [
+        {
+          "firstName": "Pat",
+          "dayRate": 120,
+          "payBasis": "day",
+          "employmentType": "self_employed"
+        },
+        null,
+        {
+          "privatePay": true
+        }
+      ],
+      "expected": {
+        "record": {
+          "firstName": "Pat",
+          "dayRate": 120,
+          "payBasis": "day",
+          "employmentType": "self_employed"
+        },
+        "pay": {
+          "payBasis": "day",
+          "dayRate": 120,
+          "hourlyRate": null
+        },
+        "rate": 120,
+        "employmentType": "self_employed",
+        "source": "users"
+      }
+    },
+    {
+      "name": "1.26.1 payEditorStartingValues: rate cleared on the pay profile (null) is not set",
+      "function": "payEditorStartingValues",
+      "args": [
+        {
+          "firstName": "Pat",
+          "dayRate": 120,
+          "payBasis": "day",
+          "employmentType": "self_employed"
+        },
+        {
+          "subjectId": "u1",
+          "fields": {
+            "dayRate": null,
+            "payBasis": null
+          }
+        },
+        {
+          "privatePay": true
+        }
+      ],
+      "expected": {
+        "record": {
+          "firstName": "Pat",
+          "dayRate": null,
+          "payBasis": null,
+          "employmentType": "self_employed"
+        },
+        "pay": {
+          "payBasis": null,
+          "dayRate": null,
+          "hourlyRate": null
+        },
+        "rate": null,
+        "employmentType": "self_employed",
+        "source": "payProfile"
+      }
+    },
+    {
+      "name": "1.27.0 inviteDraftLineManagerSubject: id invite-draft, email lower case, the level",
+      "function": "inviteDraftLineManagerSubject",
+      "args": [
+        {
+          "email": " New.Person@Example.com ",
+          "level": "operative"
+        }
+      ],
+      "expected": {
+        "id": "invite-draft",
+        "email": "new.person@example.com",
+        "role": "operative",
+        "isActive": true,
+        "adminAccess": false,
+        "operativeMode": true
+      }
+    },
+    {
+      "name": "1.27.0 lineManagerCandidates: the invite draft as person — the invitee's own email row is never offered",
+      "function": "lineManagerCandidates",
+      "args": [
+        {
+          "id": "invite-draft",
+          "email": "new.person@example.com",
+          "role": "manager",
+          "isActive": true,
+          "adminAccess": false,
+          "operativeMode": false
+        },
+        [
+          {
+            "id": "mgr-1",
+            "email": "boss@example.com",
+            "firstName": "Bea",
+            "surname": "Boss",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "self-row",
+            "email": "new.person@example.com",
+            "firstName": "Nia",
+            "surname": "New",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "id": "mgr-1",
+          "name": "Bea Boss",
+          "level": "manager"
+        }
+      ]
+    },
+    {
+      "name": "1.27.0 lineManagerSelectionAfterLevelChange: a pick of the invitee's own row is dropped",
+      "function": "lineManagerSelectionAfterLevelChange",
+      "args": [
+        {
+          "lineManagerIds": [
+            "self-row",
+            "mgr-1"
+          ],
+          "hasNoLineManager": false
+        },
+        "manager",
+        [
+          {
+            "id": "mgr-1",
+            "email": "boss@example.com",
+            "firstName": "Bea",
+            "surname": "Boss",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "self-row",
+            "email": "new.person@example.com",
+            "firstName": "Nia",
+            "surname": "New",
+            "isActive": true,
+            "passwordSet": true,
+            "role": "manager",
+            "manager": true
+          }
+        ],
+        {
+          "id": "invite-draft",
+          "email": "new.person@example.com",
+          "role": "manager",
+          "isActive": true,
+          "adminAccess": false,
+          "operativeMode": false
+        }
+      ],
+      "expected": {
+        "lineManagerIds": [
+          "mgr-1"
+        ],
+        "hasNoLineManager": false,
+        "dropped": [
+          "self-row"
+        ]
+      }
+    },
+    {
+      "name": "1.27.0 materialRequestJobViewer: a manager from their users document",
+      "function": "materialRequestJobViewer",
+      "args": [
+        {
+          "userId": "mgr-2",
+          "email": "Other@Example.com",
+          "level": "manager",
+          "permissionSource": {
+            "permissions": {
+              "projects": true
+            }
+          },
+          "formerUserIds": [
+            "old-2"
+          ]
+        }
+      ],
+      "expected": {
+        "role": {
+          "isSuperAdmin": false,
+          "isAdmin": false,
+          "isManager": true,
+          "isOperativeMode": false
+        },
+        "toggles": {
+          "projects": true,
+          "smallWorks": false
+        },
+        "uid": "mgr-2",
+        "ids": [
+          "mgr-2",
+          "old-2"
+        ],
+        "email": "other@example.com"
+      }
+    },
+    {
+      "name": "1.27.0 materialRequestJobCheck: a manager who does not manage the job is refused (job_not_visible)",
+      "function": "materialRequestJobCheck",
+      "args": [
+        {
+          "viewer": {
+            "role": {
+              "isSuperAdmin": false,
+              "isAdmin": false,
+              "isManager": true,
+              "isOperativeMode": false
+            },
+            "toggles": {
+              "projects": false,
+              "smallWorks": false
+            },
+            "uid": "mgr-2",
+            "ids": [
+              "mgr-2"
+            ],
+            "email": "other@example.com"
+          },
+          "job": {
+            "jobNumber": "J-200",
+            "managerIds": [
+              "mgr-1"
+            ]
+          },
+          "kind": "projects",
+          "managers": [],
+          "jobNumber": "J-200"
+        }
+      ],
+      "expected": {
+        "ok": false,
+        "reason": "job_not_visible",
+        "status": 403,
+        "message": "You cannot send materials for this job."
+      }
+    },
+    {
+      "name": "1.27.0 materialRequestJobCheck: a job naming the sender's managers-list row; number with spaces and case",
+      "function": "materialRequestJobCheck",
+      "args": [
+        {
+          "viewer": {
+            "role": {
+              "isSuperAdmin": false,
+              "isAdmin": false,
+              "isManager": true,
+              "isOperativeMode": false
+            },
+            "toggles": {
+              "projects": false,
+              "smallWorks": false
+            },
+            "uid": "mgr-2",
+            "ids": [
+              "mgr-2"
+            ],
+            "email": "other@example.com"
+          },
+          "job": {
+            "jobNumber": "J-200",
+            "managerIds": [
+              "mrow-9"
+            ]
+          },
+          "kind": "projects",
+          "managers": [
+            {
+              "id": "mrow-9",
+              "email": "other@example.com"
+            }
+          ],
+          "jobNumber": " j-200 "
+        }
+      ],
+      "expected": {
+        "ok": true
+      }
+    },
+    {
+      "name": "1.27.0 materialRequestJobCheck: another job's number is refused (job_number_mismatch)",
+      "function": "materialRequestJobCheck",
+      "args": [
+        {
+          "viewer": {
+            "role": {
+              "isSuperAdmin": false,
+              "isAdmin": true,
+              "isManager": false,
+              "isOperativeMode": false
+            },
+            "toggles": {
+              "projects": true,
+              "smallWorks": true
+            },
+            "uid": "a",
+            "ids": [
+              "a"
+            ],
+            "email": "a@x.y"
+          },
+          "job": {
+            "jobNumber": "J-200"
+          },
+          "kind": "smallWorks",
+          "managers": [],
+          "jobNumber": "J-201"
+        }
+      ],
+      "expected": {
+        "ok": false,
+        "reason": "job_number_mismatch",
+        "status": 409,
+        "message": "The job number does not match this job. Reopen the job and send again."
+      }
+    },
+    {
+      "name": "1.27.0 materialRequestJobCheck: no job (job_not_found)",
+      "function": "materialRequestJobCheck",
+      "args": [
+        {
+          "viewer": {
+            "role": {
+              "isSuperAdmin": false,
+              "isAdmin": false,
+              "isManager": true,
+              "isOperativeMode": false
+            },
+            "toggles": {
+              "projects": false,
+              "smallWorks": false
+            },
+            "uid": "mgr-2",
+            "ids": [
+              "mgr-2"
+            ],
+            "email": "other@example.com"
+          },
+          "job": null,
+          "kind": null,
+          "managers": [],
+          "jobNumber": "J-200"
+        }
+      ],
+      "expected": {
+        "ok": false,
+        "reason": "job_not_found",
+        "status": 404,
+        "message": "Job not found in this organisation"
+      }
+    },
+    {
+      "name": "1.27.0 variationEvidenceRemovalWriteFields: unlink e1, append to removedEvidence",
+      "function": "variationEvidenceRemovalWriteFields",
+      "args": [
+        {
+          "id": "v1",
+          "evidence": [
+            {
+              "id": "e1",
+              "fileName": "before.jpg",
+              "storagePath": "organizations/o/healthSafety/j/variations/u_1.jpg",
+              "downloadURL": "https://x/1"
+            },
+            {
+              "fileName": "after.jpg",
+              "storagePath": "organizations/o/healthSafety/j/variations/u_2.jpg",
+              "downloadURL": "https://x/2"
+            }
+          ],
+          "evidenceCount": 2,
+          "removedEvidence": [
+            {
+              "path": "organizations/o/old.pdf",
+              "name": "old.pdf",
+              "removedBy": "u0",
+              "removedAt": 1762000000000
+            }
+          ]
+        },
+        {
+          "evidenceId": "e1",
+          "removedBy": "admin-1",
+          "removedAt": 1762250000000
+        }
+      ],
+      "expected": {
+        "set": {
+          "evidence": [
+            {
+              "fileName": "after.jpg",
+              "storagePath": "organizations/o/healthSafety/j/variations/u_2.jpg",
+              "downloadURL": "https://x/2"
+            }
+          ],
+          "evidenceCount": 1,
+          "removedEvidence": [
+            {
+              "path": "organizations/o/old.pdf",
+              "name": "old.pdf",
+              "removedBy": "u0",
+              "removedAt": 1762000000000
+            },
+            {
+              "path": "organizations/o/healthSafety/j/variations/u_1.jpg",
+              "name": "before.jpg",
+              "removedBy": "admin-1",
+              "removedAt": 1762250000000
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "1.27.0 variationEvidenceRemovalWriteFields: an id that is not on the variation writes nothing",
+      "function": "variationEvidenceRemovalWriteFields",
+      "args": [
+        {
+          "id": "v1",
+          "evidence": [
+            {
+              "id": "e1",
+              "fileName": "before.jpg",
+              "storagePath": "organizations/o/healthSafety/j/variations/u_1.jpg",
+              "downloadURL": "https://x/1"
+            },
+            {
+              "fileName": "after.jpg",
+              "storagePath": "organizations/o/healthSafety/j/variations/u_2.jpg",
+              "downloadURL": "https://x/2"
+            }
+          ],
+          "evidenceCount": 2,
+          "removedEvidence": [
+            {
+              "path": "organizations/o/old.pdf",
+              "name": "old.pdf",
+              "removedBy": "u0",
+              "removedAt": 1762000000000
+            }
+          ]
+        },
+        {
+          "evidenceId": "nope",
+          "removedBy": "admin-1",
+          "removedAt": 1762250000000
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "1.27.0 canViewRemovedEvidence: admin outside operative mode",
+      "function": "canViewRemovedEvidence",
+      "args": [
+        {
+          "isAdmin": true,
+          "isOperativeMode": false
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.27.0 canViewRemovedEvidence: manager",
+      "function": "canViewRemovedEvidence",
+      "args": [
+        {
+          "isAdmin": false,
+          "isSuperAdmin": false,
+          "isManager": true
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "1.27.0 removedEvidenceHeading",
+      "function": "removedEvidenceHeading",
+      "args": [
+        2
+      ],
+      "expected": "Removed evidence (2)"
+    },
+    {
+      "name": "1.27.0 invitePayProfileCopyWrite: privatePay on — the exact invited fields",
+      "function": "invitePayProfileCopyWrite",
+      "args": [
+        {
+          "privatePay": true,
+          "authUid": "uid-1",
+          "placeholderId": "ph-1",
+          "placeholderProfile": {
+            "userId": "ph-1",
+            "payBasis": "day",
+            "dayRate": 185,
+            "employmentType": "self_employed",
+            "updatedBy": "admin"
+          },
+          "accountProfile": null
+        }
+      ],
+      "expected": {
+        "subjectId": "uid-1",
+        "set": {
+          "userId": "uid-1",
+          "payBasis": "day",
+          "dayRate": 185,
+          "employmentType": "self_employed"
+        }
+      }
+    },
+    {
+      "name": "1.27.0 invitePayProfileCopyWrite: privatePay off — nothing",
+      "function": "invitePayProfileCopyWrite",
+      "args": [
+        {
+          "privatePay": false,
+          "authUid": "uid-1",
+          "placeholderId": "ph-1",
+          "placeholderProfile": {
+            "userId": "ph-1",
+            "dayRate": 185
+          },
+          "accountProfile": null
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "1.27.0 invitePayProfileCopyWrite: the account already has a profile — nothing",
+      "function": "invitePayProfileCopyWrite",
+      "args": [
+        {
+          "privatePay": true,
+          "authUid": "uid-1",
+          "placeholderId": "ph-1",
+          "placeholderProfile": {
+            "userId": "ph-1",
+            "dayRate": 185
+          },
+          "accountProfile": {
+            "userId": "uid-1",
+            "dayRate": 185
+          }
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "1.27.0 catalogueOperativePaySubjects: rows with no account only (no link, id or email on the roster)",
+      "function": "catalogueOperativePaySubjects",
+      "args": [
+        [
+          {
+            "id": "row-solo",
+            "email": "solo@x.y",
+            "name": "Solo"
+          },
+          {
+            "id": "row-linked",
+            "email": "linked@x.y",
+            "linkedUserId": "someone"
+          },
+          {
+            "id": "row-op",
+            "email": "OP@x.y"
+          },
+          {
+            "id": "OP-1"
+          }
+        ],
+        [
+          {
+            "id": "admin-1",
+            "email": "admin@x.y",
+            "isActive": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "ops-mgr",
+            "email": "ops@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true,
+            "permissions": {
+              "operatives": true
+            }
+          },
+          {
+            "id": "plain-mgr",
+            "email": "plain@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op-1",
+            "email": "op@x.y",
+            "isActive": true,
+            "role": "operative",
+            "operativeMode": true,
+            "assignedManagerUserIds": [
+              "plain-mgr"
+            ]
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "id": "row-solo",
+          "email": "solo@x.y",
+          "catalogueOperative": true
+        }
+      ]
+    },
+    {
+      "name": "1.27.0 canViewPersonPay: a manager with the Operatives toggle sees a catalogue operative",
+      "function": "canViewPersonPay",
+      "args": [
+        {
+          "id": "ops-mgr",
+          "email": "ops@x.y",
+          "isActive": true,
+          "role": "manager",
+          "manager": true,
+          "permissions": {
+            "operatives": true
+          }
+        },
+        {
+          "id": "row-solo",
+          "email": "solo@x.y",
+          "catalogueOperative": true
+        },
+        [
+          {
+            "id": "admin-1",
+            "email": "admin@x.y",
+            "isActive": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "ops-mgr",
+            "email": "ops@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true,
+            "permissions": {
+              "operatives": true
+            }
+          },
+          {
+            "id": "plain-mgr",
+            "email": "plain@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op-1",
+            "email": "op@x.y",
+            "isActive": true,
+            "role": "operative",
+            "operativeMode": true,
+            "assignedManagerUserIds": [
+              "plain-mgr"
+            ]
+          }
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.27.0 canViewPersonPay: a manager without it does not",
+      "function": "canViewPersonPay",
+      "args": [
+        {
+          "id": "plain-mgr",
+          "email": "plain@x.y",
+          "isActive": true,
+          "role": "manager",
+          "manager": true
+        },
+        {
+          "id": "row-solo",
+          "email": "solo@x.y",
+          "catalogueOperative": true
+        },
+        [
+          {
+            "id": "admin-1",
+            "email": "admin@x.y",
+            "isActive": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "ops-mgr",
+            "email": "ops@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true,
+            "permissions": {
+              "operatives": true
+            }
+          },
+          {
+            "id": "plain-mgr",
+            "email": "plain@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op-1",
+            "email": "op@x.y",
+            "isActive": true,
+            "role": "operative",
+            "operativeMode": true,
+            "assignedManagerUserIds": [
+              "plain-mgr"
+            ]
+          }
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "name": "1.27.0 payProfileReadPlan: the operatives manager reads the catalogue operative profile by id",
+      "function": "payProfileReadPlan",
+      "args": [
+        {
+          "id": "ops-mgr",
+          "email": "ops@x.y",
+          "isActive": true,
+          "role": "manager",
+          "manager": true,
+          "permissions": {
+            "operatives": true
+          }
+        },
+        [
+          {
+            "id": "admin-1",
+            "email": "admin@x.y",
+            "isActive": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "ops-mgr",
+            "email": "ops@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true,
+            "permissions": {
+              "operatives": true
+            }
+          },
+          {
+            "id": "plain-mgr",
+            "email": "plain@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op-1",
+            "email": "op@x.y",
+            "isActive": true,
+            "role": "operative",
+            "operativeMode": true,
+            "assignedManagerUserIds": [
+              "plain-mgr"
+            ]
+          },
+          {
+            "id": "row-solo",
+            "email": "solo@x.y",
+            "catalogueOperative": true
+          }
+        ],
+        [
+          {
+            "id": "admin-1",
+            "email": "admin@x.y",
+            "isActive": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "ops-mgr",
+            "email": "ops@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true,
+            "permissions": {
+              "operatives": true
+            }
+          },
+          {
+            "id": "plain-mgr",
+            "email": "plain@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op-1",
+            "email": "op@x.y",
+            "isActive": true,
+            "role": "operative",
+            "operativeMode": true,
+            "assignedManagerUserIds": [
+              "plain-mgr"
+            ]
+          }
+        ]
+      ],
+      "expected": {
+        "kind": "documents",
+        "ids": [
+          "ops-mgr",
+          "op-1",
+          "row-solo"
+        ]
+      }
+    },
+    {
+      "name": "1.27.0 rateHistoryQueryPlan: operativeIds for the catalogue operatives (privatePay on)",
+      "function": "rateHistoryQueryPlan",
+      "args": [
+        {
+          "id": "ops-mgr",
+          "email": "ops@x.y",
+          "isActive": true,
+          "role": "manager",
+          "manager": true,
+          "permissions": {
+            "operatives": true
+          }
+        },
+        [
+          {
+            "id": "admin-1",
+            "email": "admin@x.y",
+            "isActive": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "ops-mgr",
+            "email": "ops@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true,
+            "permissions": {
+              "operatives": true
+            }
+          },
+          {
+            "id": "plain-mgr",
+            "email": "plain@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op-1",
+            "email": "op@x.y",
+            "isActive": true,
+            "role": "operative",
+            "operativeMode": true,
+            "assignedManagerUserIds": [
+              "plain-mgr"
+            ]
+          },
+          {
+            "id": "row-solo",
+            "email": "solo@x.y",
+            "catalogueOperative": true
+          }
+        ],
+        [
+          {
+            "id": "admin-1",
+            "email": "admin@x.y",
+            "isActive": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "ops-mgr",
+            "email": "ops@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true,
+            "permissions": {
+              "operatives": true
+            }
+          },
+          {
+            "id": "plain-mgr",
+            "email": "plain@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op-1",
+            "email": "op@x.y",
+            "isActive": true,
+            "role": "operative",
+            "operativeMode": true,
+            "assignedManagerUserIds": [
+              "plain-mgr"
+            ]
+          }
+        ],
+        {
+          "privatePay": true
+        }
+      ],
+      "expected": {
+        "kind": "people",
+        "userIds": [
+          "ops-mgr",
+          "op-1"
+        ],
+        "operativeIds": [
+          "row-solo"
+        ]
+      }
+    },
+    {
+      "name": "1.27.0 rateHistoryQueryPlan: privatePay off — the whole collection",
+      "function": "rateHistoryQueryPlan",
+      "args": [
+        {
+          "id": "ops-mgr",
+          "email": "ops@x.y",
+          "isActive": true,
+          "role": "manager",
+          "manager": true,
+          "permissions": {
+            "operatives": true
+          }
+        },
+        [
+          {
+            "id": "admin-1",
+            "email": "admin@x.y",
+            "isActive": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "ops-mgr",
+            "email": "ops@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true,
+            "permissions": {
+              "operatives": true
+            }
+          },
+          {
+            "id": "plain-mgr",
+            "email": "plain@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op-1",
+            "email": "op@x.y",
+            "isActive": true,
+            "role": "operative",
+            "operativeMode": true,
+            "assignedManagerUserIds": [
+              "plain-mgr"
+            ]
+          },
+          {
+            "id": "row-solo",
+            "email": "solo@x.y",
+            "catalogueOperative": true
+          }
+        ],
+        [
+          {
+            "id": "admin-1",
+            "email": "admin@x.y",
+            "isActive": true,
+            "role": "admin",
+            "adminAccess": true
+          },
+          {
+            "id": "ops-mgr",
+            "email": "ops@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true,
+            "permissions": {
+              "operatives": true
+            }
+          },
+          {
+            "id": "plain-mgr",
+            "email": "plain@x.y",
+            "isActive": true,
+            "role": "manager",
+            "manager": true
+          },
+          {
+            "id": "op-1",
+            "email": "op@x.y",
+            "isActive": true,
+            "role": "operative",
+            "operativeMode": true,
+            "assignedManagerUserIds": [
+              "plain-mgr"
+            ]
+          }
+        ],
+        {
+          "privatePay": false
+        }
+      ],
+      "expected": {
+        "kind": "all"
+      }
+    },
+    {
+      "name": "1.28.0 lone Super Admin: no line manager needed",
+      "function": "lineManagerRequiredError",
+      "args": [
+        {
+          "id": "SA",
+          "email": "sa@example.com",
+          "isSuperAdmin": true,
+          "role": "admin"
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          }
+        ]
+      ],
+      "expected": null
+    },
+    {
+      "name": "1.28.0 lone Super Admin: self-signs their timesheet",
+      "function": "timesheetSelfSigned",
+      "args": [
+        {
+          "id": "SA",
+          "email": "sa@example.com",
+          "isSuperAdmin": true,
+          "role": "admin"
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          }
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 lone Super Admin: books their own leave approved",
+      "function": "canSelfBookAnnualLeave",
+      "args": [
+        {
+          "id": "SA",
+          "email": "sa@example.com",
+          "isSuperAdmin": true,
+          "role": "admin"
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          }
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 Super Admin: both self-manage toggles read on",
+      "function": "selfManageToggles",
+      "args": [
+        {
+          "id": "SA",
+          "email": "sa@example.com",
+          "isSuperAdmin": true,
+          "role": "admin",
+          "permissions": {
+            "annualLeaveSelfBook": false,
+            "timesheetSelfSign": false
+          }
+        }
+      ],
+      "expected": {
+        "annualLeaveSelfBook": true,
+        "timesheetSelfSign": true,
+        "timesheetApplies": true,
+        "superAdmin": true,
+        "satisfied": true
+      }
+    },
+    {
+      "name": "1.28.0 admin with both toggles and no line manager: none needed",
+      "function": "lineManagerRequiredError",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "timesheetSelfSign": true,
+          "hasNoLineManager": true
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "annualLeaveSelfBook": true,
+            "timesheetSelfSign": true,
+            "hasNoLineManager": true
+          }
+        ]
+      ],
+      "expected": null
+    },
+    {
+      "name": "1.28.0 admin with both toggles: self-signed",
+      "function": "timesheetSelfSigned",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "timesheetSelfSign": true,
+          "hasNoLineManager": true
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "annualLeaveSelfBook": true,
+            "timesheetSelfSign": true,
+            "hasNoLineManager": true
+          }
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 admin with both toggles: self-booked",
+      "function": "canSelfBookAnnualLeave",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "timesheetSelfSign": true,
+          "hasNoLineManager": true
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "annualLeaveSelfBook": true,
+            "timesheetSelfSign": true,
+            "hasNoLineManager": true
+          }
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 admin with Annual Leave Management only and no line manager: refused",
+      "function": "lineManagerRequiredError",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "hasNoLineManager": true
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "annualLeaveSelfBook": true,
+            "hasNoLineManager": true
+          }
+        ]
+      ],
+      "expected": "Set a line manager, or turn on both Annual Leave Management and Timesheet self-sign — this person's timesheets and annual leave need approval."
+    },
+    {
+      "name": "1.28.0 admin with Annual Leave Management only: not self-signed",
+      "function": "timesheetSelfSigned",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "hasNoLineManager": true
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "annualLeaveSelfBook": true,
+            "hasNoLineManager": true
+          }
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "name": "1.28.0 admin with Annual Leave Management only: their timesheet goes to the other admins",
+      "function": "timesheetSubmittedRecipients",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "hasNoLineManager": true
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "annualLeaveSelfBook": true,
+            "hasNoLineManager": true
+          }
+        ]
+      ],
+      "expected": [
+        "SA"
+      ]
+    },
+    {
+      "name": "1.28.0 admin with Timesheet self-sign only and no line manager: refused",
+      "function": "lineManagerRequiredError",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "timesheetSelfSign": true
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "timesheetSelfSign": true
+          }
+        ]
+      ],
+      "expected": "Set a line manager, or turn on both Annual Leave Management and Timesheet self-sign — this person's timesheets and annual leave need approval."
+    },
+    {
+      "name": "1.28.0 admin with Timesheet self-sign only: their leave goes to the other admins",
+      "function": "holidayRequestRecipients",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "timesheetSelfSign": true
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "timesheetSelfSign": true
+          }
+        ]
+      ],
+      "expected": [
+        "SA"
+      ]
+    },
+    {
+      "name": "1.28.0 PAYE admin with Annual Leave Management only: none needed",
+      "function": "lineManagerRequiredError",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "employmentType": "paye"
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "annualLeaveSelfBook": true,
+            "employmentType": "paye"
+          }
+        ]
+      ],
+      "expected": null
+    },
+    {
+      "name": "1.28.0 PAYE admin: Timesheet self-sign does not apply",
+      "function": "selfManageToggles",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "employmentType": "paye"
+        }
+      ],
+      "expected": {
+        "annualLeaveSelfBook": true,
+        "timesheetSelfSign": false,
+        "timesheetApplies": false,
+        "superAdmin": false,
+        "satisfied": true
+      }
+    },
+    {
+      "name": "1.28.0 PAYE admin with no toggles and no line manager: refused (leave only)",
+      "function": "lineManagerRequiredError",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "employmentType": "paye"
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "employmentType": "paye"
+          }
+        ]
+      ],
+      "expected": "Set a line manager, or turn on Annual Leave Management — this person's annual leave needs approval."
+    },
+    {
+      "name": "1.28.0 demoted admin: Timesheet self-sign reads off for a manager",
+      "function": "effectivePermission",
+      "args": [
+        {
+          "id": "D",
+          "email": "d@example.com",
+          "role": "manager",
+          "manager": true,
+          "annualLeaveSelfBook": true,
+          "timesheetSelfSign": true
+        },
+        "timesheetSelfSign"
+      ],
+      "expected": false
+    },
+    {
+      "name": "1.28.0 demoted admin: not self-signed",
+      "function": "timesheetSelfSigned",
+      "args": [
+        {
+          "id": "D",
+          "email": "d@example.com",
+          "role": "manager",
+          "manager": true,
+          "annualLeaveSelfBook": true,
+          "timesheetSelfSign": true
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "D",
+            "email": "d@example.com",
+            "role": "manager",
+            "manager": true,
+            "annualLeaveSelfBook": true,
+            "timesheetSelfSign": true
+          }
+        ]
+      ],
+      "expected": false
+    },
+    {
+      "name": "1.28.0 demoted admin: needs a line manager",
+      "function": "lineManagerRequiredError",
+      "args": [
+        {
+          "id": "D",
+          "email": "d@example.com",
+          "role": "manager",
+          "manager": true,
+          "annualLeaveSelfBook": true,
+          "timesheetSelfSign": true
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "D",
+            "email": "d@example.com",
+            "role": "manager",
+            "manager": true,
+            "annualLeaveSelfBook": true,
+            "timesheetSelfSign": true
+          }
+        ]
+      ],
+      "expected": "Set a line manager — this person's timesheets and annual leave need approval."
+    },
+    {
+      "name": "1.28.0 demoted admin promoted back: the stored Timesheet self-sign reads again",
+      "function": "effectivePermission",
+      "args": [
+        {
+          "id": "D",
+          "email": "d@example.com",
+          "role": "admin",
+          "manager": true,
+          "annualLeaveSelfBook": true,
+          "timesheetSelfSign": true,
+          "adminAccess": true
+        },
+        "timesheetSelfSign"
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 toggles on with a line manager: self-signed",
+      "function": "timesheetSelfSigned",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "timesheetSelfSign": true,
+          "assignedManagerUserIds": [
+            "LM"
+          ]
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "LM",
+            "email": "lm@example.com",
+            "role": "manager",
+            "manager": true,
+            "isActive": true
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "annualLeaveSelfBook": true,
+            "timesheetSelfSign": true,
+            "assignedManagerUserIds": [
+              "LM"
+            ]
+          }
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 toggles on with a line manager: self-booked",
+      "function": "canSelfBookAnnualLeave",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "timesheetSelfSign": true,
+          "assignedManagerUserIds": [
+            "LM"
+          ]
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "LM",
+            "email": "lm@example.com",
+            "role": "manager",
+            "manager": true,
+            "isActive": true
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "annualLeaveSelfBook": true,
+            "timesheetSelfSign": true,
+            "assignedManagerUserIds": [
+              "LM"
+            ]
+          }
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 toggles on with a line manager: the save passes",
+      "function": "lineManagerRequiredError",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "annualLeaveSelfBook": true,
+          "timesheetSelfSign": true,
+          "assignedManagerUserIds": [
+            "LM"
+          ]
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "LM",
+            "email": "lm@example.com",
+            "role": "manager",
+            "manager": true,
+            "isActive": true
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "annualLeaveSelfBook": true,
+            "timesheetSelfSign": true,
+            "assignedManagerUserIds": [
+              "LM"
+            ]
+          }
+        ]
+      ],
+      "expected": null
+    },
+    {
+      "name": "1.28.0 toggles off with a line manager: their line manager signs",
+      "function": "timesheetSubmittedRecipients",
+      "args": [
+        {
+          "id": "A",
+          "email": "a@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "assignedManagerUserIds": [
+            "LM"
+          ]
+        },
+        [
+          {
+            "id": "SA",
+            "email": "sa@example.com",
+            "isSuperAdmin": true,
+            "role": "admin"
+          },
+          {
+            "id": "LM",
+            "email": "lm@example.com",
+            "role": "manager",
+            "manager": true,
+            "isActive": true
+          },
+          {
+            "id": "A",
+            "email": "a@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "assignedManagerUserIds": [
+              "LM"
+            ]
+          }
+        ]
+      ],
+      "expected": [
+        "LM"
+      ]
+    },
+    {
+      "name": "1.28.0 isOrganizationSuperAdmin: the creator without the flag",
+      "function": "isOrganizationSuperAdmin",
+      "args": [
+        {
+          "id": "C",
+          "isSuperAdmin": false
+        },
+        {
+          "id": "ORG",
+          "creatorUserId": "C"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 isOrganizationSuperAdmin: a super admin users document of this organisation",
+      "function": "isOrganizationSuperAdmin",
+      "args": [
+        {
+          "id": "S",
+          "isSuperAdmin": true,
+          "organizationId": "ORG"
+        },
+        {
+          "id": "ORG"
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 isOrganizationSuperAdmin: another company's Super Admin is not",
+      "function": "isOrganizationSuperAdmin",
+      "args": [
+        {
+          "id": "S",
+          "isSuperAdmin": true,
+          "organizationId": "ORG"
+        },
+        {
+          "id": "ORG-B"
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "1.28.0 unflagged creator with no line manager: the save passes",
+      "function": "lineManagerRequiredError",
+      "args": [
+        {
+          "id": "C",
+          "email": "c@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "hasNoLineManager": true,
+          "organizationSuperAdmin": true
+        },
+        [
+          {
+            "id": "C",
+            "email": "c@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "hasNoLineManager": true,
+            "organizationSuperAdmin": true
+          }
+        ]
+      ],
+      "expected": null
+    },
+    {
+      "name": "1.28.0 unflagged creator: self-books",
+      "function": "canSelfBookAnnualLeave",
+      "args": [
+        {
+          "id": "C",
+          "email": "c@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "hasNoLineManager": true,
+          "organizationSuperAdmin": true
+        },
+        [
+          {
+            "id": "C",
+            "email": "c@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "hasNoLineManager": true,
+            "organizationSuperAdmin": true
+          }
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 unflagged creator: self-signs",
+      "function": "timesheetSelfSigned",
+      "args": [
+        {
+          "id": "C",
+          "email": "c@example.com",
+          "role": "admin",
+          "adminAccess": true,
+          "hasNoLineManager": true,
+          "organizationSuperAdmin": true
+        },
+        [
+          {
+            "id": "C",
+            "email": "c@example.com",
+            "role": "admin",
+            "adminAccess": true,
+            "hasNoLineManager": true,
+            "organizationSuperAdmin": true
+          }
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "name": "1.28.0 another company's Super Admin working here: not self-signed",
+      "function": "timesheetSelfSigned",
+      "args": [
+        {
+          "id": "S",
+          "role": "admin",
+          "adminAccess": true,
+          "isSuperAdmin": true,
+          "organizationSuperAdmin": false
+        },
+        [
+          {
+            "id": "S",
+            "role": "admin",
+            "adminAccess": true,
+            "isSuperAdmin": true,
+            "organizationSuperAdmin": false
+          }
+        ]
       ],
       "expected": false
     }

@@ -271,6 +271,8 @@ extension FirebaseBackend {
         out.subContractors = flags["subContractors"] ?? out.subContractors
         out.wholesalersOrderHistory = flags["wholesalersOrderHistory"] ?? out.wholesalersOrderHistory
         out.annualLeaveSelfBook = flags["annualLeaveSelfBook"] ?? out.annualLeaveSelfBook
+        // RULEBOOK 1.28.0: `timesheetSelfSign` is one of `ORG_MEMBERSHIP_PERMISSION_KEYS`.
+        out.timesheetSelfSign = flags["timesheetSelfSign"] ?? out.timesheetSelfSign
         out.weeklyReports = flags["weeklyReports"] ?? out.weeklyReports
         out.dailyOverview = flags["dailyOverview"] ?? out.dailyOverview
         return out
@@ -707,7 +709,12 @@ extension FirebaseBackend {
             creatorUserId: creator,
             sharedUserData: sharedData
         )
-        return deviceSessionProfile ?? user
+        guard var session = deviceSessionProfile else { return user }
+        // RULEBOOK §12: the photo is personal; its upload time comes with it so avatars refresh in this company too.
+        session.profilePhotoURL = user.profilePhotoURL
+        session.profilePhotoUpdatedAt = user.profilePhotoUpdatedAt
+        deviceSessionProfile = session
+        return session
     }
 
     /// No membership snapshot yet: use the members-map role only. Do not copy toggles from another company.

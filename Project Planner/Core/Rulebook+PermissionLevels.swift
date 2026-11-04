@@ -36,6 +36,9 @@ nonisolated struct RulebookPermissionToggleRow: Identifiable, Equatable, Sendabl
     var visible: Bool
     var editable: Bool
     var value: Bool
+    /// RULEBOOK 1.28.0: why a visible row is greyed out when it is not the level lock —
+    /// `SUPER_ADMIN_SELF_MANAGE_MESSAGE`, `TIMESHEET_SELF_SIGN_PAYE_NOTE` or `OWN_SELF_MANAGE_MESSAGE`. Nil otherwise.
+    var note: String? = nil
     var id: String { field }
 }
 
@@ -58,7 +61,7 @@ nonisolated enum RulebookAccountTypeChange: Sendable {
 
 extension UserPermissions {
     /// `USER_PERMISSION_FIELDS`, in the rulebook's order.
-    nonisolated static let rulebookFields: [String] = ["adminAccess", "manager", "operatives", "skills", "qualifications", "materials", "projects", "smallWorks", "operativeMode", "siteAudit", "subContractors", "wholesalersOrderHistory", "annualLeaveSelfBook", "weeklyReports", "dailyOverview"]
+    nonisolated static let rulebookFields: [String] = ["adminAccess", "manager", "operatives", "skills", "qualifications", "materials", "projects", "smallWorks", "operativeMode", "siteAudit", "subContractors", "wholesalersOrderHistory", "annualLeaveSelfBook", "timesheetSelfSign", "weeklyReports", "dailyOverview"]
 
     /// The stored toggle named by a `USER_PERMISSION_FIELDS` key; nil for an unknown key.
     nonisolated func flag(_ field: String) -> Bool? {
@@ -76,6 +79,7 @@ extension UserPermissions {
         case "subContractors": return subContractors
         case "wholesalersOrderHistory": return wholesalersOrderHistory
         case "annualLeaveSelfBook": return annualLeaveSelfBook
+        case "timesheetSelfSign": return timesheetSelfSign
         case "weeklyReports": return weeklyReports
         case "dailyOverview": return dailyOverview
         default: return nil
@@ -97,6 +101,7 @@ extension UserPermissions {
         case "subContractors": subContractors = value
         case "wholesalersOrderHistory": wholesalersOrderHistory = value
         case "annualLeaveSelfBook": annualLeaveSelfBook = value
+        case "timesheetSelfSign": timesheetSelfSign = value
         case "weeklyReports": weeklyReports = value
         case "dailyOverview": dailyOverview = value
         default: break
@@ -124,16 +129,23 @@ extension UserPermissions {
 extension CanonicalBusinessEngine {
     /// The stored permission fields of a person as `permissionLevelOf` / `effectivePermissions` read them: `role`,
     /// `isSuperAdmin` and every toggle at the top level.
+    /// RULEBOOK 1.28.0: `employmentType` (a PAYE admin's Timesheet self-sign row is greyed out) and
+    /// `organizationSuperAdmin` (`isOrganizationSuperAdmin` for the open organisation; it decides the Super Admin's
+    /// locked self-manage toggles when given) are passed through as the script reads them.
     nonisolated static func permissionSubject(
         permissions: UserPermissions,
         role: String?,
-        isSuperAdmin: Bool
+        isSuperAdmin: Bool,
+        employmentType: String? = nil,
+        organizationSuperAdmin: Bool? = nil
     ) -> [String: Any] {
         var row: [String: Any] = [:]
         for (field, value) in permissions.rulebookMap { row[field] = value }
         row["permissions"] = permissions.rulebookMap
         if let role, !role.isEmpty { row["role"] = role }
         row["isSuperAdmin"] = isSuperAdmin
+        if let employmentType, !employmentType.isEmpty { row["employmentType"] = employmentType }
+        if let organizationSuperAdmin { row["organizationSuperAdmin"] = organizationSuperAdmin }
         return row
     }
 
@@ -187,13 +199,16 @@ extension CanonicalBusinessEngine {
         boolMap(callJSON("permissionsWriteMap", arguments: [draft, level.rawValue]))
     }
 
-    /// `permissionToggleRows({ level, user?, mode })`. Empty when the script did not answer.
+    /// `permissionToggleRows({ level, user?, mode, viewerIsSubject? })`. Empty when the script did not answer.
+    /// RULEBOOK 1.28.0: `viewerIsSubject` — the viewer's own self-manage rows are not editable
+    /// (`OWN_SELF_MANAGE_MESSAGE`); each row carries its `note`.
     nonisolated static func permissionToggleRows(
         level: RulebookPermissionLevel,
         user: [String: Any]?,
-        mode: RulebookPermissionToggleMode
+        mode: RulebookPermissionToggleMode,
+        viewerIsSubject: Bool = false
     ) -> [RulebookPermissionToggleRow] {
-        var input: [String: Any] = ["level": level.rawValue, "mode": mode.rawValue]
+        var input: [String: Any] = ["level": level.rawValue, "mode": mode.rawValue, "viewerIsSubject": viewerIsSubject]
         if let user { input["user"] = user }
         guard let rows = callJSON("permissionToggleRows", arguments: [input]) as? [[String: Any]] else { return [] }
         return rows.compactMap { row in
@@ -204,7 +219,8 @@ extension CanonicalBusinessEngine {
                 help: row["help"] as? String ?? "",
                 visible: row["visible"] as? Bool ?? false,
                 editable: row["editable"] as? Bool ?? false,
-                value: row["value"] as? Bool ?? false
+                value: row["value"] as? Bool ?? false,
+                note: row["note"] as? String
             )
         }
     }
@@ -218,6 +234,51 @@ extension CanonicalBusinessEngine {
     nonisolated static var adminLockedPermissionMessage: String {
         constant("ADMIN_LOCKED_PERMISSION_MESSAGE", as: String.self)
             ?? "Administrators have this on. Change user type to remove admin access."
+    }
+
+    /// `isOrganizationSuperAdmin(viewer, org)` (1.28.0 §8, §16): the organisation's creator, or a profile of that
+    /// organisation flagged `isSuperAdmin`. Nil when the script did not answer.
+    nonisolated static func isOrganizationSuperAdmin(
+        viewerId: String,
+        viewerIsSuperAdmin: Bool,
+        viewerOrganizationId: String?,
+        organizationId: String,
+        creatorUserId: String?
+    ) -> Bool? {
+        var viewer: [String: Any] = ["id": viewerId, "isSuperAdmin": viewerIsSuperAdmin]
+        if let viewerOrganizationId, !viewerOrganizationId.isEmpty { viewer["organizationId"] = viewerOrganizationId }
+        var org: [String: Any] = ["id": organizationId]
+        if let creatorUserId, !creatorUserId.isEmpty { org["creatorUserId"] = creatorUserId }
+        return callJSON("isOrganizationSuperAdmin", arguments: [viewer, org]) as? Bool
+    }
+
+    /// `OWN_SELF_MANAGE_MESSAGE` (1.28.0): nobody changes their own self-manage toggles.
+    nonisolated static var ownSelfManageMessage: String {
+        constant("OWN_SELF_MANAGE_MESSAGE", as: String.self)
+            ?? "You cannot change your own self-manage toggles. Ask another admin."
+    }
+
+    /// `SUPER_ADMIN_SELF_MANAGE_MESSAGE` (1.28.0): the Super Admin's self-manage toggles are always on.
+    nonisolated static var superAdminSelfManageMessage: String? {
+        constant("SUPER_ADMIN_SELF_MANAGE_MESSAGE", as: String.self)
+    }
+
+    /// `TIMESHEET_SELF_SIGN_PAYE_NOTE` (1.28.0): a PAYE admin's Timesheet self-sign row is greyed out.
+    nonisolated static var timesheetSelfSignPayeNote: String {
+        constant("TIMESHEET_SELF_SIGN_PAYE_NOTE", as: String.self) ?? "Not used while PAYE — PAYE has no timesheets."
+    }
+
+    /// `ADMIN_ONLY_PERMISSION_FIELDS` (1.28.0): toggles that never take effect below admin. Empty when the script did
+    /// not answer.
+    nonisolated static var adminOnlyPermissionFields: [String] {
+        constant("ADMIN_ONLY_PERMISSION_FIELDS", as: [String].self) ?? []
+    }
+
+    /// `keepStoredLockedPermissions(before, next)` (1.28.0 §11): `next` (a `users/{uid}` update) without the toggles
+    /// locked for the stored level — and, on a change away from admin, without the admin-only toggles — so a save never
+    /// writes a derived or locked value. Nil when the script did not answer.
+    nonisolated static func keepStoredLockedPermissions(before: [String: Any], next: [String: Any]) -> [String: Any]? {
+        callJSON("keepStoredLockedPermissions", arguments: [before, next]) as? [String: Any]
     }
 
     /// `PAYE_RATE_NOT_USED_NOTE`.
@@ -285,12 +346,15 @@ enum EffectivePermissionsCache {
         let permissions: UserPermissions
         let role: String
         let isSuperAdmin: Bool
+        /// RULEBOOK 1.28.0: the per-organisation Super Admin and PAYE change the self-manage toggles in effect.
+        let organizationSuperAdmin: Bool?
+        let employmentType: String
     }
     private static var cache: [Key: UserPermissions] = [:]
     private static var levels: [Key: RulebookPermissionLevel] = [:]
 
     static func effective(_ user: AppUser) -> UserPermissions {
-        let key = Key(permissions: user.permissions, role: user.role.rawValue, isSuperAdmin: user.isSuperAdmin)
+        let key = keyFields(user)
         if let hit = cache[key] { return hit }
         guard let map = CanonicalBusinessEngine.effectivePermissions(user.permissionSubject) else {
             // The script did not answer: the stored toggles (what the app showed before 1.11.0).
@@ -303,7 +367,7 @@ enum EffectivePermissionsCache {
     }
 
     static func level(_ user: AppUser) -> RulebookPermissionLevel {
-        let key = Key(permissions: user.permissions, role: user.role.rawValue, isSuperAdmin: user.isSuperAdmin)
+        let key = keyFields(user)
         if let hit = levels[key] { return hit }
         let fallback: RulebookPermissionLevel = user.isRosterAdmin ? .admin
             : (user.permissions.operativeMode || user.role == .operative) ? .operative : .manager
@@ -313,6 +377,16 @@ enum EffectivePermissionsCache {
         return level
     }
 
+    private static func keyFields(_ user: AppUser) -> Key {
+        Key(
+            permissions: user.permissions,
+            role: user.role.rawValue,
+            isSuperAdmin: user.isSuperAdmin,
+            organizationSuperAdmin: user.organizationSuperAdmin,
+            employmentType: user.employmentType.rawValue
+        )
+    }
+
     /// Tests: start from an empty cache.
     static func reset() {
         cache.removeAll()
@@ -320,10 +394,59 @@ enum EffectivePermissionsCache {
     }
 }
 
+/// `isOrganizationSuperAdmin` answers, memoised by their inputs (screen gates read it on every render).
+@MainActor
+enum OrganizationSuperAdminCache {
+    private struct Key: Hashable {
+        let organizationId: String
+        let creatorUserId: String?
+        let userId: String
+        let isSuperAdmin: Bool
+        let userOrganizationId: String
+    }
+    private static var cache: [Key: Bool] = [:]
+
+    static func answer(for user: AppUser) -> Bool? {
+        guard let orgId = OrganizationRulebookContext.organizationId else { return nil }
+        let key = Key(
+            organizationId: orgId,
+            creatorUserId: OrganizationRulebookContext.creatorUserId,
+            userId: user.id,
+            isSuperAdmin: user.isSuperAdmin,
+            userOrganizationId: user.organizationId
+        )
+        if let hit = cache[key] { return hit }
+        guard let answer = CanonicalBusinessEngine.isOrganizationSuperAdmin(
+            viewerId: user.id,
+            viewerIsSuperAdmin: user.isSuperAdmin,
+            viewerOrganizationId: user.organizationId,
+            organizationId: orgId,
+            creatorUserId: OrganizationRulebookContext.creatorUserId
+        ) else { return nil }
+        if cache.count > 512 { cache.removeAll() }
+        cache[key] = answer
+        return answer
+    }
+}
+
 extension AppUser {
     /// The stored permission fields as the permission-level rules read them.
     var permissionSubject: [String: Any] {
-        CanonicalBusinessEngine.permissionSubject(permissions: permissions, role: role.rawValue, isSuperAdmin: isSuperAdmin)
+        CanonicalBusinessEngine.permissionSubject(
+            permissions: permissions,
+            role: role.rawValue,
+            isSuperAdmin: isSuperAdmin,
+            employmentType: employmentType.rawValue,
+            organizationSuperAdmin: organizationSuperAdmin
+        )
+    }
+
+    /// RULEBOOK 1.28.0 `isOrganizationSuperAdmin(viewer, org)`: this person is the Super Admin of the open organisation
+    /// (its creator, or `isSuperAdmin` on a profile of that organisation) — never a home company's flag in another
+    /// company. Passed to the rules as `organizationSuperAdmin`. Nil before an organisation is open or when the script
+    /// did not answer (the stored flags then apply).
+    var organizationSuperAdmin: Bool? {
+        OrganizationSuperAdminCache.answer(for: self)
     }
 
     /// `permissionLevelOf(user)`.

@@ -83,17 +83,15 @@ enum StorageUploadPolicy {
         Int64((date.timeIntervalSince1970 * 1000).rounded())
     }
 
-    /// `{uid}_{unixMilliseconds}.{ext}`. The original basename is not copied into the object name.
+    /// RULEBOOK 1.25.0 §24 `CanonicalBusinessEngine.storedFileObjectName`: `{uid}_{unixMilliseconds}.{ext}`, a new object
+    /// for every upload. The original basename is never copied in. Nil without an allowed extension or a usable uid.
     static func generatedObjectName(uid: String, unixMilliseconds: Int64, fileExtension: String) -> String? {
-        let safeUID = uid.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ext = normalizedExtension(fileExtension)
-        guard !safeUID.isEmpty,
-              safeUID.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }),
-              unixMilliseconds >= 0,
-              let ext else {
-            return nil
-        }
-        return "\(safeUID)_\(unixMilliseconds).\(ext)"
+        guard let ext = normalizedExtension(fileExtension) else { return nil }
+        return CanonicalBusinessEngine.storedFileObjectName(
+            uid: uid.trimmingCharacters(in: .whitespacesAndNewlines),
+            unixMs: unixMilliseconds,
+            fileExtension: ext
+        )
     }
 
     static func generatedObjectName(uid: String, unixMilliseconds: Int64, originalFileName: String) -> String? {

@@ -47,8 +47,6 @@ private enum WorkingHoursPalette {
 
 struct OrganisationWorkingHoursView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var bookingStore: BookingStore
-    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
@@ -1197,9 +1195,8 @@ struct OrganisationWorkingHoursView: View {
         isSaving = true
         errorMessage = nil
         saveSucceeded = false
-        // RULEBOOK 1.19.0 §4.3/§8: a working-hours change never rewrites stored bookings or signed sheets. Each day is
-        // priced under the policy in effect on it (history first), so today's bookings are not re-timed here (the
-        // former `PayrollPolicyBookingRecalibrator` pass rewrote them, which web never does).
+        // RULEBOOK 1.19.0 §4.3/§8: a working-hours change never rewrites stored bookings or signed sheets; each day is
+        // priced under the policy in effect on it.
         do {
             try await firebaseBackend.applyOrganizationPayrollTimePolicyImmediately(draft, baseStateJSON: baseStateJSON, previous: baselineDraft)
             await MainActor.run {

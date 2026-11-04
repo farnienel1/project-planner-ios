@@ -26,8 +26,13 @@ class UserStore: ObservableObject {
             // Rules that run without a store (`timesheetSelfSigned` in `TimesheetApprovalPolicy`) read this roster.
             RulebookRosterSnapshot.update(organizationUsers)
             refreshJobAccessContext()
+            schedulePrivatePayOverlay()
         }
     }
+    /// Bumped by every roster change, so an overlay that finishes after a newer roster arrived is dropped.
+    private var privatePayOverlayGeneration = 0
+    /// True while the overlay's own result is being published (it must not schedule another read).
+    private var publishingPrivatePayOverlay = false
     /// Folded same-email `users` document id → the id the roster kept, from the last roster load.
     /// Bookings saved under the folded id (often the person's sign-in uid) must count for the kept person.
     private(set) var organizationUserIdAliases: [String: String] = [:]
@@ -54,6 +59,9 @@ class UserStore: ObservableObject {
     private var lastOrganizationUsersLoadAt: Date?
     private var currentUserListener: ListenerRegistration?
     private var currentUserListenerTarget: String?
+    /// Counts `users/{uid}` snapshots; only the newest one's device-session result is applied (RULEBOOK §12:
+    /// an older copy finishing its async step late must not roll back the photo or any other field).
+    private var currentUserSnapshotGeneration = 0
     /// Live roster: `users where organizationId == org` (RULEBOOK §1, §11). Keyed to one organisation;
     /// results that arrive after an organisation switch are ignored.
     private var organizationUsersListener: ListenerRegistration?
@@ -88,10 +96,41 @@ class UserStore: ObservableObject {
                 self?.rereadUsersAfterLeaveDefaultsArrive(defaultsChanged: changed)
             }
         }
+        NotificationCenter.default.addObserver(forName: .securitySwitchesDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.securitySwitchesChanged() }
+        }
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+    }
+
+    /// RULEBOOK 1.26.0 §8: while `privatePay` is on for the open organisation, every roster row's pay is read from the
+    /// pay profiles this viewer may see (`CanonicalBusinessEngine.payProfileReadPlan` + `overlayPayProfile`), so
+    /// timesheets, invoices, the weekly report and people lists keep showing pay after the strip. While it is off this
+    /// does nothing: the users documents are shown as stored.
+    private func schedulePrivatePayOverlay() {
+        guard !publishingPrivatePayOverlay else { return }
+        privatePayOverlayGeneration &+= 1
+        guard SecuritySwitchContext.privatePay, let firebaseBackend, !organizationUsers.isEmpty else { return }
+        let generation = privatePayOverlayGeneration
+        let roster = organizationUsers
+        Task { @MainActor [weak self] in
+            let overlaid = await firebaseBackend.overlayRosterPayIfPrivate(roster)
+            guard let self, generation == self.privatePayOverlayGeneration, overlaid != roster else { return }
+            self.publishingPrivatePayOverlay = true
+            self.organizationUsers = overlaid
+            self.publishingPrivatePayOverlay = false
+        }
+    }
+
+    /// A switch changed: on → lay the pay profiles over; off → read the roster again, so no overlaid value stays.
+    private func securitySwitchesChanged() {
+        if SecuritySwitchContext.privatePay {
+            schedulePrivatePayOverlay()
+        } else {
+            Task { await loadOrganizationUsers(forceRefresh: true) }
+        }
     }
 
     private func rereadUsersAfterLeaveDefaultsArrive(defaultsChanged: Bool) {
@@ -837,6 +876,7 @@ class UserStore: ObservableObject {
         currentUserListener?.remove()
         currentUserListener = nil
         currentUserListenerTarget = nil
+        currentUserSnapshotGeneration += 1
         organizationUsers = []
         organizationUsersFinishedLoadOrganizationId = nil
         organizationUserEmailClaims = nil
@@ -861,8 +901,12 @@ class UserStore: ObservableObject {
                 NSLog("CURRENT_USER_KEPT id=%@ — parseUserDocument did not answer for the live copy", user.id)
                 return
             }
+            self.currentUserSnapshotGeneration += 1
+            let generation = self.currentUserSnapshotGeneration
             Task { @MainActor in
                 let resolved = await self.firebaseBackend?.applyDeviceSessionIfNeeded(to: user) ?? user
+                // A newer snapshot arrived while this one was resolved: it decides the profile.
+                guard generation == self.currentUserSnapshotGeneration else { return }
                 self.currentUser = resolved
             }
         }
@@ -2520,9 +2564,12 @@ class UserStore: ObservableObject {
 
     func updateUserEmploymentType(userId: String, employmentType: EmploymentType, effectiveAt: Date? = nil) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
-        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        guard let storedRow = organizationUsers.first(where: { $0.id == userId }) else { return false }
         if isOrganizationCreator(userId: userId) { return false }
-        var updated = organizationUsers[index]
+        // RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: the previous employment type is the
+        // pay editor's record (the pay profile while `privatePay` is on; the users document as stored while it is off).
+        var updated = await payEditorRecord(for: storedRow)
+        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
         if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
             return false
         }
@@ -2598,8 +2645,11 @@ class UserStore: ObservableObject {
                 updateDayRate: Bool = true
              ) async -> Bool {
                 guard let firebaseBackend = firebaseBackend else { return false }
+                guard organizationUsers.contains(where: { $0.id == user.id }) else { return false }
+                // RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: the save baseline (the "rate
+                // changed?" test and the rate-history previous row) is the editor's record, never a stale users rate.
+                let original = await payEditorRecord(for: organizationUsers.first(where: { $0.id == user.id }) ?? user)
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
-                let original = organizationUsers[index]
                 var updatedUser = original
                 guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager || updatedUser.permissions.adminAccess || updatedUser.role == .admin else { return false }
                 if let hasNoLineManager {
@@ -2884,12 +2934,14 @@ class UserStore: ObservableObject {
         operativeStore: OperativeStore? = nil
     ) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
+        guard organizationUsers.contains(where: { $0.id == user.id }) else { return false }
+        // RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: the previous rate is the editor's record.
+        let row = await payEditorRecord(for: organizationUsers.first(where: { $0.id == user.id }) ?? user)
         guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
-        let row = organizationUsers[index]
         let isStaffDayRate = row.permissions.manager || row.role == .manager || row.permissions.adminAccess || row.role == .admin
         guard isStaffDayRate, !row.permissions.operativeMode else { return false }
 
-        var updatedUser = organizationUsers[index]
+        var updatedUser = row
         let previousPay = Self.storedPay(of: updatedUser)
         guard previousPay.amount != dayRate else { return true }
         // A manager's pay is changed by admins only, and nobody but an admin changes their own (§8).

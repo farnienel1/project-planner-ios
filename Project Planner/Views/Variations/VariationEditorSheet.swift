@@ -171,6 +171,8 @@ struct VariationEditorSheet: View {
     @State private var catalogueRecords: [CanonicalBusinessEngine.CanonicalMaterialRecord] = []
     @State private var catalogueSearchGeneration = 0
     @State private var errorMessage: String?
+    /// RULEBOOK 1.25.0 §24: shown when evidence is removed from the list but its file is kept (`FILE_KEPT_ON_REMOVE_COPY`).
+    @State private var evidenceNotice: String?
     @State private var isSaving = false
     @State private var showingCamera = false
     @State private var showingLibrary = false
@@ -278,6 +280,13 @@ struct VariationEditorSheet: View {
                     labourCard
                     materialsCard
                     evidenceCard
+                    if let evidenceNotice, !evidenceNotice.isEmpty {
+                        Text(evidenceNotice)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("variations.evidence.keptNotice")
+                    }
                     if let errorMessage, !errorMessage.isEmpty {
                         Text(errorMessage)
                             .font(.system(size: 13, weight: .medium))
@@ -1545,11 +1554,44 @@ struct VariationEditorSheet: View {
         )
     }
 
+    /// RULEBOOK 1.25.0 §24: the evidence leaves the list; its Storage object is deleted only when
+    /// `CanonicalBusinessEngine.fileDeletePermission` allows it (an admin, or the uploader within 15 minutes). Otherwise
+    /// the file is kept and the screen says so (`FILE_KEPT_ON_REMOVE_COPY`).
+    /// RULEBOOK 1.27.0 §24 (`variationEvidenceRemovalWriteFields`): on a saved variation the unlink is written at once
+    /// from the stored document, with `{ path, name, removedBy, removedAt }` added to `removedEvidence`, before the
+    /// file is touched. When that write fails the file goes back on the list and nothing is deleted.
     private func removeEvidence(_ item: VariationEvidenceItem) async {
-        evidence.removeAll { $0.id == item.id }
+        guard let index = evidence.firstIndex(where: { $0.id == item.id }) else { return }
+        evidence.remove(at: index)
         pendingEvidenceBytes[item.id] = nil
-        if !item.storagePath.isEmpty {
-            await firebaseBackend.deleteVariationEvidenceFile(storagePath: item.storagePath)
+        if !item.isPending, persistedVariation != nil || existing != nil {
+            do {
+                try await firebaseBackend.recordVariationEvidenceRemoval(
+                    variationId: variationId,
+                    evidenceId: item.id,
+                    organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+                )
+            } catch {
+                evidence.insert(item, at: min(index, evidence.count))
+                errorMessage = "Could not remove this file. \(error.localizedDescription)"
+                return
+            }
+        }
+        guard !item.storagePath.isEmpty else { return }
+        let role = userStore.displayUser.map { UserStore.staffAccountRole(for: $0) }
+            ?? CanonicalBusinessEngine.CanonicalStaffAccountRole(isSuperAdmin: false, isAdmin: false, isManager: false, isOperativeMode: false)
+        let outcome = await firebaseBackend.deleteVariationEvidenceFile(
+            storagePath: item.storagePath,
+            viewerRole: role,
+            uploadedAt: item.uploadedAt
+        )
+        switch outcome {
+        case .deleted:
+            evidenceNotice = nil
+        case .kept:
+            evidenceNotice = CanonicalBusinessEngine.fileKeptOnRemoveCopy
+        case .failed(let message):
+            evidenceNotice = "\(CanonicalBusinessEngine.fileKeptOnRemoveCopy) (\(message))"
         }
     }
 

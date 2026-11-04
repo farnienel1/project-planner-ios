@@ -82,6 +82,12 @@ extension CanonicalBusinessEngine {
         return answer as? String ?? "Type the company name exactly as it is shown."
     }
 
+    /// `DELETION_RESTORE_DAYS` (30 from rulebook 1.27.0): days a deleted organisation stays restorable. A deletion
+    /// already scheduled keeps its stored `eraseAfter`, which `organizationDeletionState` reads.
+    nonisolated static var deletionRestoreDays: Int {
+        constant("DELETION_RESTORE_DAYS", as: Int.self) ?? 30
+    }
+
     /// `ACCOUNT_HANDOVER_REQUIRED_MESSAGE`.
     nonisolated static var accountHandoverRequiredMessage: String {
         constant("ACCOUNT_HANDOVER_REQUIRED_MESSAGE", as: String.self)

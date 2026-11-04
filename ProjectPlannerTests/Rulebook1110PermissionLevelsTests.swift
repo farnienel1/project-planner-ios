@@ -68,7 +68,8 @@ final class Rulebook1110PermissionLevelsTests: XCTestCase {
         XCTAssertTrue(effective.materials)
         XCTAssertTrue(effective.siteAudit)
         XCTAssertFalse(effective.wholesalersOrderHistory)
-        XCTAssertEqual(CanonicalBusinessEngine.lockedPermissionFields(manager.permissionSubject).map { Set($0) }, ["materials", "siteAudit"])
+        // 1.28.0: Timesheet self-sign is admin-only, so it is locked (off) for a manager too, as web canonical.test.ts asserts.
+        XCTAssertEqual(CanonicalBusinessEngine.lockedPermissionFields(manager.permissionSubject).map { Set($0) }, ["materials", "siteAudit", "timesheetSelfSign"])
     }
 
     func testAdminRowsAreAllOnAndLockedExceptAnnualLeaveManagement() {
@@ -79,11 +80,14 @@ final class Rulebook1110PermissionLevelsTests: XCTestCase {
         XCTAssertTrue(visible.contains { $0.field == "operatives" })
         XCTAssertTrue(visible.contains { $0.field == "materials" })
         XCTAssertTrue(visible.contains { $0.field == "siteAudit" })
-        for row in visible where row.field != "annualLeaveSelfBook" {
+        // RULEBOOK 1.28.0: the two self-manage toggles (Annual Leave Management, Timesheet self-sign) are the admin's
+        // editable rows.
+        for row in visible where row.field != "annualLeaveSelfBook" && row.field != "timesheetSelfSign" {
             XCTAssertTrue(row.value, "\(row.field) reads on for an admin")
             XCTAssertFalse(row.editable, "\(row.field) is locked for an admin")
         }
         XCTAssertEqual(visible.first { $0.field == "annualLeaveSelfBook" }?.editable, true)
+        XCTAssertEqual(visible.first { $0.field == "timesheetSelfSign" }?.editable, true)
     }
 
     func testManagerAndOperativeRows() {

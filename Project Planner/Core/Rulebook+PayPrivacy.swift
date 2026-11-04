@@ -106,11 +106,30 @@ extension FirebaseBackend {
 
     /// `users/{userId}` partial update plus its pay profile in ONE batch (RULEBOOK 1.13.0 Q1 step B), so pay is never
     /// written to one document without the other.
+    /// RULEBOOK 1.26.0 §8: the users half is `CanonicalBusinessEngine.sharedDocumentPayWrite(payload, { privatePay })`
+    /// — unchanged while the switch is off, without any pay field while it is on (pay then goes only to the pay
+    /// profile). A users half left with nothing but write metadata is not sent.
     func updateUserDocumentWithPayProfile(userId: String, payload: [String: Any]) async throws {
         let batch = db.batch()
-        batch.updateData(payload, forDocument: db.collection("users").document(userId))
+        let shared = CanonicalBusinessEngine.sharedDocumentPayWrite(payload, privatePay: SecuritySwitchContext.privatePay)
+        if Self.hasFieldsBesidesMetadata(shared) {
+            batch.updateData(shared, forDocument: db.collection("users").document(userId))
+        }
         addPayProfileWrite(to: batch, subjectId: userId, profileWrite: payload)
         try await batch.commit()
+    }
+
+    /// The pay-profile half of a write on its own (RULEBOOK 1.26.0, `privatePay` on: a new users document or invite
+    /// placeholder whose shared copy carries no pay). Nothing when the write has no pay field.
+    func writePayProfileOnly(subjectId: String, profileWrite: [String: Any]) async throws {
+        let batch = db.batch()
+        guard addPayProfileWrite(to: batch, subjectId: subjectId, profileWrite: profileWrite) else { return }
+        try await batch.commit()
+    }
+
+    /// True when a write names a field other than `updatedAt` / `updatedBy` / `updatedFrom`.
+    nonisolated static func hasFieldsBesidesMetadata(_ write: [String: Any]) -> Bool {
+        !Set(write.keys).subtracting(["updatedAt", "updatedBy", "updatedFrom"]).isEmpty
     }
 
     /// The pay profile document as stored, or nil when it does not exist or this viewer may not read it (the rules
@@ -140,8 +159,26 @@ extension AppUser {
         ]
     }
 
+}
+
+extension AppUser {
+    /// RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues(person, profile, { privatePay })`: the pay a
+    /// screen shows and an editor starts from — and saves against. `record` is the person with their pay profile laid
+    /// over while `privatePay` is on; the users document exactly as stored while it is off (`source` `users`: `self`
+    /// is returned unchanged). `profile` is the `payProfiles/{profileId}` document as stored (the person's own id, else
+    /// a former invite id), or nil.
+    func payShown(with profile: [String: Any]?, profileId: String? = nil, privatePay: Bool) -> AppUser {
+        guard let answer = CanonicalBusinessEngine.payEditorStartingValues(
+            person: payProfileFieldsJSON,
+            profileId: profileId ?? id,
+            profile: profile.flatMap { FirebaseBackend.firestoreJSON($0) as? [String: Any] },
+            privatePay: privatePay
+        ), answer.fromPayProfile else { return self }
+        return applyingPayRecord(answer.record)
+    }
+
     /// `self` with its pay read pay profile first (`overlayPayProfile`), the users document second. `profile` is the
-    /// `payProfiles/{id}` document as stored (nil: none, or not readable by this viewer).
+    /// `payProfiles/{id}` document as stored (nil: none, or not readable by this viewer). Only `payShown` decides when.
     func overlayingPayProfile(_ profile: [String: Any]?) -> AppUser {
         guard let profile,
               let row = CanonicalBusinessEngine.overlayPayProfile(
@@ -149,6 +186,11 @@ extension AppUser {
                   profileId: id,
                   profile: FirebaseBackend.firestoreJSON(profile) as? [String: Any]
               ) else { return self }
+        return applyingPayRecord(row)
+    }
+
+    /// The `PAY_PROFILE_FIELDS` of a script record laid onto this person (a mapping, not a rule).
+    func applyingPayRecord(_ row: [String: Any]) -> AppUser {
         func number(_ key: String) -> Double? { (row[key] as? NSNumber)?.doubleValue }
         func text(_ key: String) -> String? {
             let value = (row[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -172,20 +214,127 @@ extension AppUser {
         }
         return out
     }
+
+    /// This person with only the pay fields of `record` (the editor's starting record), every other field as held.
+    func withPayFields(of record: AppUser) -> AppUser {
+        var out = self
+        out.payBasis = record.payBasis
+        out.dayRate = record.dayRate
+        out.hourlyRate = record.hourlyRate
+        out.employmentType = record.employmentType
+        out.employmentTypeTransitionFrom = record.employmentTypeTransitionFrom
+        out.employmentTypeEffectiveAt = record.employmentTypeEffectiveAt
+        return out
+    }
+}
+
+/// RULEBOOK 1.26.1 §8: when a pay editor's starting record (`CanonicalBusinessEngine.payEditorStartingValues`) is
+/// ready. A `securitySwitchesDidChange` while the editor is open starts a new read (`switchChanged`): Save waits again
+/// while `privatePay` is on, and a read begun before the change is dropped (`finish` with an old generation).
+/// State only — the record itself always comes from the rulebook.
+struct PayEditorLoadGate: Equatable {
+    private(set) var loaded = false
+    private(set) var generation = 0
+
+    /// True while `privatePay` is on and the current read has not finished: the form and Save wait.
+    func isLoading(privatePay: Bool) -> Bool { privatePay && !loaded }
+
+    /// The switches changed while the editor is open: read the record again.
+    mutating func switchChanged() {
+        loaded = false
+        generation &+= 1
+    }
+
+    /// A read begun at `generation` finished. False (and nothing changes) when the switches changed since it began.
+    @discardableResult
+    mutating func finish(generation started: Int) -> Bool {
+        guard started == generation else { return false }
+        loaded = true
+        return true
+    }
+
+    /// The draft after a (re)read: it follows the new record only while it still shows the value it was last seeded
+    /// with; an edited draft is kept.
+    static func reseeded<T: Equatable>(draft: T, seededWith: T, record: T) -> T {
+        draft == seededWith ? record : draft
+    }
+}
+
+extension Operative {
+    /// RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues(row, profile, { privatePay })` for a catalogue
+    /// `operatives` row: `payProfiles/{documentId}` laid over the row while `privatePay` is on; the row exactly as stored
+    /// while it is off, or when there is no profile (`self` unchanged).
+    func payShown(with profile: [String: Any]?, privatePay: Bool) -> Operative {
+        let person: [String: Any] = [
+            "payBasis": payBasis.map { $0 as Any } ?? NSNull(),
+            "dayRate": dayRate.map { $0 as Any } ?? NSNull(),
+            "hourlyRate": hourlyRate.map { $0 as Any } ?? NSNull(),
+        ]
+        guard let answer = CanonicalBusinessEngine.payEditorStartingValues(
+            person: person,
+            profileId: documentId,
+            profile: profile.flatMap { FirebaseBackend.firestoreJSON($0) as? [String: Any] },
+            privatePay: privatePay
+        ), answer.fromPayProfile else { return self }
+        func number(_ key: String) -> Double? { (answer.record[key] as? NSNumber)?.doubleValue }
+        let basis = (answer.record["payBasis"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var out = self
+        out.payBasis = basis.isEmpty ? nil : basis
+        out.dayRate = number("dayRate")
+        out.hourlyRate = number("hourlyRate")
+        return out
+    }
+}
+
+extension CanonicalBusinessEngine {
+    /// RULEBOOK 1.26.1 §8 `payEditorStartingValues(person, parsePayProfileDocument(profileId, profile), { privatePay })`
+    /// → its `record` and whether it came from the pay profile (`source`). Nil when the script did not answer.
+    nonisolated static func payEditorStartingValues(
+        person: [String: Any],
+        profileId: String,
+        profile: [String: Any]?,
+        privatePay: Bool
+    ) -> (record: [String: Any], fromPayProfile: Bool)? {
+        var parsed: Any = NSNull()
+        if let profile {
+            guard let row = callJSON("parsePayProfileDocument", arguments: [profileId, profile]) else { return nil }
+            parsed = row
+        }
+        guard let answer = callJSON("payEditorStartingValues", arguments: [person, parsed, ["privatePay": privatePay]]) as? [String: Any],
+              let record = answer["record"] as? [String: Any] else { return nil }
+        return (record, (answer["source"] as? String) == "payProfile")
+    }
 }
 
 extension UserStore {
     /// RULEBOOK 1.13.0 §8 (Q1 step C): reads `payProfiles/{subjectId}` when the signed-in person may see this
     /// person's pay (`canViewPersonPay`) and lays it over the loaded row (`overlayPayProfile`). Returns the row as
     /// shown; the roster copy is updated so other screens show the same pay.
+    ///
+    /// RULEBOOK 1.26.0 §8: only while `privatePay` is on for the organisation (`AppUser.payShown`). While it is off pay
+    /// is read from the users document as stored: an older build writes pay only there, so a pay profile may be stale,
+    /// and seeding the editor from it would show (and save back) an old rate.
     @discardableResult
     func refreshPayFromPayProfile(of subject: AppUser) async -> AppUser {
-        guard canViewPay(of: subject), let firebaseBackend else { return subject }
-        guard let profile = await firebaseBackend.loadPayProfile(subjectId: subject.id) else { return subject }
-        let overlaid = subject.overlayingPayProfile(profile)
+        let overlaid = await payEditorRecord(for: subject)
         if overlaid != subject, let index = organizationUsers.firstIndex(where: { $0.id == subject.id }) {
             organizationUsers[index] = overlaid
         }
         return overlaid
+    }
+
+    /// RULEBOOK 1.26.1 §8: the record a pay editor starts from AND saves against
+    /// (`CanonicalBusinessEngine.payEditorStartingValues`, through `AppUser.payShown`). With `privatePay` off it is
+    /// `subject` itself and no pay profile is read. With it on: `payProfiles/{subject.id}`, else of a `formerUserIds`
+    /// id (an invited person's pay sits on the placeholder's profile, web `payEditorRecord`); a refused or missing read
+    /// keeps the stored document.
+    func payEditorRecord(for subject: AppUser) async -> AppUser {
+        guard SecuritySwitchContext.privatePay, let firebaseBackend else { return subject }
+        for id in [subject.id] + subject.formerUserIds where !id.isEmpty {
+            if let profile = await firebaseBackend.loadPayProfile(subjectId: id) {
+                return subject.payShown(with: profile, profileId: id, privatePay: SecuritySwitchContext.privatePay)
+            }
+        }
+        return subject
     }
 }
