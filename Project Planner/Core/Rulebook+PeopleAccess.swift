@@ -198,7 +198,7 @@ extension CanonicalBusinessEngine {
     ) -> [RulebookPathWrite] {
         let input: [String: Any] = [
             "organizationId": organizationId,
-            "person": ["id": personId, "email": email ?? NSNull()],
+            "person": ["id": personId, "email": (email as Any?) ?? NSNull()] as [String: Any],
             "isActive": isActive,
             "roster": roster,
         ]
