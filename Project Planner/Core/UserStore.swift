@@ -2298,7 +2298,12 @@ class UserStore: ObservableObject {
                                      stored: stored
                                  ) {
                                      if let current = rosterIndex(for: userId) {
-                                         organizationUsers[current] = confirmed
+                                         if organizationUsers[current].id == confirmed.id {
+                                             organizationUsers[current] = confirmed
+                                         } else {
+                                             organizationUsers[current].role = confirmed.role
+                                             organizationUsers[current].permissions = confirmed.permissions
+                                         }
                                      }
                                      errorMessage = UserTypeChangeReadBack.notSavedMessage(stored: stored)
                                      NSLog("ROLE_CHANGE_NOT_STORED id=%@ role=%@ adminAccess=%@", userId, stored.role.rawValue, stored.permissions.adminAccess ? "true" : "false")
@@ -2326,7 +2331,16 @@ class UserStore: ObservableObject {
                          guard let savedIndex = rosterIndex(for: userId) else {
                              return true
                          }
-                         organizationUsers[savedIndex] = updatedUser
+                         // `rosterIndex` finds the person under any of their ids, so the row may be the other same-email
+                         // document the fold kept. Replacing it with this document's copy would drop the kept id (and
+                         // every booking stored under it would name nobody): only the saved type moves onto that row,
+                         // as `changeAccountType` does.
+                         if organizationUsers[savedIndex].id == updatedUser.id {
+                             organizationUsers[savedIndex] = updatedUser
+                         } else {
+                             organizationUsers[savedIndex].role = updatedUser.role
+                             organizationUsers[savedIndex].permissions = updatedUser.permissions
+                         }
                          let saved = organizationUsers[savedIndex]
                          // The copy saved on this phone follows the stored role too: an organisation switch or a cold
                          // start paints this cache first, and a load that missed the person then kept the old role.

@@ -100,7 +100,12 @@ extension Booking {
         // day too, but must show its clock times and overtime, as web does.
         let hasCustomClock = !(workStartTime ?? "").isEmpty && !(workEndTime ?? "").isEmpty
         let runsIntoOvertime = hasCustomClock && overtimeHoursBeyondPaidStandard(policy: policy) > 0.05
-        if OperativeBookingInterval.coversFullStandardDay(self, policy: policy), !runsIntoOvertime {
+        // RULEBOOK §6 (1.20.2): a custom-hours booking shows its own times, "Custom 07:30–14:00" (web
+        // `bookingTimesText`), even when they cover the day's standard window — a Saturday 07:30–14:00 read
+        // "Full standard day · 07:30–14:00" on iOS only.
+        let isCustomWithClock = timeSlot == .customHours && hasCustomClock
+        let customPrefix = isCustomWithClock ? "Custom " : ""
+        if !isCustomWithClock, OperativeBookingInterval.coversFullStandardDay(self, policy: policy), !runsIntoOvertime {
             if let start = timeline.standardWindowStart, let end = timeline.standardWindowEnd {
                 return ("Full standard day · \(start)–\(end)", false)
             }
@@ -112,9 +117,9 @@ extension Booking {
             if let multiplied = result.multipliedHours, multiplied.clockHours > 0.05 {
                 let stdShow = max(0, result.totalPaidHours - multiplied.paidHours)
                 let text = stdShow > 0.005 ? "\(ScheduleCoverageFormat.hours(stdShow))h + \(multiplied.text)" : multiplied.text
-                return ("\(s)–\(e) · \(text)", true)
+                return ("\(customPrefix)\(s)–\(e) · \(text)", true)
             }
-            var t = "\(s)–\(e)"
+            var t = "\(customPrefix)\(s)–\(e)"
             // RULEBOOK 1.19.0: "break removed" only on a day that takes an unpaid break off (`unpaidBreakAppliesOnDay`).
             if isBreakRemoved,
                CanonicalBusinessEngine.unpaidBreakAppliesOnDay(policy: policy, dayKey: CanonicalBusinessEngine.bookingDayKey(date)) {

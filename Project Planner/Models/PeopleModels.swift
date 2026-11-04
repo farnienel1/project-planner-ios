@@ -357,8 +357,24 @@ extension Operative: Hashable {
 /// Shown for a booked person no catalogue row or account matches. The booking row is never hidden.
 nonisolated let unknownLabourPersonName = "Unknown person"
 
-/// The account a labour booking names: its stored id, or the account that replaced that id (`formerIdAliases`).
-func accountForLabourBooking(operativeId: UUID, users: [AppUser]) -> AppUser? {
+/// The account a labour booking names, from the rulebook's `resolveBookingPerson` (web Daily Overview's
+/// `findUserByAnyId` and the weekly report resolve the same way): the account with that id, a former invite id or a
+/// same-email id (`sameEmailUserIds`, the ids the `rosterPeople` fold folded into the kept row), ids compared without
+/// case, else the account on the email of the catalogue row the booking names. Before 4 Nov this was an exact-id match
+/// with former ids only, so a booking stored under the same-email document the fold did not keep (a user type change
+/// writes every same-email document, so which one the fold keeps can change, #181) or under another letter case read
+/// as "Unknown person" on iOS while web named the person.
+func accountForLabourBooking(operativeId: UUID, users: [AppUser], operatives: [Operative] = []) -> AppUser? {
+    let storedId = Booking.storedOperativeId(for: operativeId)
+    if let exact = users.first(where: { $0.id == storedId }) { return exact }
+    if let resolved = CanonicalBusinessEngine.resolveBookingPerson(storedId, bookingPersonInput(operatives: operatives, users: users)) {
+        return resolved.accountId.flatMap { id in users.first { $0.id == id } }
+    }
+    return legacyAccountForLabourBooking(operativeId: operativeId, users: users)
+}
+
+/// Only when the script does not answer: the stored id, or the account that replaced it (`formerIdAliases`).
+private func legacyAccountForLabourBooking(operativeId: UUID, users: [AppUser]) -> AppUser? {
     let storedId = Booking.storedOperativeId(for: operativeId)
     let aliases = CanonicalBusinessEngine.formerIdAliases(
         users.map { CanonicalFormerIdPerson(id: $0.id, formerIds: $0.formerUserIds) }
@@ -370,7 +386,7 @@ func accountForLabourBooking(operativeId: UUID, users: [AppUser]) -> AppUser? {
 /// Email for a labour booking: the catalogue row's, else the account's. Nil when neither matches.
 func emailForLabourBooking(operativeId: UUID, operatives: [Operative], users: [AppUser]) -> String? {
     if let email = operatives.first(where: { $0.id == operativeId })?.email, !email.isEmpty { return email }
-    return accountForLabourBooking(operativeId: operativeId, users: users)?.email
+    return accountForLabourBooking(operativeId: operativeId, users: users, operatives: operatives)?.email
 }
 
 func rosterNameForLabourBooking(operativeId: UUID, operatives: [Operative], users: [AppUser]) -> String {
@@ -378,8 +394,9 @@ func rosterNameForLabourBooking(operativeId: UUID, operatives: [Operative], user
         let trimmed = operative.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
     }
-    // The stored id may be a Firebase Auth uid, or an invite placeholder id the account replaced (web #189).
-    if let user = accountForLabourBooking(operativeId: operativeId, users: users) {
+    // The stored id may be a Firebase Auth uid, an invite placeholder id the account replaced (web #189), a same-email
+    // document id, or a catalogue row on the account's email: `resolveBookingPerson` (`accountForLabourBooking`).
+    if let user = accountForLabourBooking(operativeId: operativeId, users: users, operatives: operatives) {
         let trimmed = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
         let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -439,7 +456,7 @@ final class LabourBookingPeople {
         } else {
             // The script did not answer: keep the catalogue id and former-id lookups this app had before.
             found = LabourBookingPerson(
-                user: accountForLabourBooking(operativeId: operativeId, users: users),
+                user: legacyAccountForLabourBooking(operativeId: operativeId, users: users),
                 operative: operatives.first { $0.id == operativeId }
             )
         }
