@@ -315,12 +315,16 @@ final class StaffEmailIdentityTests: XCTestCase {
             AppUser(id: "kept", email: "kept@example.com", organizationId: "org", role: .manager, isActive: true, passwordSet: true, permissions: UserPermissions(manager: true)),
             AppUser(id: "old", email: "old@example.com", organizationId: "org", role: .manager, isActive: false, passwordSet: true, permissions: UserPermissions(manager: true))
         ]
-        let eligible = ProjectManagerPickerSupport.eligibleCatalogueManagers(
-            roster: [catalogue, inactive, linked, alreadyAssigned],
-            users: users,
+        // RULEBOOK 1.30.3 §11: the picker is `jobManagerCandidates(roster)`; a catalogue row with no users document
+        // is never offered, an inactive person is not, and someone already on the job is left off.
+        let candidates = CanonicalBusinessEngine.jobManagerCandidates(roster: JobManagerRulebook.roster(users)) ?? []
+        let eligible = ProjectManagerPickerSupport.availableManagers(
+            candidates: candidates,
+            catalogue: [catalogue, inactive, linked, alreadyAssigned],
             excluding: [alreadyAssigned]
         )
         XCTAssertEqual(eligible.map(\.email), ["manager@example.com"])
+        XCTAssertEqual(eligible.first?.id, linked.id, "the candidate is their catalogue row")
     }
 
     func testUnbookedBoardStillListsSomeoneExcludedFromWarnings() {

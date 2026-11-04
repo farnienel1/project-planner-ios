@@ -639,6 +639,7 @@ struct CreateProjectView: View {
         ProjectAssignedManagersEditor(
             selectedManagers: $selectedManagers,
             availableManagersToAdd: availableManagersToAdd,
+            hasNoCandidates: ProjectManagerPickerSupport.hasNoCandidates(userStore: userStore),
             onCreateManager: { showingCreateManager = true }
         )
     }

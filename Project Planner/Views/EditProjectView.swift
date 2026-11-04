@@ -8,7 +8,7 @@
 import SwiftUI
 import MapKit
 
-private enum EditLocationMode: String, CaseIterable, Identifiable {
+enum EditLocationMode: String, CaseIterable, Identifiable {
     case addressFields = "Address"
     case mapPin = "Map pin"
     var id: String { rawValue }
@@ -34,6 +34,8 @@ struct EditProjectView: View {
     @State private var projectDescription: String
     @State private var selectedClient: Client?
     @State private var selectedManagers: [Manager]
+    /// RULEBOOK 1.30.3 `jobManagerAssignments`: the former-manager note per stored manager (amber in the picker).
+    @State private var formerManagerNotes: [UUID: String] = [:]
 
     @State private var locationMode: EditLocationMode
     @State private var pinLatitude: Double?
@@ -101,8 +103,10 @@ struct EditProjectView: View {
             }
         }()
         _projectWorksType = State(initialValue: worksType)
+        // The stored ids, kept as stored until `hydrateManagersIfNeeded` reads them through `jobManagerAssignments`.
+        // No name or email is made up for them: an empty email never resolves to a manager row on save.
         _selectedManagers = State(initialValue: project.allAssignedManagerIds.map { id in
-            Manager(id: id, firstName: "Assigned", lastName: "manager", email: "", mobileNumber: "")
+            Manager(id: id, firstName: "", lastName: "", email: "", mobileNumber: "")
         })
     }
 
@@ -203,6 +207,9 @@ struct EditProjectView: View {
                 hydrateManagersIfNeeded()
             }
             .onChange(of: operativeStore.allManagers.map(\.id)) { _, _ in
+                hydrateManagersIfNeeded()
+            }
+            .onChange(of: userStore.organizationUsers.map(\.id)) { _, _ in
                 hydrateManagersIfNeeded()
             }
             .sheet(isPresented: $showingCreateClient) {
@@ -531,6 +538,8 @@ struct EditProjectView: View {
             ProjectAssignedManagersEditor(
                 selectedManagers: $selectedManagers,
                 availableManagersToAdd: availableManagersToAdd,
+                formerNotes: formerManagerNotes,
+                hasNoCandidates: ProjectManagerPickerSupport.hasNoCandidates(userStore: userStore),
                 onCreateManager: { showingCreateManager = true },
                 onEdited: { managersUserEdited = true }
             )
@@ -538,7 +547,7 @@ struct EditProjectView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Managers")
                     .font(.subheadline.weight(.semibold))
-                Text(selectedManagers.isEmpty ? "No managers assigned" : selectedManagers.map(\.fullName).joined(separator: ", "))
+                Text(selectedManagers.isEmpty ? "No managers assigned" : selectedManagers.map(readOnlyManagerLabel).joined(separator: ", "))
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 Text("Only an admin, or a manager with the \(project.jobType == .smallWorks ? "Small works" : "Projects") permission, can change a job's managers.")
@@ -550,6 +559,14 @@ struct EditProjectView: View {
             .padding(.horizontal, 14)
             .accessibilityIdentifier("editProject.managersReadOnly")
         }
+    }
+
+    /// A manager in the read-only list: their name, with the former-manager note when the rulebook gives one.
+    private func readOnlyManagerLabel(_ manager: Manager) -> String {
+        let name = manager.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = name.isEmpty ? "Assigned manager" : name
+        guard let note = formerManagerNotes[manager.id] else { return label }
+        return "\(label) (\(note))"
     }
 
     private var availableManagersToAdd: [Manager] {
@@ -651,48 +668,28 @@ struct EditProjectView: View {
         isLoading = true
         errorMessage = nil
 
-        let usesPin = locationMode == .mapPin
-        let finalLat = usesPin ? pinLatitude : nil
-        let finalLon = usesPin ? pinLongitude : nil
-
         let mappedWorksType = jobTypeFromString(projectWorksType)
         let finalJobType: JobType = {
             if project.jobType == .smallWorks { return .smallWorks }
             if projectWorksType.isEmpty { return .catA }
             return mappedWorksType == .smallWorks ? .catA : mappedWorksType
         }()
+        let form = currentSnapshot
 
         Task {
+            // Managers already stored on the job keep their stored ids, resolved or not (never a new manager row).
             let resolvedManagers = await ProjectManagerPickerSupport.resolveManagersForSave(
                 selectedManagers,
+                keepingStored: Set(project.allAssignedManagerIds),
                 operativeStore: operativeStore
             )
-            var updatedProject = Project(
-                id: project.id,
-                jobNumber: projectJobNumber,
-                siteName: projectSiteName,
-                addressLine1: usesPin ? (projectAddressLine1.isEmpty ? "" : projectAddressLine1) : projectAddressLine1,
-                addressLine2: projectAddressLine2.isEmpty ? nil : projectAddressLine2,
-                townCity: projectTownCity,
-                postcode: projectPostcode,
+            var updatedProject = Self.editedJob(
+                from: project,
+                form: form,
                 client: client,
-                startDate: projectStartDate,
-                endDate: projectEndDate,
                 jobType: finalJobType,
-                customJobType: projectWorksType.isEmpty ? nil : projectWorksType,
-                manager: resolvedManagers.isEmpty ? project.manager : .custom,
-                managerId: resolvedManagers.first?.id,
-                managerIds: resolvedManagers.map(\.id),
-                isLive: project.isLive,
-                description: projectDescription.isEmpty ? nil : projectDescription,
-                notes: project.notes,
-                hiddenManagerUserIds: project.hiddenManagerUserIds,
-                hiddenOperativeUserIds: project.hiddenOperativeUserIds,
-                usesMapPinForLocation: usesPin,
-                latitude: finalLat,
-                longitude: finalLon
+                managers: resolvedManagers
             )
-            updatedProject.createdAt = project.createdAt
             updatedProject.updatedAt = Date()
             projectStore.errorMessage = nil
             await projectStore.updateProject(updatedProject, editedFrom: project)
@@ -708,40 +705,68 @@ struct EditProjectView: View {
         }
     }
 
+    /// The job as an edit saves it, diffed against `project` by the save (only changed fields are written). The job
+    /// number is trimmed as on create. The legacy `manager` label is kept as read, so it is not sent and a name web
+    /// stored there is never overwritten with "Custom". The stored document and manager ids are carried over, so every
+    /// manager already on the job is written back in its stored spelling (`managerUserIds` is recomputed by the save).
+    static func editedJob(
+        from project: Project,
+        form: EditProjectSnapshot,
+        client: Client,
+        jobType: JobType,
+        managers: [Manager]
+    ) -> Project {
+        let usesPin = form.locationMode == EditLocationMode.mapPin.rawValue
+        var job = Project(
+            id: project.id,
+            jobNumber: form.jobNumber.trimmingCharacters(in: .whitespacesAndNewlines),
+            siteName: form.siteName,
+            addressLine1: form.addressLine1,
+            addressLine2: form.addressLine2.isEmpty ? nil : form.addressLine2,
+            townCity: form.townCity,
+            postcode: form.postcode,
+            client: client,
+            startDate: form.startDate,
+            endDate: form.endDate,
+            jobType: jobType,
+            customJobType: form.worksType.isEmpty ? nil : form.worksType,
+            manager: project.manager,
+            managerId: managers.first?.id,
+            managerIds: managers.map(\.id),
+            isLive: project.isLive,
+            description: form.description.isEmpty ? nil : form.description,
+            notes: project.notes,
+            hiddenManagerUserIds: project.hiddenManagerUserIds,
+            hiddenOperativeUserIds: project.hiddenOperativeUserIds,
+            usesMapPinForLocation: usesPin,
+            latitude: usesPin ? form.pinLatitude : nil,
+            longitude: usesPin ? form.pinLongitude : nil
+        )
+        job.createdAt = project.createdAt
+        job.firestoreDocumentId = project.firestoreDocumentId
+        job.storedManagerIds = project.storedManagerIds
+        return job
+    }
+
     private func hydrateManagersIfNeeded() {
+        let rows = ProjectManagerPickerSupport.assignedManagers(
+            for: project,
+            operativeStore: operativeStore,
+            userStore: userStore
+        )
+        var notes: [UUID: String] = [:]
+        for row in rows { if let note = row.note { notes[row.manager.id] = note } }
+        formerManagerNotes = notes
         if !managersUserEdited {
-            selectedManagers = hydrateAssignedManagers(from: project)
+            selectedManagers = rows.map(\.manager)
         }
         if editBaseline == nil {
             editBaseline = currentSnapshot
         }
     }
-
-    private func hydrateAssignedManagers(from project: Project) -> [Manager] {
-        let ids = project.allAssignedManagerIds
-        var selected: [Manager] = []
-        var seen = Set<UUID>()
-        for id in ids {
-            guard seen.insert(id).inserted else { continue }
-            if let match = operativeStore.allManagers.first(where: { $0.id == id }) {
-                selected.append(match)
-            } else {
-                selected.append(
-                    Manager(
-                        id: id,
-                        firstName: "Assigned",
-                        lastName: "manager",
-                        email: "",
-                        mobileNumber: ""
-                    )
-                )
-            }
-        }
-        return selected
-    }
 }
 
-private struct EditProjectSnapshot: Equatable {
+struct EditProjectSnapshot: Equatable {
     var jobNumber: String
     var siteName: String
     var addressLine1: String
