@@ -3832,12 +3832,11 @@ struct EditUserView: View {
         .filter { !(suppressAdminAccessToggle && $0.field == "adminAccess") }
     }
 
-    /// The signed-in person is the person being edited (any of their ids): their own self-manage rows are locked.
+    /// The signed-in person is the person being edited: their own self-manage rows are locked. Plain id
+    /// equality, as web (`EditUserProfile`) and the security rules (`request.auth.uid == userId`) decide it.
     private var viewerIsEditedPerson: Bool {
         guard let viewer = userStore.currentUser else { return false }
-        let viewerIds = Set(([viewer.id] + viewer.sameEmailUserIds + viewer.formerUserIds).map { $0.lowercased() })
-        let subjectIds = [user.id] + user.sameEmailUserIds + user.formerUserIds
-        return subjectIds.contains { viewerIds.contains($0.lowercased()) }
+        return viewer.id == user.id
     }
 
     private func editPermissionBinding(_ row: RulebookPermissionToggleRow) -> Binding<Bool> {
