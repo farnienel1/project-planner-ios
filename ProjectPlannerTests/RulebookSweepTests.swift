@@ -153,4 +153,16 @@ final class RulebookSweepTests: XCTestCase {
         )
         XCTAssertEqual(count?.total, rows?.count, "the banner and the Home badge read the same rows")
     }
+
+    // MARK: 6. Task overdue counts (`isTaskOverdue`)
+
+    /// The Tasks hub counts and filters overdue tasks with `isTaskOverdue`: due before today on the organisation day,
+    /// never a completed task.
+    func testTaskOverdueIsTheOrganisationDay() {
+        let now = orgDay("2026-11-04").addingTimeInterval(30 * 60)
+        let lateYesterday = orgDay("2026-11-04").addingTimeInterval(-30 * 60)
+        XCTAssertTrue(CanonicalBusinessEngine.isTaskOverdue(status: ProjectTask.Status.todo.rawValue, dueDate: lateYesterday, now: now))
+        XCTAssertFalse(CanonicalBusinessEngine.isTaskOverdue(status: ProjectTask.Status.completed.rawValue, dueDate: lateYesterday, now: now))
+        XCTAssertFalse(CanonicalBusinessEngine.isTaskOverdue(status: ProjectTask.Status.todo.rawValue, dueDate: now, now: now))
+    }
 }

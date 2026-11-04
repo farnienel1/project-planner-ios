@@ -99,17 +99,17 @@ struct TasksDetailView: View {
         isAdminTaskHub ? taskStore.tasks : userRelevantTasks
     }
 
+    /// RULEBOOK §23 `isTaskOverdue`: not completed and due before today on the organisation day (never the phone's).
+    private func taskIsOverdue(_ task: ProjectTask) -> Bool {
+        CanonicalBusinessEngine.isTaskOverdue(status: task.status.rawValue, dueDate: task.dueDate)
+    }
+
     private var myTasksStats: (todo: Int, inProgress: Int, overdue: Int, done: Int) {
         let base = hubScopeTasks
-        let cal = Calendar.current
-        let startOfToday = cal.startOfDay(for: Date())
         let incomplete = base.filter { !$0.isCompleted }
         let todo = incomplete.filter { $0.status == .todo }.count
         let inProgress = incomplete.filter { $0.status == .inProgress }.count
-        let overdue = incomplete.filter { task in
-            guard let due = task.dueDate else { return false }
-            return cal.startOfDay(for: due) < startOfToday
-        }.count
+        let overdue = base.filter(taskIsOverdue).count
         let done = base.filter { $0.isCompleted }.count
         return (todo, inProgress, overdue, done)
     }
@@ -123,18 +123,11 @@ struct TasksDetailView: View {
     }
 
     private var overdueRelevantCount: Int {
-        let cal = Calendar.current
-        let startOfToday = cal.startOfDay(for: Date())
-        return hubScopeTasks.filter { task in
-            guard !task.isCompleted, let due = task.dueDate else { return false }
-            return cal.startOfDay(for: due) < startOfToday
-        }.count
+        hubScopeTasks.filter(taskIsOverdue).count
     }
 
     private var displayedTasks: [ProjectTask] {
         var list: [ProjectTask]
-        let cal = Calendar.current
-        let startOfToday = cal.startOfDay(for: Date())
         switch listSegment {
         case .assignedToMe:
             list = userRelevantTasks.filter { !$0.isCompleted }
@@ -143,10 +136,7 @@ struct TasksDetailView: View {
         case .completed:
             list = hubScopeTasks.filter { $0.isCompleted }
         case .overdue:
-            list = hubScopeTasks.filter { task in
-                guard !task.isCompleted, let due = task.dueDate else { return false }
-                return cal.startOfDay(for: due) < startOfToday
-            }
+            list = hubScopeTasks.filter(taskIsOverdue)
         }
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !q.isEmpty {
@@ -762,11 +752,12 @@ private struct MyTasksRedesignTaskCard: View {
 
     private var dueText: String {
         guard let due = resolvedTask.dueDate else { return "No date" }
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         let d0 = cal.startOfDay(for: due)
         let t0 = cal.startOfDay(for: Date())
         if resolvedTask.isCompleted || d0 >= t0 {
             let fmt = DateFormatter()
+            fmt.timeZone = cal.timeZone
             fmt.dateFormat = "EEE d MMM"
             return fmt.string(from: due)
         }
@@ -777,11 +768,7 @@ private struct MyTasksRedesignTaskCard: View {
     }
 
     private var dueColor: Color {
-        guard let due = resolvedTask.dueDate, !resolvedTask.isCompleted else { return MyTasksScreenPalette.muted }
-        if Calendar.current.startOfDay(for: due) < Calendar.current.startOfDay(for: Date()) {
-            return MyTasksScreenPalette.overdueCount
-        }
-        return MyTasksScreenPalette.muted
+        isOverdue ? MyTasksScreenPalette.overdueCount : MyTasksScreenPalette.muted
     }
 
     private var dueWeight: Font.Weight {
