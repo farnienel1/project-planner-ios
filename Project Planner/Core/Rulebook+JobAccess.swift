@@ -253,7 +253,14 @@ nonisolated enum JobAccessContext {
     }
 
     /// The operatives catalogue, for the signed-in account's own booking ids.
+    /// Lower-cased `operatives` document id → its email (RULEBOOK 1.31.0 `operativesManagerMayDeleteBooking`
+    /// `operativeHasAccount`: whether a labour booking's person has a users document).
+    nonisolated(unsafe) private(set) static var catalogueEmailById: [String: String] = [:]
+
     @MainActor static func updateOperatives(_ operatives: [Operative]) {
+        var emails: [String: String] = [:]
+        for row in operatives { emails[row.documentId.lowercased()] = row.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+        catalogueEmailById = emails
         let next = operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.documentId, email: $0.email) }
         guard next != operativeRows else { return }
         operativeRows = next
