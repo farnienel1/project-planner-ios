@@ -510,28 +510,21 @@ private struct OperativeAnnualLeaveRequestsListView: View {
     }
 
     private func notifyDecision(to request: HolidayBooking, approved: Bool, decidedByName: String) async {
-        if let requesterUserId = request.userId {
-            await notificationService.notifyHolidayRequestDecisionToUser(
-                userId: requesterUserId,
-                bookingId: request.id,
-                approved: approved,
-                decidedByName: decidedByName
-            )
-            return
-        }
-        if let oid = request.operativeId,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let operativeUser = userStore.organizationUsers.first(where: {
-               ($0.permissions.operativeMode || $0.role == .operative) &&
-               $0.email.lowercased() == op.email.lowercased()
-           }) {
-            await notificationService.notifyHolidayRequestDecisionToUser(
-                userId: operativeUser.id,
-                bookingId: request.id,
-                approved: approved,
-                decidedByName: decidedByName
-            )
-        }
+        // RULEBOOK §9, §13: the requester is the account the record names (`resolveBookingPerson` on its `userId`,
+        // else its `operativeId`); `notifyHolidayRequestDecisionToUser` then asks `holidayDecisionRecipients` (never
+        // the decider, no admin copy). No email or operative-mode match here.
+        let requesterId = AnnualLeaveApproval.requester(
+            for: request,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )?.id ?? request.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let requesterId, !requesterId.isEmpty else { return }
+        await notificationService.notifyHolidayRequestDecisionToUser(
+            userId: requesterId,
+            bookingId: request.id,
+            approved: approved,
+            decidedByName: decidedByName
+        )
     }
 }
 
@@ -907,10 +900,7 @@ struct OperativeAnnualLeaveCalendarView: View {
         let defaults = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let user = leaveProfileUser
         return AnnualLeavePolicy.usageSummary(
-            bookings: holidayStore.bookings,
-            profileUserId: user?.id ?? person.userId ?? "",
-            operativeId: person.operativeId,
-            profileEmail: user?.email,
+            bookings: personHolidayBookings,
             daysPerYear: user?.annualLeaveDaysPerYear ?? defaults.daysPerYear,
             startMonth: user?.annualLeaveYearStartMonth ?? defaults.startMonth,
             endMonth: user?.annualLeaveYearEndMonth ?? defaults.endMonth,
@@ -929,13 +919,11 @@ struct OperativeAnnualLeaveCalendarView: View {
 
     /// RULEBOOK 1.9.0 §9: the person's leave by every id of their account (`leaveRecordsForAccount`).
     private var personHolidayBookings: [HolidayBooking] {
-        if let account = leaveProfileUser {
-            return holidayStore.myBookings(account: account, operatives: operativeStore.allOperatives, operativeId: person.operativeId)
-        }
-        return holidayStore.myBookings(
-            userId: person.userId,
+        holidayStore.myBookings(
+            account: leaveProfileUser,
+            operatives: operativeStore.allOperatives,
             operativeId: person.operativeId,
-            email: nil
+            userId: person.userId
         )
     }
 
@@ -1541,38 +1529,29 @@ struct OperativeAnnualLeaveCalendarView: View {
     }
 
     private func notifyDecision(to request: HolidayBooking, approved: Bool, decidedByName: String) async {
-        if let requesterUserId = request.userId {
-            await notificationService.notifyHolidayRequestDecisionToUser(
-                userId: requesterUserId,
-                bookingId: request.id,
-                approved: approved,
-                decidedByName: decidedByName
-            )
-            return
-        }
-        if let oid = request.operativeId,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let operativeUser = userStore.organizationUsers.first(where: {
-               ($0.permissions.operativeMode || $0.role == .operative) &&
-               $0.email.lowercased() == op.email.lowercased()
-           }) {
-            await notificationService.notifyHolidayRequestDecisionToUser(
-                userId: operativeUser.id,
-                bookingId: request.id,
-                approved: approved,
-                decidedByName: decidedByName
-            )
-        }
+        // RULEBOOK §9, §13: the requester is the account the record names (`resolveBookingPerson` on its `userId`,
+        // else its `operativeId`); `notifyHolidayRequestDecisionToUser` then asks `holidayDecisionRecipients` (never
+        // the decider, no admin copy). No email or operative-mode match here.
+        let requesterId = AnnualLeaveApproval.requester(
+            for: request,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )?.id ?? request.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let requesterId, !requesterId.isEmpty else { return }
+        await notificationService.notifyHolidayRequestDecisionToUser(
+            userId: requesterId,
+            bookingId: request.id,
+            approved: approved,
+            decidedByName: decidedByName
+        )
     }
 
+    /// The person's account: their `userId`, else the account behind their catalogue row (`resolveBookingPerson`).
     private func resolvedNotificationUserId() -> String? {
         if let uid = person.userId { return uid }
-        if let oid = person.operativeId,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }) {
-            let email = op.email.lowercased()
-            return userStore.organizationUsers.first(where: { $0.email.lowercased() == email })?.id
-        }
-        return nil
+        guard let oid = person.operativeId else { return nil }
+        return LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+            .person(for: oid).user?.id
     }
 }
 

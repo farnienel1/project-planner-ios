@@ -209,8 +209,6 @@ class HolidayStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: HolidayStore resolved org \(orgId); fetching holidayBookings…")
             bookings = try await fb.loadHolidayBookings(organizationId: orgId)
             print("🔥🔥🔥 DEBUG: HolidayStore loaded \(bookings.count) holiday bookings")
-            // Do not auto-purge weekends on load — sequential deletes freeze Simulator launch.
-            // Purge remains available via `purgeInvalidWeekendBookingsIfNeeded()` for explicit cleanup.
         } catch {
             let nsError = error as NSError
             print("🔥🔥🔥 DEBUG: HolidayStore loadData failed: \(error.localizedDescription)")
@@ -345,19 +343,6 @@ class HolidayStore: ObservableObject {
         }
     }
 
-    /// Removes single-day annual leave records that fall on a weekend (early-days cleanup; restores allowance).
-    /// A multi-day record (one document per request, §9) may span a weekend and is kept.
-    func purgeInvalidWeekendBookingsIfNeeded() async {
-        let cal = OrganizationRulebookContext.calendar
-        let invalid = bookings.filter {
-            cal.isDate($0.startDate, inSameDayAs: $0.endDate) &&
-            AnnualLeaveCalendarRules.bookingContainsWeekend($0, calendar: cal)
-        }
-        for booking in invalid {
-            await deleteBooking(booking)
-        }
-    }
-
     // Owner decision 4 Nov ("Never delete leave"): changing Annual Leave Management, the line manager or the account
     // type never deletes a person's approved or pending leave. The toggle only decides whether *future* leave saves
     // approved or is requested (`canSelfBookAnnualLeave`). The two helpers that deleted it are gone.
@@ -447,37 +432,32 @@ class HolidayStore: ObservableObject {
 
     /// RULEBOOK 1.9.0 §9, §10: this account's leave — `leaveRecordsForAccount` (a record whose `userId` or
     /// `operativeId` is any of the account's ids: uid, former and same-email ids, catalogue rows on its email; without
-    /// case, never by name). With no account, the records on `operativeId` (a catalogue-only person). Falls back to
-    /// `myBookings(userId:operativeId:email:)` only when the script did not answer.
-    func myBookings(account: AppUser?, operatives: [Operative], operativeId: UUID? = nil) -> [HolidayBooking] {
-        guard let account else {
-            guard let operativeId else { return [] }
-            return bookings.filter { $0.operativeId == operativeId }
-        }
-        let indexes = CanonicalBusinessEngine.leaveRecordsForAccount(
-            records: bookings.map { (userId: $0.userId, operativeId: $0.operativeIdRaw) },
-            account: CanonicalBusinessEngine.CanonicalBookingPersonAccount(
+    /// case, never by name). With no profile loaded but a stored `userId`, that id alone is the account. With neither,
+    /// the records on `operativeId` (a catalogue-only person). Empty when the script did not answer: no Swift copy of
+    /// the matching rule (AGENTS.md Rule 0).
+    func myBookings(account: AppUser?, operatives: [Operative], operativeId: UUID? = nil, userId: String? = nil) -> [HolidayBooking] {
+        let accountRow: CanonicalBusinessEngine.CanonicalBookingPersonAccount
+        if let account {
+            accountRow = CanonicalBusinessEngine.CanonicalBookingPersonAccount(
                 id: account.id,
                 email: account.email,
                 formerIds: account.formerUserIds,
                 aliasIds: account.sameEmailUserIds
-            ),
+            )
+        } else if let uid = userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty {
+            accountRow = CanonicalBusinessEngine.CanonicalBookingPersonAccount(id: uid, email: nil, formerIds: nil, aliasIds: nil)
+        } else {
+            guard let operativeId else { return [] }
+            return bookings.filter { $0.operativeId == operativeId }
+        }
+        guard let indexes = CanonicalBusinessEngine.leaveRecordsForAccount(
+            records: bookings.map { (userId: $0.userId, operativeId: $0.operativeIdRaw) },
+            account: accountRow,
             operatives: operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.documentId, email: $0.email) }
-        )
-        guard let indexes else {
-            return myBookings(userId: account.id, operativeId: operativeId, email: account.email)
+        ) else {
+            return []
         }
         let all = bookings
         return indexes.filter { $0 >= 0 && $0 < all.count }.map { all[$0] }
-    }
-
-    func myBookings(userId: String?, operativeId: UUID?, email: String? = nil) -> [HolidayBooking] {
-        bookings.filter { b in
-            if AnnualLeavePolicy.holidayUserMatches(bookingUserId: b.userId, profileUserId: userId, profileEmail: email) {
-                return true
-            }
-            if let oid = operativeId, b.operativeId == oid { return true }
-            return false
-        }
     }
 }

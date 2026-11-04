@@ -249,7 +249,9 @@ struct ContentView: View {
             )
             .onReceive(NotificationCenter.default.publisher(for: .openWorkCatalogueDetail)) { notification in
                 guard let projectId = notification.userInfo?["projectId"] as? UUID else { return }
-                let isSmallWorks = notification.userInfo?["isSmallWorks"] as? Bool ?? false
+                // A variation notice may not say which collection its job is in: the loaded jobs answer it.
+                let isSmallWorks = notification.userInfo?["isSmallWorks"] as? Bool
+                    ?? projectStore.smallWorks.contains(where: { $0.id == projectId })
                 let tab = isSmallWorks ? 2 : 1
                 showMoreMenuSheet = false
                 showingHolidaySheet = false

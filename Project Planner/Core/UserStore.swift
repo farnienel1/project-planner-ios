@@ -1050,11 +1050,10 @@ class UserStore: ObservableObject {
     func canViewOperatives() -> Bool {
         if isOperativeMode() { return false }
         guard let u = displayUser else { return false }
-        // Super admin keeps the Operatives page. Everyone else, including admins, follows the Operatives toggle.
+        // Super admin keeps the Operatives page. Everyone else follows `canManageOperatives` (RULEBOOK §11: above
+        // operative level with the Operatives toggle in effect; admins have it on and locked).
         if u.isSuperAdmin { return true }
-        let canHoldTheToggle = u.permissions.manager || u.permissions.adminAccess || u.role == .admin || u.role == .manager
-        // RULEBOOK 1.11.0 §11: `effectivePermissions` — admins have Operatives on and locked.
-        return canHoldTheToggle && u.effectivePermissions.operatives
+        return CanonicalBusinessEngine.canManageOperatives(u.permissionSubject)
     }
     
     /// Organisation material catalogue (batch upload, CRUD). Admins and managers only — not operatives with project materials access.
@@ -1162,14 +1161,11 @@ class UserStore: ObservableObject {
         if isUserTimesheetRosterLoading {
             return true
         }
-        if let ids = UserTimesheetAccessRulebook.subjectUserIds(viewer: user, members: organizationUsers) {
-            return !ids.isEmpty
+        // `userTimesheetSubjects`; closed when the script did not answer (no Swift copy of the rule, AGENTS.md Rule 0).
+        guard let ids = UserTimesheetAccessRulebook.subjectUserIds(viewer: user, members: organizationUsers) else {
+            return false
         }
-        return organizationUsers.contains { orgUser in
-            guard orgUser.permissions.operativeMode else { return false }
-            guard orgUser.isActive else { return false }
-            return orgUser.isLineManager(user.id)
-        }
+        return !ids.isEmpty
     }
 
     /// The profile, or this organisation's roster, has not arrived yet. Screens wait instead of deciding on an empty list.
@@ -1182,22 +1178,13 @@ class UserStore: ObservableObject {
     /// `userTimesheetSubjects` decides once the packed script has it; before that, the screen's previous filter.
     func userTimesheetSubjectUsers() -> [AppUser] {
         guard let viewer = displayUser else { return [] }
-        let users: [AppUser]
-        if let ids = UserTimesheetAccessRulebook.subjectUserIds(viewer: viewer, members: organizationUsers) {
-            let wanted = Set(ids)
-            users = organizationUsers.filter { wanted.contains($0.id) }
-        } else if CanonicalBusinessEngine.seesEveryUserTimesheet(Self.staffAccountRole(for: viewer)) == true {
-            users = organizationUsers.filter { user in
-                user.isActive
-                && (user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess || user.role == .manager || user.role == .admin)
-            }
-        } else {
-            users = organizationUsers.filter { user in
-                user.isActive && user.isLineManager(viewer.id)
-            }
+        // `userTimesheetSubjects`; empty when the script did not answer (no Swift copy of the rule, AGENTS.md Rule 0).
+        guard let ids = UserTimesheetAccessRulebook.subjectUserIds(viewer: viewer, members: organizationUsers) else {
+            return []
         }
-        // RULEBOOK 1.30.2 `userTimesheetSubjects`: never the viewer (their own sheet is My Timesheets). The script
-        // already leaves them out; the fallback lists (script did not answer) must not add them back.
+        let wanted = Set(ids)
+        let users = organizationUsers.filter { wanted.contains($0.id) }
+        // RULEBOOK 1.30.2 `userTimesheetSubjects`: never the viewer (their own sheet is My Timesheets).
         let viewerIds = Set(RulebookPeople.ownerIds(for: viewer, users: organizationUsers).map { $0.lowercased() })
         return users
             .filter { !viewerIds.contains($0.id.lowercased()) }
@@ -1530,9 +1517,9 @@ class UserStore: ObservableObject {
     /// and add a new operative. They cannot add managers or admins.
     func isActingManagerOperativeManagementOnly() -> Bool {
         guard let u = displayUser else { return false }
-        if u.permissions.operativeMode { return false }
-        if u.isSuperAdmin || u.permissions.adminAccess { return false }
-        return u.permissions.manager && u.effectivePermissions.operatives
+        // A manager-level account (`permissionLevelOf`) that `canManageOperatives`.
+        guard u.permissionLevel == .manager else { return false }
+        return CanonicalBusinessEngine.canManageOperatives(u.permissionSubject)
     }
 
     /// Admins and managers with operative management can open the team annual leave directory.
@@ -1540,7 +1527,7 @@ class UserStore: ObservableObject {
         if isOperativeMode() { return false }
         if hasAdminAccess() { return true }
         guard let u = displayUser else { return false }
-        return u.permissions.manager && u.effectivePermissions.operatives
+        return CanonicalBusinessEngine.canManageOperatives(u.permissionSubject)
     }
     
     /// Whether the signed-in user may change permissions for `target` in **Manage / edit user**.
@@ -2282,12 +2269,15 @@ class UserStore: ObservableObject {
         do {
             for id in idsToPatch {
                 do {
+                    // Only the changed identity fields of each document (`userProfileWriteFields` against the row
+                    // this device loaded for that id).
                     try await firebaseBackend.patchUserIdentity(
                         userId: id,
                         firstName: trimmedFirst,
                         surname: trimmedSurname,
                         email: savedEmail,
-                        mobileNumber: mobileOut
+                        mobileNumber: mobileOut,
+                        previous: organizationUsers.first(where: { $0.id == id })
                     )
                 } catch {
                     print("🔥🔥🔥 DEBUG: identity patch skipped for \(id): \(error.localizedDescription)")

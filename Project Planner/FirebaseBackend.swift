@@ -5862,14 +5862,8 @@ class FirebaseBackend: ObservableObject {
         deviceSessionProfile = user
     }
 
-    /// Name, email, and phone only. Does not touch organisation, role, or permission flags.
-    func patchUserIdentity(
-        userId: String,
-        firstName: String,
-        surname: String,
-        email: String,
-        mobileNumber: String?
-    ) async throws {
+    /// The identity fields a profile save writes, as native Firestore values ("no phone" is `FieldValue.delete()`).
+    static func userIdentityPayload(firstName: String, surname: String, email: String, mobileNumber: String?) -> [String: Any] {
         let trimmedFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -5879,19 +5873,63 @@ class FirebaseBackend: ObservableObject {
             "surname": trimmedSurname,
             "lastName": trimmedSurname,
             "email": trimmedEmail,
-            "updatedAt": Timestamp(date: Date())
         ]
         if !display.isEmpty {
             payload["name"] = display
             payload["displayName"] = display
         }
         let trimmedMobile = mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedMobile.isEmpty {
-            payload["mobileNumber"] = trimmedMobile
-        } else {
-            payload["mobileNumber"] = FieldValue.delete()
+        payload["mobileNumber"] = trimmedMobile.isEmpty ? FieldValue.delete() as Any : trimmedMobile as Any
+        return payload
+    }
+
+    /// The identity fields of a profile save that changed against the copy the editor loaded (`previous`):
+    /// `userProfileWriteFields` (RULEBOOK §1 partial writes; the name fields travel together as its name group). With
+    /// no loaded copy, every identity field. Nil when the script did not answer.
+    static func userIdentityChanges(
+        firstName: String,
+        surname: String,
+        email: String,
+        mobileNumber: String?,
+        previous: AppUser?
+    ) -> [String: Any]? {
+        let next = userIdentityPayload(firstName: firstName, surname: surname, email: email, mobileNumber: mobileNumber)
+        guard let previous else { return next }
+        let before = userIdentityPayload(
+            firstName: previous.firstName,
+            surname: previous.surname,
+            email: previous.email,
+            mobileNumber: previous.mobileNumber
+        ).filter { !($0.value is FieldValue) }
+        guard let write = CanonicalBusinessEngine.peopleDocumentWrite("userProfileWriteFields", before: before, next: next) else {
+            return nil
         }
-        try await db.collection("users").document(userId).updateData(payload)
+        return write.firestoreFields(from: next)
+    }
+
+    /// Name, email, and phone only. Does not touch organisation, role, or permission flags. Sends only the fields that
+    /// changed against `previous` (the profile the editor loaded), never all of them (RULEBOOK §1; a full identity
+    /// write cost the rules evaluation on every save).
+    func patchUserIdentity(
+        userId: String,
+        firstName: String,
+        surname: String,
+        email: String,
+        mobileNumber: String?,
+        previous: AppUser? = nil
+    ) async throws {
+        guard let changes = Self.userIdentityChanges(
+            firstName: firstName,
+            surname: surname,
+            email: email,
+            mobileNumber: mobileNumber,
+            previous: previous
+        ) else {
+            throw CanonicalWriteUnavailableError(function: "userProfileWriteFields")
+        }
+        guard !changes.isEmpty else { return }
+        try await db.collection("users").document(userId)
+            .updateData(WriteMetadata.stamped(changes, userId: auth.currentUser?.uid))
     }
 
     // MARK: - Sensitive profile (users/{uid}/private/taxIds)
@@ -7533,10 +7571,8 @@ class FirebaseBackend: ObservableObject {
             scheduleHistoryStart = day
             return true
         }
-        let day = Calendar.current.startOfDay(for: date)
-        guard day < current else { return false }
-        scheduleHistoryStart = day
-        return true
+        // The script did not answer: the download is left as it is (no Swift copy of `bookingLoadStart`).
+        return false
     }
 
     /// Weekly report, invoicing, and a project week outside the launch window ask for the archive.
@@ -10485,6 +10521,42 @@ extension FirebaseBackend {
             return left > right
         }
         return Array(sorted.prefix(max(1, limit)))
+    }
+
+    /// RULEBOOK 1.31.0 §8: exported sheets an older build stored without `userId` (web's exported-history fast path,
+    /// `exportedAt != null`). Each row carries `__documentId` and `__subjectId`, the subject read from the document id
+    /// (`timesheetDocumentSubjectId`). Rows that do carry `userId` are left to `listTimesheetStates`.
+    /// Memoised per organisation for `exportedHistoryMemoSeconds` (web's `EXPORTED_HISTORY_TTL_MS`, 20 s), so
+    /// reopening the Exported list does not repeat the organisation-wide read.
+    func listExportedTimesheetsWithoutUserId(organizationId: String, now: Date = Date()) async throws -> [[String: Any]] {
+        let key = normalizedOrganizationId(organizationId)
+        if let hit = Self.exportedWithoutUserIdMemo[key], now.timeIntervalSince(hit.at) < Self.exportedHistoryMemoSeconds {
+            return hit.rows
+        }
+        let rows = try await readExportedTimesheetsWithoutUserId(organizationId: organizationId)
+        Self.exportedWithoutUserIdMemo[key] = (now, rows)
+        return rows
+    }
+
+    static let exportedHistoryMemoSeconds: TimeInterval = 20
+    private static var exportedWithoutUserIdMemo: [String: (at: Date, rows: [[String: Any]])] = [:]
+
+    private func readExportedTimesheetsWithoutUserId(organizationId: String) async throws -> [[String: Any]] {
+        let snapshot = try await db.collection("organizations")
+            .document(organizationId)
+            .collection("settings")
+            .whereField("exportedAt", isNotEqualTo: NSNull())
+            .getDocuments()
+        return snapshot.documents.compactMap { doc -> [String: Any]? in
+            var row = doc.data()
+            let stored = (row["userId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard stored.isEmpty,
+                  let subject = CanonicalBusinessEngine.timesheetDocumentSubjectId(doc.documentID),
+                  !subject.isEmpty else { return nil }
+            row["__documentId"] = doc.documentID
+            row["__subjectId"] = subject
+            return row
+        }
     }
 
     private func hsCollectionName(for project: Project) -> String {

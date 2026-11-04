@@ -752,9 +752,10 @@ struct WholesalerSendHistoryView: View {
         return ["Anyone"] + names.sorted()
     }
 
+    /// RULEBOOK §16 `canSendMaterialOrders`: admins and super admins outside operative mode, and managers.
     private func canPlaceMaterialOrders(_ user: AppUser) -> Bool {
-        guard user.isActive, !user.permissions.operativeMode else { return false }
-        return user.isSuperAdmin || user.permissions.adminAccess || user.permissions.manager
+        guard user.isActive else { return false }
+        return CanonicalBusinessEngine.canSendMaterialOrders(UserStore.staffAccountRole(for: user))
     }
 
     private var filteredRecords: [MaterialSendRecord] {

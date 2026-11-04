@@ -43,7 +43,7 @@ struct MaterialsWeekNavigator: View {
     }
 
     private func shiftWeek(_ delta: Int) {
-        if let next = Calendar.current.date(byAdding: .day, value: delta * 7, to: currentWeek) {
+        if let next = OrganizationRulebookContext.calendar.date(byAdding: .day, value: delta * 7, to: currentWeek) {
             currentWeek = next
         }
     }
@@ -57,14 +57,14 @@ struct MaterialsDayStrip: View {
     var body: some View {
         HStack(spacing: 4) {
             ForEach(weekDays, id: \.self) { day in
-                let isSelected = Calendar.current.isDate(day, inSameDayAs: selectedDate)
-                let hasItems = materials.contains { Calendar.current.isDate($0.date, inSameDayAs: day) }
+                let isSelected = MaterialsDay.same(day, selectedDate)
+                let hasItems = materials.contains { MaterialsDay.same($0.date, day) }
                 Button { selectedDate = day } label: {
                     VStack(spacing: 3) {
                         Text(shortWeekday(day))
                             .font(.caption2.weight(.semibold))
                             .opacity(isSelected ? 0.85 : 1)
-                        Text("\(Calendar.current.component(.day, from: day))")
+                        Text("\(OrganizationRulebookContext.calendar.component(.day, from: day))")
                             .font(.system(.headline, design: .rounded))
                             .fontWeight(.bold)
                             .monospacedDigit()
@@ -103,9 +103,7 @@ struct MaterialsDayStrip: View {
     }
 
     private func shortWeekday(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "EEE"
-        return f.string(from: date)
+        MaterialsDay.formatter("EEE").string(from: date)
     }
 }
 
@@ -216,9 +214,7 @@ struct OperativeMaterialsPanel: View {
     @State private var showingDeleteErrorAlert = false
 
     private var dayMaterials: [MaterialItem] {
-        let calendar = Calendar.current
-        let selectedDay = calendar.startOfDay(for: selectedDate)
-        return materials.filter { calendar.isDate(calendar.startOfDay(for: $0.date), inSameDayAs: selectedDay) }
+        materials.filter { MaterialsDay.same($0.date, selectedDate) }
             .sorted { $0.addedAt > $1.addedAt }
     }
 
@@ -335,9 +331,7 @@ struct OperativeMaterialsPanel: View {
     }
 
     private var dayTitle: String {
-        let f = DateFormatter()
-        f.dateFormat = "d MMM"
-        return "\(f.string(from: selectedDate)) · \(dayMaterials.count) items"
+        "\(MaterialsDay.formatter("d MMM").string(from: selectedDate)) · \(dayMaterials.count) items"
     }
 
     private func deleteMaterial(_ material: MaterialItem) {
@@ -366,22 +360,40 @@ struct OperativeMaterialsPanel: View {
 }
 
 enum MaterialsWeekHelpers {
-    static func weekDays(containing date: Date, calendar: Calendar = .current) -> [Date] {
+    /// Monday–Sunday in the organisation zone (rulebook §1: the week starts on Monday), never the phone's locale week.
+    static func weekDays(containing date: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> [Date] {
         guard let weekInterval = calendar.dateInterval(of: .weekOfYear, for: date) else { return [] }
         return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: weekInterval.start) }
     }
 
-    static func weekRangeString(for week: Date, calendar: Calendar = .current) -> String {
+    static func weekRangeString(for week: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> String {
         let days = weekDays(containing: week, calendar: calendar)
         guard let first = days.first, let last = days.last else { return "" }
-        let f = DateFormatter()
-        f.dateFormat = "d MMM yyyy"
+        let f = MaterialsDay.formatter("d MMM yyyy")
+        f.timeZone = calendar.timeZone
         return "\(calendar.component(.day, from: first)) – \(f.string(from: last))"
     }
 
-    static func itemsThisWeek(_ materials: [MaterialItem], week: Date, calendar: Calendar = .current) -> Int {
+    static func itemsThisWeek(_ materials: [MaterialItem], week: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> Int {
         let days = Set(weekDays(containing: week, calendar: calendar).map { calendar.startOfDay(for: $0) })
         return materials.filter { days.contains(calendar.startOfDay(for: $0.date)) }.count
+    }
+}
+
+/// Materials screens work in organisation days (rulebook §1: one business time zone, never the phone's): the week
+/// strip, the selected day, the lines on a day and their labels.
+enum MaterialsDay {
+    /// Same organisation day (`OrganizationRulebookContext.dayKey`).
+    static func same(_ a: Date, _ b: Date) -> Bool {
+        OrganizationRulebookContext.dayKey(a) == OrganizationRulebookContext.dayKey(b)
+    }
+
+    /// A label formatter in the organisation zone.
+    static func formatter(_ format: String) -> DateFormatter {
+        let f = DateFormatter()
+        f.timeZone = OrganizationRulebookContext.timeZone
+        f.dateFormat = format
+        return f
     }
 }
 

@@ -66,58 +66,11 @@ nonisolated enum AnnualLeavePolicy {
         return leaveYearRange(containing: dayBefore, startMonth: startMonth, endMonth: endMonth, calendar: calendar)
     }
 
-    static func holidayUserMatches(bookingUserId: String?, profileUserId: String?, profileEmail: String?) -> Bool {
-        guard let storedRaw = bookingUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !storedRaw.isEmpty else {
-            return false
-        }
-        if let profileUserId {
-            let profile = profileUserId.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !profile.isEmpty, storedRaw.caseInsensitiveCompare(profile) == .orderedSame { return true }
-        }
-        if let profileEmail {
-            let email = profileEmail.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !email.isEmpty, storedRaw.caseInsensitiveCompare(email) == .orderedSame { return true }
-        }
-        return false
-    }
-
-    static func consumedDays(
-        bookings: [HolidayBooking],
-        userId: String?,
-        operativeId: UUID?,
-        profileEmail: String? = nil,
-        statuses: Set<HolidayStatus>,
-        rangeStart: Date,
-        rangeEnd: Date,
-        calendar: Calendar = OrganizationRulebookContext.calendar
-    ) -> Double {
-        let rs = calendar.startOfDay(for: rangeStart)
-        let re = calendar.startOfDay(for: rangeEnd)
-        // Several requests can cover the same calendar day. A day never consumes more than 1.
-        var byDay: [Date: Double] = [:]
-        for b in bookings where statuses.contains(b.status) {
-            let matchesUser = Self.holidayUserMatches(bookingUserId: b.userId, profileUserId: userId, profileEmail: profileEmail)
-            let matchesOp = operativeId != nil && b.operativeId == operativeId
-            guard matchesUser || matchesOp else { continue }
-
-            var d = calendar.startOfDay(for: b.startDate)
-            let endB = calendar.startOfDay(for: b.endDate)
-            while d <= endB {
-                if d >= rs && d <= re {
-                    byDay[d, default: 0] += b.timeSlot.dayValue
-                }
-                guard let nx = calendar.date(byAdding: .day, value: 1, to: d) else { break }
-                d = nx
-            }
-        }
-        return byDay.values.reduce(0) { $0 + min(1, $1) }
-    }
-
+    /// RULEBOOK §9 `annualLeaveBalance` over one person's records. `bookings` are already that person's own
+    /// (`leaveRecordsForAccount`, `HolidayStore.myBookings(account:operatives:)`): this never matches a record to a
+    /// person itself (it used to compare `userId` with the id or the email only, missing former and same-email ids).
     static func usageSummary(
         bookings: [HolidayBooking],
-        profileUserId: String,
-        operativeId: UUID?,
-        profileEmail: String? = nil,
         daysPerYear: Double,
         startMonth: Int,
         endMonth: Int,
@@ -135,13 +88,10 @@ nonisolated enum AnnualLeavePolicy {
         maxCarryOverDays: Double? = OrganizationRulebookContext.annualLeaveDefaults?.maxCarryOverDays
     ) -> AnnualLeaveUsageSummary {
         _ = calendar
-        let records: [CanonicalBusinessEngine.CanonicalLeaveBooking] = bookings.compactMap { booking in
-            let matchesUser = holidayUserMatches(bookingUserId: booking.userId, profileUserId: profileUserId, profileEmail: profileEmail)
-            let matchesOp = operativeId != nil && booking.operativeId == operativeId
-            guard matchesUser || matchesOp else { return nil }
-            return CanonicalBusinessEngine.CanonicalLeaveBooking(
-                startDayKey: CanonicalBusinessEngine.dayKey(for: booking.startDate),
-                endDayKey: CanonicalBusinessEngine.dayKey(for: booking.endDate),
+        let records: [CanonicalBusinessEngine.CanonicalLeaveBooking] = bookings.map { booking in
+            CanonicalBusinessEngine.CanonicalLeaveBooking(
+                startDayKey: booking.startDayKey,
+                endDayKey: booking.endDayKey,
                 timeSlot: booking.timeSlot.rawValue,
                 status: booking.status.rawValue
             )
@@ -238,8 +188,6 @@ nonisolated enum AnnualLeavePolicy {
         selectedStartOfDays: [Date],
         timeSlot: HolidayTimeSlot,
         bookings: [HolidayBooking],
-        profileUserId: String,
-        operativeId: UUID?,
         daysPerYear: Double,
         startMonth: Int,
         endMonth: Int,
@@ -260,8 +208,6 @@ nonisolated enum AnnualLeavePolicy {
             let ref = days.first ?? range.start
             let summary = usageSummary(
                 bookings: bookings,
-                profileUserId: profileUserId,
-                operativeId: operativeId,
                 daysPerYear: daysPerYear,
                 startMonth: startMonth,
                 endMonth: endMonth,
@@ -285,8 +231,6 @@ nonisolated enum AnnualLeavePolicy {
     static func validateProposedDaySlots(
         daySlots: [Date: HolidayTimeSlot],
         bookings: [HolidayBooking],
-        profileUserId: String,
-        operativeId: UUID?,
         daysPerYear: Double,
         startMonth: Int,
         endMonth: Int,
@@ -304,8 +248,6 @@ nonisolated enum AnnualLeavePolicy {
             let ref = days.first ?? Date()
             let summary = usageSummary(
                 bookings: bookings,
-                profileUserId: profileUserId,
-                operativeId: operativeId,
                 daysPerYear: daysPerYear,
                 startMonth: startMonth,
                 endMonth: endMonth,
@@ -330,8 +272,6 @@ nonisolated enum AnnualLeavePolicy {
         booking: HolidayBooking,
         newTimeSlot: HolidayTimeSlot,
         bookings: [HolidayBooking],
-        profileUserId: String,
-        operativeId: UUID?,
         daysPerYear: Double,
         startMonth: Int,
         endMonth: Int,
@@ -363,8 +303,6 @@ nonisolated enum AnnualLeavePolicy {
         for (yearStart, extra) in extraByYear {
             let summary = usageSummary(
                 bookings: bookings,
-                profileUserId: profileUserId,
-                operativeId: operativeId,
                 daysPerYear: daysPerYear,
                 startMonth: startMonth,
                 endMonth: endMonth,

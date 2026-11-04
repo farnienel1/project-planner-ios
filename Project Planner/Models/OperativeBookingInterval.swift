@@ -41,18 +41,6 @@ enum OperativeBookingInterval {
         return !ids.isEmpty
     }
 
-    /// Wall-clock hours overlapping the org standard day window for the booking's calendar day.
-    static func hoursInsideStandardClockWindow(booking: Booking, policy: OrgPayrollTimePolicy) -> Double {
-        guard let iv = clashInterval(for: booking, policy: policy) else { return 0 }
-        let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
-        guard let ds = timeline.standardWindowStartMinutes,
-              let de = timeline.standardWindowEndMinutes, de > ds else { return 0 }
-        let overlapStart = max(iv.0, ds)
-        let overlapEnd = min(iv.1, de)
-        guard overlapEnd > overlapStart else { return 0 }
-        return Double(overlapEnd - overlapStart) / 60.0
-    }
-
     static func coversFullStandardDay(_ booking: Booking, policy: OrgPayrollTimePolicy) -> Bool {
         guard let iv = clashInterval(for: booking, policy: policy) else { return false }
         let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: booking.date, policy: policy)
@@ -182,7 +170,7 @@ extension Booking {
     }
 }
 
-enum ScheduleCoverageFormat {
+nonisolated enum ScheduleCoverageFormat {
     /// Hours as the pay rule gives them, to the hundredth with trailing zeros dropped (7.25 → "7.25", 3.5 → "3.5",
     /// 8 → "8"). RULEBOOK 1.20.0: a derived weekday day is often a quarter hour (owner example 7.25h), so the display
     /// never rounds it to the half hour (it used to show 7.25 as "7.5").

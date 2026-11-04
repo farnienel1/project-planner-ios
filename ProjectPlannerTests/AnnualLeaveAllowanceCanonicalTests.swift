@@ -145,8 +145,6 @@ final class AnnualLeaveAllowanceCanonicalTests: XCTestCase {
         )
         let summary = AnnualLeavePolicy.usageSummary(
             bookings: [booking],
-            profileUserId: "user-1",
-            operativeId: nil,
             daysPerYear: 25,
             startMonth: 1,
             endMonth: 12,

@@ -54,27 +54,29 @@ struct TasksDetailView: View {
         }
     }
 
+    /// RULEBOOK §5 `qualificationExpiryRows` for the signed-in operative's own catalogue rows (every row of their
+    /// account, `bookingIdsForAccount`): organisation day, one calendar month ahead, already expired included — the
+    /// rows the Home badge counts (`qualificationExpiryCount`). It used to be a 30-day device-calendar window that
+    /// dropped expired qualifications and found the operative by email.
     private var qualificationExpiryBannerItems: [(id: String, title: String, subtitle: String)] {
-        guard userStore.isOperativeMode(),
-              let email = userStore.currentUser?.email else { return [] }
-        let em = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let op = operativeStore.allOperatives.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
-        }) else { return [] }
-        let today = Calendar.current.startOfDay(for: Date())
-        guard let horizon = Calendar.current.date(byAdding: .day, value: 30, to: today) else { return [] }
-        var rows: [(String, String, String)] = []
-        for (qid, exp) in op.qualificationExpiryDates {
-            guard exp >= today && exp <= horizon,
-                  let q = op.qualifications.first(where: { $0.id == qid }) else { continue }
-            let days = Calendar.current.dateComponents([.day], from: today, to: exp).day ?? 0
-            rows.append((
-                id: qid,
-                title: "Qualification expiring: \(q.name)",
-                subtitle: days <= 0 ? "Renew today — tell your manager when complete." : "\(days) day(s) remaining. Tell your manager when you have renewed it."
-            ))
+        guard userStore.isOperativeMode(), let me = userStore.currentUser else { return [] }
+        let ids = labourBookingIds(for: me, operatives: operativeStore.allOperatives)
+        let mine = operativeStore.allOperatives.filter { ids.contains($0.id) }
+        guard !mine.isEmpty,
+              let rows = CanonicalBusinessEngine.qualificationExpiryRows(operatives: mine.map(\.rulebookQualificationRow))
+        else { return [] }
+        return rows.sorted { $0.dayKey < $1.dayKey }.map { row in
+            let days = row.daysUntilExpiry
+            let subtitle: String
+            if days < 0 {
+                subtitle = "Expired \(-days) day\(days == -1 ? "" : "s") ago. Tell your manager when you have renewed it."
+            } else if days == 0 {
+                subtitle = "Renew today — tell your manager when complete."
+            } else {
+                subtitle = "\(days) day\(days == 1 ? "" : "s") remaining. Tell your manager when you have renewed it."
+            }
+            return (id: row.id, title: "\(row.title): \(row.qualificationName)", subtitle: subtitle)
         }
-        return rows.sorted(by: { $0.1 < $1.1 })
     }
 
     /// Home Tasks hub: assigned-to-me is always personal. Admins see every job's tasks in Active / Overdue / Completed.
@@ -97,17 +99,17 @@ struct TasksDetailView: View {
         isAdminTaskHub ? taskStore.tasks : userRelevantTasks
     }
 
+    /// RULEBOOK §23 `isTaskOverdue`: not completed and due before today on the organisation day (never the phone's).
+    private func taskIsOverdue(_ task: ProjectTask) -> Bool {
+        CanonicalBusinessEngine.isTaskOverdue(status: task.status.rawValue, dueDate: task.dueDate)
+    }
+
     private var myTasksStats: (todo: Int, inProgress: Int, overdue: Int, done: Int) {
         let base = hubScopeTasks
-        let cal = Calendar.current
-        let startOfToday = cal.startOfDay(for: Date())
         let incomplete = base.filter { !$0.isCompleted }
         let todo = incomplete.filter { $0.status == .todo }.count
         let inProgress = incomplete.filter { $0.status == .inProgress }.count
-        let overdue = incomplete.filter { task in
-            guard let due = task.dueDate else { return false }
-            return cal.startOfDay(for: due) < startOfToday
-        }.count
+        let overdue = base.filter(taskIsOverdue).count
         let done = base.filter { $0.isCompleted }.count
         return (todo, inProgress, overdue, done)
     }
@@ -121,18 +123,11 @@ struct TasksDetailView: View {
     }
 
     private var overdueRelevantCount: Int {
-        let cal = Calendar.current
-        let startOfToday = cal.startOfDay(for: Date())
-        return hubScopeTasks.filter { task in
-            guard !task.isCompleted, let due = task.dueDate else { return false }
-            return cal.startOfDay(for: due) < startOfToday
-        }.count
+        hubScopeTasks.filter(taskIsOverdue).count
     }
 
     private var displayedTasks: [ProjectTask] {
         var list: [ProjectTask]
-        let cal = Calendar.current
-        let startOfToday = cal.startOfDay(for: Date())
         switch listSegment {
         case .assignedToMe:
             list = userRelevantTasks.filter { !$0.isCompleted }
@@ -141,10 +136,7 @@ struct TasksDetailView: View {
         case .completed:
             list = hubScopeTasks.filter { $0.isCompleted }
         case .overdue:
-            list = hubScopeTasks.filter { task in
-                guard !task.isCompleted, let due = task.dueDate else { return false }
-                return cal.startOfDay(for: due) < startOfToday
-            }
+            list = hubScopeTasks.filter(taskIsOverdue)
         }
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !q.isEmpty {
@@ -760,11 +752,12 @@ private struct MyTasksRedesignTaskCard: View {
 
     private var dueText: String {
         guard let due = resolvedTask.dueDate else { return "No date" }
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         let d0 = cal.startOfDay(for: due)
         let t0 = cal.startOfDay(for: Date())
         if resolvedTask.isCompleted || d0 >= t0 {
             let fmt = DateFormatter()
+            fmt.timeZone = cal.timeZone
             fmt.dateFormat = "EEE d MMM"
             return fmt.string(from: due)
         }
@@ -775,11 +768,7 @@ private struct MyTasksRedesignTaskCard: View {
     }
 
     private var dueColor: Color {
-        guard let due = resolvedTask.dueDate, !resolvedTask.isCompleted else { return MyTasksScreenPalette.muted }
-        if Calendar.current.startOfDay(for: due) < Calendar.current.startOfDay(for: Date()) {
-            return MyTasksScreenPalette.overdueCount
-        }
-        return MyTasksScreenPalette.muted
+        isOverdue ? MyTasksScreenPalette.overdueCount : MyTasksScreenPalette.muted
     }
 
     private var dueWeight: Font.Weight {

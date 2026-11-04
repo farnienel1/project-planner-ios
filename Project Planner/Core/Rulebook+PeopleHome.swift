@@ -209,7 +209,8 @@ extension CanonicalBusinessEngine {
 }
 
 extension Operative {
-    /// This operative as a `qualificationExpiryRows` row (CanonicalBusinessEngine `qualificationExpiryCount`).
+    /// This operative as a `qualificationExpiryRows` row (CanonicalBusinessEngine `qualificationExpiryCount`). Each
+    /// expiry carries the qualification's name when the catalogue row has it, else its id.
     var rulebookQualificationRow: [String: Any] {
         [
             "id": documentId,
@@ -217,9 +218,56 @@ extension Operative {
             "email": email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
             "name": "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces),
             "expiries": qualificationExpiryDates.sorted { $0.key < $1.key }.map { id, date in
-                ["qualificationId": id, "name": id, "expiryIso": CanonicalBusinessEngine.isoString(from: date)] as [String: Any]
+                let name = qualifications.first(where: { $0.id == id })?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return [
+                    "qualificationId": id,
+                    "name": name.isEmpty ? id : name,
+                    "expiryIso": CanonicalBusinessEngine.isoString(from: date),
+                ] as [String: Any]
             },
         ]
+    }
+}
+
+/// One `qualificationExpiryRows` row for a reminder banner.
+nonisolated struct RulebookQualificationExpiryRow: Equatable, Sendable {
+    let id: String
+    let operativeId: String
+    let qualificationName: String
+    let dayKey: String
+    /// Negative once expired (rulebook §5: already-expired qualifications are listed too).
+    let daysUntilExpiry: Int
+    let title: String
+}
+
+extension CanonicalBusinessEngine {
+    /// RULEBOOK §5 `qualificationExpiryRows({ referenceIso, timeZone, operatives })`: the same rows the Warnings screen
+    /// and the Home badge (`qualificationExpiryCount`) count — active operatives, organisation day, one calendar month
+    /// ahead, already expired included. Nil when the script did not answer.
+    nonisolated static func qualificationExpiryRows(
+        operatives: [[String: Any]],
+        reference: Date = Date(),
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> [RulebookQualificationExpiryRow]? {
+        guard let rows = objectRows(
+            function: "qualificationExpiryRows",
+            payload: [
+                "referenceIso": isoString(from: reference),
+                "timeZone": timeZone,
+                "operatives": operatives,
+            ]
+        ) else { return nil }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String, let dayKey = row["dayKey"] as? String else { return nil }
+            return RulebookQualificationExpiryRow(
+                id: id,
+                operativeId: row["operativeId"] as? String ?? "",
+                qualificationName: row["qualificationName"] as? String ?? "",
+                dayKey: dayKey,
+                daysUntilExpiry: (row["daysUntilExpiry"] as? NSNumber)?.intValue ?? 0,
+                title: row["title"] as? String ?? ""
+            )
+        }
     }
 }
 

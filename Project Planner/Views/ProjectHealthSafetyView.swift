@@ -732,7 +732,7 @@ struct ProjectHealthSafetyView: View {
 
     private var availableOperativeWeeks: [Date] {
         let myId = userStore.currentUser?.id ?? ""
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         let weeks = Set(vm.visibleIssues().compactMap { issue -> Date? in
             guard vm.signatures(for: issue.id).contains(where: { $0.userId == myId }) else { return nil }
             return calendar.dateInterval(of: .weekOfYear, for: issue.weekCommencing)?.start
@@ -1709,7 +1709,7 @@ struct ProjectHealthSafetyView: View {
                 let assigned = vm.signatures(for: issue.id).contains(where: { $0.userId == myId })
                 guard assigned else { return false }
                 guard let week = operativeWeekFilter else { return true }
-                let issueWeek = Calendar.current.dateInterval(of: .weekOfYear, for: issue.weekCommencing)?.start
+                let issueWeek = OrganizationRulebookContext.calendar.dateInterval(of: .weekOfYear, for: issue.weekCommencing)?.start
                 return issueWeek == week
             }
 

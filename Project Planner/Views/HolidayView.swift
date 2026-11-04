@@ -96,10 +96,7 @@ struct HolidayView: View {
         let oid = currentOperative?.id
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         return AnnualLeavePolicy.usageSummary(
-            bookings: holidayStore.bookings,
-            profileUserId: u.id,
-            operativeId: oid,
-            profileEmail: u.email,
+            bookings: holidayStore.myBookings(account: u, operatives: operativeStore.allOperatives, operativeId: oid),
             daysPerYear: u.annualLeaveDaysPerYear,
             startMonth: u.annualLeaveYearStartMonth,
             endMonth: u.annualLeaveYearEndMonth,
@@ -147,12 +144,11 @@ struct HolidayView: View {
     }
 
     private var selfBookedApprovedHolidayBookings: [HolidayBooking] {
-        guard canShowSelfServeBookedAnnualLeave, let uid = firebaseBackend.currentUser?.uid else { return [] }
-        return holidayStore.bookings
+        guard canShowSelfServeBookedAnnualLeave, firebaseBackend.currentUser?.uid != nil else { return [] }
+        return signedInLeave
             .filter {
                 $0.status == .approved &&
                 $0.cancellationRequestedAt == nil &&
-                bookingMatchesSignedInUser($0, uid: uid) &&
                 !$0.isOperativeRequest
             }
             .sorted { $0.startDate > $1.startDate }
@@ -166,22 +162,22 @@ struct HolidayView: View {
         case pendingHalf(HolidayBooking)
     }
 
-    private func bookingMatchesSignedInUser(_ booking: HolidayBooking, uid: String) -> Bool {
-        AnnualLeavePolicy.holidayUserMatches(
-            bookingUserId: booking.userId,
-            profileUserId: uid,
-            profileEmail: firebaseBackend.currentUser?.email ?? holidayProfileUser?.email
+    /// RULEBOOK 1.9.0 §9, §10: the signed-in person's leave by every id of their account (`leaveRecordsForAccount`
+    /// through `HolidayStore.myBookings`), never by the uid or the email alone.
+    private var signedInLeave: [HolidayBooking] {
+        holidayStore.myBookings(
+            account: holidayProfileUser,
+            operatives: operativeStore.allOperatives,
+            operativeId: currentOperative?.id,
+            userId: firebaseBackend.currentUser?.uid
         )
     }
 
     /// RULEBOOK 1.23.0 §9 `CanonicalBusinessEngine.leaveDayKind`: the signed-in person's leave on the organisation day —
     /// leave days only, rejected never, approved with a pending cancellation still approved, fixed order.
     private func calendarDayKind(for day: Date) -> CalendarDayKind {
-        guard let uid = firebaseBackend.currentUser?.uid else { return .none }
-        let oid = currentOperative?.id
-        let mine = holidayStore.bookings.filter { booking in
-            bookingMatchesSignedInUser(booking, uid: uid) || (oid != nil && booking.operativeId == oid)
-        }
+        guard firebaseBackend.currentUser?.uid != nil else { return .none }
+        let mine = signedInLeave
         guard let answer = CanonicalBusinessEngine.leaveDayAnswer(
             records: mine.map(\.rulebookLeaveRecord),
             dayKey: OrganizationRulebookContext.dayKey(day),
@@ -434,9 +430,7 @@ struct HolidayView: View {
                             return AnnualLeavePolicy.validateTimeSlotIncreaseAgainstAllowance(
                                 booking: booking,
                                 newTimeSlot: updated.timeSlot,
-                                bookings: holidayStore.bookings,
-                                profileUserId: u.id,
-                                operativeId: currentOperative?.id,
+                                bookings: holidayStore.myBookings(account: u, operatives: operativeStore.allOperatives, operativeId: currentOperative?.id),
                                 daysPerYear: u.annualLeaveDaysPerYear,
                                 startMonth: u.annualLeaveYearStartMonth,
                                 endMonth: u.annualLeaveYearEndMonth,
@@ -703,7 +697,7 @@ struct HolidayView: View {
         let person = teamPerson(for: request)
         let name = person?.displayName ?? requesterName(for: request)
         let trade = person?.tradeLabel ?? ""
-        let days = AnnualLeaveDateFormat.consumedDays(from: request.startDate, to: request.endDate, slot: request.timeSlot)
+        let days = AnnualLeaveDateFormat.leaveDays(request)
         let isCancellation = request.cancellationRequestedAt != nil
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
@@ -1087,27 +1081,25 @@ struct HolidayView: View {
         return people
     }
 
+    /// The team row a leave record belongs to: the requester account the rulebook resolves (`resolveBookingPerson`
+    /// through `AnnualLeaveApproval.requester`), else the catalogue row on the record's `operativeId`.
     private func teamPerson(for booking: HolidayBooking) -> AnnualLeavePerson? {
-        teamPeople.first { person in
-            let email = person.userId.flatMap { uid in
-                userStore.organizationUsers.first(where: { $0.id == uid })?.email
-            }
-            if AnnualLeavePolicy.holidayUserMatches(bookingUserId: booking.userId, profileUserId: person.userId, profileEmail: email) {
-                return true
-            }
-            if let oid = person.operativeId, booking.operativeId == oid { return true }
-            return false
+        if let requester = AnnualLeaveApproval.requester(
+            for: booking,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        ), let person = teamPeople.first(where: { $0.userId == requester.id }) {
+            return person
         }
+        guard let oid = booking.operativeId else { return nil }
+        return teamPeople.first { $0.operativeId == oid }
     }
 
     private func teamBalance(for person: AnnualLeavePerson) -> (remaining: Double?, allowance: Double, taken: Double, hasAllowance: Bool, used: Double)? {
         guard let user = teamUser(for: person) else { return nil }
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let summary = AnnualLeavePolicy.usageSummary(
-            bookings: holidayStore.bookings,
-            profileUserId: user.id,
-            operativeId: person.operativeId,
-            profileEmail: user.email,
+            bookings: holidayStore.myBookings(account: user, operatives: operativeStore.allOperatives, operativeId: person.operativeId),
             daysPerYear: user.annualLeaveDaysPerYear,
             startMonth: user.annualLeaveYearStartMonth,
             endMonth: user.annualLeaveYearEndMonth,
@@ -1129,16 +1121,17 @@ struct HolidayView: View {
         if let uid = person.userId {
             return userStore.organizationUsers.first { $0.id == uid }
         }
-        if let oid = person.operativeId,
-           let operative = operativeStore.allOperatives.first(where: { $0.id == oid }) {
-            return userStore.organizationUsers.first { $0.email.lowercased() == operative.email.lowercased() }
+        if let oid = person.operativeId {
+            // `resolveBookingPerson`: the account behind the catalogue row (same email, former or alias ids).
+            return LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+                .person(for: oid).user
         }
         return nil
     }
 
     private func remainingAfterNote(for request: HolidayBooking, person: AnnualLeavePerson?) -> String? {
         guard let person, let balance = teamBalance(for: person), balance.hasAllowance else { return nil }
-        let days = AnnualLeaveDateFormat.consumedDays(from: request.startDate, to: request.endDate, slot: request.timeSlot)
+        let days = AnnualLeaveDateFormat.leaveDays(request)
         let after = request.cancellationRequestedAt != nil
             ? balance.allowance - balance.taken + days
             : balance.allowance - balance.taken - days
@@ -1521,19 +1514,11 @@ struct HolidayView: View {
         selectedDates.sorted()
     }
 
-    private func hasExistingHoliday(on day: Date, userId: String?, operativeId: UUID?) -> Bool {
-        holidayStore.bookings.contains { booking in
-            guard booking.status != .rejected else { return false }
-            let matchesUser = AnnualLeavePolicy.holidayUserMatches(
-                bookingUserId: booking.userId,
-                profileUserId: userId,
-                profileEmail: holidayProfileUser?.email
-            )
-            let matchesOperative = operativeId != nil && booking.operativeId == operativeId
-            guard matchesUser || matchesOperative else {
-                return false
-            }
-            return LeaveRecordDays.covers(booking, day: day)
+    /// The signed-in person already has leave (not rejected) on `day`: their records (`leaveRecordsForAccount`) whose
+    /// leave days (`leaveRecordDayKeys`) include it.
+    private func hasExistingHoliday(on day: Date) -> Bool {
+        signedInLeave.contains { booking in
+            booking.status != .rejected && LeaveRecordDays.covers(booking, day: day)
         }
     }
 
@@ -1546,9 +1531,7 @@ struct HolidayView: View {
             daySlots: Dictionary(startOfDays.map { day in
                 (day, selectedDaySlots[day] ?? selectedHolidayTimeSlot)
             }, uniquingKeysWith: { first, _ in first }),
-            bookings: holidayStore.bookings,
-            profileUserId: u.id,
-            operativeId: currentOperative?.id,
+            bookings: holidayStore.myBookings(account: u, operatives: operativeStore.allOperatives, operativeId: currentOperative?.id),
             daysPerYear: u.annualLeaveDaysPerYear,
             startMonth: u.annualLeaveYearStartMonth,
             endMonth: u.annualLeaveYearEndMonth,
@@ -1606,7 +1589,7 @@ struct HolidayView: View {
                             ?? "Operative"
                     }()
                     for day in selectedDays {
-                        if hasExistingHoliday(on: day, userId: uid, operativeId: operativeId) {
+                        if hasExistingHoliday(on: day) {
                             throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
                         }
                     }
@@ -1641,7 +1624,7 @@ struct HolidayView: View {
                         return
                     }
                     for day in selectedDays {
-                        if hasExistingHoliday(on: day, userId: uid, operativeId: nil) {
+                        if hasExistingHoliday(on: day) {
                             throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
                         }
                     }
@@ -1793,22 +1776,17 @@ struct HolidayView: View {
     }
 
     private func assignedApproverUserId(for request: HolidayBooking) -> String? {
-        if let uid = request.userId,
-           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            if AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester, users: userStore.organizationUsers) {
-                return requester.primaryLineManagerUserId
-            }
+        // The requester is `resolveBookingPerson` (`AnnualLeaveApproval.requester`), never an email match.
+        guard let requester = AnnualLeaveApproval.requester(
+            for: request,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        ) else { return nil }
+        if request.userId != nil,
+           !AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester, users: userStore.organizationUsers) {
             return nil
         }
-        if let oid = request.operativeId,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let requester = userStore.organizationUsers.first(where: {
-               ($0.permissions.operativeMode || $0.role == .operative) &&
-               $0.email.lowercased() == op.email.lowercased()
-           }) {
-            return requester.primaryLineManagerUserId
-        }
-        return nil
+        return requester.primaryLineManagerUserId
     }
 
     private func approveRequest(_ request: HolidayBooking) {
@@ -1860,18 +1838,11 @@ struct HolidayView: View {
         actorName: String,
         actionVerb: String
     ) async {
-        let requesterUser: AppUser? = {
-            if let uid = request.userId {
-                return userStore.organizationUsers.first(where: { $0.id == uid })
-            }
-            if let oid = request.operativeId,
-               let op = operativeStore.allOperatives.first(where: { $0.id == oid }) {
-                return userStore.organizationUsers.first(where: {
-                    $0.email.lowercased() == op.email.lowercased()
-                })
-            }
-            return nil
-        }()
+        let requesterUser = AnnualLeaveApproval.requester(
+            for: request,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
         guard let requesterUser else { return }
         // `lineManagerPeerRecipients(subject, actor, roster)` picks the other line managers.
         await notificationService.notifyLineManagerPeerAction(
@@ -1926,31 +1897,22 @@ struct HolidayView: View {
     }
 
     private func notifyDecision(to request: HolidayBooking, approved: Bool, decidedByName: String, reason: String = "") async {
-        if let requesterUserId = request.userId {
-            await notificationService.notifyHolidayRequestDecisionToUser(
-                userId: requesterUserId,
-                bookingId: request.id,
-                approved: approved,
-                decidedByName: decidedByName,
+        // RULEBOOK §9, §13: the requester is the account the record names (`resolveBookingPerson` on its `userId`,
+        // else its `operativeId`); `notifyHolidayRequestDecisionToUser` then asks `holidayDecisionRecipients` (never
+        // the decider, no admin copy). No email or operative-mode match here.
+        let requesterId = AnnualLeaveApproval.requester(
+            for: request,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )?.id ?? request.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let requesterId, !requesterId.isEmpty else { return }
+        await notificationService.notifyHolidayRequestDecisionToUser(
+            userId: requesterId,
+            bookingId: request.id,
+            approved: approved,
+            decidedByName: decidedByName,
                 reason: reason
-            )
-            // RULEBOOK §13: a decision notifies the requester only (`holidayDecisionRecipients`); no admin copy.
-            return
-        }
-        if let oid = request.operativeId,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let operativeUser = userStore.organizationUsers.first(where: {
-               ($0.permissions.operativeMode || $0.role == .operative) &&
-               $0.email.lowercased() == op.email.lowercased()
-           }) {
-            await notificationService.notifyHolidayRequestDecisionToUser(
-                userId: operativeUser.id,
-                bookingId: request.id,
-                approved: approved,
-                decidedByName: decidedByName,
-                reason: reason
-            )
-        }
+        )
     }
 
     private func requesterName(for request: HolidayBooking) -> String {

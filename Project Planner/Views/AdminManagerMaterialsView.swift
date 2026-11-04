@@ -24,9 +24,7 @@ struct AdminManagerMaterialsView: View {
     @State private var showingDeleteErrorAlert = false
 
     private var dayMaterials: [MaterialItem] {
-        let calendar = Calendar.current
-        let selectedDay = calendar.startOfDay(for: selectedDate)
-        return materials.filter { calendar.isDate(calendar.startOfDay(for: $0.date), inSameDayAs: selectedDay) }
+        materials.filter { MaterialsDay.same($0.date, selectedDate) }
             .sorted { $0.addedAt > $1.addedAt }
     }
 
@@ -105,9 +103,7 @@ struct AdminManagerMaterialsView: View {
     }
 
     private var materialsForSend: [MaterialItem] {
-        let calendar = Calendar.current
-        let day = calendar.startOfDay(for: selectedDate)
-        return materials.filter { calendar.isDate(calendar.startOfDay(for: $0.date), inSameDayAs: day) }
+        materials.filter { MaterialsDay.same($0.date, selectedDate) }
     }
 
     /// Admins and managers only, never operative mode (`canViewMaterialOrderHistory`). Not the Wholesalers toggle.
@@ -162,9 +158,7 @@ struct AdminManagerMaterialsView: View {
     }
 
     private var dayTitle: String {
-        let f = DateFormatter()
-        f.dateFormat = "d MMM"
-        return "\(f.string(from: selectedDate)) · \(dayMaterials.count) items"
+        "\(MaterialsDay.formatter("d MMM").string(from: selectedDate)) · \(dayMaterials.count) items"
     }
 
     @ViewBuilder
@@ -250,6 +244,7 @@ struct AdminManagerMaterialsView: View {
 
     private func formattedDate(_ date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateStyle = .medium
         return formatter.string(from: date)
     }

@@ -1533,19 +1533,6 @@ enum WarningsComputation {
         return "\(clock(start))–\(clock(end))"
     }
 
-    nonisolated private static func workingDaysBetween(_ start: Date, _ end: Date, calendar: Calendar) -> Int {
-        var count = 0
-        var current = calendar.startOfDay(for: start)
-        let endDay = calendar.startOfDay(for: end)
-        while current <= endDay {
-            let w = calendar.component(.weekday, from: current)
-            if w >= 2 && w <= 6 { count += 1 }
-            guard let next = calendar.date(byAdding: .day, value: 1, to: current) else { break }
-            current = next
-        }
-        return count
-    }
-
     nonisolated private static func clashPersonKind(
         for user: WarningsComputationSnapshot.UserSnapshot?
     ) -> Warning.ClashPersonKind {
@@ -1583,12 +1570,10 @@ enum WarningsComputation {
         return ("\(formattedHours)-hour overlap", "Both bookings active during the overlapping period")
     }
 
-    nonisolated fileprivate static func formatHours(_ h: Double) -> String {
-        let rounded = (h * 2).rounded() / 2
-        if abs(rounded - rounded.rounded(.towardZero)) < 0.01 {
-            return String(format: "%.0f", rounded)
-        }
-        return String(format: "%.1f", rounded)
+    /// Hours as the pay rule gives them (`ScheduleCoverageFormat.hours`: to the hundredth, 7.25 stays "7.25"). The
+    /// clash timeline used to snap to the half hour, so a 7.25h booking read "7.5h" here and "7.25h" everywhere else.
+    nonisolated static func formatHours(_ h: Double) -> String {
+        ScheduleCoverageFormat.hours(h)
     }
 
     nonisolated fileprivate static func operativeTimelineEntry(

@@ -149,11 +149,37 @@ enum NotificationDeepLink {
             deepLinkUserId: targetUserId
         ) else { return }
 
-        open(destination, weekStart: weekStart(from: userInfo))
+        // The payload's `catalogue` names the job's collection when present. `userId` is the recipient, never the job.
+        let jobCatalogue = (catalogue == "projects" || catalogue == "smallWorks") ? catalogue : nil
+        open(destination, weekStart: weekStart(from: userInfo), jobCatalogue: jobCatalogue)
     }
 
-    private static func open(_ destination: CanonicalBusinessEngine.CanonicalNotificationDestination, weekStart: Date?) {
+    private static func open(
+        _ destination: CanonicalBusinessEngine.CanonicalNotificationDestination,
+        weekStart: Date?,
+        jobCatalogue: String? = nil
+    ) {
         switch destination.kind {
+        // RULEBOOK 1.10.0 §13 (`notificationDestination`): a variation notice opens Variations, as web
+        // (`hrefForNotificationDestination`). `variations` names the job; `variationDetail` names the variation, whose
+        // job is read from the variation itself. iOS keeps variations under each job, so both open that job's
+        // Variations; with no job they open the Projects tab (web's company list has no iOS screen).
+        case "variations":
+            openVariations(jobId: destination.relatedId, isSmallWorks: jobCatalogue.map { $0 == "smallWorks" })
+        case "variationDetail":
+            guard let variationId = destination.relatedId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !variationId.isEmpty,
+                  let orgId = OrganizationRulebookContext.organizationId else {
+                openVariations(jobId: nil, isSmallWorks: jobCatalogue.map { $0 == "smallWorks" })
+                return
+            }
+            Task { @MainActor in
+                let parent = await FirebaseBackend.variationParent(organizationId: orgId, variationId: variationId)
+                openVariations(
+                    jobId: parent?.parentId,
+                    isSmallWorks: parent.map { $0.parentType == .smallWork } ?? jobCatalogue.map { $0 == "smallWorks" }
+                )
+            }
         case "dailyOverviewDay":
             var payload: [String: Any] = ["route": MainMenuSurfaceRoute.dailyOverview.rawValue]
             if let dayKey = destination.dayKey { payload["dayKey"] = dayKey }
@@ -252,6 +278,26 @@ enum NotificationDeepLink {
         default:
             postSurface(["route": MainMenuSurfaceRoute.notifications.rawValue])
         }
+    }
+
+    /// The job's Variations tile (`WorkCatalogueDeepLink` section `variations`), or the job list when no job is known.
+    /// `isSmallWorks` is the job's collection when the variation or the payload's `catalogue` names it; nil leaves it to
+    /// the receiver, which looks the job up in the loaded jobs (`ContentView`, `openWorkCatalogueDetail`).
+    private static func openVariations(jobId: String?, isSmallWorks: Bool?) {
+        guard let raw = jobId?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("selectTab"),
+                object: nil,
+                userInfo: ["tab": isSmallWorks == true ? 2 : 1]
+            )
+            return
+        }
+        var info: [String: Any] = [
+            "projectId": JobKeys.inAppId(raw),
+            "section": "variations",
+        ]
+        if let isSmallWorks { info["isSmallWorks"] = isSmallWorks }
+        NotificationCenter.default.post(name: .openWorkCatalogueDetail, object: nil, userInfo: info)
     }
 
     private static func postTimesheetTeam(

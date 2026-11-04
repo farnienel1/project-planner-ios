@@ -46,7 +46,8 @@ enum TimesheetPayrollPolicy {
         user.employmentType(on: calendar.startOfDay(for: day)) == .selfEmployed
     }
 
-    static let organizationTimeZone = "Europe/London"
+    /// The open organisation's business zone (`organizationTimeZone(countryCode)`, rulebook §1), never a fixed London.
+    static var organizationTimeZone: String { OrganizationRulebookContext.timeZoneIdentifier }
 
     /// Pay run that **contains** `referenceDate`. The window comes from `timesheetPeriodFromInvoicing`.
     /// A nil script result is the reference day only, never a 1–15 or ISO-week window.

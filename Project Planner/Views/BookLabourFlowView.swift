@@ -54,8 +54,13 @@ struct BookLabourCandidate: Identifiable {
         AccountLabourBooking.operative(for: user)
     }
 
+    /// Whether this candidate (not the viewer) is booked at other locations (office, working from home, site survey):
+    /// above operative level (`permissionLevelOf` via `canScheduleOperatives`) and not in operative mode
+    /// (`UserStore.staffAccountRole`), as before — an admin in operative mode is booked as an operative. No rulebook
+    /// rule names this for a candidate yet (reported to the web agent); `canScheduleOperatives` is a viewer rule.
     var canBookOtherLocations: Bool {
-        !user.permissions.operativeMode && (user.permissions.manager || user.permissions.adminAccess || user.isSuperAdmin)
+        guard !UserStore.staffAccountRole(for: user).isOperativeMode else { return false }
+        return CanonicalBusinessEngine.canScheduleOperatives(user.permissionSubject)
     }
 }
 

@@ -39,9 +39,8 @@ struct ManageUsersView: View {
 
     private var isManagerOperativeManagement: Bool {
         guard let u = userStore.displayUser else { return false }
-        if u.permissions.operativeMode { return false }
         if userStore.hasAdminAccess() { return false }
-        return u.permissions.manager && u.permissions.operatives
+        return CanonicalBusinessEngine.canManageOperatives(u.permissionSubject)
     }
 
     /// Signed in with Firebase Auth but org user doc not in memory yet — show spinner instead of “access denied”.
@@ -1816,10 +1815,7 @@ struct EditUserView: View {
     private func currentRemainingDays(for subject: AppUser) -> Double {
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let summary = AnnualLeavePolicy.usageSummary(
-            bookings: holidayStore.bookings,
-            profileUserId: subject.id,
-            operativeId: nil,
-            profileEmail: subject.email,
+            bookings: holidayStore.myBookings(account: subject, operatives: operativeStore.allOperatives),
             daysPerYear: subject.annualLeaveDaysPerYear,
             startMonth: subject.annualLeaveYearStartMonth,
             endMonth: subject.annualLeaveYearEndMonth,
@@ -4285,10 +4281,7 @@ struct EditUserView: View {
                     return
                 }
                 let summary = AnnualLeavePolicy.usageSummary(
-                    bookings: holidayStore.bookings,
-                    profileUserId: subjectUser.id,
-                    operativeId: nil,
-                    profileEmail: subjectUser.email,
+                    bookings: holidayStore.myBookings(account: subjectUser, operatives: operativeStore.allOperatives),
                     daysPerYear: days,
                     startMonth: annualLeaveStartMonth,
                     endMonth: annualLeaveEndMonth,

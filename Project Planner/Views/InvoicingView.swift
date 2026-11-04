@@ -3015,7 +3015,7 @@ private struct PreviousTimesheetsView: View {
                     if let run = selectedRun {
                         summaryCard(run)
                         signatureCard(run)
-                        if run.isCompleted || (userStore.displayUser.map { TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: run.draft, user: $0) } ?? false),
+                        if run.isCompleted,
                            let selectedPeriod,
                            let currentUser = userStore.displayUser {
                             InvoiceTaxIdsOption(subject: currentUser, isOn: $includeTaxIds)
@@ -3225,7 +3225,8 @@ private struct PreviousTimesheetsView: View {
                     PreviousTimesheetRun(
                         id: "prev-\(Int(week.start.timeIntervalSince1970))",
                         week: week,
-                        draft: adjusted
+                        draft: adjusted,
+                        owner: userStore.displayUser
                     )
                 )
             }
@@ -3253,7 +3254,8 @@ private struct PreviousTimesheetsView: View {
                         PreviousTimesheetRun(
                             id: "prev-\(Int(week.start.timeIntervalSince1970))",
                             week: week,
-                            draft: merged
+                            draft: merged,
+                            owner: userStore.displayUser
                         )
                     )
                 }
@@ -3326,9 +3328,16 @@ private struct PreviousTimesheetRun: Identifiable {
     let id: String
     let week: WeekRange
     let draft: TimesheetDraft
+    /// RULEBOOK §8 `isTimesheetFullySigned(fields, hasLineManager)` for the owner (`timesheetSelfSigned`): a self-signed
+    /// sheet is complete with the owner's signature alone. It used to need a manager signature too, so a self-signed
+    /// admin's past runs read "Sign Off Pending" forever.
+    let isCompleted: Bool
 
-    var isCompleted: Bool {
-        draft.operativeSignedAt != nil && draft.managerSignedAt != nil
+    init(id: String, week: WeekRange, draft: TimesheetDraft, owner: AppUser?) {
+        self.id = id
+        self.week = week
+        self.draft = draft
+        self.isCompleted = owner.map { TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: $0) } ?? false
     }
 }
 
@@ -4076,6 +4085,12 @@ private struct OperativeTimesheetsView: View {
 
         let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
         var byId: [String: ExportedTimesheetHistoryRow] = [:]
+        // RULEBOOK 1.31.0 §8: a sheet stored without `userId` is matched by its document id
+        // (`timesheetDocumentSubjectId`) against every id of the person (`personIdSet`: own, former and same-email
+        // ids), never dropped. Each such sheet is listed under one person only.
+        let unownedRows: [[String: Any]] = orgId == nil ? [] :
+            ((try? await firebaseBackend.listExportedTimesheetsWithoutUserId(organizationId: orgId!)) ?? [])
+        var claimedUnowned = Set<String>()
 
         for user in users {
             var weekStarts = Set(TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id))
@@ -4085,11 +4100,20 @@ private struct OperativeTimesheetsView: View {
             weekStarts.insert(week.start)
 
             if let orgId,
-               let cloudRows = try? await firebaseBackend.listTimesheetStates(
+               let listed = try? await firebaseBackend.listTimesheetStates(
                    organizationId: orgId,
                    userId: user.id,
                    limit: 400
                ) {
+                let personIds = Set(RulebookPeople.ownerIds(for: user, users: userStore.organizationUsers).map { $0.lowercased() })
+                let unownedForUser = unownedRows.filter { row in
+                    guard let subject = (row["__subjectId"] as? String)?.lowercased(),
+                          let docId = row["__documentId"] as? String,
+                          personIds.contains(subject), !claimedUnowned.contains(docId) else { return false }
+                    claimedUnowned.insert(docId)
+                    return true
+                }
+                let cloudRows = listed + unownedForUser
                 for row in cloudRows {
                     guard let weekStart = firestoreDate(row["weekStart"]),
                           let day = TimesheetDraftStore.organizationDay(weekStart) else { continue }

@@ -698,6 +698,9 @@ struct ProjectDetailView: View {
         }
         if WorkCatalogueDeepLink.pendingSection == "healthSafety" {
             openedManageTile = .healthSafety
+        } else if WorkCatalogueDeepLink.pendingSection == "variations", canAccessVariations {
+            // A variation notice (`notificationDestination` → `variations` / `variationDetail`).
+            openedManageTile = .variations
         }
         WorkCatalogueDeepLink.focusProjectId = nil
         WorkCatalogueDeepLink.pendingDayKey = nil

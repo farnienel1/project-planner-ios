@@ -230,6 +230,12 @@ extension CanonicalBusinessEngine {
         callJSON("canManageOperatives", arguments: [subject]) as? Bool ?? false
     }
 
+    /// `canScheduleOperatives(user)`: anyone above operative level books people and other locations. False when the
+    /// script did not answer.
+    nonisolated static func canScheduleOperatives(_ subject: [String: Any]) -> Bool {
+        callJSON("canScheduleOperatives", arguments: [subject]) as? Bool ?? false
+    }
+
     /// `ADMIN_LOCKED_PERMISSION_MESSAGE`.
     nonisolated static var adminLockedPermissionMessage: String {
         constant("ADMIN_LOCKED_PERMISSION_MESSAGE", as: String.self)

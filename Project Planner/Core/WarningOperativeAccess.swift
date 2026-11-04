@@ -12,8 +12,8 @@ enum WarningOperativeAccess {
         if target.isSuperAdmin && !actor.isSuperAdmin { return false }
         let canManageUsers = actor.isSuperAdmin || actor.permissions.adminAccess || actor.role == .admin
         if canManageUsers { return true }
-        let canManageOperatives = actor.permissions.manager && actor.permissions.operatives
-        if canManageOperatives {
+        // RULEBOOK §11 `canManageOperatives`: above operative level with the Operatives toggle in effect.
+        if CanonicalBusinessEngine.canManageOperatives(actor.permissionSubject) {
             return target.permissions.operativeMode || target.role == .operative
         }
         return false

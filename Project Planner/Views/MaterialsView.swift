@@ -53,7 +53,7 @@ struct MaterialsView: View {
         .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await MainActor.run {
-                let today = Calendar.current.startOfDay(for: Date())
+                let today = OrganizationRulebookContext.calendar.startOfDay(for: Date())
                 selectedDate = today
                 currentWeek = today
             }
@@ -67,7 +67,7 @@ struct MaterialsView: View {
             Task {
                 if let intervals = note.userInfo?["materialBookingDayIntervals"] as? [TimeInterval], !intervals.isEmpty {
                     await MainActor.run {
-                        let cal = Calendar.current
+                        let cal = OrganizationRulebookContext.calendar
                         let days = intervals.map { cal.startOfDay(for: Date(timeIntervalSince1970: $0)) }
                         if let target = days.min() {
                             selectedDate = target
@@ -101,7 +101,7 @@ struct MaterialsView: View {
     /// When Firestore returns rows, the week strip may still be on “this week” while all bookings are on other dates — jump to a week that has data.
     private func syncWeekSelectionToLoadedMaterialsIfNothingForCurrentDay() {
         guard !materials.isEmpty else { return }
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         let selectedDay = calendar.startOfDay(for: selectedDate)
         let hasMatch = materials.contains { calendar.isDate(calendar.startOfDay(for: $0.date), inSameDayAs: selectedDay) }
         if hasMatch { return }
@@ -363,13 +363,9 @@ private struct OperativeMaterialsView: View {
         }
     }
 
+    /// Lines on the selected organisation day (the week strip is organisation days, rulebook §1).
     private var materialsForSelectedDate: [MaterialItem] {
-        let calendar = Calendar.current
-        let selectedDay = calendar.startOfDay(for: selectedDate)
-        return materials.filter { material in
-            let materialDay = calendar.startOfDay(for: material.date)
-            return calendar.isDate(materialDay, inSameDayAs: selectedDay)
-        }
+        materials.filter { MaterialsDay.same($0.date, selectedDate) }
     }
 
     private func canManage(_ material: MaterialItem) -> Bool {
@@ -406,7 +402,7 @@ private struct OperativeMaterialsView: View {
     }
     
     private var weekDays: [Date] {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: currentWeek)?.start else {
             return []
         }
@@ -414,40 +410,45 @@ private struct OperativeMaterialsView: View {
     }
     
     private func isSelected(_ date: Date) -> Bool {
-        Calendar.current.isDate(date, inSameDayAs: selectedDate)
+        MaterialsDay.same(date, selectedDate)
     }
     
     private func dayName(for date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "EEE"
         return formatter.string(from: date)
     }
     
     private func dayNumber(for date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "d"
         return formatter.string(from: date)
     }
     
     private func monthName(for date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "MMM"
         return formatter.string(from: date)
     }
     
     private var weekRangeString: String {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: currentWeek)?.start,
               let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart) else {
             return ""
         }
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "d MMM"
         return "\(formatter.string(from: weekStart)) - \(formatter.string(from: weekEnd))"
     }
     
     private func formattedDate(_ date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateStyle = .medium
         return formatter.string(from: date)
     }
@@ -468,17 +469,24 @@ struct MaterialItemRow: View {
 
     private var timeString: String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "HH:mm"
         return formatter.string(from: material.addedAt)
     }
 
     private var shouldShowBookingTime: Bool {
-        Calendar.current.isDate(material.date, inSameDayAs: material.addedAt)
+        OrganizationRulebookContext.dayKey(material.date) == OrganizationRulebookContext.dayKey(material.addedAt)
     }
-    
+
+    /// Green when the line was added from 07:00 up to the organisation's material cut-off (RULEBOOK §4.7
+    /// `resolveMaterialCutOffClock` / `materialCutOffClockMinutes`; it used to be a fixed 16:00 on the phone's clock).
     private var bookingTimeColor: Color {
-        let hour = Calendar.current.component(.hour, from: material.addedAt)
-        return (hour >= 7 && hour < 16) ? .green : .red
+        guard let cutOff = OrgMaterialCutOff.clockMinutes(
+            stored: firebaseBackend.currentOrganization?.settings.materialCutOff,
+            organizationLoaded: firebaseBackend.currentOrganization != nil
+        ) else { return .secondary }
+        let added = OrgMaterialCutOff.organizationMinuteOfDay(material.addedAt)
+        return (added >= 7 * 60 && added < cutOff) ? .green : .red
     }
     
     var body: some View {
@@ -647,7 +655,7 @@ struct AddMaterialView: View {
             Button("Change Date", role: .cancel) { }
                 .accessibilityIdentifier("addMaterial.changeDate")
         } message: {
-            Text("Some materials are being added for today after 4:00 PM. Continue or change the date.")
+            Text("Some materials are being added for today after the \(OrgMaterialCutOff.clockLabel(stored: firebaseBackend.currentOrganization?.settings.materialCutOff, organizationLoaded: firebaseBackend.currentOrganization != nil) ?? "material") cut-off. Continue or change the date.")
         }
         .alert("Could Not Save Materials", isPresented: $showingSaveErrorAlert) {
             Button("OK", role: .cancel) { }
@@ -665,12 +673,18 @@ struct AddMaterialView: View {
         saveAllMaterials()
     }
 
+    /// Lines for today added once the organisation's material cut-off has passed (RULEBOOK §4.7
+    /// `resolveMaterialCutOffClock` / `materialCutOffClockMinutes`, organisation zone). It used to be 16:00 on the
+    /// phone's clock whatever the organisation set.
     private func hasTodayEntriesAfterCutoff() -> Bool {
-        let calendar = Calendar.current
         let now = Date()
-        guard calendar.component(.hour, from: now) >= 16 else { return false }
+        guard let cutOff = OrgMaterialCutOff.clockMinutes(
+            stored: firebaseBackend.currentOrganization?.settings.materialCutOff,
+            organizationLoaded: firebaseBackend.currentOrganization != nil
+        ), OrgMaterialCutOff.organizationMinuteOfDay(now) >= cutOff else { return false }
+        let todayKey = OrganizationRulebookContext.dayKey(now)
         return materialEntries.contains {
-            calendar.isDate($0.selectedDate, inSameDayAs: now) &&
+            OrganizationRulebookContext.dayKey($0.selectedDate) == todayKey &&
             !$0.materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
@@ -903,7 +917,7 @@ private struct MaterialEntrySection: View {
 enum MaterialsWeekNavigation {
     /// Moving the week arrows used to update only `currentWeek`, so the list still filtered an old day while the strip showed another week.
     static func applyWeekDelta(_ weeks: Int, currentWeek: inout Date, selectedDate: inout Date) {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         guard let anchor = calendar.date(byAdding: .weekOfYear, value: weeks, to: currentWeek) else { return }
         guard let oldWeekStart = calendar.dateInterval(of: .weekOfYear, for: currentWeek)?.start,
               let newWeekStart = calendar.dateInterval(of: .weekOfYear, for: anchor)?.start else { return }
