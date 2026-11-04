@@ -2237,7 +2237,7 @@ class FirebaseBackend: ObservableObject {
             "customJobType": orDelete(job.customJobType),
             // The primary manager's name (web `managerLegacy`), else the legacy label as read; never "Custom"
             // (`parseJobDocument` reads "Custom" as no name).
-            "manager": JobManagerLabel.storedValue(job) ?? FieldValue.delete(),
+            "manager": JobManagerLabel.storedValue(job),
             "managerId": orDelete(primaryManager),
             "managerIds": managerIds.isEmpty ? FieldValue.delete() as Any : managerIds as Any,
             "isLive": job.isLive,
@@ -11257,17 +11257,16 @@ class FirebaseConfig {
 }
 
 /// The `manager` label a job save writes (RULEBOOK 1.31.0 §21, web `buildProjectFirestorePayload` `managerLegacy`):
-/// the primary manager's name when known, else the legacy label as read; nil (no field) instead of "Custom" or "N/A".
+/// the primary manager's name when known (every new job), else the legacy label as read.
 /// A label only — who manages the job is `managerIds` / `managerUserIds`.
 enum JobManagerLabel {
-    static func storedValue(_ job: Project) -> String? {
+    static func storedValue(_ job: Project) -> String {
         if let name = job.managerName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !name.isEmpty, name.lowercased() != "custom" {
             return name
         }
-        switch job.manager {
-        case .custom, .na: return nil
-        default: return job.manager.rawValue
-        }
+        // A job read without a name keeps its stored legacy label (an older document's "Custom" is not rewritten by an
+        // unrelated edit; cross-platform contract iOS sample). A new job always carries its primary manager's name.
+        return job.manager.rawValue
     }
 }

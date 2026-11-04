@@ -745,6 +745,8 @@ struct EditProjectView: View {
         job.createdAt = project.createdAt
         job.firestoreDocumentId = project.firestoreDocumentId
         job.storedManagerIds = project.storedManagerIds
+        // The stored `manager` label (a name web wrote) is kept as read, never rewritten or removed by an edit.
+        job.managerName = project.managerName
         return job
     }
 
