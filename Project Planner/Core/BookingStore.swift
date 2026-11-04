@@ -262,38 +262,8 @@ class BookingStore: ObservableObject {
             if let message = JobAccessContext.bookingWriteRefusal(collection: "bookings", projectId: booking.storedProjectId, isDelete: isDelete) {
                 return message
             }
-            if isDelete, let message = Self.operativesManagerDeleteRefusal(booking) {
-                return message
-            }
         }
         return nil
-    }
-
-    /// RULEBOOK 1.31.0 §2, §11 (owner decision): a manager (not an admin) deletes a labour booking of an operative with
-    /// no login (`operativeHasAccount` false) only when its day is after today (`operativesManagerMayDeleteBooking`);
-    /// today's and past ones they cancel. The message, else nil. Admins and bookings of people with a login are
-    /// decided by `canDeleteBooking` alone.
-    static func operativesManagerDeleteRefusal(_ booking: Booking, now: Date = Date()) -> String? {
-        guard let viewer = JobAccessContext.readViewer else { return nil }
-        let role = viewer.role
-        if role.isOperativeMode || role.isAdmin || role.isSuperAdmin || !role.isManager { return nil }
-        let stored = booking.storedOperativeId.lowercased()
-        let accounts = RulebookRosterSnapshot.users
-        let catalogueEmail = JobAccessContext.catalogueEmailById[stored] ?? ""
-        let hasAccount = accounts.contains { user in
-            ([user.id] + user.sameEmailUserIds + user.formerUserIds).contains { $0.lowercased() == stored }
-                || (!catalogueEmail.isEmpty && user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == catalogueEmail)
-        }
-        if hasAccount { return nil }
-        if CanonicalBusinessEngine.operativesManagerMayDeleteBooking(
-            date: booking.date,
-            now: now,
-            timeZone: OrganizationRulebookContext.timeZoneIdentifier,
-            operativeHasAccount: false
-        ) {
-            return nil
-        }
-        return BookingDeleteCopy.pastOrTodayManagerMessage
     }
 
     func addBooking(_ booking: Booking) async {
@@ -890,8 +860,3 @@ class BookingStore: ObservableObject {
     }
 }
 
-/// RULEBOOK 1.31.0 (owner decision 4 Nov): a manager cancels — never deletes — today's and past labour bookings of an
-/// operative with no login.
-enum BookingDeleteCopy {
-    static let pastOrTodayManagerMessage = "You can delete only future bookings for this operative. Cancel this booking instead."
-}

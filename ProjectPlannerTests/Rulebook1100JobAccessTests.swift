@@ -150,7 +150,17 @@ final class Rulebook1100JobAccessTests: XCTestCase {
         XCTAssertEqual(operativePlan.first?["values"] as? [String], ["o1", "OP-1"])
     }
 
+    /// RULEBOOK 1.31.0 §5 (owner decision 4 Nov): admins see every warning; a manager — whatever their job toggles — only
+    /// themselves, their reports (`lineManagerIds`) and the jobs they manage. The inputs are web's
+    /// (`lib/warnings/warningScopeRoster.ts` `orgWarningScope`): every job with its stored manager fields and the roster
+    /// with the line-manager fields. Before 1.31.0 the scope was the jobs the viewer saw and everyone booked on them.
     func testWarningScopePerViewer() {
+        let roster: [[String: Any]] = [
+            ["id": "m1", "email": "m1@x.t", "isActive": true,
+             "role": ["isSuperAdmin": false, "isAdmin": false, "isManager": true, "isOperativeMode": false]],
+            ["id": "u9", "email": "p@x.t", "isActive": true, "assignedManagerUserIds": ["m1"],
+             "role": ["isSuperAdmin": false, "isAdmin": false, "isManager": false, "isOperativeMode": true]],
+        ]
         let input: (JobAccessViewer) -> [String: Any] = { viewer in
             CanonicalBusinessEngine.warningScopeFor(
                 viewer: viewer,
@@ -159,17 +169,22 @@ final class Rulebook1100JobAccessTests: XCTestCase {
                 managerBookings: [],
                 people: [],
                 operatives: [["id": "OP-9", "email": "p@x.t"]],
+                jobs: [["id": "JOB-1", "managerUserIds": ["m1"]], ["id": "job-2", "managerUserIds": ["someone-else"]]],
+                managers: [],
+                roster: roster,
                 enforced: true
             )
         }
         XCTAssertEqual(input(admin)["kind"] as? String, "all")
         let restricted = input(manager)
         XCTAssertEqual(restricted["kind"] as? String, "jobs")
-        XCTAssertEqual(restricted["personIds"] as? [String], ["op-9"])
+        XCTAssertEqual(Set(restricted["personIds"] as? [String] ?? []), ["m1", "u9", "op-9"],
+                       "themselves and their report, under every row on the report's email")
         XCTAssertEqual(restricted["unbookedLabour"] as? Bool, false, "unbooked labour needs every booking")
         // 1.11.0: `unbookedLabour` is `readsEveryBooking`, which (enforced) is admins only.
         XCTAssertEqual(input(toggleManager)["unbookedLabour"] as? Bool, false)
-        XCTAssertTrue(CanonicalBusinessEngine.isJobInWarningScope(restricted, jobId: "JOB-1"))
+        XCTAssertEqual(input(toggleManager)["kind"] as? String, "jobs", "1.31.0: job toggles no longer widen the scope")
+        XCTAssertTrue(CanonicalBusinessEngine.isJobInWarningScope(restricted, jobId: "JOB-1"), "a job they manage")
         XCTAssertFalse(CanonicalBusinessEngine.isJobInWarningScope(restricted, jobId: "job-2"))
     }
 
