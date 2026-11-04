@@ -112,6 +112,10 @@ struct VariationDetailView: View {
                                 }
                             }
 
+                            if canViewRemovedEvidence, !variation.removedEvidence.isEmpty {
+                                removedEvidenceSection(variation.removedEvidence)
+                            }
+
                             sectionTitle("History")
                             VStack(alignment: .leading, spacing: 8) {
                                 ForEach(historyLines(variation), id: \.self) { line in
@@ -333,6 +337,54 @@ struct VariationDetailView: View {
                 )
             }
         }
+    }
+
+    /// RULEBOOK 1.27.0 §24 `CanonicalBusinessEngine.canViewRemovedEvidence`: admins and super admins outside operative
+    /// mode, the people who can restore a file.
+    private var canViewRemovedEvidence: Bool {
+        guard let user = userStore.displayUser else { return false }
+        return CanonicalBusinessEngine.canViewRemovedEvidence(role: UserStore.staffAccountRole(for: user))
+    }
+
+    /// RULEBOOK 1.27.0 §24: "Removed evidence (n)" (`removedEvidenceHeading`), each entry's name, path, who removed it
+    /// (roster name) and when (organisation zone), read from `parseVariationDocument(...).removedEvidence`.
+    private func removedEvidenceSection(_ entries: [VariationRemovedEvidence]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionTitle(CanonicalBusinessEngine.removedEvidenceHeading(entries.count))
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entry.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text(entry.path)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Text(removedEvidenceByline(entry))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(16)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+            .accessibilityIdentifier("variationDetail.removedEvidence")
+        }
+    }
+
+    private func removedEvidenceByline(_ entry: VariationRemovedEvidence) -> String {
+        let key = entry.removedBy.lowercased()
+        let person = userStore.organizationUsers.first { $0.id.lowercased() == key }
+        let name: String = {
+            guard let person else { return entry.removedBy.isEmpty ? "Unknown person" : entry.removedBy }
+            let full = person.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return full.isEmpty ? person.email : full
+        }()
+        guard let at = entry.removedAt else { return "Removed by \(name)" }
+        let when = at.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened, timeZone: OrganizationRulebookContext.timeZone))
+        return "Removed by \(name) on \(when)"
     }
 
     private func historyLines(_ variation: Variation) -> [String] {

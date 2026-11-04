@@ -39,6 +39,23 @@ extension CanonicalBusinessEngine {
         }
     }
 
+    /// `INVITE_DRAFT_PERSON_ID` (rulebook 1.27.0 §11): the id Add User gives the invite before it has a document.
+    nonisolated static var inviteDraftPersonId: String {
+        constant("INVITE_DRAFT_PERSON_ID", as: String.self) ?? "invite-draft"
+    }
+
+    /// `inviteDraftLineManagerSubject({ email, level })` (rulebook 1.27.0 §11) → its `email`: the typed email as the
+    /// shared rule reads it (trimmed, lower case), so `personIdSet` reaches the roster rows on it and the invitee is
+    /// never offered as their own line manager. Falls back to the same trim and lower case when the script did not answer.
+    nonisolated static func inviteDraftLineManagerEmail(email: String, level: String) -> String {
+        let input: [String: Any] = ["email": email, "level": level]
+        if let row = callJSON("inviteDraftLineManagerSubject", arguments: [input]) as? [String: Any],
+           let normalized = row["email"] as? String {
+            return normalized
+        }
+        return email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
     /// `lineManagerOptions(person)`. Nil when the script did not answer.
     nonisolated static func lineManagerOptions(person: [String: Any]) -> RulebookLineManagerOptions? {
         guard let row = callJSON("lineManagerOptions", arguments: [person]) as? [String: Any],

@@ -16,11 +16,18 @@ class OperativeStore: ObservableObject {
         // RULEBOOK 1.10.0 §17: the signed-in account's own booking ids (`bookingIdsForAccount`) for `bookingQueryPlan`.
         didSet {
             JobAccessContext.updateOperatives(operatives)
+            RulebookCatalogueOperativeSnapshot.update(operatives)
             revision &+= 1
+            scheduleCataloguePayOverlay()
         }
     }
     /// Bumped on every change to `operatives` or `managers`, so pickers can memoise what they build from them.
     private(set) var revision = 0
+    /// RULEBOOK 1.27.0 §8: bumped by every rows change, so a catalogue pay overlay that finishes after newer rows
+    /// arrived is dropped.
+    private var cataloguePayOverlayGeneration = 0
+    /// True while the overlay's own result is being published (it must not schedule another read).
+    private var publishingCataloguePayOverlay = false
     
     @Published var managers: [Manager] = [] {
         // RULEBOOK 1.10.0: `canSeeJob` / `jobManagerUserIds` match a job's managers-list ids by this list's emails.
@@ -70,6 +77,15 @@ class OperativeStore: ObservableObject {
             }
         }
 
+        // RULEBOOK 1.27.0 §8: the catalogue operatives' pay overlay follows the `privatePay` switch and the roster
+        // (which decides which rows are catalogue operatives and who the viewer is).
+        NotificationCenter.default.addObserver(forName: .securitySwitchesDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.securitySwitchesChanged() }
+        }
+        NotificationCenter.default.addObserver(forName: .rulebookRosterDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.scheduleCataloguePayOverlay() }
+        }
+
         // No `.syncOfflineChanges` observer: operatives and managers are Manage Users / online-only edits
         // (RULEBOOK §2), so nothing is queued to replay. The old whole-roster re-save re-created rows deleted
         // on another device.
@@ -79,6 +95,47 @@ class OperativeStore: ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
     
+    /// RULEBOOK 1.27.0 §8 (owner decision 7) `CanonicalBusinessEngine.catalogueOperativePaySubjects` +
+    /// `payProfileReadPlan`: while `privatePay` is on, each catalogue `operatives` row whose pay the signed-in person may
+    /// see (admins, managers with the Operatives toggle) is shown with its `payProfiles/{rowId}` laid over
+    /// (`FirebaseBackend.overlayCatalogueOperativePayIfPrivate`). Re-run when the rows, the roster or the switch change.
+    /// While the switch is off nothing is read and the rows stay as stored.
+    private func scheduleCataloguePayOverlay() {
+        guard !publishingCataloguePayOverlay else { return }
+        cataloguePayOverlayGeneration &+= 1
+        guard SecuritySwitchContext.privatePay, let firebaseBackend, !operatives.isEmpty else { return }
+        let generation = cataloguePayOverlayGeneration
+        let rows = operatives
+        let roster = RulebookRosterSnapshot.users
+        Task { @MainActor [weak self] in
+            let overlaid = await firebaseBackend.overlayCatalogueOperativePayIfPrivate(rows, roster: roster)
+            guard let self, generation == self.cataloguePayOverlayGeneration,
+                  Self.payDiffers(rows, overlaid) else { return }
+            self.publishingCataloguePayOverlay = true
+            self.operatives = overlaid
+            self.publishingCataloguePayOverlay = false
+        }
+    }
+
+    /// `Operative ==` compares ids only, so the pay fields are compared here.
+    private static func payDiffers(_ before: [Operative], _ after: [Operative]) -> Bool {
+        guard before.count == after.count else { return true }
+        return zip(before, after).contains { old, new in
+            old.dayRate != new.dayRate || old.hourlyRate != new.hourlyRate || old.payBasis != new.payBasis
+        }
+    }
+
+    /// A switch changed: on → lay the catalogue pay profiles over; off → read the rows again, so no overlaid value stays.
+    private func securitySwitchesChanged() {
+        if SecuritySwitchContext.privatePay {
+            scheduleCataloguePayOverlay()
+        } else {
+            cataloguePayOverlayGeneration &+= 1
+            guard firebaseBackend?.currentOrganization != nil else { return }
+            loadData()
+        }
+    }
+
     func setCurrentUser(_ userId: String?) async {
         if userId == nil {
             await clearAllData()

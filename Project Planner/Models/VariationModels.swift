@@ -82,6 +82,17 @@ nonisolated struct VariationEvidenceItem: Identifiable, Hashable, Sendable {
     var isPending: Bool
 }
 
+/// RULEBOOK 1.27.0 §24: one evidence file unlinked from a variation (`parseVariationDocument` → `removedEvidence`),
+/// written only by `variationEvidenceRemovalWriteFields`. Read-only on iOS; never part of `VariationCodec.firestoreMap`.
+nonisolated struct VariationRemovedEvidence: Hashable, Sendable {
+    /// The Storage path, else the stored download URL.
+    var path: String
+    var name: String
+    /// The uid of whoever unlinked it.
+    var removedBy: String
+    var removedAt: Date?
+}
+
 nonisolated struct VariationNumberHistoryEntry: Hashable, Sendable {
     var from: String
     var to: String
@@ -125,6 +136,9 @@ nonisolated struct Variation: Identifiable, Hashable, Sendable {
     var submittedAt: Date?
     var closedAt: Date?
     var isDeleted: Bool
+    /// RULEBOOK 1.27.0 §24: evidence unlinked from this variation, oldest first. Shown to admins only
+    /// (`canViewRemovedEvidence`); never written by a variation save.
+    var removedEvidence: [VariationRemovedEvidence] = []
 
     mutating func recomputeCounts() {
         totalLabourHours = labour.reduce(0) { $0 + $1.hours }
@@ -252,7 +266,15 @@ nonisolated enum VariationCodec {
             },
             submittedAt: row.date("submittedAtMs"),
             closedAt: row.date("closedAtMs"),
-            isDeleted: row.bool("isDeleted")
+            isDeleted: row.bool("isDeleted"),
+            removedEvidence: row.rows("removedEvidence").map { entry in
+                VariationRemovedEvidence(
+                    path: entry.text("path"),
+                    name: entry.text("name"),
+                    removedBy: entry.text("removedBy"),
+                    removedAt: entry.date("removedAtMs")
+                )
+            }
         )
     }
 

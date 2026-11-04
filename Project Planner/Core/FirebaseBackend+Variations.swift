@@ -329,6 +329,86 @@ extension FirebaseBackend {
         ) { _ in data }
     }
 
+    /// RULEBOOK 1.27.0 §24 (owner decision 4) `CanonicalBusinessEngine.variationEvidenceRemovalWriteFields`: unlinks one
+    /// evidence file and records `{ path, name, removedBy, removedAt }` on the variation's `removedEvidence`, as one
+    /// partial update of `variations/{id}` read and written in a transaction (so a file added or removed elsewhere
+    /// meanwhile is never lost), then of its `settings/variationItem_{id}` copy (best effort, also a transaction). The
+    /// list is always built from the stored document, never from the screen's copy. Writes exactly `evidence`,
+    /// `evidenceCount`, `removedEvidence` plus `updatedByUid` and write metadata. Returns whether either document
+    /// changed (false when the file is not on the stored variation); throws only when both writes failed.
+    @discardableResult
+    func recordVariationEvidenceRemoval(variationId: String, evidenceId: String, organizationId: String) async throws -> Bool {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty, !variationId.isEmpty, !evidenceId.isEmpty else { return false }
+        let uid = currentUser?.uid ?? ""
+        let removedAt = Timestamp(date: Date())
+        let refs = [
+            variationsCollection(organizationId: orgId).document(variationId),
+            variationItemDocument(organizationId: orgId, variationId: variationId),
+        ]
+        var changed = false
+        var firstError: Error?
+        var failures = 0
+        for ref in refs {
+            do {
+                if try await Self.runVariationEvidenceRemoval(
+                    db: db,
+                    ref: ref,
+                    variationId: variationId,
+                    evidenceId: evidenceId,
+                    userId: uid,
+                    removedAt: removedAt
+                ) {
+                    changed = true
+                }
+            } catch {
+                failures += 1
+                firstError = firstError ?? error
+                print("⚠️ [Variations] evidence removal not recorded on \(ref.path): \(error.localizedDescription)")
+            }
+        }
+        if failures == refs.count, let firstError { throw firstError }
+        return changed
+    }
+
+    /// One document of `recordVariationEvidenceRemoval`: read, `variationEvidenceRemovalWriteFields`, partial update, in
+    /// one transaction. False when the document is missing or the file is not on it. `nonisolated` so the transaction
+    /// block never runs on the main actor.
+    nonisolated private static func runVariationEvidenceRemoval(
+        db: Firestore,
+        ref: DocumentReference,
+        variationId: String,
+        evidenceId: String,
+        userId: String,
+        removedAt: Timestamp
+    ) async throws -> Bool {
+        let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            guard let stored = snapshot.data() else { return NSNumber(value: false) }
+            guard let write = CanonicalBusinessEngine.variationEvidenceRemovalWriteFields(
+                stored: stored,
+                evidenceId: evidenceId,
+                removedBy: userId,
+                removedAt: removedAt,
+                variationId: variationId
+            ) else {
+                errorPointer?.pointee = CanonicalWriteUnavailableError(function: "variationEvidenceRemovalWriteFields") as NSError
+                return nil
+            }
+            guard var fields = write else { return NSNumber(value: false) }
+            if !userId.isEmpty { fields["updatedByUid"] = userId }
+            transaction.updateData(WriteMetadata.stamped(fields, userId: userId.isEmpty ? nil : userId), forDocument: ref)
+            return NSNumber(value: true)
+        }
+        return (answer as? NSNumber)?.boolValue ?? false
+    }
+
     /// `settings/variationTrades` through `parseVariationTrades` (1.9.0). Picker suggestions: read when the picker
     /// opens (`LIVE_COLLECTIONS` `listen: false`).
     func loadCustomVariationTrades(organizationId: String) async -> [String] {

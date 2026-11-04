@@ -176,6 +176,8 @@ enum CustomerLegalPack {
     14. Deletion and Return
     At the Customer’s choice, the Provider will delete or return Customer personal data at the end of the service, unless applicable law requires continued storage. The Provider may retain limited copies in secure backups for a reasonable backup cycle where immediate deletion is not technically practicable, provided the data is protected and not actively processed for operational purposes.
 
+    \(CanonicalBusinessEngine.deletedDataRetentionNotice)
+
     15. Processing Details
     The processing described in this DPA is intended to satisfy the contract requirements applicable to controller-processor relationships under UK data protection law, including requirements concerning the subject matter and duration, nature and purpose, categories of data and data subjects, confidentiality, security, sub-processors, assistance with rights, breach assistance, deletion/return and audits.
     """
@@ -252,6 +254,8 @@ enum CustomerLegalPack {
 
     7. Retention
     We keep personal information only for as long as reasonably necessary for the purposes described in this Policy, including to provide services, maintain business and financial records, resolve disputes, enforce agreements and comply with legal obligations. Retention periods vary according to the type of information and purpose. Product usage events and sessions are kept for 13 months. Unfinished organisation set-ups that never activated are reviewed after 12 months and may be deleted.
+
+    \(CanonicalBusinessEngine.deletedDataRetentionNotice)
 
     8. Your Rights
     Subject to applicable law, individuals may have rights including access, rectification, erasure, restriction, objection, data portability and the right to withdraw consent where processing relies on consent. To exercise a right, contact info@projectplanner.us. We may need to verify identity before responding.

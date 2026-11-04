@@ -16,6 +16,8 @@ import FirebaseAuth
 extension Notification.Name {
     /// A security switch changed for the open organisation (`securitySwitches`): pay reads and the read plans re-plan.
     static let securitySwitchesDidChange = Notification.Name("securitySwitchesDidChange")
+    /// The live roster (`RulebookRosterSnapshot`) changed: the catalogue operatives' pay overlay re-plans (RULEBOOK 1.27.0 §8).
+    static let rulebookRosterDidChange = Notification.Name("rulebookRosterDidChange")
 }
 
 /// The `platformConfig/app` document as last read (launch, foreground and its live listener), and the two switches for
@@ -110,7 +112,9 @@ extension CanonicalBusinessEngine {
         return write.filter { kept.contains($0.key) }
     }
 
-    /// `rateHistoryQueryPlan(viewer, subjects, roster, { privatePay })` → `{ kind: 'all' }` or `{ kind: 'people', userIds }`.
+    /// `rateHistoryQueryPlan(viewer, subjects, roster, { privatePay })` → `{ kind: 'all' }` or `{ kind: 'people', userIds,
+    /// operativeIds }`. 1.27.0: `operativeIds` are the catalogue operatives among `subjects`
+    /// (`catalogueOperativePaySubjects`) whose pay the viewer may see; absent in older scripts, read as `[]`.
     nonisolated static func rateHistoryQueryPlan(
         viewer: [String: Any]?,
         subjects: [[String: Any]],
@@ -126,7 +130,16 @@ extension CanonicalBusinessEngine {
             return .people((viewer?["id"] as? String).map { [$0] } ?? [])
         }
         if (row["kind"] as? String) == "all" { return .all }
-        return .people(row["userIds"] as? [String] ?? [])
+        return .people(row["userIds"] as? [String] ?? [], operativeIds: row["operativeIds"] as? [String] ?? [])
+    }
+
+    /// RULEBOOK 1.27.0 §8 `catalogueOperativePaySubjects(operatives, roster)`: the `operatives` rows with no app account
+    /// (no `linkedUserId` / `userId` / `uid`, a row id that is no roster member's id, no roster member on the row's
+    /// email), each as a pay subject `{ id: <row id>, email, catalogueOperative: true }` for `canViewPersonPay`,
+    /// `payProfileReadPlan` and `rateHistoryQueryPlan`. Empty when the script did not answer (nothing extra is read).
+    nonisolated static func catalogueOperativePaySubjects(operatives: [[String: Any]], roster: [[String: Any]]) -> [[String: Any]] {
+        guard !operatives.isEmpty else { return [] }
+        return callJSON("catalogueOperativePaySubjects", arguments: [operatives, roster]) as? [[String: Any]] ?? []
     }
 
     /// `payProfileReadPlan(viewer, subjects, roster)` → `{ kind: 'all' }` or `{ kind: 'documents', ids }`.
@@ -144,7 +157,35 @@ extension CanonicalBusinessEngine {
 
 nonisolated enum RulebookRateHistoryPlan: Equatable, Sendable {
     case all
-    case people([String])
+    /// One `userId ==` query per account holder; 1.27.0: one `operativeId ==` + `userId == ''` query per catalogue
+    /// operative row id in `operativeIds`.
+    case people([String], operativeIds: [String] = [])
+}
+
+extension Operative {
+    /// This `operatives` row as `catalogueOperativePaySubjects` reads it (RULEBOOK 1.27.0 §8).
+    var catalogueOperativeRow: [String: Any] {
+        [
+            "id": documentId,
+            "email": email,
+            "linkedUserId": linkedUserId.map { $0 as Any } ?? NSNull(),
+            "isActive": isActive,
+        ]
+    }
+}
+
+/// The live `operatives` rows (`OperativeStore`), for the pay plans that need the catalogue operatives (RULEBOOK 1.27.0
+/// §8) without a store at hand — as `RulebookRosterSnapshot` holds the roster.
+enum RulebookCatalogueOperativeSnapshot {
+    private(set) static var rows: [[String: Any]] = []
+    private static var key: [String] = []
+
+    static func update(_ operatives: [Operative]) {
+        let next = operatives.map { "\($0.documentId)|\($0.email)|\($0.linkedUserId ?? "")|\($0.isActive)" }
+        guard next != key else { return }
+        key = next
+        rows = operatives.map(\.catalogueOperativeRow)
+    }
 }
 
 nonisolated enum RulebookPayProfileReadPlan: Equatable, Sendable {
@@ -166,28 +207,47 @@ extension FirebaseBackend {
         return row
     }
 
-    /// RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.rateHistoryQueryPlan(viewer, roster, roster, { privatePay })`: the
+    /// RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.rateHistoryQueryPlan(viewer, subjects, roster, { privatePay })`: the
     /// whole `operativeDayRateHistory` collection while the switch is off (as before) or for a viewer who sees every
-    /// pay; one `userId ==` query per person whose pay this viewer may see while it is on.
+    /// pay; one `userId ==` query per person whose pay this viewer may see while it is on. 1.27.0: the subjects are the
+    /// roster plus the catalogue operatives (`catalogueOperativePaySubjects`), so an operatives manager also gets one
+    /// `operativeId ==` + `userId == ''` query per catalogue row. Nothing extra is computed while the switch is off.
     var rateHistoryPlan: RulebookRateHistoryPlan {
+        let privatePay = SecuritySwitchContext.privatePay
+        guard privatePay else { return .all }
         let roster = RulebookRosterSnapshot.users.map(\.payAccessSubject)
+        let catalogue = CanonicalBusinessEngine.catalogueOperativePaySubjects(
+            operatives: RulebookCatalogueOperativeSnapshot.rows,
+            roster: roster
+        )
         return CanonicalBusinessEngine.rateHistoryQueryPlan(
             viewer: payViewerRow,
-            subjects: roster,
+            subjects: roster + catalogue,
             roster: roster,
-            privatePay: SecuritySwitchContext.privatePay
+            privatePay: privatePay
         )
     }
 
     /// The `operativeDayRateHistory` listener a pay screen holds for `subjectId` (`listensWhileOpen`): the whole
-    /// collection while the plan is `all`, else that person's rows only (a query the rules allow a pay viewer).
+    /// collection while the plan is `all`, else that person's rows only (a query the rules allow a pay viewer). 1.27.0:
+    /// a catalogue operative row id in the plan's `operativeIds` listens to `operativeId ==` + `userId == ''` (the only
+    /// such query the rules allow); account holders keep `userId ==`.
     func rateHistoryListenQuery(subjectId: String) -> (DocumentReference) -> Query {
         switch rateHistoryPlan {
         case .all:
             return { $0.collection("operativeDayRateHistory") }
-        case .people:
+        case .people(_, let operativeIds):
+            if operativeIds.contains(subjectId) {
+                return Self.catalogueRateHistoryQuery(operativeId: subjectId)
+            }
             return { $0.collection("operativeDayRateHistory").whereField("userId", isEqualTo: subjectId) }
         }
+    }
+
+    /// RULEBOOK 1.27.0 §8: a catalogue operative's rate history — `operativeId ==` its row id and `userId == ''` (rows
+    /// `payRateHistoryWriteFields` wrote for a row with no account). A plain `operativeId ==` query is refused by the rules.
+    nonisolated static func catalogueRateHistoryQuery(operativeId: String) -> (DocumentReference) -> Query {
+        { $0.collection("operativeDayRateHistory").whereField("operativeId", isEqualTo: operativeId).whereField("userId", isEqualTo: "") }
     }
 
     /// The target suffix that makes a pay screen's history listener re-attach when the plan changes.
@@ -225,6 +285,44 @@ extension FirebaseBackend {
             // RULEBOOK 1.26.1 §8: the same `payEditorStartingValues` record the pay editors start from.
             let profileId = ([user.id] + user.formerUserIds).first { profiles[$0] != nil }
             return profileId.map { user.payShown(with: profiles[$0], profileId: $0, privatePay: true) } ?? user
+        }
+    }
+
+    /// RULEBOOK 1.27.0 §8 (owner decision 7): while `privatePay` is on, each catalogue `operatives` row
+    /// (`catalogueOperativePaySubjects` over `roster`) whose pay this viewer may see is laid over from
+    /// `payProfiles/{rowId}` (`payProfileReadPlan` with the roster plus the catalogue subjects, then
+    /// `Operative.payShown`). Admins read the collection; an operatives manager reads each catalogue row's profile by id.
+    /// Each read stands alone: a refused or missing one keeps that row as stored. While the switch is off nothing is read
+    /// and the rows are returned unchanged.
+    func overlayCatalogueOperativePayIfPrivate(_ operatives: [Operative], roster users: [AppUser]) async -> [Operative] {
+        guard SecuritySwitchContext.privatePay, !operatives.isEmpty,
+              let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return operatives }
+        let roster = users.map(\.payAccessSubject)
+        let catalogue = CanonicalBusinessEngine.catalogueOperativePaySubjects(
+            operatives: operatives.map(\.catalogueOperativeRow),
+            roster: roster
+        )
+        let catalogueIds = Set(catalogue.compactMap { $0["id"] as? String })
+        guard !catalogueIds.isEmpty else { return operatives }
+        let plan = CanonicalBusinessEngine.payProfileReadPlan(viewer: payViewerRow, subjects: roster + catalogue, roster: roster)
+        var profiles: [String: [String: Any]] = [:]
+        let collection = db.collection("organizations").document(orgId).collection("payProfiles")
+        switch plan {
+        case .all:
+            if let snapshot = try? await collection.getDocuments() {
+                for doc in snapshot.documents where catalogueIds.contains(doc.documentID) { profiles[doc.documentID] = doc.data() }
+            }
+        case .documents(let ids):
+            for id in ids where catalogueIds.contains(id) {
+                if let snapshot = try? await collection.document(id).getDocument(), snapshot.exists, let data = snapshot.data() {
+                    profiles[id] = data
+                }
+            }
+        }
+        guard !profiles.isEmpty else { return operatives }
+        return operatives.map { row in
+            guard let profile = profiles[row.documentId] else { return row }
+            return row.payShown(with: profile, privatePay: true)
         }
     }
 }

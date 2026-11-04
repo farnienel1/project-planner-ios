@@ -407,9 +407,12 @@ struct AddUserView: View {
     }
 
     private var inviteDraftUserForValidation: AppUser {
+        // RULEBOOK 1.27.0 §11 `inviteDraftLineManagerSubject`: id `INVITE_DRAFT_PERSON_ID` and the typed email as the
+        // shared rule reads it, passed as `person` to `lineManagerCandidates`, `lineManagerSelectionAfterLevelChange`
+        // and `lineManagerRequiredError`, so the invitee is never offered as their own line manager.
         AppUser(
-            id: "invite-draft",
-            email: email,
+            id: CanonicalBusinessEngine.inviteDraftPersonId,
+            email: CanonicalBusinessEngine.inviteDraftLineManagerEmail(email: email, level: invitedAccountType.rawValue),
             organizationId: userStore.currentUser?.organizationId ?? "",
             role: UserRole(rawValue: invitedAccountType.rawValue) ?? .manager,
             permissions: permissions,

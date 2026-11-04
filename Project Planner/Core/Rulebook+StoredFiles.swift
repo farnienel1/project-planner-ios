@@ -78,6 +78,18 @@ extension CanonicalBusinessEngine {
         constant("FILE_KEPT_ON_REMOVE_COPY", as: String.self)
             ?? "Removed from this list. The file itself is kept so an admin can restore it."
     }
+
+    /// RULEBOOK 1.27.0 §24 `FILE_RECOVERY_RETENTION_DAYS`: how long a deleted or replaced file is kept for recovery.
+    nonisolated static var fileRecoveryRetentionDays: Int {
+        constant("FILE_RECOVERY_RETENTION_DAYS", as: Int.self) ?? 30
+    }
+
+    /// RULEBOOK 1.27.0 §24 `DELETED_DATA_RETENTION_NOTICE`: the sentence the privacy policy (7. Retention) and the DPA
+    /// (14. Deletion and Return) carry word for word on every platform.
+    nonisolated static var deletedDataRetentionNotice: String {
+        constant("DELETED_DATA_RETENTION_NOTICE", as: String.self)
+            ?? "A deleted company can be restored for 30 days, after which its data is erased. Deleted files, including the files of an erased company, are kept for up to 30 days so they can be recovered, then permanently removed."
+    }
 }
 
 /// What removing a file from a record did (RULEBOOK 1.25.0 §24): deleted (`fileDeletePermission` allowed it), kept
