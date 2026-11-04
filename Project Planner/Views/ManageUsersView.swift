@@ -1706,7 +1706,7 @@ struct EditUserView: View {
     
     /// Fresh row from the store (e.g. after profile photo upload).
     private var displayedUser: AppUser {
-        userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        userStore.rosterRow(for: user.id) ?? user
     }
     
     private var canUploadProfilePhoto: Bool {
@@ -1825,7 +1825,7 @@ struct EditUserView: View {
 
     private var annualLeaveEntitlementDirty: Bool {
         guard shouldShowAnnualLeaveEntitlementSection else { return false }
-        let s = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let s = userStore.rosterRow(for: user.id) ?? user
         guard let p = parsedAnnualLeaveDaysForSave() else { return true }
         return abs(p - s.annualLeaveDaysPerYear) > 0.0001
             || annualLeaveStartMonth != s.annualLeaveYearStartMonth
@@ -1837,7 +1837,7 @@ struct EditUserView: View {
     /// RULEBOOK 1.13.0 §4.4: an admin changed the start date the leave year joined is pro rata from.
     private var employmentStartDateDirty: Bool {
         guard canUseAdminAccountTools else { return false }
-        let stored = (userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user).employmentStartDate ?? ""
+        let stored = (userStore.rosterRow(for: user.id) ?? user).employmentStartDate ?? ""
         return employmentStartDateDraft != stored
     }
 
@@ -2002,7 +2002,7 @@ struct EditUserView: View {
         // (only the level flags change), never a preset.
         let level: RulebookPermissionLevel = changeUserTypeDraft == .administrator ? .admin
             : changeUserTypeDraft == .manager ? .manager : .operative
-        let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let stored = userStore.rosterRow(for: user.id) ?? user
         if let kept = CanonicalBusinessEngine.accountTypePermissions(
             kind: level,
             previous: CanonicalBusinessEngine.permissionSubject(
@@ -2106,7 +2106,7 @@ struct EditUserView: View {
     /// RULEBOOK 1.12.2 §11 `accountTypeSyncState(...).repair`: the level to finish on every record, nil when the user
     /// type is the same on the users document and `members.{uid}`.
     private var accountTypeRepair: RulebookPermissionLevel? {
-        let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let stored = userStore.rosterRow(for: user.id) ?? user
         return stored.accountTypeSyncState(in: firebaseBackend)?.repair
     }
 
@@ -2501,7 +2501,7 @@ struct EditUserView: View {
     private func syncEditUserDraftsFromStore() {
         guard !didSyncIdentityDrafts else { return }
         didSyncIdentityDrafts = true
-        let u = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let u = userStore.rosterRow(for: user.id) ?? user
         editFirstName = u.firstName
         editSurname = u.surname
         editEmail = u.email
@@ -2878,7 +2878,7 @@ struct EditUserView: View {
         case .operative:
             screen = ["materials": operativeTransitionMaterials, "siteAudit": operativeTransitionSiteAudit]
         }
-        let storedPerson = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let storedPerson = userStore.rosterRow(for: user.id) ?? user
         let storedSubject = CanonicalBusinessEngine.permissionSubject(
             permissions: storedPerson.permissions,
             role: storedPerson.role.rawValue,
@@ -2904,7 +2904,7 @@ struct EditUserView: View {
             await userStore.loadOrganizationUsers(forceRefresh: true)
             await holidayStore.loadData()
             await MainActor.run {
-                if let fresh = userStore.organizationUsers.first(where: { $0.id == user.id }) {
+                if let fresh = userStore.rosterRow(for: user.id) {
                     permissions = fresh.permissions
                     permissionsBaseline = fresh.permissions
                     selectedLineManagerUserIds = LineManagerRulebook.selectedIds(for: fresh, roster: userStore.organizationUsers)
@@ -2921,7 +2921,7 @@ struct EditUserView: View {
         } else {
             await MainActor.run {
                 // Refused or not stored: show the stored type again, never the one that was asked for.
-                let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+                let stored = userStore.rosterRow(for: user.id) ?? user
                 permissions = stored.permissions
                 permissionsBaseline = stored.permissions
                 changeUserTypeDraft = storedAccountKind(of: stored)
@@ -3436,7 +3436,7 @@ struct EditUserView: View {
     /// (`payRecordLoading`), so no save runs on the pre-read value.
     private func refreshPayFromPayProfile() async {
         let started = payLoadGate.generation
-        let before = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let before = userStore.rosterRow(for: user.id) ?? user
         let after = await userStore.refreshPayFromPayProfile(of: before)
         // A switch change since this read began starts a newer read; this one is dropped.
         guard !Task.isCancelled, payLoadGate.finish(generation: started) else { return }
@@ -3463,7 +3463,7 @@ struct EditUserView: View {
     /// The save baseline (RULEBOOK 1.26.1 §8): the stored person with the pay fields of the editor's record — the same
     /// record the drafts started from. Without a record (switch off) the stored person, exactly as before.
     private var payBaselineUser: AppUser {
-        let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let stored = userStore.rosterRow(for: user.id) ?? user
         return payRecord.map { stored.withPayFields(of: $0) } ?? stored
     }
 
@@ -3487,7 +3487,7 @@ struct EditUserView: View {
         guard canEditPermissionsMatrix else { return }
         openingQualificationsEditor = true
         Task {
-            let subject = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+            let subject = userStore.rosterRow(for: user.id) ?? user
             let op: Operative?
             if let linked = linkedOperativeForUser {
                 op = linked
@@ -3740,7 +3740,7 @@ struct EditUserView: View {
         isUpdatingActiveStatus = true
         activeStatusMessage = nil
         let newValue = !isActive
-        let target = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let target = userStore.rosterRow(for: user.id) ?? user
         Task {
             let ok = await userStore.updateUserActiveStatus(for: target, isActive: newValue)
             await MainActor.run {
@@ -3967,7 +3967,7 @@ struct EditUserView: View {
             // RULEBOOK 1.12.0 §4.4 `validateLeaveYearMonths`: when this save changes the leave-year months, a year that
             // is not 12 months is refused before anything is written.
             if canEditPermissionsMatrix && annualLeaveEntitlementDirty {
-                let saved = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+                let saved = userStore.rosterRow(for: user.id) ?? user
                 let monthsChanged = annualLeaveStartMonth != saved.annualLeaveYearStartMonth
                     || annualLeaveEndMonth != saved.annualLeaveYearEndMonth
                 if monthsChanged,
@@ -4105,7 +4105,7 @@ struct EditUserView: View {
         // finished on every record from the profile's level, through the same `accountTypeChangeWrites` plan.
         if canUseAdminAccountTools && !isViewingSuperAdminProfile && permissionsSuccess,
            let repair = subjectUser.accountTypeSyncState(in: firebaseBackend)?.repair {
-            let current = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? subjectUser
+            let current = userStore.rosterRow(for: user.id) ?? subjectUser
             let repaired = await userStore.changeAccountType(
                 userId: user.id,
                 kind: repair,
@@ -4339,7 +4339,7 @@ struct EditUserView: View {
             } else {
                 if !permissionsSuccess {
                     // A refused permission save shows the stored flags again, never the unsaved ones.
-                    let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+                    let stored = userStore.rosterRow(for: user.id) ?? user
                     permissions = stored.permissions
                     permissionsBaseline = stored.permissions
                 }

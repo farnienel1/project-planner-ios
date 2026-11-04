@@ -79,6 +79,61 @@ final class RoleChangeAndVanishingJobTests: XCTestCase {
         XCTAssertTrue(UserTypeChangeReadBack.notSavedMessage(stored: unchanged).contains("Manager"))
     }
 
+    // MARK: - Change user type: the person is found under any of their ids (owner test, 4 Nov)
+
+    private func signedInDocument(id: String, role: UserRole, updatedAt: Date) -> AppUser {
+        var user = AppUser(
+            id: id,
+            email: "test-promote@example.com",
+            organizationId: "org-test",
+            role: role,
+            firstName: "TEST",
+            surname: "Promote",
+            isActive: true,
+            passwordSet: true,
+            permissions: role == .admin ? UserPermissions(adminAccess: true, manager: true) : UserPermissions(manager: true)
+        )
+        user.documentUpdatedAt = updatedAt
+        return user
+    }
+
+    /// Manager -> admin writes every same-email document. Afterwards the `rosterPeople` fold can keep the other
+    /// document, so the id the editor opened is no longer a row id. Before the fix every later lookup by that id said
+    /// "This person is not in the loaded user list" although the change had landed.
+    func testAfterAPromotionTheFoldMayKeepTheOtherDocumentAndThePersonIsStillFound() {
+        let opened = "TEST-UID-A"
+        let other = "TEST-UID-B"
+        let now = Date()
+        let before = FirebaseBackend.foldRosterBySameEmail([
+            signedInDocument(id: opened, role: .manager, updatedAt: now),
+            signedInDocument(id: other, role: .manager, updatedAt: now.addingTimeInterval(-3_600)),
+        ])
+        XCTAssertEqual(before.users.map(\.id), [opened], "the newer document is the row the editor opens")
+
+        // The type change wrote both documents; the other one was written last.
+        let after = FirebaseBackend.foldRosterBySameEmail([
+            signedInDocument(id: opened, role: .admin, updatedAt: now.addingTimeInterval(1)),
+            signedInDocument(id: other, role: .admin, updatedAt: now.addingTimeInterval(2)),
+        ])
+        XCTAssertNil(after.users.firstIndex(where: { $0.id == opened }),
+                     "reproduces the owner bug: an exact-id lookup misses the person after the fold re-keys them")
+        let index = UserStore.rosterIndex(for: opened, in: after.users, aliases: after.aliases)
+        XCTAssertNotNil(index)
+        XCTAssertEqual(index.map { after.users[$0].role }, .admin)
+        XCTAssertEqual(UserStore.rosterIndex(for: opened.lowercased(), in: after.users, aliases: after.aliases), index)
+        XCTAssertNil(UserStore.rosterIndex(for: "TEST-UID-NOBODY", in: after.users, aliases: after.aliases))
+    }
+
+    /// The plan is built for the id the members map knows, so `members.{uid}` is not added under a second id.
+    func testTheTypeChangeIsWrittenForTheIdTheMembersMapKnows() {
+        var row = signedInDocument(id: "TEST-UID-B", role: .manager, updatedAt: Date())
+        row.sameEmailUserIds = ["TEST-UID-A"]
+        XCTAssertEqual(UserStore.membersKeyId(for: row, members: ["test-uid-a": "manager"]), "TEST-UID-A")
+        XCTAssertEqual(UserStore.membersKeyId(for: row, members: ["TEST-UID-B": "manager"]), "TEST-UID-B")
+        XCTAssertEqual(UserStore.membersKeyId(for: row, members: nil), "TEST-UID-B")
+        XCTAssertEqual(UserStore.membersKeyId(for: row, members: ["someone-else": "admin"]), "TEST-UID-B")
+    }
+
     func testAnEditorOpenedFromAnOlderRowNeverWritesItsFlagsBack() {
         let olderManager = UserPermissions(adminAccess: false, manager: true, operatives: true, weeklyReports: false)
         let storedAdmin = UserPermissions(adminAccess: true, manager: true, operatives: true, weeklyReports: true)
