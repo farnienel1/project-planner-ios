@@ -514,6 +514,13 @@ enum WarningsComputation {
         let managerAdminUserIds = Set(RulebookRosterLists.clashManagerIds(clashRosterRows) ?? [])
 
         let scheduleIndex = WarningsScheduleIndex(calendar: cal)
+        // RULEBOOK 1.31.0 §5 `isWarningRowInScope`: a manager's clash and leave-cover rows are those about themselves,
+        // their reports or a job they manage (`warningScopeFor`). Nil scope (admins) keeps every row.
+        let rowScope = input.warningScope
+        func inScope(jobIds: [String], personIds: [String]) -> Bool {
+            guard rowScope != nil else { return true }
+            return CanonicalBusinessEngine.isWarningRowInScope(rowScope, jobIds: jobIds, personIds: personIds)
+        }
 
         if let rows = qualificationRows(input, reference: now, dismissedKeys: input.dismissedQualificationKeys) {
             generated.append(contentsOf: rows)
@@ -536,6 +543,10 @@ enum WarningsComputation {
             var clusterIndexByPersonDay: [String: Int] = [:]
             for group in groups {
                 let sortedCluster = group.bookings
+                guard inScope(
+                    jobIds: sortedCluster.map { JobKeys.storedJobId(for: $0.projectId) },
+                    personIds: [group.personKey] + sortedCluster.map { Booking.storedOperativeId(for: $0.operativeId) }
+                ) else { continue }
                 let personDay = "\(group.personKey)|\(group.dayKey)"
                 let clusterIndex = clusterIndexByPersonDay[personDay, default: 0]
                 clusterIndexByPersonDay[personDay] = clusterIndex + 1
@@ -640,6 +651,14 @@ enum WarningsComputation {
             ) {
                 for group in groups {
                     guard group.items.count > 1 else { continue }
+                    let jobIds: [String] = group.items.compactMap { item in
+                        if let booking = item.managerBooking {
+                            guard booking.isProjectLikeLocation, let locationId = booking.locationId else { return nil }
+                            return JobKeys.storedJobId(for: locationId)
+                        }
+                        return item.operativeBooking.map { JobKeys.storedJobId(for: $0.projectId) }
+                    }
+                    guard inScope(jobIds: jobIds, personIds: [group.userId]) else { continue }
                     appendManagerClash(group.items, userId: group.userId, resolutionKey: group.resolutionKey)
                 }
             }
@@ -653,7 +672,7 @@ enum WarningsComputation {
 
         // Leave clash and half-day cover come only from the script. Swift does not decide
         // which half is open or whether a booking sits inside the leave.
-        if let rows = leaveRows(input, coverageStart: coverageStart, coverageEnd: coverageEnd) {
+        if let rows = leaveRows(input, coverageStart: coverageStart, coverageEnd: coverageEnd, scope: rowScope) {
             generated.append(contentsOf: rows)
         }
 
@@ -1360,7 +1379,8 @@ enum WarningsComputation {
     nonisolated private static func leaveRows(
         _ input: WarningsComputationSnapshot,
         coverageStart: Date,
-        coverageEnd: Date
+        coverageEnd: Date,
+        scope: Any? = nil
     ) -> [Warning]? {
         let calendar = CanonicalBusinessEngine.businessCalendar
         let startKey = dayKeyString(coverageStart, calendar: calendar)
@@ -1469,7 +1489,22 @@ enum WarningsComputation {
         )
         // RULEBOOK 1.23.0 §5, §9: each day under its own working hours (`day` = the policy state, `standardDayOn`).
         guard let rows = CanonicalBusinessEngine.leaveCoverageRows(inputPayload, day: input.payrollPolicyState) else { return nil }
-        return rows.compactMap { row in
+        // RULEBOOK 1.31.0 §5 `isWarningRowInScope`: the person (any id) or a job of a clashing booking.
+        var jobOfBooking: [String: String] = [:]
+        if scope != nil {
+            for booking in input.bookings { jobOfBooking[booking.id.uuidString] = JobKeys.storedJobId(for: booking.projectId) }
+            for booking in input.managerSiteBookings where booking.isProjectLikeLocation {
+                if let locationId = booking.locationId { jobOfBooking[booking.id.uuidString] = JobKeys.storedJobId(for: locationId) }
+            }
+        }
+        let scopedRows = scope == nil ? rows : rows.filter { row in
+            CanonicalBusinessEngine.isWarningRowInScope(
+                scope,
+                jobIds: row.clashes.compactMap { jobOfBooking[$0.bookingId] },
+                personIds: [row.userId, row.operativeId, row.personKey].compactMap { $0 }
+            )
+        }
+        return scopedRows.compactMap { row in
             guard let date = CanonicalBusinessEngine.date(fromDayKey: row.dayKey, calendar: calendar) else { return nil }
             let severity: Warning.WarningSeverity = row.kind == "leave_clash" || row.severity == "high" ? .high : .medium
             let ranges = row.missing.map { formatClockRange($0.start, $0.end) }

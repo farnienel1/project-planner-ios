@@ -156,8 +156,13 @@ extension CanonicalBusinessEngine {
         managerBookings: [[String: Any]],
         people: [[String: Any]],
         operatives: [[String: Any]],
+        jobs: [[String: Any]] = [],
+        managers: [[String: Any]] = [],
+        roster: [[String: Any]] = [],
         enforced: Bool? = nil
     ) -> [String: Any] {
+        // RULEBOOK 1.31.0 §5: `jobs` (stored manager fields), `managers` and `roster` (line-manager fields) decide a
+        // manager's scope; `visibleJobIds`, `bookings` and `managerBookings` are no longer read by the script.
         var input: [String: Any] = [
             "viewer": viewer.json,
             "visibleJobIds": visibleJobIds,
@@ -165,6 +170,9 @@ extension CanonicalBusinessEngine {
             "managerBookings": managerBookings,
             "people": people,
             "operatives": operatives,
+            "jobs": jobs,
+            "managers": managers,
+            "roster": roster,
         ]
         if let enforced { input["enforced"] = enforced }
         return callJSON("warningScopeFor", arguments: [input]) as? [String: Any] ?? ["kind": "all"]
@@ -283,6 +291,15 @@ nonisolated enum JobAccessContext {
 
     /// Stored manager fields of each loaded job, by lower-cased document id (the job a booking names).
     nonisolated(unsafe) private(set) static var jobFieldsById: [String: [String: Any]] = [:]
+
+    /// Every loaded job as `{ id, ...stored manager fields }` (RULEBOOK 1.31.0 `warningScopeFor` `jobs`).
+    nonisolated static var jobManagerRows: [[String: Any]] {
+        jobFieldsById.map { key, fields in
+            var row = fields
+            row["id"] = key
+            return row
+        }
+    }
 
     /// The jobs this device loaded: their ids for `bookingQueryPlan` and their manager fields for `canWriteBooking`.
     @MainActor static func updateJobs(_ projects: [Project]) {
@@ -450,8 +467,9 @@ enum WarningScopeSupport {
         operatives: [Operative]
     ) -> [String: Any]? {
         guard let viewer = JobAccessContext.readViewer else { return nil }
-        // Admins and managers with both toggles: everything, without building the inputs.
-        if CanonicalBusinessEngine.seesEveryJob(viewer, kind: nil) { return nil }
+        // RULEBOOK 1.31.0 §5 (owner decision): admins see everything; a manager — whatever their Projects / Small works
+        // toggles — themselves, their reports and the jobs they manage. Admins skip building the inputs.
+        if (viewer.role.isAdmin || viewer.role.isSuperAdmin) && !viewer.role.isOperativeMode { return nil }
         let scope = CanonicalBusinessEngine.warningScopeFor(
             viewer: viewer,
             visibleJobIds: JobAccessContext.visibleJobIds,
@@ -463,6 +481,9 @@ enum WarningScopeSupport {
             },
             people: users.map { ["id": $0.id, "email": $0.email, "formerIds": $0.formerUserIds + $0.sameEmailUserIds] },
             operatives: operatives.map { ["id": $0.documentId, "email": $0.email] },
+            jobs: JobAccessContext.jobManagerRows,
+            managers: JobAccessContext.managers,
+            roster: RulebookPeople.roster(users),
             // RULEBOOK 1.26.0 §17: with `enforcedReads` on a restricted viewer does not read every booking.
             enforced: SecuritySwitchContext.enforcedReads
         )
