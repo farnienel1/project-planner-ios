@@ -106,11 +106,30 @@ extension FirebaseBackend {
 
     /// `users/{userId}` partial update plus its pay profile in ONE batch (RULEBOOK 1.13.0 Q1 step B), so pay is never
     /// written to one document without the other.
+    /// RULEBOOK 1.26.0 §8: the users half is `CanonicalBusinessEngine.sharedDocumentPayWrite(payload, { privatePay })`
+    /// — unchanged while the switch is off, without any pay field while it is on (pay then goes only to the pay
+    /// profile). A users half left with nothing but write metadata is not sent.
     func updateUserDocumentWithPayProfile(userId: String, payload: [String: Any]) async throws {
         let batch = db.batch()
-        batch.updateData(payload, forDocument: db.collection("users").document(userId))
+        let shared = CanonicalBusinessEngine.sharedDocumentPayWrite(payload, privatePay: SecuritySwitchContext.privatePay)
+        if Self.hasFieldsBesidesMetadata(shared) {
+            batch.updateData(shared, forDocument: db.collection("users").document(userId))
+        }
         addPayProfileWrite(to: batch, subjectId: userId, profileWrite: payload)
         try await batch.commit()
+    }
+
+    /// The pay-profile half of a write on its own (RULEBOOK 1.26.0, `privatePay` on: a new users document or invite
+    /// placeholder whose shared copy carries no pay). Nothing when the write has no pay field.
+    func writePayProfileOnly(subjectId: String, profileWrite: [String: Any]) async throws {
+        let batch = db.batch()
+        guard addPayProfileWrite(to: batch, subjectId: subjectId, profileWrite: profileWrite) else { return }
+        try await batch.commit()
+    }
+
+    /// True when a write names a field other than `updatedAt` / `updatedBy` / `updatedFrom`.
+    nonisolated static func hasFieldsBesidesMetadata(_ write: [String: Any]) -> Bool {
+        !Set(write.keys).subtracting(["updatedAt", "updatedBy", "updatedFrom"]).isEmpty
     }
 
     /// The pay profile document as stored, or nil when it does not exist or this viewer may not read it (the rules
@@ -138,6 +157,13 @@ extension AppUser {
             "employmentTypeTransitionFrom": employmentTypeTransitionFrom.map { $0.rawValue as Any } ?? NSNull(),
             "employmentTypeEffectiveAt": employmentTypeEffectiveAt.map { $0.timeIntervalSince1970 * 1000 as Any } ?? NSNull(),
         ]
+    }
+
+    /// The pay a screen shows (RULEBOOK 1.26.0 §8, `CanonicalBusinessEngine` `overlayPayProfile` gated by `privatePay`):
+    /// the pay profile laid over the users document while the switch is on; the users document as stored while it is
+    /// off, whatever the pay profile says.
+    func payShown(with profile: [String: Any]?, privatePay: Bool) -> AppUser {
+        privatePay ? overlayingPayProfile(profile) : self
     }
 
     /// `self` with its pay read pay profile first (`overlayPayProfile`), the users document second. `profile` is the
@@ -178,11 +204,15 @@ extension UserStore {
     /// RULEBOOK 1.13.0 §8 (Q1 step C): reads `payProfiles/{subjectId}` when the signed-in person may see this
     /// person's pay (`canViewPersonPay`) and lays it over the loaded row (`overlayPayProfile`). Returns the row as
     /// shown; the roster copy is updated so other screens show the same pay.
+    ///
+    /// RULEBOOK 1.26.0 §8: only while `privatePay` is on for the organisation (`AppUser.payShown`). While it is off pay
+    /// is read from the users document as stored: an older build writes pay only there, so a pay profile may be stale,
+    /// and seeding the editor from it would show (and save back) an old rate.
     @discardableResult
     func refreshPayFromPayProfile(of subject: AppUser) async -> AppUser {
-        guard canViewPay(of: subject), let firebaseBackend else { return subject }
+        guard SecuritySwitchContext.privatePay, canViewPay(of: subject), let firebaseBackend else { return subject }
         guard let profile = await firebaseBackend.loadPayProfile(subjectId: subject.id) else { return subject }
-        let overlaid = subject.overlayingPayProfile(profile)
+        let overlaid = subject.payShown(with: profile, privatePay: SecuritySwitchContext.privatePay)
         if overlaid != subject, let index = organizationUsers.firstIndex(where: { $0.id == subject.id }) {
             organizationUsers[index] = overlaid
         }

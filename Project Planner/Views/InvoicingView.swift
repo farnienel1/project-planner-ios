@@ -2343,8 +2343,11 @@ private struct MyTimesheetView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadDraft() }
         .task { await loadDayRateHistory() }
-        .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.myTimesheet", firebaseBackend: firebaseBackend,
-                          query: { $0.collection("operativeDayRateHistory") }) { await loadDayRateHistory() }
+        // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.rateHistoryQueryPlan`: the whole collection while `privatePay` is
+        // off, else this person's rows.
+        .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.myTimesheet",
+                          targetSuffix: firebaseBackend.rateHistoryListenSuffix, firebaseBackend: firebaseBackend,
+                          query: firebaseBackend.rateHistoryListenQuery(subjectId: firebaseBackend.currentUser?.uid ?? "")) { await loadDayRateHistory() }
         // Approved leave rows read the holiday list (read only); load it when nothing is cached yet.
         .task { if holidayStore.bookings.isEmpty { await holidayStore.loadData() } }
         // Live sheet while open: a line manager's sign-off or review on web shows here. An edit sheet that is
@@ -4190,8 +4193,10 @@ private struct OperativeTimesheetReviewView: View {
                 Task { await refreshDraftFromCloud() }
             }
             .task { await loadDayRateHistory() }
-            .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.review", firebaseBackend: firebaseBackend,
-                              query: { $0.collection("operativeDayRateHistory") }) { await loadDayRateHistory() }
+            // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.rateHistoryQueryPlan`: the subject's rows while `privatePay` is on.
+            .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.review",
+                              targetSuffix: firebaseBackend.rateHistoryListenSuffix, firebaseBackend: firebaseBackend,
+                              query: firebaseBackend.rateHistoryListenQuery(subjectId: operative.id)) { await loadDayRateHistory() }
             .task { if holidayStore.bookings.isEmpty { await holidayStore.loadData() } }
             // Live sheet while open: the person's own edit or another reviewer's decision on web shows here.
             // An entry being edited, or the sign sheet, is never overwritten — the server copy loads after.
