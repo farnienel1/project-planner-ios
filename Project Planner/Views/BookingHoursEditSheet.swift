@@ -835,6 +835,14 @@ struct OperativeCustomHoursSheet: View {
                     .accessibilityIdentifier("operativeCustomHours.deleteBooking")
                     .accessibilityLabel("Delete booking")
                 }
+            } else {
+                // Hours sheet and other create / no-delete callers (3.5 "Hours sheet"): Cancel and Save in the header,
+                // no delete. Same validateAndSave as the bottom bar.
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { validateAndSave() }
+                        .buttonStyle(PPOnNavyPillButtonStyle())
+                        .accessibilityIdentifier("operativeCustomHours.saveTop")
+                }
             }
         }
         .confirmationDialog(
