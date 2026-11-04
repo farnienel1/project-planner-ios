@@ -1776,22 +1776,17 @@ struct HolidayView: View {
     }
 
     private func assignedApproverUserId(for request: HolidayBooking) -> String? {
-        if let uid = request.userId,
-           let requester = userStore.organizationUsers.first(where: { $0.id == uid }) {
-            if AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester, users: userStore.organizationUsers) {
-                return requester.primaryLineManagerUserId
-            }
+        // The requester is `resolveBookingPerson` (`AnnualLeaveApproval.requester`), never an email match.
+        guard let requester = AnnualLeaveApproval.requester(
+            for: request,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        ) else { return nil }
+        if request.userId != nil,
+           !AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: requester, users: userStore.organizationUsers) {
             return nil
         }
-        if let oid = request.operativeId,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let requester = userStore.organizationUsers.first(where: {
-               ($0.permissions.operativeMode || $0.role == .operative) &&
-               $0.email.lowercased() == op.email.lowercased()
-           }) {
-            return requester.primaryLineManagerUserId
-        }
-        return nil
+        return requester.primaryLineManagerUserId
     }
 
     private func approveRequest(_ request: HolidayBooking) {
@@ -1843,18 +1838,11 @@ struct HolidayView: View {
         actorName: String,
         actionVerb: String
     ) async {
-        let requesterUser: AppUser? = {
-            if let uid = request.userId {
-                return userStore.organizationUsers.first(where: { $0.id == uid })
-            }
-            if let oid = request.operativeId,
-               let op = operativeStore.allOperatives.first(where: { $0.id == oid }) {
-                return userStore.organizationUsers.first(where: {
-                    $0.email.lowercased() == op.email.lowercased()
-                })
-            }
-            return nil
-        }()
+        let requesterUser = AnnualLeaveApproval.requester(
+            for: request,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
         guard let requesterUser else { return }
         // `lineManagerPeerRecipients(subject, actor, roster)` picks the other line managers.
         await notificationService.notifyLineManagerPeerAction(
@@ -1909,31 +1897,22 @@ struct HolidayView: View {
     }
 
     private func notifyDecision(to request: HolidayBooking, approved: Bool, decidedByName: String, reason: String = "") async {
-        if let requesterUserId = request.userId {
-            await notificationService.notifyHolidayRequestDecisionToUser(
-                userId: requesterUserId,
-                bookingId: request.id,
-                approved: approved,
-                decidedByName: decidedByName,
+        // RULEBOOK §9, §13: the requester is the account the record names (`resolveBookingPerson` on its `userId`,
+        // else its `operativeId`); `notifyHolidayRequestDecisionToUser` then asks `holidayDecisionRecipients` (never
+        // the decider, no admin copy). No email or operative-mode match here.
+        let requesterId = AnnualLeaveApproval.requester(
+            for: request,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )?.id ?? request.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let requesterId, !requesterId.isEmpty else { return }
+        await notificationService.notifyHolidayRequestDecisionToUser(
+            userId: requesterId,
+            bookingId: request.id,
+            approved: approved,
+            decidedByName: decidedByName,
                 reason: reason
-            )
-            // RULEBOOK §13: a decision notifies the requester only (`holidayDecisionRecipients`); no admin copy.
-            return
-        }
-        if let oid = request.operativeId,
-           let op = operativeStore.allOperatives.first(where: { $0.id == oid }),
-           let operativeUser = userStore.organizationUsers.first(where: {
-               ($0.permissions.operativeMode || $0.role == .operative) &&
-               $0.email.lowercased() == op.email.lowercased()
-           }) {
-            await notificationService.notifyHolidayRequestDecisionToUser(
-                userId: operativeUser.id,
-                bookingId: request.id,
-                approved: approved,
-                decidedByName: decidedByName,
-                reason: reason
-            )
-        }
+        )
     }
 
     private func requesterName(for request: HolidayBooking) -> String {

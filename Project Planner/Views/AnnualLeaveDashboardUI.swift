@@ -481,16 +481,8 @@ func notifyAnnualLeavePeerManagers(
     operatives: [Operative],
     notificationService: NotificationService
 ) async {
-    let requester: AppUser? = {
-        if let uid = request.userId {
-            return users.first(where: { $0.id == uid })
-        }
-        if let oid = request.operativeId,
-           let op = operatives.first(where: { $0.id == oid }) {
-            return users.first(where: { $0.email.lowercased() == op.email.lowercased() })
-        }
-        return nil
-    }()
+    // The requester is `resolveBookingPerson` (`AnnualLeaveApproval.requester`), never an email match.
+    let requester = AnnualLeaveApproval.requester(for: request, users: users, operatives: operatives)
     guard let requester else { return }
     let name = requester.fullName.isEmpty ? requester.email : requester.fullName
     // Web `buildLeaveDecisionPeerNotifications`: same copy, key and relatedId (`annualLeaveDecisionDateText`).

@@ -211,4 +211,26 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertFalse(WarningOperativeAccess.canOpen(actor: managerWithout, target: operative))
         XCTAssertFalse(WarningOperativeAccess.canOpen(actor: managerWith, target: managerWithout))
     }
+
+    // MARK: 10. Leave decision notices (`resolveBookingPerson`, then `holidayDecisionRecipients`)
+
+    /// A request stored only under a catalogue row reaches the account on that row's email whatever its level (the
+    /// screens used to accept an operative-mode account only), and the decider is never notified of their own decision.
+    func testLeaveDecisionNoticeFindsTheRequesterAccount() {
+        let manager = staffUser(id: "uid-mgr", email: "boss@example.com", operativeMode: false)
+        let catalogue = LogicFixtures.operative(id: UUID(), email: "BOSS@example.com")
+        var record = LogicFixtures.holiday(userId: "", start: orgDay("2026-11-04"), end: orgDay("2026-11-04"))
+        record.userId = nil
+        record.operativeIdRaw = catalogue.documentId
+        let requester = AnnualLeaveApproval.requester(for: record, users: [manager], operatives: [catalogue])
+        XCTAssertEqual(requester?.id, "uid-mgr")
+        XCTAssertEqual(
+            CanonicalBusinessEngine.holidayDecisionRecipients(requester: "uid-mgr", decider: "uid-admin", roster: []),
+            ["uid-mgr"]
+        )
+        XCTAssertEqual(
+            CanonicalBusinessEngine.holidayDecisionRecipients(requester: "uid-mgr", decider: "uid-mgr", roster: []),
+            []
+        )
+    }
 }
