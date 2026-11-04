@@ -461,6 +461,10 @@ nonisolated enum IOSLiveListenerCoverage {
         // RULEBOOK 1.29.0 §25: while the Overtime screens are open (CanonicalBusinessEngine.liveCollections).
         "overtimeRequests": "OvertimeRangesView / OvertimeLinesView (FirebaseBackend.listenOvertimeRequests, userId ==)",
         "overtimeReviews": "OvertimeLinesView (FirebaseBackend.listenOvertimeReviews, userId ==)",
+        // RULEBOOK 1.30.0 §26.
+        "priceWorkItems": "PayeClaimsRangeView (FirebaseBackend.listenPayeClaims, userId ==)",
+        "expenseItems": "PayeClaimsRangeView (FirebaseBackend.listenPayeClaims, userId ==)",
+        "personalSiteAudits": "PersonalSiteAuditsView / PersonalSiteAuditPickerSheet (FirebaseBackend.listenPersonalSiteAudits, ownerUserId ==)",
     ]
 
     /// `LIVE_COLLECTIONS` ids with `listen: true` that have no entry above. Empty when iOS covers them all.

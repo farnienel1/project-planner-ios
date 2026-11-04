@@ -249,6 +249,8 @@ enum CustomerLegalPack {
     5. Sharing Personal Information
     We may share personal information with service providers that help us operate ProjectPlanner, such as hosting, infrastructure, authentication, email, payment, analytics, security, support and professional service providers. We may also disclose information where required by law, to protect rights or safety, or in connection with a business sale, restructuring or financing, subject to applicable law.
 
+    \(CanonicalBusinessEngine.personalSiteAuditPrivacyNotice)
+
     6. International Transfers
     Some service providers may process information outside the UK. Where this occurs, we will use a lawful transfer mechanism and appropriate safeguards required by applicable data protection law.
 

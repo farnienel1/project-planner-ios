@@ -228,6 +228,7 @@ struct SiteAuditHubView: View {
 
     @State private var showingCreate = false
     @State private var worksBrowserKind: SiteAuditWorksBrowserKind?
+    @State private var showingPersonal = false
 
     var body: some View {
         NavigationStack {
@@ -269,6 +270,20 @@ struct SiteAuditHubView: View {
                             }
                                 .accessibilityIdentifier("siteAuditHub.wrenchAndScrewdriverFill")
                                 .buttonStyle(PPMenuRowButtonStyle())
+
+                            PPRowDivider()
+
+                            // RULEBOOK 1.30.0 §26: the signed-in person's own audits, not linked to a job (owner only).
+                            Button { showingPersonal = true } label: {
+                                hubTile(
+                                    icon: "person.fill",
+                                    title: CanonicalBusinessEngine.payeClaimText("PERSONAL_SITE_AUDIT_SECTION_LABEL", fallback: "Personal"),
+                                    subtitle: "Your own audits, not linked to a job — only you can see them",
+                                    family: .plan
+                                )
+                            }
+                                .accessibilityIdentifier("siteAuditHub.personal")
+                                .buttonStyle(PPMenuRowButtonStyle())
                         }
                         .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                     }
@@ -289,6 +304,11 @@ struct SiteAuditHubView: View {
                     .environmentObject(projectStore)
                     .environmentObject(bookingStore)
                     .environmentObject(operativeStore)
+                    .environmentObject(userStore)
+                    .environmentObject(firebaseBackend)
+            }
+            .sheet(isPresented: $showingPersonal) {
+                PersonalSiteAuditsView()
                     .environmentObject(userStore)
                     .environmentObject(firebaseBackend)
             }

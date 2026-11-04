@@ -4,7 +4,7 @@
 //
 //  RULEBOOK 1.29.0 §25: Timesheets → "Overtime, Expenses & Price Work" — the same screens and flow as web
 //  `components/overtime/OvertimeScreen.tsx`: the hub (My… / Users'…), Users' list with search and filter, the person's
-//  Overtime / Expenses / Price work tiles, Current PAYE payrun / Past PAYE payruns / Custom date range, the lines with
+//  Overtime / Expenses / Price work tiles (Expenses and Price work: `PayeClaimsViews.swift`, 1.30.0), Current PAYE payrun / Past PAYE payruns / Custom date range, the lines with
 //  tick / X / cog, Send for approval, Approve Overtime Request, Generate overtime report. Every figure, state,
 //  permission and write shape comes from `CanonicalBusinessEngine` (`Rulebook+PayeOvertime.swift`); these views only pass
 //  inputs and show results. Online only.
@@ -83,7 +83,7 @@ enum OvertimeScreenSupport {
 }
 
 /// A tappable card row used across the Overtime screens.
-private struct OvertimeTile: View {
+struct OvertimeTile: View {
     let title: String
     var subtitle: String? = nil
     var disabled: Bool = false
@@ -114,7 +114,7 @@ private struct OvertimeTile: View {
     }
 }
 
-private struct OvertimeScreenScaffold<Content: View>: View {
+struct OvertimeScreenScaffold<Content: View>: View {
     let title: String
     @ViewBuilder let content: () -> Content
 
@@ -269,35 +269,19 @@ struct OvertimePersonView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("overtime.person.overtime")
             NavigationLink {
-                OvertimeComingNextView(title: "Expenses", subject: subject, scope: scope, noun: "expenses are")
+                PayeClaimsSectionView(kind: .expense, subjectId: subjectId, scope: scope)
             } label: {
-                OvertimeTile(title: "Expenses", subtitle: "Coming in the next update")
+                OvertimeTile(title: "Expenses")
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("overtime.person.expenses")
             NavigationLink {
-                OvertimeComingNextView(title: "Price work", subject: subject, scope: scope, noun: "price work is")
+                PayeClaimsSectionView(kind: .priceWork, subjectId: subjectId, scope: scope)
             } label: {
-                OvertimeTile(title: "Price work", subtitle: "Coming in the next update")
+                OvertimeTile(title: "Price work")
             }
             .buttonStyle(.plain)
-        }
-    }
-}
-
-/// Expenses and Price work (1.30): the placeholder web shows; a self-employed person's are on their timesheet.
-private struct OvertimeComingNextView: View {
-    let title: String
-    let subject: AppUser?
-    let scope: OvertimeScope
-    let noun: String
-
-    var body: some View {
-        OvertimeScreenScaffold(title: title) {
-            if scope == .review, let subject, !subject.isPayeEmployment {
-                Text("\(OvertimeScreenSupport.name(subject)) is self-employed: their \(noun) on their timesheet. Open User Timesheets.")
-            } else {
-                Text(CanonicalBusinessEngine.overtimeText("OVERTIME_COMING_NEXT_MESSAGE", fallback: "Expenses and price work are coming in the next update."))
-            }
+            .accessibilityIdentifier("overtime.person.priceWork")
         }
     }
 }

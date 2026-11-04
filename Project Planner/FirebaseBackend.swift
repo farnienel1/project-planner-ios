@@ -4242,6 +4242,7 @@ class FirebaseBackend: ObservableObject {
             fallback.documentDisplayName = data["displayName"] as? String ?? ""
             // Stores never let this identity-only copy replace a profile the rulebook did read.
             fallback.parsedWithoutRulebook = true
+            fallback.storedOrganizationId = organizationIdFromFirestore(data["organizationId"])
             ReaderDiagnostics.shared.record(collection: "users", rowCount: 1, parsedCount: 0, keptCount: 0, source: "user \(userId)")
             return fallback
         }
@@ -4319,6 +4320,9 @@ class FirebaseBackend: ObservableObject {
         parsed.storedRoleText = (data["role"] as? String).flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         parsed.annualLeaveDefaultsPending = row.bool("annualLeaveDefaultsPending")
         parsed.annualLeaveStoredKeys = row.map("annualLeaveStored").filter { !($0.value is NSNull) }.map(\.key).sorted()
+        // RULEBOOK 1.30.0 §26 (web `homeOrganizationId`): the organisation the users document stores, before any
+        // reader fills `organizationId` with the open organisation. The price work approver check reads this.
+        parsed.storedOrganizationId = organizationIdFromFirestore(data["organizationId"])
         return parsed
     }
 
