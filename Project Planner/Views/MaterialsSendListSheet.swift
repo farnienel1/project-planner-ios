@@ -38,6 +38,10 @@ struct MaterialsSendListSheet: View {
     @State private var sendAsPlainText = false
     @State private var requiredDeliveryAt: Date?
     @State private var sendErrorMessage: String?
+    @FocusState private var focusedOneOffField: OneOffField?
+
+    private enum OneOffField: Hashable { case name, email }
+    private static let oneOffAddAnchor = "materialsSendList.oneOffAddAnchor"
     @State private var showingWhatsApp = false
 
     struct ResendDialogState: Identifiable {
@@ -59,7 +63,11 @@ struct MaterialsSendListSheet: View {
 
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .bottom) {
+            // The send bar is a bottom safe-area inset, not an overlay: the scroll view's content ends above
+            // the bar (whatever its height), so every field and the one-off "Add" button can be scrolled
+            // into view on small phones. While a one-off field is being typed in, the bar steps aside so the
+            // keyboard and the field share the screen; it comes back when the keyboard is dismissed.
+            ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         projectCard
@@ -68,9 +76,17 @@ struct MaterialsSendListSheet: View {
                         oneOffSection
                     }
                     .padding(16)
-                    .padding(.bottom, 120)
                 }
-                footerBar
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: focusedOneOffField) { _, field in
+                    guard field != nil else { return }
+                    withAnimation { proxy.scrollTo(Self.oneOffAddAnchor, anchor: .bottom) }
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if focusedOneOffField == nil {
+                    footerBar
+                }
             }
             .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Send list")
@@ -81,6 +97,11 @@ struct MaterialsSendListSheet: View {
                     Button("Cancel") { isPresented = false }
                         .foregroundStyle(.white)
                         .accessibilityIdentifier("materialsSendList.cancel")
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedOneOffField = nil }
+                        .accessibilityIdentifier("materialsSendList.keyboardDone")
                 }
             }
             .task {
@@ -362,8 +383,14 @@ struct MaterialsSendListSheet: View {
             VStack(spacing: 8) {
                 TextField("Name (for email greeting)", text: $newRecipientName)
                     .accessibilityIdentifier("materialsSendList.nameForEmailGreeting")
+                    .focused($focusedOneOffField, equals: .name)
+                    .submitLabel(.next)
+                    .onSubmit { focusedOneOffField = .email }
                 TextField("Email", text: $newEmail)
                     .accessibilityIdentifier("materialsSendList.email")
+                    .focused($focusedOneOffField, equals: .email)
+                    .submitLabel(.done)
+                    .onSubmit { focusedOneOffField = nil }
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
                 if oneOffNeedsName {
@@ -390,6 +417,7 @@ struct MaterialsSendListSheet: View {
                 .accessibilityIdentifier("materialsSendList.add")
                 .disabled(pendingOneOff == nil)
                 .frame(maxWidth: .infinity, alignment: .trailing)
+                .id(Self.oneOffAddAnchor)
             }
             .padding(12)
             .background(PPColor.card)

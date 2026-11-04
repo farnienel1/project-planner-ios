@@ -869,6 +869,40 @@ class UserStore: ObservableObject {
         return folded.users
     }
     
+    /// The roster row for `userId` under any of the person's ids: the row with that id (ignoring case), else the row
+    /// the `rosterPeople` fold kept for it (`sameEmailUserIds`, `formerUserIds`, `userIdAliases`). Two `users`
+    /// documents on one email are one row, and which document the fold keeps can change when a save writes both (a
+    /// user type change writes every same-email document): a lookup by the exact id an editor opened then missed the
+    /// person ("not in the loaded user list") although the change had landed. Nothing about the person is decided
+    /// here; the fold is the rulebook's.
+    static func rosterIndex(for userId: String, in users: [AppUser], aliases: [String: String]) -> Int? {
+        let wanted = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return nil }
+        func same(_ a: String, _ b: String) -> Bool { a.caseInsensitiveCompare(b) == .orderedSame }
+        if let exact = users.firstIndex(where: { $0.id == wanted }) { return exact }
+        if let index = users.firstIndex(where: { same($0.id, wanted) }) { return index }
+        if let index = users.firstIndex(where: { user in
+            user.sameEmailUserIds.contains { same($0, wanted) } || user.formerUserIds.contains { same($0, wanted) }
+        }) {
+            return index
+        }
+        if let kept = aliases.first(where: { same($0.key, wanted) })?.value,
+           let index = users.firstIndex(where: { same($0.id, kept) }) {
+            return index
+        }
+        return nil
+    }
+
+    /// `rosterIndex(for:in:aliases:)` over the roster on screen.
+    func rosterIndex(for userId: String) -> Int? {
+        Self.rosterIndex(for: userId, in: organizationUsers, aliases: organizationUserIdAliases)
+    }
+
+    /// The roster row for `userId` under any of the person's ids (`rosterIndex(for:)`).
+    func rosterRow(for userId: String) -> AppUser? {
+        rosterIndex(for: userId).map { organizationUsers[$0] }
+    }
+
     /// Call when the user signs out so deleted/other-org users don't persist in the UI.
     func clearOnSignOut() {
         stopOrganizationUsersListener()
@@ -1196,7 +1230,7 @@ class UserStore: ObservableObject {
         }
         do {
             try await firebaseBackend.saveSensitiveProfile(userId: userId, utrNumber: utrNumber, vatNumber: vatNumber)
-            if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
+            if let index = rosterIndex(for: userId) {
                 organizationUsers[index].vatNumber = nil
                 organizationUsers[index].utrNumber = nil
             }
@@ -1263,7 +1297,7 @@ class UserStore: ObservableObject {
 
     func updateUserTimesheetsEnabled(userId: String, enabled: Bool) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
-        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        guard let index = rosterIndex(for: userId) else { return false }
 
         var updated = organizationUsers[index]
         updated.timesheetsEnabled = enabled
@@ -1857,7 +1891,7 @@ class UserStore: ObservableObject {
              func deactivateUser(userId: String) async {
                  guard let firebaseBackend = firebaseBackend else { return }
                  if isOrganizationCreator(userId: userId) { return }
-                 if organizationUsers.first(where: { $0.id == userId })?.isSuperAdmin == true { return }
+                 if rosterRow(for: userId)?.isSuperAdmin == true { return }
                  
                  do {
                      // Writes only `isActive` (+ WriteMetadata) — never the whole profile from this copy.
@@ -1873,7 +1907,7 @@ class UserStore: ObservableObject {
                          )
                          
                          // Update local array
-                         if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
+                         if let index = rosterIndex(for: userId) {
                              organizationUsers[index] = user
                          }
                      }
@@ -2023,7 +2057,7 @@ class UserStore: ObservableObject {
         operativeStore: OperativeStore?
     ) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
-        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        guard let index = rosterIndex(for: userId) else { return false }
         if isOrganizationCreator(userId: userId) {
             errorMessage = "Could not save this name."
             return false
@@ -2197,7 +2231,7 @@ class UserStore: ObservableObject {
                  errorMessage = nil
 
                  do {
-                     if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
+                     if let index = rosterIndex(for: userId) {
                          var updatedUser = organizationUsers[index]
                          let previousPermissions = updatedUser.permissions
 
@@ -2263,7 +2297,7 @@ class UserStore: ObservableObject {
                                      expected: updatedUser.permissions,
                                      stored: stored
                                  ) {
-                                     if let current = organizationUsers.firstIndex(where: { $0.id == userId }) {
+                                     if let current = rosterIndex(for: userId) {
                                          organizationUsers[current] = confirmed
                                      }
                                      errorMessage = UserTypeChangeReadBack.notSavedMessage(stored: stored)
@@ -2289,7 +2323,7 @@ class UserStore: ObservableObject {
                          }
 
                          // The roster may have been republished while the write was in flight: find the row again.
-                         guard let savedIndex = organizationUsers.firstIndex(where: { $0.id == userId }) else {
+                         guard let savedIndex = rosterIndex(for: userId) else {
                              return true
                          }
                          organizationUsers[savedIndex] = updatedUser
@@ -2340,11 +2374,16 @@ class UserStore: ObservableObject {
                  }
              }
 
-    /// RULEBOOK 1.11.0 §11: "Change user type" through `accountTypeChangeWrites` — every document that decides the
-    /// type: `users/{uid}` (and same-email documents of this organisation, `updateUserPermissions`), `members.{uid}`
-    /// and `users/{uid}/orgMemberships/{orgId}`. A profile of another company keeps its own document; only the members
-    /// entry and the membership change (`note`). Refused for a Super Admin who would stop being an admin.
+    /// RULEBOOK 1.11.0 / 1.12.2 §11: "Change user type" through `accountTypeChangeWrites` — every document that decides
+    /// the type: `users/{uid}`, the same-email `users` documents of this organisation, `members.{uid}` and
+    /// `users/{uid}/orgMemberships/{orgId}`, written as **one atomic batch** (`commitAccountTypeChangeWrites`, web
+    /// `userStore.changeAccountType`). A profile of another company keeps its own document; only the members entry and
+    /// the membership change (`note`). Refused for a Super Admin who would stop being an admin.
     /// `screenPermissions` are the toggles the sheet set; the plan applies `effectivePermissions` for the new level.
+    ///
+    /// The person is found under any of their ids (`rosterIndex(for:)`): the batch writes every same-email document, so
+    /// the `rosterPeople` fold may keep the other document afterwards. After the commit the profile is read back from the
+    /// server; a read-back that cannot be made is not an error (the batch was accepted).
     func changeAccountType(
         userId: String,
         kind: RulebookPermissionLevel,
@@ -2353,16 +2392,38 @@ class UserStore: ObservableObject {
         linkedOperativeUUID: UUID? = nil
     ) async -> (ok: Bool, note: String?) {
         errorMessage = nil
-        guard let firebaseBackend,
-              let person = organizationUsers.first(where: { $0.id == userId }) else {
+        guard let firebaseBackend, let personIndex = rosterIndex(for: userId) else {
             errorMessage = "This person is not in the loaded user list. Pull to refresh and try again."
             return (false, nil)
         }
+        let person = organizationUsers[personIndex]
+        if (person.isSuperAdmin || isOrganizationCreator(userId: person.id)) && kind != .admin {
+            errorMessage = CanonicalBusinessEngine.constant("ACCOUNT_TYPE_SUPER_ADMIN_MESSAGE", as: String.self)
+                ?? "The Super Admin's account type cannot be changed here."
+            return (false, nil)
+        }
         let orgId = normalizedOrganizationId(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "")
+        // The person as the plan reads them (web passes the stored document): every stored toggle, top level and nested,
+        // so `accountTypeWritePermissions` keeps the saved toggles the new level cannot change.
         var personRow = RulebookPeople.person(person)
+        for (key, value) in person.accountTypeSubject { personRow[key] = value }
         personRow["role"] = person.role.rawValue
         personRow["organizationId"] = person.organizationId
-        let roster: [[String: Any]] = organizationUsers.map { ["id": $0.id, "email": $0.email, "organizationId": $0.organizationId] }
+        // `members.{uid}` and the membership go on the id the organisation's members map knows for this person (the
+        // fold may show a same-email document with another id); the shown document is written as a same-email one.
+        let planId = Self.membersKeyId(for: person, members: firebaseBackend.organizationMembersSnapshot.flatMap {
+            organizationIdsMatch($0.organizationId, orgId) ? $0.members : nil
+        })
+        personRow["id"] = planId
+        // The roster the plan scans for same-email documents of this organisation. The fold keeps one row per email,
+        // so the person's other documents are read here (their own `organizationId` decides whether they are written).
+        var roster: [[String: Any]] = organizationUsers.map { ["id": $0.id, "email": $0.email, "organizationId": $0.organizationId] }
+        for aliasId in ([person.id] + person.sameEmailUserIds) where aliasId.caseInsensitiveCompare(planId) != .orderedSame
+            && !roster.contains(where: { ($0["id"] as? String)?.caseInsensitiveCompare(aliasId) == .orderedSame }) {
+            guard case .present(let alias) = await firebaseBackend.probeOrganizationUser(userId: aliasId, organizationId: orgId),
+                  !alias.isSuperAdmin else { continue }
+            roster.append(["id": alias.id, "email": alias.email, "organizationId": alias.organizationId])
+        }
         guard let plan = CanonicalBusinessEngine.accountTypeChangeWrites(
             person: personRow,
             kind: kind,
@@ -2378,34 +2439,95 @@ class UserStore: ObservableObject {
             errorMessage = message
             return (false, nil)
         case .ok(let role, let effective, let writes, let note):
-            let writesOwnProfile = writes.contains { write in
-                if case .userProfile(let path, _) = write { return path.caseInsensitiveCompare("users/\(userId)") == .orderedSame }
-                return false
-            }
-            if writesOwnProfile {
-                let nextRole: UserRole = role == .admin ? .admin : role == .manager ? .manager : .operative
-                let saved = await updateUserPermissions(
-                    userId: userId,
-                    permissions: screenPermissions.applying(effective),
-                    holidayStore: holidayStore,
-                    linkedOperativeUUID: linkedOperativeUUID,
-                    role: nextRole
-                )
-                guard saved else { return (false, nil) }
-            }
+            let previousPermissions = person.permissions
             do {
-                try await firebaseBackend.applyAccountTypeMembershipWrites(
+                try await firebaseBackend.commitAccountTypeChangeWrites(
                     writes,
                     organizationId: orgId,
                     actorUserId: Auth.auth().currentUser?.uid
                 )
             } catch {
-                NSLog("ACCOUNT_TYPE_MEMBERSHIP_WRITE_FAILED id=%@ %@", userId, error.localizedDescription)
-                errorMessage = "The profile was changed, but the organisation membership could not be updated: \(error.localizedDescription). Try again."
-                return (false, note)
+                NSLog("ACCOUNT_TYPE_BATCH_REFUSED id=%@ %@", person.id, error.localizedDescription)
+                errorMessage = UserTypeChangeReadBack.writeRefusedMessage(error)
+                return (false, nil)
+            }
+            // A roster load that read the server before this batch landed must not publish its older copy over it.
+            invalidateInFlightRosterLoads()
+
+            let nextRole: UserRole = role == .admin ? .admin : role == .manager ? .manager : .operative
+            let writesOwnProfile = writes.contains { write in
+                if case .userProfile(let path, _) = write { return path.caseInsensitiveCompare("users/\(planId)") == .orderedSame }
+                return false
+            }
+            var saved = person
+            if writesOwnProfile {
+                saved.role = nextRole
+                saved.permissions = screenPermissions.applying(effective)
+                // Read the saved document back from the server: the screen shows what was stored. The batch was
+                // accepted, so a read-back that cannot be made (or a copy not yet caught up) is not an error.
+                if case .present(let stored) = await firebaseBackend.probeOrganizationUser(userId: planId, organizationId: orgId) {
+                    if UserTypeChangeReadBack.landed(expectedRole: nextRole, expected: saved.permissions, stored: stored) {
+                        var confirmed = stored
+                        confirmed.sameEmailUserIds = person.sameEmailUserIds
+                        confirmed.formerUserIds = person.formerUserIds
+                        saved = confirmed
+                    } else {
+                        NSLog("ROLE_CHANGE_READBACK_BEHIND id=%@ role=%@", person.id, stored.role.rawValue)
+                    }
+                }
+                // The roster may have been republished (and re-folded) while the batch was in flight.
+                if let index = rosterIndex(for: person.id) {
+                    if organizationUsers[index].id == saved.id {
+                        organizationUsers[index] = saved
+                    } else {
+                        organizationUsers[index].role = saved.role
+                        organizationUsers[index].permissions = saved.permissions
+                    }
+                    if let rosterOrgId = organizationUsersLoadOrganizationId {
+                        RosterRetention.save(organizationUsers, organizationId: rosterOrgId)
+                    }
+                }
+            }
+
+            if let holidayStore {
+                let users = organizationUsers
+                if UserRoleTransitionPolicy.shouldClearPendingAnnualLeave(
+                    old: previousPermissions,
+                    new: saved.permissions,
+                    oldHasNoLineManager: saved.hasNoLineManager,
+                    newHasNoLineManager: saved.hasNoLineManager,
+                    oldLineManagerUserIds: saved.lineManagerUserIds,
+                    newLineManagerUserIds: saved.lineManagerUserIds,
+                    users: users
+                ) {
+                    await holidayStore.deletePendingHolidayRequestsFor(userId: person.id, operativeId: linkedOperativeUUID)
+                }
+                if UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
+                    old: previousPermissions,
+                    new: saved.permissions,
+                    oldHasNoLineManager: saved.hasNoLineManager,
+                    newHasNoLineManager: saved.hasNoLineManager,
+                    oldLineManagerUserIds: saved.lineManagerUserIds,
+                    newLineManagerUserIds: saved.lineManagerUserIds,
+                    users: users
+                ) {
+                    await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: person.id)
+                }
             }
             return (true, note)
         }
+    }
+
+    /// The id of `person` that the organisation's `members` map is keyed by: the row's own id when the map has it (or
+    /// the map is not loaded), else the first of the person's same-email ids that it has. Only picks which of the
+    /// person's own document ids the `accountTypeChangeWrites` plan is built for.
+    static func membersKeyId(for person: AppUser, members: [String: String]?) -> String {
+        guard let members, !members.isEmpty else { return person.id }
+        func isKey(_ candidate: String) -> Bool {
+            members.keys.contains { $0.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(candidate) == .orderedSame }
+        }
+        if isKey(person.id) { return person.id }
+        return person.sameEmailUserIds.first(where: isKey) ?? person.id
     }
 
     /// Ends every roster load already in flight: its result is ignored when it lands. The next load starts afresh.
@@ -2458,7 +2580,7 @@ class UserStore: ObservableObject {
         writeYearAllowance: Bool = false
     ) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
-        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        guard let index = rosterIndex(for: userId) else { return false }
         var updated = organizationUsers[index]
         if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
             return false
@@ -2518,7 +2640,7 @@ class UserStore: ObservableObject {
         guard let firebaseBackend, hasAdminAccess() else { return false }
         do {
             try await firebaseBackend.updateEmploymentStartDate(userId: userId, dayKey: dayKey)
-            if let index = organizationUsers.firstIndex(where: { $0.id == userId }) {
+            if let index = rosterIndex(for: userId) {
                 organizationUsers[index].employmentStartDate = dayKey
             }
             if var me = currentUser, me.id == userId {
@@ -2534,7 +2656,7 @@ class UserStore: ObservableObject {
 
     func updateUserAnnualLeaveEnabled(userId: String, enabled: Bool) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
-        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        guard let index = rosterIndex(for: userId) else { return false }
         if isOrganizationCreator(userId: userId) { return false }
         var updated = organizationUsers[index]
         if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
@@ -2564,12 +2686,12 @@ class UserStore: ObservableObject {
 
     func updateUserEmploymentType(userId: String, employmentType: EmploymentType, effectiveAt: Date? = nil) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
-        guard let storedRow = organizationUsers.first(where: { $0.id == userId }) else { return false }
+        guard let storedRow = rosterRow(for: userId) else { return false }
         if isOrganizationCreator(userId: userId) { return false }
         // RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: the previous employment type is the
         // pay editor's record (the pay profile while `privatePay` is on; the users document as stored while it is off).
         var updated = await payEditorRecord(for: storedRow)
-        guard let index = organizationUsers.firstIndex(where: { $0.id == userId }) else { return false }
+        guard let index = rosterIndex(for: userId) else { return false }
         if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
             return false
         }

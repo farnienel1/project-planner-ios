@@ -460,34 +460,57 @@ extension AppUser {
 // MARK: - Change user type: members entry and membership (accountTypeChangeWrites)
 
 extension FirebaseBackend {
-    /// RULEBOOK 1.11.0 §11: the `organizationMember` (`organizations/{orgId}` `members.{uid}`) and `membership`
-    /// (`users/{uid}/orgMemberships/{orgId}`, `orgMembershipWriteFields` admin, created when missing) writes of an
-    /// `accountTypeChangeWrites` plan. The `users/{uid}` writes go through `UserStore.updateUserPermissions`.
-    func applyAccountTypeMembershipWrites(_ writes: [RulebookAccountTypeWrite], organizationId: String, actorUserId: String?) async throws {
+    /// RULEBOOK 1.12.2 §11: the whole `accountTypeChangeWrites` plan as **one atomic batch** — every `users/{uid}`
+    /// document it names (role, level flags and every toggle, top level and `permissions.{key}`), `members.{uid}` on
+    /// `organizations/{orgId}` and `users/{uid}/orgMemberships/{orgId}` — so the type lands on every record or on none
+    /// (web `userStore.changeAccountType`). Before this the users document was written first and the members entry and
+    /// membership after, so a refusal or a stop in between left the type half applied (`accountTypeSyncState`). The
+    /// membership is a merge-set of its organisation, role and nested `permissions` (`ORG_MEMBERSHIP_PERMISSION_KEYS`):
+    /// a missing one is created, status and dates are kept, and nothing has to be read first.
+    func commitAccountTypeChangeWrites(_ writes: [RulebookAccountTypeWrite], organizationId: String, actorUserId: String?) async throws {
         let orgId = normalizedOrganizationId(organizationId)
-        guard !orgId.isEmpty else { return }
+        guard !orgId.isEmpty, !writes.isEmpty else { return }
+        let membershipKeys = CanonicalBusinessEngine.constant("ORG_MEMBERSHIP_PERMISSION_KEYS", as: [String].self)
+            ?? UserPermissions.rulebookFields
+        let batch = db.batch()
+        var count = 0
         for write in writes {
             switch write {
-            case .userProfile:
-                continue
+            case .userProfile(let path, let fields):
+                let parts = path.split(separator: "/").map(String.init)
+                guard parts.count == 2, parts[0] == "users", !parts[1].isEmpty else { continue }
+                var data: [String: Any] = [:]
+                for (key, value) in fields { data[key] = value }
+                guard !data.isEmpty else { continue }
+                batch.updateData(WriteMetadata.stamped(data, userId: actorUserId), forDocument: db.collection("users").document(parts[1]))
+                count += 1
             case .organizationMember(_, let fields):
                 var data: [String: Any] = [:]
                 for (key, value) in fields { data[key] = value }
                 guard !data.isEmpty else { continue }
-                try await db.collection("organizations").document(orgId).updateData(WriteMetadata.stamped(data, userId: actorUserId))
+                batch.updateData(data, forDocument: db.collection("organizations").document(orgId))
+                count += 1
             case .membership(let path, let role, let permissions):
                 // `users/{uid}/orgMemberships/{orgId}`
                 let parts = path.split(separator: "/").map(String.init)
-                guard parts.count == 4, parts[0] == "users", parts[2] == "orgMemberships" else { continue }
-                try await writeOrgMembership(
-                    userId: parts[1],
-                    organizationId: orgId,
-                    next: ["role": role, "permissions": permissions],
-                    writer: "admin",
-                    createIfMissing: true
+                guard parts.count == 4, parts[0] == "users", parts[2] == "orgMemberships", !parts[1].isEmpty else { continue }
+                var nested: [String: Bool] = [:]
+                for key in membershipKeys { if let value = permissions[key] { nested[key] = value } }
+                batch.setData(
+                    [
+                        "organizationId": orgId,
+                        "role": role,
+                        "permissions": nested,
+                        "updatedAt": FieldValue.serverTimestamp(),
+                    ],
+                    forDocument: db.collection("users").document(parts[1]).collection("orgMemberships").document(orgId),
+                    merge: true
                 )
+                count += 1
             }
         }
+        guard count > 0 else { return }
+        try await batch.commit()
     }
 }
 
@@ -547,8 +570,19 @@ extension AppUser {
         guard let snapshot = backend.organizationMembersSnapshot,
               let open = backend.currentOrganization?.firestoreDocumentId,
               organizationIdsMatch(snapshot.organizationId, open) else { return nil }
+        // The `rosterPeople` fold shows one row per email and may keep a same-email document whose id is not the
+        // `members` key (a type change writes every same-email document, so which one is kept can change). The members
+        // entry is then read under the person's id that the map knows; the users document stays the source of the
+        // level. Reported to web: `accountTypeSyncState` reads `members.{person.id}` only.
+        var subject = accountTypeSubject
+        func isMemberKey(_ candidate: String) -> Bool {
+            snapshot.members.keys.contains { $0.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(candidate) == .orderedSame }
+        }
+        if !isMemberKey(id), let memberId = sameEmailUserIds.first(where: isMemberKey) {
+            subject["id"] = memberId
+        }
         return CanonicalBusinessEngine.accountTypeSyncState(
-            person: accountTypeSubject,
+            person: subject,
             organizationId: snapshot.organizationId,
             members: snapshot.members
         )

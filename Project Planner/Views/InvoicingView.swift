@@ -643,10 +643,11 @@ enum TimesheetApprovalPolicy {
 
     /// RULEBOOK §8: the sheet waits for a line manager (or, with none, an admin) unless it is self-signed —
     /// `timesheetSelfSigned(user, roster)` (RULEBOOK 1.28.0): an admin with Timesheet self-sign on, or the
-    /// organisation's Super Admin, line manager or not. Every operative and manager needs a counter-signature. The stored line managers decide only
-    /// when the script did not answer.
+    /// organisation's Super Admin, line manager or not. Every operative and manager needs a counter-signature. When
+    /// the script did not answer the sheet is not self-signed (it waits for a counter-signature): having no line
+    /// manager has not self-signed anyone since 1.28.0, and no Swift copy of the rule decides it.
     static func requiresLineManagerCounterSign(for user: AppUser) -> Bool {
-        guard let selfSigned = RulebookRosterSnapshot.timesheetSelfSigned(user) else { return user.hasLineManager }
+        guard let selfSigned = RulebookRosterSnapshot.timesheetSelfSigned(user) else { return true }
         return !selfSigned
     }
 
