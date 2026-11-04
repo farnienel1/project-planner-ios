@@ -2891,6 +2891,7 @@ struct EditUserView: View {
             userId: user.id,
             kind: level,
             screenPermissions: newPerms,
+            sheetToggles: screen,
             holidayStore: holidayStore,
             linkedOperativeUUID: linkedOperativeForUser?.id
         )

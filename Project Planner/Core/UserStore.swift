@@ -2402,6 +2402,7 @@ class UserStore: ObservableObject {
         userId: String,
         kind: RulebookPermissionLevel,
         screenPermissions: UserPermissions,
+        sheetToggles: [String: Bool]? = nil,
         holidayStore: HolidayStore? = nil,
         linkedOperativeUUID: UUID? = nil
     ) async -> (ok: Bool, note: String?) {
@@ -2443,7 +2444,10 @@ class UserStore: ObservableObject {
             kind: kind,
             organizationId: orgId,
             roster: roster,
-            permissions: screenPermissions.rulebookMap
+            // Only the toggles the sheet shows for the new level (web `changeAccountType` passes the sheet's values).
+            // The whole map carried in-effect values for toggles the sheet does not show, so admin → manager wrote
+            // `wholesalersOrderHistory: true` (an admin has it in effect) over a stored false.
+            permissions: sheetToggles
         ) else {
             errorMessage = "Could not work out the change. Nothing was changed."
             return (false, nil)

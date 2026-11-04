@@ -95,4 +95,27 @@ final class DailyOverviewBookingPersonTests: XCTestCase {
         let booking = LogicFixtures.booking(on: LogicFixtures.day(2026, 10, 21, hour: 8))
         XCTAssertTrue(booking.scheduleCoverageSubtitle(policy: LogicFixtures.policy).text.hasPrefix("Full standard day"))
     }
+
+    // MARK: - Change user type keeps stored toggles (audit, 4 Nov)
+
+    /// Admin → manager: the plan gets only the sheet's toggles (`sheetToggles`, web `changeAccountType`). The whole
+    /// in-effect map turned `wholesalersOrderHistory` on (an admin has it in effect) over a stored false.
+    func testAdminToManagerKeepsAStoredOffToggleTheSheetDoesNotShow() throws {
+        let person: [String: Any] = [
+            "id": "admin-1", "email": "a@example.com", "organizationId": "org-1", "role": "admin",
+            "adminAccess": true, "isSuperAdmin": false, "wholesalersOrderHistory": false,
+            "permissions": ["adminAccess": true, "wholesalersOrderHistory": false],
+        ]
+        let sheet: [String: Bool] = ["annualLeaveSelfBook": false, "operatives": true, "projects": true, "smallWorks": true]
+        guard case .ok(_, let fromSheet, _, _) = try XCTUnwrap(CanonicalBusinessEngine.accountTypeChangeWrites(
+            person: person, kind: .manager, organizationId: "org-1", roster: [], permissions: sheet
+        )) else { return XCTFail("plan refused") }
+        XCTAssertEqual(fromSheet["wholesalersOrderHistory"], false, "stored value kept")
+
+        let inEffect = try XCTUnwrap(CanonicalBusinessEngine.effectivePermissions(person))
+        guard case .ok(_, let fromWholeMap, _, _) = try XCTUnwrap(CanonicalBusinessEngine.accountTypeChangeWrites(
+            person: person, kind: .manager, organizationId: "org-1", roster: [], permissions: inEffect.merging(sheet) { $1 }
+        )) else { return XCTFail("plan refused") }
+        XCTAssertEqual(fromWholeMap["wholesalersOrderHistory"], true, "why the whole map must not be passed")
+    }
 }
