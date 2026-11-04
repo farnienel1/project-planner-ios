@@ -291,13 +291,57 @@ final class Rulebook1310Tests: XCTestCase {
 
     // MARK: Bookings (§2, §11)
 
-    func testAnOperativesManagerDeletesOnlyFutureBookingsOfOperativesWithoutALogin() throws {
+    /// The `userDeleteWrites` plan an operatives manager runs (`UserStore.userDeleteInput`, as web `deleteUser`): one
+    /// account write at a time; `members.{uid}` is removed only when the members map lists the person (the rules let
+    /// them remove exactly one listed operative entry), and only bookings dated after today are deleted.
+    private func operativeDeletePlan(members: [String: String]?) throws -> [(step: String, writes: [[String: Any]])] {
         let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-04T10:00:00Z"))
-        let tomorrow = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-05T00:00:00Z"))
         let today = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-04T00:00:00Z"))
-        XCTAssertTrue(CanonicalBusinessEngine.operativesManagerMayDeleteBooking(date: tomorrow, now: now, timeZone: "Europe/London", operativeHasAccount: false))
-        XCTAssertFalse(CanonicalBusinessEngine.operativesManagerMayDeleteBooking(date: today, now: now, timeZone: "Europe/London", operativeHasAccount: false))
-        XCTAssertFalse(CanonicalBusinessEngine.operativesManagerMayDeleteBooking(date: tomorrow, now: now, timeZone: "Europe/London", operativeHasAccount: true))
+        let tomorrow = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-05T00:00:00Z"))
+        let input = UserStore.userDeleteInput(
+            organizationId: org,
+            user: report,
+            actorUserId: "MGR",
+            roster: rosterRows,
+            bookings: [
+                ["id": "b-today", "operativeId": "OP", "dateMs": today.timeIntervalSince1970 * 1000],
+                ["id": "b-tomorrow", "operativeId": "OP", "dateMs": tomorrow.timeIntervalSince1970 * 1000],
+            ],
+            managerSiteBookings: [],
+            operativeRows: [],
+            managerRows: [],
+            invitations: [],
+            actorManagesOperatives: true,
+            members: members,
+            now: now
+        )
+        let steps = try XCTUnwrap(CanonicalBusinessEngine.callJSON("userDeleteWrites", arguments: [input]) as? [[String: Any]])
+        return steps.map { ($0["step"] as? String ?? "", $0["writes"] as? [[String: Any]] ?? []) }
+    }
+
+    func testAnOperativesManagerRemovesTheMembersEntryOnlyWhenItIsListed() throws {
+        let listed = try operativeDeletePlan(members: ["OP": "operative", "MGR": "manager"])
+        let membersUpdates = listed.flatMap { $0.writes }.filter { ($0["op"] as? String) == "update" }
+        XCTAssertEqual(membersUpdates.count, 1)
+        XCTAssertEqual(membersUpdates.first?["deleteFields"] as? [String], ["members.OP"])
+        XCTAssertTrue(listed.filter { $0.step == "account" }.allSatisfy { $0.writes.count == 1 }, "one account write at a time")
+
+        let notListed = try operativeDeletePlan(members: ["MGR": "manager"])
+        XCTAssertFalse(notListed.flatMap { $0.writes }.contains { ($0["op"] as? String) == "update" },
+                       "no members entry: nothing to remove, so the delete never stops halfway")
+        XCTAssertTrue(notListed.contains { $0.step == "bookings" }, "the later steps still run")
+
+        let notLoaded = try operativeDeletePlan(members: nil)
+        XCTAssertTrue(notLoaded.flatMap { $0.writes }.contains { ($0["op"] as? String) == "update" }, "an unloaded map is read as listed (web)")
+    }
+
+    func testAnOperativesManagerDeletesOnlyFutureBookings() throws {
+        let deleted = try operativeDeletePlan(members: ["OP": "operative"])
+            .filter { $0.step == "bookings" }
+            .flatMap { $0.writes }
+            .filter { ($0["op"] as? String) == "delete" }
+            .compactMap { $0["path"] as? String }
+        XCTAssertEqual(deleted, ["organizations/\(org)/bookings/b-tomorrow"], "today's booking stays; it may only be cancelled")
     }
 
     // MARK: Exported timesheets (§8)
@@ -355,5 +399,21 @@ final class Rulebook1310Tests: XCTestCase {
             bookedBy: "TEST-ADMIN"
         )
         XCTAssertTrue(LabourBookingEditOptions.isPaye(booking, operatives: [], users: [account]), "PAYE is read from the account")
+
+        // A users id that is a UUID (invite placeholder) is found too.
+        let uuidId = UUID().uuidString.lowercased()
+        let placeholder = user(uuidId, role: .operative, operative: true, email: "placeholder@example.test")
+        let placeholderRow = AccountLabourBooking.operative(for: placeholder)
+        XCTAssertEqual(AccountLabourBooking.account(forOperativeId: placeholderRow.id, users: [placeholder])?.id, uuidId)
+    }
+
+    /// Deactivate never creates a bare membership: a membership is updated only when it exists (`writeOrgMembership`).
+    func testDeactivateUpdatesAMembershipOnlyWhenItExists() throws {
+        let source = try String(contentsOf: repoRoot.appendingPathComponent("Project Planner/Core/UserStore.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "func updateUserActiveStatus("))
+        let end = try XCTUnwrap(source.range(of: "// MARK: - Resend Invitation Email", range: start.upperBound..<source.endIndex))
+        let body = String(source[start.upperBound..<end.lowerBound])
+        XCTAssertTrue(body.contains("writeOrgMembership("))
+        XCTAssertFalse(body.contains("merge: true"), "no merge-set of { accountActive } on a membership")
     }
 }

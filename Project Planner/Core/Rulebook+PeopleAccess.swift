@@ -228,23 +228,4 @@ extension CanonicalBusinessEngine {
         guard let scope, (scope["kind"] as? String) == "jobs" else { return true }
         return scope["unbookedLabour"] as? Bool ?? false
     }
-
-    // MARK: Bookings (§2, §11)
-
-    /// `operativesManagerMayDeleteBooking({ dateMs, nowIso, timeZone, operativeHasAccount })`: a manager with the
-    /// Operatives permission deletes only a booking dated after today whose operative has no users document.
-    nonisolated static func operativesManagerMayDeleteBooking(
-        date: Date,
-        now: Date,
-        timeZone: String,
-        operativeHasAccount: Bool
-    ) -> Bool {
-        let input: [String: Any] = [
-            "dateMs": (date.timeIntervalSince1970 * 1000).rounded(),
-            "nowIso": isoString(from: now),
-            "timeZone": timeZone,
-            "operativeHasAccount": operativeHasAccount,
-        ]
-        return callJSON("operativesManagerMayDeleteBooking", arguments: [input]) as? Bool ?? false
-    }
 }

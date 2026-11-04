@@ -388,10 +388,10 @@ enum AccountLabourBooking {
         )
     }
 
-    /// The account a labour booking's `operativeId` names when it is a users id (no catalogue row), else nil.
+    /// The account a labour booking's `operativeId` names when it is a users id, else nil. Callers look for an
+    /// Operatives-list row first. A users id that is itself a UUID (an invite placeholder) is matched too, without case.
     static func account(forOperativeId id: UUID, users: [AppUser]) -> AppUser? {
         let stored = Booking.storedOperativeId(for: id)
-        guard stored.caseInsensitiveCompare(id.uuidString) != .orderedSame else { return nil }
         return users.first {
             $0.id.caseInsensitiveCompare(stored) == .orderedSame
                 || $0.sameEmailUserIds.contains { $0.caseInsensitiveCompare(stored) == .orderedSame }

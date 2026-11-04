@@ -1592,6 +1592,43 @@ class UserStore: ObservableObject {
         return messages[code] ?? "You do not have permission to delete this user."
     }
 
+    /// The `userDeleteWrites` input, as web `lib/stores/userStore.ts` `deleteUser` builds it. RULEBOOK 1.31.0:
+    /// `listedInMembers` is whether `organizations/{orgId}.members` has an entry under the person's id (true when the
+    /// map is not loaded) — the plan removes `members.{uid}` only then. An operatives manager's account step runs one
+    /// write at a time and the rules let them remove exactly one listed `operative` entry
+    /// (`orgRootRemovesOneOperativeMember`), so removing a missing entry stopped the delete halfway.
+    static func userDeleteInput(
+        organizationId: String,
+        user: AppUser,
+        actorUserId: String,
+        roster: [[String: Any]],
+        bookings: [[String: Any]],
+        managerSiteBookings: [[String: Any]],
+        operativeRows: [[String: Any]],
+        managerRows: [[String: Any]],
+        invitations: [[String: Any]],
+        actorManagesOperatives: Bool,
+        members: [String: String]?,
+        now: Date = Date()
+    ) -> [String: Any] {
+        [
+            "orgId": organizationId,
+            "user": userDeletePerson(user),
+            "actorUserId": actorUserId,
+            "platform": "ios",
+            "roster": roster,
+            "bookings": bookings,
+            "managerSiteBookings": managerSiteBookings,
+            "operativeRows": operativeRows,
+            "managerRows": managerRows,
+            "invitations": invitations,
+            "listedInMembers": members.map { $0[user.id] != nil } ?? true,
+            "actorManagesOperatives": actorManagesOperatives,
+            "nowIso": CanonicalBusinessEngine.isoString(from: now),
+            "tz": OrganizationRulebookContext.timeZoneIdentifier,
+        ]
+    }
+
     /// `UserDeletePerson { id, email, role, formerUserIds, sameEmailUserIds }`.
     static func userDeletePerson(_ user: AppUser) -> [String: Any] {
         let role = staffAccountRole(for: user)
@@ -2051,7 +2088,28 @@ class UserStore: ObservableObject {
                     let ids = RulebookPeople.ownerIds(for: user, users: organizationUsers)
                     let emailNormalized = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                     let emailRaw = user.email.trimmingCharacters(in: .whitespacesAndNewlines)
-                    // Manager site bookings under any of the person's ids (labour bookings come from the store).
+                    // Labour and manager site bookings under any of the person's ids, read from the server as web
+                    // `deleteUser` does: their ids and their Operatives-list rows on the same email, in stored, upper
+                    // and lower case. The in-memory store may not hold them (an operatives manager under enforced reads
+                    // loads only their jobs' bookings), which would leave future bookings orphaned.
+                    let catalogueIds = (operativeStore?.operatives ?? [])
+                        .filter { !emailNormalized.isEmpty && $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNormalized }
+                        .map(\.documentId)
+                    var lookup: [String] = []
+                    for id in ids + catalogueIds {
+                        for variant in [id, id.uppercased(), id.lowercased()] where !variant.isEmpty && !lookup.contains(variant) {
+                            lookup.append(variant)
+                        }
+                    }
+                    var labourRows: [[String: Any]] = []
+                    for chunk in stride(from: 0, to: lookup.count, by: 30).map({ Array(lookup[$0..<min($0 + 30, lookup.count)]) }) where !chunk.isEmpty {
+                        let snap = try await db.collection("organizations").document(organizationId)
+                            .collection("bookings").whereField("operativeId", in: chunk).getDocuments(source: .server)
+                        for doc in snap.documents {
+                            let date = (doc.data()["date"] as? Timestamp)?.dateValue() ?? .distantPast
+                            labourRows.append(["id": doc.documentID, "operativeId": doc.data()["operativeId"] as? String ?? "", "dateMs": date.timeIntervalSince1970 * 1000])
+                        }
+                    }
                     var managerRows: [[String: Any]] = []
                     for chunk in stride(from: 0, to: ids.count, by: 30).map({ Array(ids[$0..<min($0 + 30, ids.count)]) }) where !chunk.isEmpty {
                         let snap = try await db.collection("organizations").document(organizationId)
@@ -2069,25 +2127,22 @@ class UserStore: ObservableObject {
                             .getDocuments(source: .server)
                         invitationRows += invSnap.documents.map { ["id": $0.documentID, "email": ($0.data()["email"] as? String) ?? variant] }
                     }
-                    let input: [String: Any] = [
-                        "orgId": organizationId,
-                        "user": Self.userDeletePerson(user),
-                        "actorUserId": actorUid,
-                        "platform": "ios",
-                        "roster": RulebookPeople.roster(organizationUsers),
-                        "bookings": (bookingStore?.bookings ?? []).map {
-                            ["id": $0.documentKey, "operativeId": $0.storedOperativeId, "dateMs": $0.date.timeIntervalSince1970 * 1000] as [String: Any]
-                        },
-                        "managerSiteBookings": managerRows,
-                        "operativeRows": (operativeStore?.operatives ?? []).map { ["id": $0.documentId, "email": $0.email] as [String: Any] },
-                        "managerRows": (operativeStore?.managers ?? []).map { ["id": $0.firestoreDocumentId, "email": $0.email] as [String: Any] },
-                        "invitations": invitationRows,
-                        // RULEBOOK 1.31.0: an operatives manager's plan deletes only bookings dated after today
-                        // (`operativesManagerMayDeleteBooking`) and runs the account step one write at a time.
-                        "actorManagesOperatives": actorManagesOperativesOnly,
-                        "nowIso": CanonicalBusinessEngine.isoString(from: Date()),
-                        "tz": OrganizationRulebookContext.timeZoneIdentifier,
-                    ]
+                    let membersMap = firebaseBackend.organizationMembersSnapshot.flatMap {
+                        organizationIdsMatch($0.organizationId, organizationId) ? $0.members : nil
+                    }
+                    let input = Self.userDeleteInput(
+                        organizationId: organizationId,
+                        user: user,
+                        actorUserId: actorUid,
+                        roster: RulebookPeople.roster(organizationUsers),
+                        bookings: labourRows,
+                        managerSiteBookings: managerRows,
+                        operativeRows: (operativeStore?.operatives ?? []).map { ["id": $0.documentId, "email": $0.email] as [String: Any] },
+                        managerRows: (operativeStore?.managers ?? []).map { ["id": $0.firestoreDocumentId, "email": $0.email] as [String: Any] },
+                        invitations: invitationRows,
+                        actorManagesOperatives: actorManagesOperativesOnly,
+                        members: membersMap
+                    )
                     guard let steps = CanonicalBusinessEngine.callJSON("userDeleteWrites", arguments: [input]) as? [[String: Any]],
                           !steps.isEmpty else {
                         errorMessage = "Couldn't delete this person: the rules did not load. Try again."
@@ -3267,23 +3322,22 @@ class UserStore: ObservableObject {
                      return false
                  }
                  // Memberships are admin writes (web `setUserActive`): a manager with the Operatives permission writes the
-                 // users documents only.
+                 // users documents only. A membership is updated only when it already exists (`writeOrgMembership`,
+                 // never a bare `{ accountActive }` document: a session reads any membership as the person's level here).
                  let actorIsAdmin = currentUser.map { Self.staffAccountRole(for: $0) }.map { ($0.isAdmin || $0.isSuperAdmin) && !$0.isOperativeMode } ?? false
                  let db = Firestore.firestore()
                  let batch = db.batch()
                  let actor = Auth.auth().currentUser?.uid
+                 var memberships: [(userId: String, fields: [String: Any])] = []
                  for write in writes {
-                     let ref = db.document(write.path)
                      var fields: [String: Any] = [:]
                      for (key, value) in write.fields { fields[key] = value }
-                     switch write.kind {
-                     case "membership":
-                         guard actorIsAdmin else { continue }
-                         fields["updatedAt"] = FieldValue.serverTimestamp()
-                         batch.setData(fields, forDocument: ref, merge: true)
-                     default:
-                         batch.updateData(WriteMetadata.stamped(fields, userId: actor), forDocument: ref)
+                     if write.kind == "membership" {
+                         let parts = write.path.split(separator: "/").map(String.init)
+                         if actorIsAdmin, parts.count == 4 { memberships.append((parts[1], fields)) }
+                         continue
                      }
+                     batch.updateData(WriteMetadata.stamped(fields, userId: actor), forDocument: db.document(write.path))
                  }
                  do {
                      try await batch.commit()
@@ -3291,6 +3345,18 @@ class UserStore: ObservableObject {
                      errorMessage = "Failed to update active status: \(error.localizedDescription)"
                      print("🔥🔥🔥 DEBUG: ❌ Error updating user active status: \(error)")
                      return false
+                 }
+                 for membership in memberships {
+                     do {
+                         _ = try await firebaseBackend?.writeOrgMembership(
+                             userId: membership.userId,
+                             organizationId: organizationId,
+                             next: membership.fields,
+                             writer: "admin"
+                         )
+                     } catch {
+                         print("🔥🔥🔥 DEBUG: [OrgMembership] accountActive patch skipped: \(error.localizedDescription)")
+                     }
                  }
                  let emailNormalized = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                  for i in organizationUsers.indices {
