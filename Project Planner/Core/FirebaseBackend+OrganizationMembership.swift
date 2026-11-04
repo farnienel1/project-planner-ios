@@ -645,6 +645,14 @@ extension FirebaseBackend {
             profile.isActive = true
         }
         profile.id = userId
+        // RULEBOOK 1.30.2 `organizationSelfManageFlags`: Annual Leave Management and Timesheet self-sign for THIS
+        // organisation — the membership here (or the creator), never the users document of another company.
+        profile = profile.applyingOrganizationSelfManageFlags(
+            organizationId: orgId,
+            userDocument: sharedUserData,
+            membership: membershipSnap.exists ? membershipSnap.data() : nil,
+            creatorUserId: creatorUserId
+        )
         profile.email = base.email.isEmpty ? userEmail : base.email
         profile.firstName = base.firstName
         profile.surname = base.surname
@@ -709,7 +717,17 @@ extension FirebaseBackend {
             creatorUserId: creator,
             sharedUserData: sharedData
         )
-        guard var session = deviceSessionProfile else { return user }
+        guard var session = deviceSessionProfile else {
+            // The membership read failed: keep this person's rights, but RULEBOOK 1.30.2 `organizationSelfManageFlags`
+            // never carries the home company's self-manage toggles here (off until the membership read arrives,
+            // both on for this company's creator) — as web `applyDeviceOrgMembership` does.
+            return user.applyingOrganizationSelfManageFlags(
+                organizationId: sessionOrg,
+                userDocument: nil,
+                membership: nil,
+                creatorUserId: creator
+            )
+        }
         // RULEBOOK §12: the photo is personal; its upload time comes with it so avatars refresh in this company too.
         session.profilePhotoURL = user.profilePhotoURL
         session.profilePhotoUpdatedAt = user.profilePhotoUpdatedAt

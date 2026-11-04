@@ -211,22 +211,27 @@ extension CanonicalBusinessEngine {
 
     // MARK: - Who writes what on a timesheet (§6)
 
-    /// `timesheetWriterIsReviewer(input)`: admins always; otherwise someone other than the subject
-    /// whose id (or a former invite id) is one of the subject's line managers. Nil when the script
-    /// did not answer.
+    /// `timesheetWriterIsReviewer(input)` (RULEBOOK 1.30.2): never the subject under any of their ids (own id,
+    /// `writerFormerIds`, `writerAliasIds`, and every id `personIdSet` finds in `roster`), admins and the Super Admin
+    /// included; otherwise admins always, else someone whose id (or a former invite id) is one of the subject's line
+    /// managers. Nil when the script did not answer.
     nonisolated static func timesheetWriterIsReviewer(
         writerUserId: String?,
         subjectUserId: String?,
         writerIsAdmin: Bool,
         writerFormerIds: [String],
-        subjectLineManagerIds: [String]
+        writerAliasIds: [String] = [],
+        subjectLineManagerIds: [String],
+        roster: [[String: Any]] = []
     ) -> Bool? {
         let input: [String: Any] = [
             "writerUserId": writerUserId ?? "",
             "subjectUserId": subjectUserId ?? "",
             "writerIsAdmin": writerIsAdmin,
             "writerFormerIds": writerFormerIds,
-            "subjectLineManagerIds": subjectLineManagerIds
+            "writerAliasIds": writerAliasIds,
+            "subjectLineManagerIds": subjectLineManagerIds,
+            "roster": roster
         ]
         return callJSON("timesheetWriterIsReviewer", arguments: [input]) as? Bool
     }

@@ -652,17 +652,25 @@ enum TimesheetApprovalPolicy {
     }
 
     /// `timesheetWriterIsReviewer`: whether this save is the reviewer's (line manager or admin), the
-    /// same test as firestore.rules `isTimesheetReviewer`. Without the subject's profile (or when the
-    /// script did not answer) a write by anyone other than the subject counts as the reviewer's, as
+    /// same test as firestore.rules `isTimesheetReviewer`. RULEBOOK 1.30.2: never the subject under any of
+    /// their ids (`writerAliasIds`, and `personIdSet` over the live roster) — an admin's own sheet is the
+    /// owner's, and a self-signed owner signs through the owner path. Without the subject's profile (or when
+    /// the script did not answer) a write by anyone other than the subject counts as the reviewer's, as
     /// web's `saveTimesheetDraft` does, since only a reviewer may write someone else's sheet.
     static func writerIsReviewer(writerId: String, writer: AppUser?, subjectUserId: String, subject: AppUser?) -> Bool {
-        let fallback = !writerId.isEmpty && writerId != subjectUserId
+        let writerIds = Set(([writerId] + (writer.map { [$0.id] + $0.formerUserIds + $0.sameEmailUserIds } ?? []))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty })
+        let fallback = !writerId.isEmpty
+            && !writerIds.contains(subjectUserId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
         let answer = CanonicalBusinessEngine.timesheetWriterIsReviewer(
             writerUserId: writerId,
             subjectUserId: subjectUserId,
             writerIsAdmin: writer?.isRosterAdmin ?? false,
             writerFormerIds: writer?.formerUserIds ?? [],
-            subjectLineManagerIds: subject?.lineManagerUserIds ?? []
+            writerAliasIds: writer?.sameEmailUserIds ?? [],
+            subjectLineManagerIds: subject?.lineManagerUserIds ?? [],
+            roster: RulebookRosterSnapshot.roster
         )
         if answer == true { return true }
         if subject == nil || answer == nil { return fallback }
@@ -4247,11 +4255,21 @@ private struct OperativeTimesheetReviewView: View {
     /// Shown when the cloud save failed.
     @State private var saveErrorMessage: String?
 
-    private var canManagerReview: Bool {
+    /// RULEBOOK 1.30.2 `timesheetWriterIsReviewer`: the viewer reviews this sheet only as the subject's line manager
+    /// or an admin, never their own under any of their ids (admins and the Super Admin included). Their own sheet is
+    /// the owner flow (My Timesheets); the counter-signature is never offered on it.
+    private var viewerIsReviewer: Bool {
         guard let viewer = userStore.displayUser else { return false }
-        let isAdmin = viewer.isSuperAdmin || viewer.permissions.adminAccess || viewer.role == .admin
-        let isLineManager = operative.isLineManager(viewer.id)
-        guard isAdmin || isLineManager else { return false }
+        return TimesheetApprovalPolicy.writerIsReviewer(
+            writerId: viewer.id,
+            writer: viewer,
+            subjectUserId: operative.id,
+            subject: operative
+        )
+    }
+
+    private var canManagerReview: Bool {
+        guard viewerIsReviewer else { return false }
         if TimesheetApprovalPolicy.isExported(draft) {
             return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative)
         }
@@ -4495,7 +4513,9 @@ private struct OperativeTimesheetReviewView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        } else if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative), draft.managerSignedAt == nil {
+        } else if viewerIsReviewer,
+                  TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative),
+                  draft.managerSignedAt == nil {
             if needsExtrasReviewMessage {
                 Text("Approve, decline or edit every expense and price-work line before signing off.")
                     .font(.caption)
@@ -4524,6 +4544,8 @@ private struct OperativeTimesheetReviewView: View {
     }
 
     private func handleSignOffTapped() {
+        // RULEBOOK 1.30.2: nobody counter-signs their own sheet (`timesheetWriterIsReviewer`).
+        guard viewerIsReviewer else { return }
         // Nothing is counter-signed (and frozen) until pay can be worked out from loaded inputs.
         if let blocked = payInputsBlockMessage {
             saveErrorMessage = blocked
