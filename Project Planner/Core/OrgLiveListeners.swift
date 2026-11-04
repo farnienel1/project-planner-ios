@@ -458,6 +458,9 @@ nonisolated enum IOSLiveListenerCoverage {
         "jobTypes": "ProjectStore.startLiveUpdates (key jobTypes)",
         "skills": notShownOnIOS + " (the skills catalogue is retired on iOS)",
         "qualifications": "OperativeStore.startLiveUpdates (key qualifications)",
+        // RULEBOOK 1.29.0 §25: while the Overtime screens are open (CanonicalBusinessEngine.liveCollections).
+        "overtimeRequests": "OvertimeRangesView / OvertimeLinesView (FirebaseBackend.listenOvertimeRequests, userId ==)",
+        "overtimeReviews": "OvertimeLinesView (FirebaseBackend.listenOvertimeReviews, userId ==)",
     ]
 
     /// `LIVE_COLLECTIONS` ids with `listen: true` that have no entry above. Empty when iOS covers them all.

@@ -154,6 +154,16 @@ class LocalNotificationService {
         case .materialOrderCreated:
             content.title = "Material order"
             content.body = details.isEmpty ? "A material order was created." : details
+        // RULEBOOK 1.29.0: copy only; recipients come from CanonicalBusinessEngine.overtimeRequestRecipients.
+        case .overtimeRequestSubmitted:
+            content.title = "Overtime request"
+            content.body = details.isEmpty ? "Someone sent their overtime for approval." : details
+        case .overtimeRequestReviewed:
+            content.title = "Overtime update"
+            content.body = details.isEmpty ? "Your overtime request was approved." : details
+        case .bookingHoursChangedByOwner:
+            content.title = "Hours changed"
+            content.body = details.isEmpty ? "Someone changed the hours of their booking." : details
         case .unknown:
             content.title = "Notification"
             content.body = details

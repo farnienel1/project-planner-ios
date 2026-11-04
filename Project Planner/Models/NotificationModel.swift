@@ -61,6 +61,13 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case variationRenumbered = "variation_renumbered"
         case bookedOntoJob = "booked_onto_job"
         case materialOrderCreated = "material_order_created"
+        /// RULEBOOK 1.29.0 §13, §25: a PAYE person sent their overtime for approval (CanonicalBusinessEngine.overtimeRequestRecipients; push).
+        case overtimeRequestSubmitted = "overtime_request_submitted"
+        /// RULEBOOK 1.29.0: "Overtime update" to the requester (`overtimeReviewedRecipients`; push).
+        case overtimeRequestReviewed = "overtime_request_reviewed"
+        /// RULEBOOK 1.29.0: a PAYE manager or admin changed their own booking directly (`bookingHoursChangedRecipients`;
+        /// inbox only).
+        case bookingHoursChangedByOwner = "booking_hours_changed_by_owner"
         /// A type this build does not know. The row is kept (never dropped); its stored text is
         /// `AppNotification.storedType`.
         case unknown = "unknown"

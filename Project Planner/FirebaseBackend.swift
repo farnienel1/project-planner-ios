@@ -453,6 +453,7 @@ class FirebaseBackend: ObservableObject {
         org.payrollTimePolicyEffectiveFrom = parsed.payrollTimePolicyEffectiveFrom
         org.payrollTimePolicyScheduled = parsed.payrollTimePolicyScheduled
         org.payrollPolicyStateJSON = parsed.payrollPolicyStateJSON
+        org.payePaydayJSON = parsed.payePaydayJSON
         guard org != previous else { return }
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -1455,6 +1456,8 @@ class FirebaseBackend: ObservableObject {
         // RULEBOOK 1.19.0: keep the whole stored state (history and revision included) for every pricing call and for
         // the two-admin save guard; the typed fields below are today's view of it.
         organization.payrollPolicyStateJSON = PayrollTimePolicyCatalog.payrollStateJSON(fromOrganizationData: data)
+        // RULEBOOK 1.29.0 §4.5: the PAYE payday and its dated history, as stored (read by CanonicalBusinessEngine.payePayrunPeriod).
+        organization.payePaydayJSON = OvertimeOrganizationDocument.payePaydayJSON(fromOrganizationData: data)
         let zone = CanonicalBusinessEngine.organizationTimeZoneIdentifier(countryCode: data["countryCode"] as? String)
         let todayKey = CanonicalBusinessEngine.organizationDayKey(Date(), timeZoneIdentifier: zone)
         guard let state = CanonicalBusinessEngine.payrollTimePolicyTimeline(
@@ -6855,8 +6858,9 @@ class FirebaseBackend: ObservableObject {
             } else {
                 stored = key
             }
+            // RULEBOOK 1.29.0: `overtimeRequest` and `booking` related ids (`NOTIFICATION_RELATED_ID`).
             for field in ["holidayBookingId", "jobId", "variationId", "clientId", "userId", "taskId", "deadlineId",
-                          "issueId", "warningKey", "ideaId"] {
+                          "issueId", "warningKey", "ideaId", "overtimeRequestId", "bookingId"] {
                 ids[field] = stored
             }
         }
@@ -7829,6 +7833,8 @@ class FirebaseBackend: ObservableObject {
         guard let parsed = CanonicalBusinessEngine.parseManagerSiteBookingDocuments(payload) else {
             return documents.compactMap { managerSiteBookingFromFirestoreDocument($0) }
         }
+        // RULEBOOK 1.29.0 §25: the booking's own overtime rate, read by the same rulebook reader.
+        let overtimeRates = OvertimeBookingInputs.managerSiteRates(documents: payload)
         return parsed.compactMap { row in
             guard let timeSlot = ManagerTimeSlot.fromStored(row.timeSlot),
                   let locationType = ManagerLocationType(rawValue: row.locationType) else { return nil }
@@ -7852,6 +7858,7 @@ class FirebaseBackend: ObservableObject {
             )
             booking.documentId = row.id == booking.id.uuidString ? nil : row.id
             booking.locationKey = locationKey?.isEmpty == false ? locationKey : nil
+            booking.otMultiplierOverride = overtimeRates[row.id]
             return booking
         }
     }

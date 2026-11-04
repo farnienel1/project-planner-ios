@@ -1568,7 +1568,9 @@ struct ProjectDetailView: View {
                 subtitle: payeMode ? nil : bookingEditSubtitle(date: booking.date),
                 headerName: personName,
                 headerInitials: PlannerUIInitials.from(personName),
-                allowsOtMultiplierOverride: !payeMode,
+                // RULEBOOK 1.29.0 §25: Edit Booking's overtime rate applies to every person's booking, PAYE included
+                // (CanonicalBusinessEngine.overtimeRateControl).
+                allowsOtMultiplierOverride: true,
                 showsBreakControls: !payeMode,
                 showsBreakdown: !payeMode,
                 showsFooterNote: !payeMode,

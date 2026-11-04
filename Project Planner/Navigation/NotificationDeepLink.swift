@@ -225,6 +225,20 @@ enum NotificationDeepLink {
             postTimesheetTeam(destination, surface: "teamAwaiting", weekStart: weekStart)
         case "timesheetTeamSigned":
             postTimesheetTeam(destination, surface: "teamSigned", weekStart: weekStart)
+        // RULEBOOK 1.29.0 §25: the person's own Overtime page; Users' → that person → Overtime
+        // (kinds from CanonicalBusinessEngine.notificationDestination).
+        case "overtimeMine":
+            postSurface([
+                "route": MainMenuSurfaceRoute.invoicing.rawValue,
+                "timesheetSurface": "overtimeMine",
+            ])
+        case "overtimeUser":
+            var payload: [String: Any] = [
+                "route": MainMenuSurfaceRoute.invoicing.rawValue,
+                "timesheetSurface": "overtimeUser",
+            ]
+            if let userId = destination.userId, !userId.isEmpty { payload["targetUserId"] = userId }
+            postSurface(payload)
         case "qualifications":
             postSurface(["route": MainMenuSurfaceRoute.qualifications.rawValue])
         case "home":

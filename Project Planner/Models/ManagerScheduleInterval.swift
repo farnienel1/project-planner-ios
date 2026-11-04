@@ -103,7 +103,9 @@ extension ManagerSiteBooking {
             workStartTime: workStartTime,
             workEndTime: workEndTime,
             isBreakRemoved: isBreakRemoved,
-            otMultiplierOverride: nil
+            // RULEBOOK 1.29.0 §25: a manager site booking's own overtime rate prices its overtime part too
+            // (CanonicalBusinessEngine payrollHoursResult via PayrollHoursEngine).
+            otMultiplierOverride: otMultiplierOverride
         )
     }
 

@@ -236,7 +236,9 @@ enum MainMenuCatalog {
                 icon: "doc.text.fill",
                 iconBackground: ProjectWorksRevampColors.blueTint,
                 iconTint: ProjectWorksRevampColors.blue,
-                isEligible: { u, _, _ in u.canAccessTimesheetsSurface() },
+                // RULEBOOK 1.29.0 §25: PAYE staff and line managers reach Overtime, Expenses & Price Work from here
+                // (CanonicalBusinessEngine.overtimeHubAccess).
+                isEligible: { u, _, _ in u.canAccessTimesheetsSurface() || u.overtimeHubAccess().showButton },
                 action: .openSurface(.invoicing)
             ),
 

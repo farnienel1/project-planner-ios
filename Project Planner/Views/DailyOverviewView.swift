@@ -1231,15 +1231,18 @@ private extension DailyOverviewView {
                 subtitle: editSheetSubtitle(date: booking.date, locationTitle: locationTitle),
                 headerName: personName,
                 headerInitials: PlannerUIInitials.from(personName),
-                allowsOtMultiplierOverride: false,
+                // RULEBOOK 1.29.0 §25: Edit Booking's overtime rate on manager site bookings too (web Daily Overview;
+                // CanonicalBusinessEngine.overtimeRateControl in the sheet).
+                allowsOtMultiplierOverride: true,
                 initialChoice: booking.hoursEditChoice(policy: firebaseBackend.payrollPolicy(for: booking.date)),
-                onSave: { start, end, breakRemoved, _ in
+                onSave: { start, end, breakRemoved, otMult in
                     bookingEditTarget = nil
                     saveManagerBookingEdit(
                         booking: booking,
                         start: start,
                         end: end,
-                        breakRemoved: breakRemoved
+                        breakRemoved: breakRemoved,
+                        otMultiplierOverride: otMult
                     )
                 },
                 onCancel: { bookingEditTarget = nil },
@@ -1323,13 +1326,15 @@ private extension DailyOverviewView {
         booking: ManagerSiteBooking,
         start: String,
         end: String,
-        breakRemoved: Bool
+        breakRemoved: Bool,
+        otMultiplierOverride: Double? = nil
     ) {
         var updated = booking
         updated.timeSlot = .customHours
         updated.workStartTime = start
         updated.workEndTime = end
         updated.isBreakRemoved = breakRemoved
+        updated.otMultiplierOverride = otMultiplierOverride
         updated.updatedAt = Date()
         let timesChanged = updated.timeSlot != booking.timeSlot
             || updated.workStartTime != booking.workStartTime

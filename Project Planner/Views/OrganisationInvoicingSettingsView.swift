@@ -143,6 +143,19 @@ struct OrganisationInvoicingSettingsView: View {
                         .padding(.vertical, 8)
                 }
 
+                // RULEBOOK 1.29.0 §4.5: the PAYE payday, saved on its own (not part of the payment-run draft).
+                numberedStep(
+                    6,
+                    title: "PAYE payday",
+                    description: CanonicalBusinessEngine.overtimeText(
+                        "PAYE_PAYDAY_HELP",
+                        fallback: "The day of the month PAYE staff are paid. A change applies from the next payrun."
+                    )
+                )
+                SettingsHubChrome.card {
+                    PayePaydayCard(isOnline: smartCache.isOnline)
+                }
+
                 if errorMessage == nil, let inlineValidationError {
                     Text(inlineValidationError)
                         .foregroundStyle(PPColor.danger)
