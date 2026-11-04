@@ -271,6 +271,8 @@ extension FirebaseBackend {
         out.subContractors = flags["subContractors"] ?? out.subContractors
         out.wholesalersOrderHistory = flags["wholesalersOrderHistory"] ?? out.wholesalersOrderHistory
         out.annualLeaveSelfBook = flags["annualLeaveSelfBook"] ?? out.annualLeaveSelfBook
+        // RULEBOOK 1.28.0: `timesheetSelfSign` is one of `ORG_MEMBERSHIP_PERMISSION_KEYS`.
+        out.timesheetSelfSign = flags["timesheetSelfSign"] ?? out.timesheetSelfSign
         out.weeklyReports = flags["weeklyReports"] ?? out.weeklyReports
         out.dailyOverview = flags["dailyOverview"] ?? out.dailyOverview
         return out

@@ -1033,6 +1033,7 @@ class FirebaseBackend: ObservableObject {
             smallWorks: permissionFlag("smallWorks", default: true),
             operativeMode: permissionFlag("operativeMode", default: false),
             annualLeaveSelfBook: permissionFlag("annualLeaveSelfBook", default: false),
+            timesheetSelfSign: permissionFlag("timesheetSelfSign", default: false),
             weeklyReports: permissionFlag("weeklyReports", default: false),
             dailyOverview: permissionFlag("dailyOverview", default: true),
             subContractors: permissionFlag("subContractors", default: false),
@@ -1064,6 +1065,7 @@ class FirebaseBackend: ObservableObject {
                 "smallWorks": permissions.smallWorks,
                 "operativeMode": permissions.operativeMode,
                 "annualLeaveSelfBook": permissions.annualLeaveSelfBook,
+                "timesheetSelfSign": permissions.timesheetSelfSign,
                 "weeklyReports": permissions.weeklyReports,
                 "dailyOverview": permissions.dailyOverview,
                 "subContractors": permissions.subContractors,
@@ -4253,6 +4255,7 @@ class FirebaseBackend: ObservableObject {
             smallWorks: permission("smallWorks"),
             operativeMode: row.bool("operativeMode"),
             annualLeaveSelfBook: permission("annualLeaveSelfBook"),
+            timesheetSelfSign: permission("timesheetSelfSign"),
             weeklyReports: permission("weeklyReports"),
             dailyOverview: permission("dailyOverview"),
             subContractors: permission("subContractors"),
@@ -5634,6 +5637,8 @@ class FirebaseBackend: ObservableObject {
             "smallWorks": user.permissions.smallWorks,
             "operativeMode": operativeModeToSave,
             "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
+            // RULEBOOK 1.28.0: the stored value as it is (admins only in effect); never a derived one.
+            "timesheetSelfSign": user.permissions.timesheetSelfSign,
             "weeklyReports": user.permissions.weeklyReports,
             "dailyOverview": user.permissions.dailyOverview,
             "subContractors": user.permissions.subContractors,
@@ -5653,6 +5658,7 @@ class FirebaseBackend: ObservableObject {
                 "subContractors": user.permissions.subContractors,
                 "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory,
                 "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
+                "timesheetSelfSign": user.permissions.timesheetSelfSign,
                 "weeklyReports": user.permissions.weeklyReports,
                 "dailyOverview": user.permissions.dailyOverview,
             ] as [String: Bool],
@@ -6013,6 +6019,7 @@ class FirebaseBackend: ObservableObject {
             ("smallWorks", previous.smallWorks, updated.smallWorks),
             ("operativeMode", previous.operativeMode, updated.operativeMode),
             ("annualLeaveSelfBook", previous.annualLeaveSelfBook, updated.annualLeaveSelfBook),
+            ("timesheetSelfSign", previous.timesheetSelfSign, updated.timesheetSelfSign),
             ("weeklyReports", previous.weeklyReports, updated.weeklyReports),
             ("dailyOverview", previous.dailyOverview, updated.dailyOverview),
             ("subContractors", previous.subContractors, updated.subContractors),
@@ -6026,6 +6033,20 @@ class FirebaseBackend: ObservableObject {
         }
         if !isSelf, let nextRole, nextRole != previousRole {
             payload["role"] = nextRole.rawValue
+        }
+        // RULEBOOK 1.28.0 §11 `keepStoredLockedPermissions`: a toggle locked for the stored level is never written, and
+        // a change away from admin never writes Timesheet self-sign (the stored value stays underneath). The script only
+        // drops keys from a flat payload, so the keys it kept are sent with their original Swift values.
+        if !payload.isEmpty,
+           let kept = CanonicalBusinessEngine.keepStoredLockedPermissions(
+               before: CanonicalBusinessEngine.permissionSubject(
+                   permissions: previous,
+                   role: previousRole.rawValue,
+                   isSuperAdmin: false
+               ),
+               next: payload
+           ) {
+            payload = payload.filter { kept[$0.key] != nil }
         }
         guard !payload.isEmpty else { return }
         payload["updatedAt"] = Timestamp(date: Date())
@@ -7136,6 +7157,7 @@ class FirebaseBackend: ObservableObject {
                 "smallWorks": permissions.smallWorks,
                 "operativeMode": permissions.operativeMode,
                 "annualLeaveSelfBook": permissions.annualLeaveSelfBook,
+                "timesheetSelfSign": permissions.timesheetSelfSign,
                 "weeklyReports": permissions.weeklyReports,
                 "dailyOverview": permissions.dailyOverview,
                 "subContractors": permissions.subContractors,
@@ -7407,6 +7429,7 @@ class FirebaseBackend: ObservableObject {
                     "materials": newUser.permissions.materials,
                     "operativeMode": newUser.permissions.operativeMode,
                     "annualLeaveSelfBook": newUser.permissions.annualLeaveSelfBook,
+                    "timesheetSelfSign": newUser.permissions.timesheetSelfSign,
                     "weeklyReports": newUser.permissions.weeklyReports,
                     "dailyOverview": newUser.permissions.dailyOverview,
                     "subContractors": newUser.permissions.subContractors,

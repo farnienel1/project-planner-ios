@@ -176,6 +176,10 @@ nonisolated struct UserPermissions: Codable, Hashable, Sendable {
     var smallWorks: Bool   // Can create and manage small works
     var operativeMode: Bool // Operative mode - limited view of app
     var annualLeaveSelfBook: Bool // Managers can self-book annual leave without approval
+    /// RULEBOOK 1.28.0 §8 `timesheetSelfSign` (Timesheet self-sign): admins only. Stored value; what is in effect is
+    /// `effectivePermissions` / `selfManageToggles` (always off for a manager or operative, always on for the Super
+    /// Admin). A demoted admin's stored value stays underneath.
+    var timesheetSelfSign: Bool
     var weeklyReports: Bool // Managers can access weekly reports
     var dailyOverview: Bool // Managers can access Daily Overview
     var subContractors: Bool // Managers can add/manage sub contractors
@@ -194,6 +198,7 @@ nonisolated struct UserPermissions: Codable, Hashable, Sendable {
         smallWorks: Bool = false,
         operativeMode: Bool = false,
         annualLeaveSelfBook: Bool = false,
+        timesheetSelfSign: Bool = false,
         weeklyReports: Bool = false,
         dailyOverview: Bool = true,
         subContractors: Bool = false,
@@ -211,6 +216,7 @@ nonisolated struct UserPermissions: Codable, Hashable, Sendable {
         self.smallWorks = smallWorks
         self.operativeMode = operativeMode
         self.annualLeaveSelfBook = annualLeaveSelfBook
+        self.timesheetSelfSign = timesheetSelfSign
         self.weeklyReports = weeklyReports
         self.dailyOverview = dailyOverview
         self.subContractors = subContractors
@@ -229,6 +235,7 @@ nonisolated struct UserPermissions: Codable, Hashable, Sendable {
         case smallWorks
         case operativeMode
         case annualLeaveSelfBook
+        case timesheetSelfSign
         case weeklyReports
         case dailyOverview
         case subContractors
@@ -249,6 +256,7 @@ nonisolated struct UserPermissions: Codable, Hashable, Sendable {
         smallWorks = try c.decodeIfPresent(Bool.self, forKey: .smallWorks) ?? false
         operativeMode = try c.decodeIfPresent(Bool.self, forKey: .operativeMode) ?? false
         annualLeaveSelfBook = try c.decodeIfPresent(Bool.self, forKey: .annualLeaveSelfBook) ?? false
+        timesheetSelfSign = try c.decodeIfPresent(Bool.self, forKey: .timesheetSelfSign) ?? false
         weeklyReports = try c.decodeIfPresent(Bool.self, forKey: .weeklyReports) ?? false
         dailyOverview = try c.decodeIfPresent(Bool.self, forKey: .dailyOverview) ?? true
         subContractors = try c.decodeIfPresent(Bool.self, forKey: .subContractors) ?? false
@@ -268,6 +276,7 @@ nonisolated struct UserPermissions: Codable, Hashable, Sendable {
         try c.encode(smallWorks, forKey: .smallWorks)
         try c.encode(operativeMode, forKey: .operativeMode)
         try c.encode(annualLeaveSelfBook, forKey: .annualLeaveSelfBook)
+        try c.encode(timesheetSelfSign, forKey: .timesheetSelfSign)
         try c.encode(weeklyReports, forKey: .weeklyReports)
         try c.encode(dailyOverview, forKey: .dailyOverview)
         try c.encode(subContractors, forKey: .subContractors)

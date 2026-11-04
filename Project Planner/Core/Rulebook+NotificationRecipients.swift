@@ -18,8 +18,8 @@ extension CanonicalBusinessEngine {
         callJSON("lineManagerIds", arguments: [user, roster]) as? [String]
     }
 
-    /// `timesheetSelfSigned(user, roster)`: an admin or super admin outside operative mode with no active line
-    /// manager. Nil when the script did not answer.
+    /// `timesheetSelfSigned(user, roster)` (RULEBOOK 1.28.0): an admin with Timesheet self-sign on, or the
+    /// organisation's Super Admin — line manager or not. Nil when the script did not answer.
     nonisolated static func timesheetSelfSigned(user: [String: Any], roster: [[String: Any]]) -> Bool? {
         callJSON("timesheetSelfSigned", arguments: [user, roster]) as? Bool
     }
@@ -182,6 +182,9 @@ enum RulebookPeople {
             // a stray flag on an admin is ignored on lists (`permissions.operativeMode`) but still counts here.
             "operativeMode": user.permissions.operativeMode || (user.isRosterAdmin && user.operativeModeStored),
             "annualLeaveSelfBook": user.permissions.annualLeaveSelfBook,
+            // RULEBOOK 1.28.0 `selfManageToggles`: Timesheet self-sign (admins only) and PAYE (no timesheets).
+            "timesheetSelfSign": user.permissions.timesheetSelfSign,
+            "employmentType": user.employmentType.rawValue,
             "annualLeaveEnabled": user.annualLeaveEnabled,
             "formerUserIds": user.formerUserIds,
             "sameEmailUserIds": user.sameEmailUserIds,
@@ -191,6 +194,9 @@ enum RulebookPeople {
             "passwordSet": user.passwordSet,
         ]
         if let legacy = user.assignedManagerUserId { row["assignedManagerUserId"] = legacy }
+        // RULEBOOK 1.28.0 `isOrganizationSuperAdmin` (web `rulebookPerson.organizationSuperAdmin`): the Super Admin of
+        // the open organisation — its creator even without the flag, never another company's Super Admin visiting.
+        if let organizationSuperAdmin = user.organizationSuperAdmin { row["organizationSuperAdmin"] = organizationSuperAdmin }
         return row
     }
 
@@ -238,6 +244,14 @@ enum RulebookRosterSnapshot {
         lineManagerIdsCache = [:]
         // RULEBOOK 1.27.0 §8: the catalogue operatives' pay overlay depends on the roster (`OperativeStore`).
         NotificationCenter.default.post(name: .rulebookRosterDidChange, object: nil)
+    }
+
+    /// RULEBOOK 1.28.0: the open organisation or its creator changed (`isOrganizationSuperAdmin`): drop memoised
+    /// answers so the Super Admin's self-manage toggles are read again.
+    static func invalidateAnswers() {
+        cachedRoster = nil
+        selfSignedCache = [:]
+        lineManagerIdsCache = [:]
     }
 
     /// `RulebookPeople.roster(users)`, built once per revision.

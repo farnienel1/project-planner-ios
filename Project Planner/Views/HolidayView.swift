@@ -125,7 +125,7 @@ struct HolidayView: View {
         return isRequestMode ? "Submit request" : "Submit"
     }
 
-    /// `canSelfBookAnnualLeave(user, roster)`: the self-book permission, or an admin with no line manager.
+    /// `canSelfBookAnnualLeave(user, roster)` (RULEBOOK 1.28.0): Annual Leave Management, or the organisation's Super Admin.
     private var canShowSelfServeBookedAnnualLeave: Bool {
         guard let u = userStore.displayUser else { return false }
         return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: u, users: userStore.organizationUsers)
