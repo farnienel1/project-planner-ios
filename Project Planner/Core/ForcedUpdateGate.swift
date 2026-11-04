@@ -86,7 +86,15 @@ final class ForcedUpdateGate: ObservableObject {
     private func startListening(path: String) {
         guard listener == nil else { return }
         listener = Firestore.firestore().document(path).addSnapshotListener { [weak self] snapshot, error in
-            guard let snapshot, error == nil else { return }
+            guard let snapshot, error == nil else {
+                // A failed listener is dead: drop it, so the next foreground `check()` reads the document and
+                // attaches a new one (the switches keep their last value meanwhile).
+                Task { @MainActor [weak self] in
+                    self?.listener?.remove()
+                    self?.listener = nil
+                }
+                return
+            }
             Task { @MainActor [weak self] in self?.apply(snapshot) }
         }
     }
