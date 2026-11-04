@@ -308,6 +308,17 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertEqual(CanonicalBusinessEngine.timesheetDocumentSubjectId("settings"), "")
     }
 
+    /// An exported sheet saved without `userId` under a former invite id or a same-email id is the person's
+    /// (`personIdSet` via `RulebookPeople.ownerIds`), not only one saved under their current id.
+    func testUnownedExportedSheetsMatchEveryIdOfThePerson() {
+        var person = staffUser(id: "uid-now", email: "ada@example.com", formerUserIds: ["invite-old"])
+        person.sameEmailUserIds = ["uid-twin"]
+        let ids = Set(RulebookPeople.ownerIds(for: person, users: [person]).map { $0.lowercased() })
+        XCTAssertTrue(ids.isSuperset(of: ["uid-now", "invite-old", "uid-twin"]), "\(ids)")
+        let subject = CanonicalBusinessEngine.timesheetDocumentSubjectId("timesheet_INVITE-OLD_1761955200")?.lowercased()
+        XCTAssertTrue(subject.map(ids.contains) ?? false)
+    }
+
     // MARK: 16. Own-profile save: changed fields only (`userProfileWriteFields`)
 
     /// A phone-number edit sends the phone only; a name edit sends the name group, never the email or phone again.

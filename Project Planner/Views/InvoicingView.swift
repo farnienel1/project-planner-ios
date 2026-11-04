@@ -4086,15 +4086,11 @@ private struct OperativeTimesheetsView: View {
         let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
         var byId: [String: ExportedTimesheetHistoryRow] = [:]
         // RULEBOOK 1.31.0 §8: a sheet stored without `userId` is matched by its document id
-        // (`timesheetDocumentSubjectId`), never dropped. Keyed by the subject id without case.
-        var unownedRows: [String: [[String: Any]]] = [:]
-        if let orgId,
-           let rows = try? await firebaseBackend.listExportedTimesheetsWithoutUserId(organizationId: orgId) {
-            for row in rows {
-                guard let subject = row["__subjectId"] as? String else { continue }
-                unownedRows[subject.lowercased(), default: []].append(row)
-            }
-        }
+        // (`timesheetDocumentSubjectId`) against every id of the person (`personIdSet`: own, former and same-email
+        // ids), never dropped. Each such sheet is listed under one person only.
+        let unownedRows: [[String: Any]] = orgId == nil ? [] :
+            ((try? await firebaseBackend.listExportedTimesheetsWithoutUserId(organizationId: orgId!)) ?? [])
+        var claimedUnowned = Set<String>()
 
         for user in users {
             var weekStarts = Set(TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id))
@@ -4109,7 +4105,15 @@ private struct OperativeTimesheetsView: View {
                    userId: user.id,
                    limit: 400
                ) {
-                let cloudRows = listed + (unownedRows[user.id.lowercased()] ?? [])
+                let personIds = Set(RulebookPeople.ownerIds(for: user, users: userStore.organizationUsers).map { $0.lowercased() })
+                let unownedForUser = unownedRows.filter { row in
+                    guard let subject = (row["__subjectId"] as? String)?.lowercased(),
+                          let docId = row["__documentId"] as? String,
+                          personIds.contains(subject), !claimedUnowned.contains(docId) else { return false }
+                    claimedUnowned.insert(docId)
+                    return true
+                }
+                let cloudRows = listed + unownedForUser
                 for row in cloudRows {
                     guard let weekStart = firestoreDate(row["weekStart"]),
                           let day = TimesheetDraftStore.organizationDay(weekStart) else { continue }
