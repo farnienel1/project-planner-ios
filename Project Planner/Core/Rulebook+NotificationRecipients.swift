@@ -236,6 +236,8 @@ enum RulebookRosterSnapshot {
         cachedRoster = nil
         selfSignedCache = [:]
         lineManagerIdsCache = [:]
+        // RULEBOOK 1.27.0 §8: the catalogue operatives' pay overlay depends on the roster (`OperativeStore`).
+        NotificationCenter.default.post(name: .rulebookRosterDidChange, object: nil)
     }
 
     /// `RulebookPeople.roster(users)`, built once per revision.

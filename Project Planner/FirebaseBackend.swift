@@ -8478,22 +8478,36 @@ class FirebaseBackend: ObservableObject {
 
     /// RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.rateHistoryQueryPlan`: the whole collection while `privatePay` is off
     /// (unchanged) or for a viewer who sees every pay; otherwise one `userId ==` query per person whose pay this viewer
-    /// may see, merged by document id.
+    /// may see, merged by document id. 1.27.0: plus one `operativeId ==` + `userId == ''` query per catalogue operative
+    /// in the plan's `operativeIds`. Each query stands alone: a refused one is skipped and the others still load; only
+    /// when every query failed is the first error thrown.
     func loadOperativeDayRateHistory(organizationId: String) async throws -> OperativeDayRateHistoryCollection {
-        let collection = db.collection("organizations").document(organizationId).collection("operativeDayRateHistory")
+        let orgRef = db.collection("organizations").document(organizationId)
+        let collection = orgRef.collection("operativeDayRateHistory")
         switch rateHistoryPlan {
         case .all:
             let snapshot = try await collection.getDocuments()
             return Self.operativeDayRateHistory(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
-        case .people(let ids):
+        case .people(let ids, let operativeIds):
+            let queries: [Query] = ids.map { collection.whereField("userId", isEqualTo: $0) }
+                + operativeIds.map { Self.catalogueRateHistoryQuery(operativeId: $0)(orgRef) }
             var rows: [(id: String, data: [String: Any])] = []
             var seen = Set<String>()
-            for id in ids {
-                let snapshot = try await collection.whereField("userId", isEqualTo: id).getDocuments()
-                for doc in snapshot.documents where seen.insert(doc.documentID).inserted {
-                    rows.append((id: doc.documentID, data: doc.data()))
+            var firstError: Error?
+            var failures = 0
+            for query in queries {
+                do {
+                    let snapshot = try await query.getDocuments()
+                    for doc in snapshot.documents where seen.insert(doc.documentID).inserted {
+                        rows.append((id: doc.documentID, data: doc.data()))
+                    }
+                } catch {
+                    failures += 1
+                    firstError = firstError ?? error
+                    print("⚠️ [PayHistory] one rate history query refused or failed: \(error.localizedDescription)")
                 }
             }
+            if !queries.isEmpty, failures == queries.count, let firstError { throw firstError }
             return Self.operativeDayRateHistory(fromDocuments: rows)
         }
     }
