@@ -23,24 +23,25 @@ struct ScheduleSubcontractorView: View {
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(spacing: 20) {
-                    projectHeaderCard
-                    subbiesSection
-                    if selectedSubcontractor != nil {
-                        attendanceSection
+                VStack(alignment: .leading, spacing: 0) {
+                    subcontractorHeader
+                    VStack(alignment: .leading, spacing: 4) {
+                        subbiesSection
+                        if selectedSubcontractor != nil {
+                            attendanceSection
+                        }
+                        calendarSection
+                        quickSelectSection
+                        if !selectedDates.isEmpty {
+                            selectedDatesSection
+                        }
                     }
-                    calendarSection
-                    quickSelectSection
-                    if !selectedDates.isEmpty {
-                        selectedDatesSection
-                    }
+                    .padding(.bottom, 24)
+                    .ppContentSheet()
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 84)
             }
             .background(PPColor.page.ignoresSafeArea())
-            .navigationTitle("Schedule Sub Contractor")
+            .navigationTitle("Schedule subcontractor")
             .navigationBarTitleDisplayMode(.inline)
             .ppNavyNavigationBar()
             .toolbar {
@@ -104,205 +105,228 @@ struct ScheduleSubcontractorView: View {
     }
     
     private var subbiesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Choose sub contractor")
-                .font(.system(.title3, design: .rounded))
-                .fontWeight(.bold)
-            HStack {
+        VStack(alignment: .leading, spacing: 10) {
+            PPSheetSectionTitle("Choose subcontractor")
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 TextField("Search sub contractors...", text: $searchText)
                     .accessibilityIdentifier("scheduleSubcontractor.searchSubContractors")
                     .textFieldStyle(.plain)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(ProjectWorksRevampColors.surface)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color(.systemGray5), lineWidth: 0.8)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(PPBookingColor.cardBorder, lineWidth: 0.5)
             )
-            .cornerRadius(10)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(typeFilters, id: \.self) { type in
+                        let selected = selectedTypeFilter == type
                         Button {
                             selectedTypeFilter = type
                         } label: {
                             Text(type == "All Types" ? "All trades" : type)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(selectedTypeFilter == type ? .white : .secondary)
-                                .padding(.horizontal, 11)
-                                .padding(.vertical, 6)
-                                .background(selectedTypeFilter == type ? Color.purple : ProjectWorksRevampColors.chipSurface)
-                                .clipShape(Capsule())
-                                .overlay(
-                                    Capsule().stroke(Color(.systemGray5), lineWidth: selectedTypeFilter == type ? 0 : 0.8)
-                                )
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(selected ? Color.white : Color.primary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(selected ? PPBookingColor.selected : PPColor.card, in: Capsule())
+                                .overlay(Capsule().strokeBorder(PPBookingColor.cardBorder, lineWidth: selected ? 0 : 0.5))
                         }
                         .accessibilityIdentifier("scheduleSubcontractor.row.\(type).allTypes")
+                        .accessibilityAddTraits(selected ? .isSelected : [])
                         .buttonStyle(.plain)
                     }
                 }
+                .padding(.vertical, 1)
             }
             if subcontractorStore.subcontractors.isEmpty {
                 Text("No sub contractors available. Add one first.")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             } else if filteredSubcontractors.isEmpty {
                 Text("No sub contractors match this search/filter.")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             } else {
-                ForEach(filteredSubcontractors) { subcontractor in
-                    Button {
-                        selectSubcontractor(subcontractor.id)
-                    } label: {
-                        HStack(spacing: 10) {
-                            Text(initials(for: subcontractor.name))
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 32, height: 32)
-                                .background(Color.purple.opacity(0.85))
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(subcontractor.name)
-                                    .foregroundColor(.primary)
-                                    .fontWeight(.semibold)
-                                Text(subcontractor.subcontractorType)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            Text("\(subcontractor.contacts.count) op\(subcontractor.contacts.count == 1 ? "" : "s")")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Image(systemName: selectedSubcontractorId == subcontractor.id ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(selectedSubcontractorId == subcontractor.id ? .purple : .secondary)
+                VStack(spacing: 0) {
+                    ForEach(Array(filteredSubcontractors.enumerated()), id: \.element.id) { index, subcontractor in
+                        if index > 0 {
+                            Divider().padding(.leading, 62)
                         }
-                        .padding(10)
-                        .background(selectedSubcontractorId == subcontractor.id ? Color.purple.opacity(0.08) : Color(.systemGray6))
-                        .cornerRadius(10)
+                        subcontractorRow(subcontractor)
                     }
-                    .accessibilityIdentifier("scheduleSubcontractor.row.\(subcontractor.id).op")
-                    .buttonStyle(.plain)
                 }
+                .background(PPColor.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(PPBookingColor.cardBorder, lineWidth: 0.5)
+                )
             }
         }
-        .padding(16)
-        .background(PPColor.card)
-        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
-    private var projectHeaderCard: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("\(project.jobNumber) \(project.siteName)")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.theme.primary)
-            Text("\(project.client.name) · \(project.siteAddress)")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+    private func subcontractorRow(_ subcontractor: Subcontractor) -> some View {
+        let selected = selectedSubcontractorId == subcontractor.id
+        let count = subcontractor.contacts.count
+        return Button {
+            selectSubcontractor(subcontractor.id)
+        } label: {
+            HStack(spacing: 12) {
+                Text(initials(for: subcontractor.name))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(PPFamily.people.gradient, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(subcontractor.name)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(subcontractor.subcontractorType)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                PPChip(text: "\(count) op\(count == 1 ? "" : "s")", tone: .neutral)
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(selected ? PPColor.brand : Color.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(selected ? PPColor.brand.opacity(0.08) : Color.clear)
+            .contentShape(Rectangle())
         }
+        .accessibilityIdentifier("scheduleSubcontractor.row.\(subcontractor.id).op")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .buttonStyle(.plain)
+    }
+
+    private var subcontractorHeader: some View {
+        PPJobHeaderBlock(
+            code: project.jobNumber,
+            name: project.siteName,
+            detail: project.client.name,
+            address: project.siteAddress,
+            isSmallWorks: project.jobType == .smallWorks
+        )
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(ProjectWorksRevampColors.surface)
-        .cornerRadius(12)
+        .ppNavyHeader()
     }
 
     private var attendanceSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let selectedSubcontractor {
-                Text("Who's attending")
-                    .font(.headline)
-                Toggle(isOn: $useGeneralAttendance) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(selectedSubcontractor.name) (General)")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Use if named operatives are not confirmed yet.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .accessibilityIdentifier("scheduleSubcontractor.general")
-                .tint(.purple)
-                if !useGeneralAttendance, !selectedSubcontractor.contacts.isEmpty {
-                    ForEach(selectedSubcontractor.contacts) { contact in
-                        Button {
-                            if selectedContactIds.contains(contact.id) {
-                                selectedContactIds.remove(contact.id)
-                            } else {
-                                selectedContactIds.insert(contact.id)
-                            }
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(contact.name)
-                                        .foregroundStyle(.primary)
-                                    Text(contact.displayTrade)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: selectedContactIds.contains(contact.id) ? "checkmark.square.fill" : "square")
-                                    .foregroundStyle(selectedContactIds.contains(contact.id) ? Color.purple : Color.secondary)
-                            }
-                            .padding(10)
-                            .background(Color(.systemGray6))
-                            .cornerRadius(10)
+                PPSheetSectionTitle("Who's attending")
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle(isOn: $useGeneralAttendance) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(selectedSubcontractor.name) (General)")
+                                .font(.subheadline.weight(.semibold))
+                            Text("Use if named operatives are not confirmed yet.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
-                        .accessibilityIdentifier("scheduleSubcontractor.row.\(contact.id).checkmarkSquareFill")
-                        .buttonStyle(.plain)
+                    }
+                    .accessibilityIdentifier("scheduleSubcontractor.general")
+                    .tint(PPColor.brand)
+                    if !useGeneralAttendance, !selectedSubcontractor.contacts.isEmpty {
+                        ForEach(selectedSubcontractor.contacts) { contact in
+                            let picked = selectedContactIds.contains(contact.id)
+                            Button {
+                                if selectedContactIds.contains(contact.id) {
+                                    selectedContactIds.remove(contact.id)
+                                } else {
+                                    selectedContactIds.insert(contact.id)
+                                }
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(contact.name)
+                                            .foregroundStyle(.primary)
+                                        Text(contact.displayTrade)
+                                            .font(.footnote)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: picked ? "checkmark.square.fill" : "square")
+                                        .font(.title3)
+                                        .foregroundStyle(picked ? PPColor.brand : Color.secondary)
+                                }
+                                .padding(10)
+                                .background(PPBookingColor.field, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .contentShape(Rectangle())
+                            }
+                            .accessibilityIdentifier("scheduleSubcontractor.row.\(contact.id).checkmarkSquareFill")
+                            .accessibilityAddTraits(picked ? .isSelected : [])
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
+                .ppBookingCard(padding: 14)
             }
         }
-        .padding(16)
-        .background(PPColor.card)
-        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
-    
+
     private var calendarSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Select Dates")
-                .font(.system(.title3, design: .rounded))
-                .fontWeight(.bold)
-            HStack {
-                Button(action: { changeMonth(by: -1) }) {
-                    Image(systemName: "chevron.left")
-                        .foregroundColor(.white)
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(Color.theme.primary))
-                }
-                    .accessibilityIdentifier("scheduleSubcontractor.back2")
-                Spacer()
-                Text(monthYearString)
-                    .font(.headline)
-                Spacer()
-                Button(action: { changeMonth(by: 1) }) {
-                    Image(systemName: "chevron.right")
-                        .foregroundColor(.white)
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(Color.theme.primary))
-                }
-                    .accessibilityIdentifier("scheduleSubcontractor.chevronRight")
+        VStack(alignment: .leading, spacing: 10) {
+            PPSheetSectionTitle("Dates") {
+                PPChip(text: "\(selectedDates.count) selected", tone: .blue)
             }
-            calendarGrid
+            VStack(spacing: 10) {
+                HStack {
+                    Button(action: { changeMonth(by: -1) }) {
+                        Image(systemName: "chevron.left")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 32, height: 32)
+                            .background(PPBookingColor.field, in: Circle())
+                    }
+                    .accessibilityIdentifier("scheduleSubcontractor.back2")
+                    .accessibilityLabel("Previous month")
+                    .buttonStyle(.plain)
+                    Spacer()
+                    Text(monthYearString)
+                        .font(.headline)
+                    Spacer()
+                    Button(action: { changeMonth(by: 1) }) {
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 32, height: 32)
+                            .background(PPBookingColor.field, in: Circle())
+                    }
+                    .accessibilityIdentifier("scheduleSubcontractor.chevronRight")
+                    .accessibilityLabel("Next month")
+                    .buttonStyle(.plain)
+                }
+                calendarGrid
+            }
+            .ppBookingCard(padding: 12)
         }
-        .padding(16)
-        .background(PPColor.card)
-        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
-    
+
+    /// The existing Today / 3 Days / 5 Days actions, relabelled as on Schedule booking, with their old identifiers.
     private var quickSelectSection: some View {
-        HStack(spacing: 10) {
-            quickSelectButton(days: 1, label: "Today")
-            quickSelectButton(days: 3, label: "3 Days")
-            quickSelectButton(days: 5, label: "5 Days")
+        PPChipRow {
+            quickSelectButton(days: 1, label: "Today", idLabel: "Today")
+            quickSelectButton(days: 3, label: "Next 3 working days", idLabel: "3 Days")
+            quickSelectButton(days: 5, label: "Next 5 working days", idLabel: "5 Days")
         }
+        .padding(.top, 6)
     }
-    
-    private func quickSelectButton(days: Int, label: String) -> some View {
-        Button(action: {
+
+    private func quickSelectButton(days: Int, label: String, idLabel: String) -> some View {
+        let selected = quickSelectDays == days
+        return Button(action: {
             quickSelectDays = days
             var dates: Set<Date> = []
             ScheduleDateSelectionPolicy.quickSelect(count: days, into: &dates)
@@ -313,59 +337,61 @@ struct ScheduleSubcontractorView: View {
             }
         }) {
             Text(label)
-                .font(.subheadline.weight(.semibold))
-                .foregroundColor(quickSelectDays == days ? .white : .purple)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(quickSelectDays == days ? Color.purple : Color.purple.opacity(0.1))
-                )
+                .font(.footnote.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(selected ? Color.white : PPColor.brand)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(selected ? PPBookingColor.selected : PPColor.card, in: Capsule())
+                .overlay(Capsule().strokeBorder(PPBookingColor.cardBorder, lineWidth: selected ? 0 : 0.5))
         }
-            .accessibilityIdentifier("scheduleSubcontractor.\(AccessibilityID.token(label))")
+            .accessibilityIdentifier("scheduleSubcontractor.\(AccessibilityID.token(idLabel))")
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .buttonStyle(.plain)
     }
-    
+
     private var selectedDatesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Selected Dates")
-                .font(.headline)
-            ForEach(selectedDates.sorted(), id: \.self) { date in
-                VStack(spacing: 8) {
-                    HStack {
-                        Text(date.formatted(date: .abbreviated, time: .omitted))
-                        Spacer()
-                        Button(role: .destructive) {
-                            selectedDates.remove(date)
-                            dateTimeSlots.removeValue(forKey: slotKey(for: date))
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
+        VStack(alignment: .leading, spacing: 10) {
+            PPSheetSectionTitle("Selected dates")
+            VStack(spacing: 8) {
+                ForEach(selectedDates.sorted(), id: \.self) { date in
+                    VStack(spacing: 8) {
+                        HStack {
+                            Text(date.formatted(date: .abbreviated, time: .omitted))
+                                .font(.body.weight(.semibold))
+                            Spacer()
+                            Button(role: .destructive) {
+                                selectedDates.remove(date)
+                                dateTimeSlots.removeValue(forKey: slotKey(for: date))
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.secondary)
+                            }
+                                .accessibilityIdentifier("scheduleSubcontractor.row.\(date).clear")
+                                .accessibilityLabel("Remove \(date.formatted(date: .abbreviated, time: .omitted))")
+                                .buttonStyle(.plain)
                         }
-                            .accessibilityIdentifier("scheduleSubcontractor.row.\(date).clear")
+                        // RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: Saturday and Sunday are custom hours only.
+                        let offered = CanonicalBusinessEngine.allowedTimeSlots(on: date)
+                        Picker("Time", selection: Binding(
+                            get: { dateTimeSlots[slotKey(for: date)] ?? .defaultPickerSlot(on: date) },
+                            set: { dateTimeSlots[slotKey(for: date)] = $0 }
+                        )) {
+                            if offered.contains(.am) { Text("AM").tag(TimeSlot.morning) }
+                            if offered.contains(.pm) { Text("PM").tag(TimeSlot.afternoon) }
+                            if offered.contains(.fullDay) { Text("FULL DAY").tag(TimeSlot.fullDay) }
+                            Text("Custom").tag(TimeSlot.customHours)
+                        }
+                        .accessibilityIdentifier("scheduleSubcontractor.row.\(date).time")
+                        .pickerStyle(.segmented)
                     }
-                    // RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: Saturday and Sunday are custom hours only.
-                    let offered = CanonicalBusinessEngine.allowedTimeSlots(on: date)
-                    Picker("Time", selection: Binding(
-                        get: { dateTimeSlots[slotKey(for: date)] ?? .defaultPickerSlot(on: date) },
-                        set: { dateTimeSlots[slotKey(for: date)] = $0 }
-                    )) {
-                        if offered.contains(.am) { Text("AM").tag(TimeSlot.morning) }
-                        if offered.contains(.pm) { Text("PM").tag(TimeSlot.afternoon) }
-                        if offered.contains(.fullDay) { Text("FULL DAY").tag(TimeSlot.fullDay) }
-                        Text("Custom").tag(TimeSlot.customHours)
-                    }
-                    .accessibilityIdentifier("scheduleSubcontractor.row.\(date).time")
-                    .pickerStyle(.segmented)
+                    .ppBookingCard(padding: 12, radius: 16)
                 }
-                .padding(12)
-                .background(Color(.systemGray6))
-                .cornerRadius(10)
             }
         }
-        .padding(16)
-        .background(PPColor.card)
-        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
-    
+
     private var bookingSummarySection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Booking Summary")
@@ -410,36 +436,36 @@ struct ScheduleSubcontractorView: View {
         .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
+    /// Bottom bar: who is selected (with the slot summary) and the day count, then Confirm booking. Disabled, the
+    /// button says what is missing instead of fading.
     private var bookingFooter: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Text(summaryLine)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(selectedDates.count) day\(selectedDates.count == 1 ? "" : "s")")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.purple)
+        let canConfirm = !(isSaving || selectedSubcontractorId == nil || selectedDates.isEmpty)
+        let missing: String = {
+            if isSaving { return "Booking..." }
+            if selectedSubcontractorId == nil { return "Choose a subcontractor to confirm" }
+            return "Choose dates to confirm"
+        }()
+        return PPBottomActionBar(
+            title: "Confirm booking",
+            isEnabled: canConfirm,
+            disabledTitle: missing,
+            isBusy: isSaving,
+            accessibilityIdentifier: "scheduleSubcontractor.booking",
+            action: { save() }
+        ) {
+            PPChipRow {
+                PPChip(
+                    text: summaryLine,
+                    symbol: selectedSubcontractor == nil ? "exclamationmark.circle" : "checkmark",
+                    tone: selectedSubcontractor == nil ? .amber : .blue
+                )
+                PPChip(
+                    text: "\(selectedDates.count) day\(selectedDates.count == 1 ? "" : "s")",
+                    symbol: "calendar",
+                    tone: selectedDates.isEmpty ? .neutral : .blue
+                )
             }
-            Button {
-                save()
-            } label: {
-                Text(isSaving ? "Booking..." : "Confirm booking")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.purple)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-            .accessibilityIdentifier("scheduleSubcontractor.booking")
-            .disabled(isSaving || selectedSubcontractorId == nil || selectedDates.isEmpty)
-            .opacity((isSaving || selectedSubcontractorId == nil || selectedDates.isEmpty) ? 0.55 : 1)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 10)
-        .background(ProjectWorksRevampColors.surface)
     }
 
     private var summaryLine: String {
@@ -515,8 +541,8 @@ struct ScheduleSubcontractorView: View {
             HStack(spacing: 0) {
                 ForEach(MondayFirstCalendarSupport.weekdayHeaderItems, id: \.id) { day in
                     Text(day.label)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -527,7 +553,7 @@ struct ScheduleSubcontractorView: View {
             let weeks = days.chunked(into: 7)
 
             ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
-                HStack(spacing: 8) {
+                HStack(spacing: 0) {
                     ForEach(week, id: \.self) { date in
                         dayButton(for: date, isCurrentMonth: calendar.isDate(date, equalTo: currentMonth, toGranularity: .month))
                     }
@@ -540,6 +566,7 @@ struct ScheduleSubcontractorView: View {
         let calendar = Calendar.current
         let normalized = calendar.startOfDay(for: date)
         let isSelected = selectedDates.contains(normalized)
+        let isToday = calendar.isDateInToday(date)
 
         return Button {
             if isSelected {
@@ -565,12 +592,24 @@ struct ScheduleSubcontractorView: View {
             quickSelectDays = nil
         } label: {
             Text("\(calendar.component(.day, from: date))")
-                .font(.system(size: 15, weight: isSelected ? .bold : .regular))
-                .foregroundColor(isSelected ? .white : (isCurrentMonth ? .primary : .secondary))
-                .frame(width: 40, height: 40)
-                .background(Circle().fill(isSelected ? Color.theme.primary : Color.clear))
+                .font(.subheadline.weight(isSelected ? .bold : (isToday ? .semibold : .regular)))
+                .monospacedDigit()
+                .foregroundStyle(isSelected ? Color.white : (isCurrentMonth ? (isToday ? PPColor.brand : Color.primary) : Color.secondary))
+                .frame(width: 36, height: 36)
+                .background {
+                    if isSelected {
+                        Circle().fill(PPColor.brand)
+                    } else if isToday {
+                        Circle().strokeBorder(PPColor.brand, lineWidth: 1.5)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
         }
         .accessibilityIdentifier("scheduleSubcontractor.day")
+        .accessibilityLabel(date.formatted(date: .complete, time: .omitted))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
         .opacity(isCurrentMonth ? 1.0 : 0.3)
     }
