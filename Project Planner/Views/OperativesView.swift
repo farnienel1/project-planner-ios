@@ -969,7 +969,10 @@ struct EditOperativeView: View {
     /// over while `privatePay` is on — the rate field's starting value and the save's pay baseline. Nil until read;
     /// with the switch off it stays nil and the row is used exactly as before.
     @State private var payRecord: Operative?
-    @State private var payRecordLoaded = false
+    /// RULEBOOK 1.26.1 §8: read again when the security switches change while the editor is open (`PayEditorLoadGate`).
+    @State private var payLoadGate = PayEditorLoadGate()
+    /// The record the rate field was last seeded from; an untouched field follows a re-read (nil: the row).
+    @State private var payDraftSeed: Operative?
     
     init(operative: Operative) {
         self.operative = operative
@@ -1140,7 +1143,11 @@ struct EditOperativeView: View {
                         }
             }
         }
-        .task(id: operative.id) { await loadPayRecord() }
+        .task(id: "\(operative.id)#\(payLoadGate.generation)") { await loadPayRecord() }
+        // RULEBOOK 1.26.1 §8: a switch change re-reads the `CanonicalBusinessEngine.payEditorStartingValues` record.
+        .onReceive(NotificationCenter.default.publisher(for: .securitySwitchesDidChange)) { _ in
+            payLoadGate.switchChanged()
+        }
         .alert("Delete Operative", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
                 .accessibilityIdentifier("editOperative.cancel2")
@@ -1170,7 +1177,7 @@ struct EditOperativeView: View {
     
     /// True while `privatePay` is on and the starting record has not been read yet.
     private var payRecordLoading: Bool {
-        SecuritySwitchContext.privatePay && !payRecordLoaded
+        payLoadGate.isLoading(privatePay: SecuritySwitchContext.privatePay)
     }
 
     /// The pay baseline (RULEBOOK 1.26.1 §8): the record the rate field started from; the row itself while the switch
@@ -1185,18 +1192,22 @@ struct EditOperativeView: View {
     /// RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: with `privatePay` on, reads
     /// `payProfiles/{rowId}` and lays it over the row (a refused or missing read keeps the row). With it off nothing is
     /// read. An untouched rate field follows the record.
+    ///
+    /// Re-run on every `securitySwitchesDidChange` (`PayEditorLoadGate`): Save waits again while `privatePay` is on, a
+    /// read begun before the change is dropped, and only an untouched field is re-seeded.
     private func loadPayRecord() async {
-        guard SecuritySwitchContext.privatePay else {
-            payRecord = nil
-            payRecordLoaded = true
-            return
+        let started = payLoadGate.generation
+        let privatePay = SecuritySwitchContext.privatePay
+        var record = operative
+        if privatePay {
+            let profile = await firebaseBackend.loadPayProfile(subjectId: operative.documentId)
+            record = operative.payShown(with: profile, privatePay: privatePay)
         }
-        let untouched = dayRate == Self.rateText(operative)
-        let profile = await firebaseBackend.loadPayProfile(subjectId: operative.documentId)
-        let record = operative.payShown(with: profile, privatePay: SecuritySwitchContext.privatePay)
-        payRecord = record
-        payRecordLoaded = true
-        if untouched { dayRate = Self.rateText(record) }
+        guard !Task.isCancelled, payLoadGate.finish(generation: started) else { return }
+        let seed = payDraftSeed ?? operative
+        payRecord = privatePay ? record : nil
+        payDraftSeed = record
+        dayRate = PayEditorLoadGate.reseeded(draft: dayRate, seededWith: Self.rateText(seed), record: Self.rateText(record))
     }
 
     private func updateOperative() {

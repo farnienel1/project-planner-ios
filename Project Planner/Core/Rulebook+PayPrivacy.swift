@@ -228,6 +228,38 @@ extension AppUser {
     }
 }
 
+/// RULEBOOK 1.26.1 §8: when a pay editor's starting record (`CanonicalBusinessEngine.payEditorStartingValues`) is
+/// ready. A `securitySwitchesDidChange` while the editor is open starts a new read (`switchChanged`): Save waits again
+/// while `privatePay` is on, and a read begun before the change is dropped (`finish` with an old generation).
+/// State only — the record itself always comes from the rulebook.
+struct PayEditorLoadGate: Equatable {
+    private(set) var loaded = false
+    private(set) var generation = 0
+
+    /// True while `privatePay` is on and the current read has not finished: the form and Save wait.
+    func isLoading(privatePay: Bool) -> Bool { privatePay && !loaded }
+
+    /// The switches changed while the editor is open: read the record again.
+    mutating func switchChanged() {
+        loaded = false
+        generation &+= 1
+    }
+
+    /// A read begun at `generation` finished. False (and nothing changes) when the switches changed since it began.
+    @discardableResult
+    mutating func finish(generation started: Int) -> Bool {
+        guard started == generation else { return false }
+        loaded = true
+        return true
+    }
+
+    /// The draft after a (re)read: it follows the new record only while it still shows the value it was last seeded
+    /// with; an edited draft is kept.
+    static func reseeded<T: Equatable>(draft: T, seededWith: T, record: T) -> T {
+        draft == seededWith ? record : draft
+    }
+}
+
 extension Operative {
     /// RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues(row, profile, { privatePay })` for a catalogue
     /// `operatives` row: `payProfiles/{documentId}` laid over the row while `privatePay` is on; the row exactly as stored
