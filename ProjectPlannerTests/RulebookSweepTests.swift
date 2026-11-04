@@ -307,24 +307,37 @@ final class RulebookSweepTests: XCTestCase {
     // MARK: 17. Variation deep links (`notificationDestination` → `variations`)
 
     /// A renumbered-variations notice opens that job's Variations tile (web opens Variations); it used to fall back
-    /// to the notification inbox.
+    /// to the notification inbox. The job's collection comes from the payload's `catalogue`, never from `userId`
+    /// (the recipient); with no catalogue it is left to the loaded jobs (no `isSmallWorks` in the request).
     func testVariationNoticeOpensTheJobsVariations() {
         let admin = levelUser(id: "admin", role: .admin, permissions: UserPermissions(adminAccess: true, manager: true))
-        var received: [String: Any]?
+        var received: [[String: Any]] = []
         let token = NotificationCenter.default.addObserver(forName: .openWorkCatalogueDetail, object: nil, queue: nil) { note in
-            received = note.userInfo as? [String: Any]
+            received.append(note.userInfo as? [String: Any] ?? [:])
         }
         defer { NotificationCenter.default.removeObserver(token) }
         NotificationDeepLink.route(
             userInfo: [
                 NotificationDeepLink.typeKey: "variation_renumbered",
                 NotificationDeepLink.relatedIdKey: "TEST-JOB-1",
-                NotificationDeepLink.userIdKey: VariationParentType.smallWork.rawValue,
+                NotificationDeepLink.catalogueKey: "smallWorks",
+                NotificationDeepLink.userIdKey: "recipient-uid",
             ],
             user: admin
         )
-        XCTAssertEqual(received?["section"] as? String, "variations")
-        XCTAssertEqual(received?["isSmallWorks"] as? Bool, true)
-        XCTAssertEqual(received?["projectId"] as? UUID, JobKeys.inAppId("TEST-JOB-1"))
+        NotificationDeepLink.route(
+            userInfo: [
+                NotificationDeepLink.typeKey: "variation_renumbered",
+                NotificationDeepLink.relatedIdKey: "TEST-JOB-2",
+                NotificationDeepLink.userIdKey: "smallWork",
+            ],
+            user: admin
+        )
+        XCTAssertEqual(received.count, 2)
+        XCTAssertEqual(received.first?["section"] as? String, "variations")
+        XCTAssertEqual(received.first?["isSmallWorks"] as? Bool, true)
+        XCTAssertEqual(received.first?["projectId"] as? UUID, JobKeys.inAppId("TEST-JOB-1"))
+        XCTAssertNil(received.last?["isSmallWorks"], "userId is the recipient and never decides the job's collection")
+        XCTAssertEqual(received.last?["projectId"] as? UUID, JobKeys.inAppId("TEST-JOB-2"))
     }
 }
