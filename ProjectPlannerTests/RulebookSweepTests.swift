@@ -1,4 +1,5 @@
 import XCTest
+import FirebaseFirestore
 @testable import Project_Planner
 
 /// The iOS rulebook-bypass sweep: screens that kept their own copy of a rule the packed script already owns now call
@@ -267,5 +268,37 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertTrue(ids.contains(catalogue.id))
         XCTAssertTrue(ids.contains(Booking.internalOperativeId(for: "invite-1")))
         XCTAssertTrue(ids.contains(Booking.internalOperativeId(for: "uid-1")))
+    }
+
+    // MARK: 15. 1.31.0 hand-off items (`jobTypeStoredFields`, `timesheetDocumentSubjectId`)
+
+    /// A job save writes the picker type through `jobTypeStoredFields`: a custom type switched back to CAT A removes
+    /// `customJobType`; small works always store "Small Works".
+    func testJobTypeIsStoredByTheRulebook() {
+        var job = Project(
+            jobNumber: "TEST-J-SWEEP",
+            siteName: "TEST-Site",
+            siteAddress: "1 Test Street",
+            client: Client(name: "TEST-Client"),
+            startDate: Date(),
+            endDate: Date(),
+            jobType: .catA,
+            manager: .custom
+        )
+        job.customJobType = "Fit-out"
+        var payload = FirebaseBackend.jobDocumentPayload(job, organizationId: "TEST-ORG")
+        XCTAssertEqual(payload["jobType"] as? String, "CAT A")
+        XCTAssertEqual(payload["customJobType"] as? String, "Fit-out")
+        job.customJobType = "CAT A"
+        payload = FirebaseBackend.jobDocumentPayload(job, organizationId: "TEST-ORG")
+        XCTAssertTrue(payload["customJobType"] is FieldValue, "a type back on the default removes customJobType")
+        XCTAssertEqual(CanonicalBusinessEngine.jobTypeStoredFields(name: "Snagging", collection: "smallWorks")?.jobType, "Small Works")
+    }
+
+    /// Exported sheets stored without `userId` are matched by their document id.
+    func testTimesheetSubjectIdComesFromTheDocumentId() {
+        XCTAssertEqual(CanonicalBusinessEngine.timesheetDocumentSubjectId("timesheet_ABC-123_1761955200"), "ABC-123")
+        XCTAssertEqual(CanonicalBusinessEngine.timesheetDocumentSubjectId("timesheet_user_with_underscore_1761955200"), "user_with_underscore")
+        XCTAssertEqual(CanonicalBusinessEngine.timesheetDocumentSubjectId("settings"), "")
     }
 }

@@ -4085,6 +4085,16 @@ private struct OperativeTimesheetsView: View {
 
         let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
         var byId: [String: ExportedTimesheetHistoryRow] = [:]
+        // RULEBOOK 1.31.0 §8: a sheet stored without `userId` is matched by its document id
+        // (`timesheetDocumentSubjectId`), never dropped. Keyed by the subject id without case.
+        var unownedRows: [String: [[String: Any]]] = [:]
+        if let orgId,
+           let rows = try? await firebaseBackend.listExportedTimesheetsWithoutUserId(organizationId: orgId) {
+            for row in rows {
+                guard let subject = row["__subjectId"] as? String else { continue }
+                unownedRows[subject.lowercased(), default: []].append(row)
+            }
+        }
 
         for user in users {
             var weekStarts = Set(TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id))
@@ -4094,11 +4104,12 @@ private struct OperativeTimesheetsView: View {
             weekStarts.insert(week.start)
 
             if let orgId,
-               let cloudRows = try? await firebaseBackend.listTimesheetStates(
+               let listed = try? await firebaseBackend.listTimesheetStates(
                    organizationId: orgId,
                    userId: user.id,
                    limit: 400
                ) {
+                let cloudRows = listed + (unownedRows[user.id.lowercased()] ?? [])
                 for row in cloudRows {
                     guard let weekStart = firestoreDate(row["weekStart"]),
                           let day = TimesheetDraftStore.organizationDay(weekStart) else { continue }

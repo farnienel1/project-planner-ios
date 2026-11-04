@@ -390,3 +390,14 @@ extension CanonicalBusinessEngine {
         ) as? Bool
     }
 }
+
+// MARK: - 1.31.0 sheets stored without `userId`
+
+extension CanonicalBusinessEngine {
+    /// RULEBOOK 1.31.0 §8 `timesheetDocumentSubjectId(documentId)`: the subject's id in a `timesheet_{userId}_{start}`
+    /// settings document id, so a sheet an older build stored without `userId` is matched by its id, never dropped.
+    /// Empty for any other id; nil when the script did not answer.
+    nonisolated static func timesheetDocumentSubjectId(_ documentId: String) -> String? {
+        callJSON("timesheetDocumentSubjectId", arguments: [documentId]) as? String
+    }
+}
