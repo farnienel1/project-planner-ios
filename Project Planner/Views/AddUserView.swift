@@ -416,7 +416,9 @@ struct AddUserView: View {
             organizationId: userStore.currentUser?.organizationId ?? "",
             role: UserRole(rawValue: invitedAccountType.rawValue) ?? .manager,
             permissions: permissions,
-            hasNoLineManager: hasNoLineManager
+            hasNoLineManager: hasNoLineManager,
+            // RULEBOOK 1.28.0 `selfManageToggles`: a PAYE admin needs only Annual Leave Management to have no line manager.
+            employmentType: employmentType
         )
     }
 
@@ -474,7 +476,9 @@ struct AddUserView: View {
         if AnnualLeaveApproval.lineManagerRequiredError(for: unassigned, users: userStore.organizationUsers) != nil {
             return "Required. Timesheets and annual leave requests from this person go to these line manager(s)."
         }
-        return "Optional for admins. With no line manager, an admin's own timesheets and annual leave are self-approved."
+        // RULEBOOK 1.28.0: an admin may have no line manager only with the self-manage toggles on
+        // (`lineManagerRequiredError` above already answered "not required" for this draft).
+        return "Optional while Annual Leave Management and Timesheet self-sign are on. Otherwise timesheets and annual leave requests from this person go to these line manager(s)."
     }
 
     private var stepDetailsWithManager: some View {
@@ -756,9 +760,18 @@ struct AddUserView: View {
                                 title: row.label,
                                 description: row.help,
                                 isOn: invitePermissionBinding(row),
-                                isDisabled: !row.editable || (row.field == "annualLeaveSelfBook" && invitedAccountType == .admin && hasNoLineManager),
+                                isDisabled: !row.editable,
                                 style: .plainInset
                             )
+                            // RULEBOOK 1.28.0 `permissionToggleRows` `note` (a PAYE admin's Timesheet self-sign).
+                            if let note = row.note, !note.isEmpty {
+                                Text(note)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.bottom, 6)
+                                    .accessibilityIdentifier("addUser.permissionNote.\(row.field)")
+                            }
                         }
                     }
                 }
@@ -934,7 +947,12 @@ struct AddUserView: View {
 
     /// The Add User draft as the permission rules read it (the chosen level's role).
     private var invitePermissionDraft: [String: Any] {
-        CanonicalBusinessEngine.permissionSubject(permissions: permissions, role: invitedAccountType.rawValue, isSuperAdmin: false)
+        CanonicalBusinessEngine.permissionSubject(
+            permissions: permissions,
+            role: invitedAccountType.rawValue,
+            isSuperAdmin: false,
+            employmentType: employmentType.rawValue
+        )
     }
 
     /// `permissionToggleRows` for the chosen level and the draft.

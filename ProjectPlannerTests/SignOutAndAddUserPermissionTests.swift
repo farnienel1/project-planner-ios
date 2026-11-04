@@ -200,7 +200,11 @@ final class SignOutAndAddUserPermissionTests: XCTestCase {
             let none = invitee(level, lineManagers: [], hasNoLineManager: false)
             XCTAssertNotNil(AnnualLeaveApproval.lineManagerRequiredError(for: none, users: [admin]), "\(level)")
         }
-        let soloAdmin = invitee(.admin, lineManagers: [], hasNoLineManager: true)
+        // RULEBOOK 1.28.0: an admin may have none only with both self-manage toggles on.
+        var soloAdmin = invitee(.admin, lineManagers: [], hasNoLineManager: true)
+        XCTAssertNotNil(AnnualLeaveApproval.lineManagerRequiredError(for: soloAdmin, users: [admin]))
+        soloAdmin.permissions.annualLeaveSelfBook = true
+        soloAdmin.permissions.timesheetSelfSign = true
         XCTAssertNil(AnnualLeaveApproval.lineManagerRequiredError(for: soloAdmin, users: [admin]))
     }
 

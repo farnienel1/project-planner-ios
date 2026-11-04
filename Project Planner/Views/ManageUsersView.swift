@@ -272,7 +272,8 @@ struct ManageUsersView: View {
     }
 
     /// `usersMissingLineManager` over the loaded roster: operatives and managers saved before the line-manager
-    /// requirement (RULEBOOK §8, §11). Their timesheets and requests reach every active admin meanwhile.
+    /// requirement, and (RULEBOOK 1.28.0) admins with no line manager whose self-manage toggles are not both on
+    /// (§8, §11). Their timesheets and requests reach every other active admin meanwhile.
     private var usersMissingLineManager: [AppUser] {
         AnnualLeaveApproval.usersMissingLineManager(userStore.organizationUsers)
     }
@@ -3818,14 +3819,24 @@ struct EditUserView: View {
     /// RULEBOOK 1.11.0 §11: `permissionToggleRows({ level, user: draft, mode: 'edit' })` — the rows Add User and its
     /// summary show for this level. Admins and super admins: every toggle on and greyed out except Annual Leave
     /// Management; managers: Materials and Site audit on and greyed out; operatives: Materials and Site audit.
+    /// RULEBOOK 1.28.0: the Super Admin's self-manage rows are on and locked, a PAYE admin's Timesheet self-sign row is
+    /// greyed out, and the viewer's own self-manage rows are locked (`viewerIsSubject`); each says why in `note`.
     private func editPermissionRows(level: RulebookPermissionLevel) -> [RulebookPermissionToggleRow] {
         CanonicalBusinessEngine.permissionToggleRows(
             level: level,
             user: draftUserForAnnualLeaveValidation.permissionSubject,
-            mode: .edit
+            mode: .edit,
+            viewerIsSubject: viewerIsEditedPerson
         )
         .filter(\.visible)
         .filter { !(suppressAdminAccessToggle && $0.field == "adminAccess") }
+    }
+
+    /// The signed-in person is the person being edited: their own self-manage rows are locked. Plain id
+    /// equality, as web (`EditUserProfile`) and the security rules (`request.auth.uid == userId`) decide it.
+    private var viewerIsEditedPerson: Bool {
+        guard let viewer = userStore.currentUser else { return false }
+        return viewer.id == user.id
     }
 
     private func editPermissionBinding(_ row: RulebookPermissionToggleRow) -> Binding<Bool> {
@@ -3845,6 +3856,7 @@ struct EditUserView: View {
         case "dailyOverview": return ("calendar.badge.clock", ManageUserProfilePalette.chipTealBg, ManageUserProfilePalette.chipTealFg)
         case "subContractors": return ("person.2.wave.2.fill", ManageUserProfilePalette.chipTealBg, ManageUserProfilePalette.chipTealFg)
         case "annualLeaveSelfBook": return ("beach.umbrella.fill", ManageUserProfilePalette.chipBlueBg, ManageUserProfilePalette.chipBlueFg)
+        case "timesheetSelfSign": return ("signature", ManageUserProfilePalette.chipBlueBg, ManageUserProfilePalette.chipBlueFg)
         case "operatives": return ("person.crop.rectangle.stack.fill", ManageUserProfilePalette.chipPurpleBg, ManageUserProfilePalette.chipPurpleFg)
         case "qualifications": return ("rosette", ManageUserProfilePalette.chipPinkBg, ManageUserProfilePalette.chipPinkFg)
         case "wholesalersOrderHistory": return ("building.2.fill", ManageUserProfilePalette.chipAmberBg, ManageUserProfilePalette.chipAmberFg)
@@ -3862,6 +3874,9 @@ struct EditUserView: View {
                 if index > 0 { ManageUserCardDivider() }
                 let icon = Self.permissionIcon(row.field)
                 if row.field == "annualLeaveSelfBook" {
+                    // RULEBOOK 1.28.0: having no line manager no longer self-books anyone; the toggle decides
+                    // (`canSelfBookAnnualLeave`), and an admin with no line manager needs both self-manage toggles on
+                    // (`lineManagerRequiredError` refuses the save otherwise).
                     ManageUserExpandablePermissionToggleRow(
                         iconName: icon.name,
                         iconBackground: icon.background,
@@ -3869,20 +3884,15 @@ struct EditUserView: View {
                         title: row.label,
                         description: row.help,
                         isOn: editPermissionBinding(row),
-                        isDisabled: !row.editable || hasNoLineManagerDraft
+                        isDisabled: !row.editable,
+                        onDisabledTap: lockedPermissionTap(row, level: level)
                     )
                     .onChange(of: permissions.annualLeaveSelfBook) { oldValue, newValue in
-                        if oldValue && !newValue && !hasNoLineManagerDraft {
+                        if oldValue && !newValue {
                             selfBookOffConfirmationAccepted = false
                         }
                     }
-                    if hasNoLineManagerDraft {
-                        Text("No line manager is selected, so this user books their own annual leave without approval routing.")
-                            .font(.caption)
-                            .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                            .padding(.horizontal, 14)
-                            .padding(.bottom, 8)
-                    }
+                    permissionRowNote(row)
                 } else {
                     ManageUserExpandablePermissionToggleRow(
                         iconName: icon.name,
@@ -3894,17 +3904,31 @@ struct EditUserView: View {
                         isDisabled: !row.editable,
                         onDisabledTap: lockedPermissionTap(row, level: level)
                     )
+                    permissionRowNote(row)
                 }
             }
+        }
+    }
+
+    /// RULEBOOK 1.28.0 `permissionToggleRows` `note`: why a self-manage row is greyed out.
+    @ViewBuilder
+    private func permissionRowNote(_ row: RulebookPermissionToggleRow) -> some View {
+        if let note = row.note, !note.isEmpty {
+            Text(note)
+                .font(.caption)
+                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("editUser.permissionNote.\(row.field)")
         }
     }
 
     /// A locked row explains why it cannot be changed.
     private func lockedPermissionTap(_ row: RulebookPermissionToggleRow, level: RulebookPermissionLevel) -> (() -> Void)? {
         guard !row.editable else { return nil }
-        let message = level == .admin
+        let message = row.note ?? (level == .admin
             ? CanonicalBusinessEngine.adminLockedPermissionMessage
-            : "\(row.label) is always on for managers."
+            : "\(row.label) is always on for managers.")
         return {
             lockedPermissionMessage = message
             showingAdminAccessLockedMessage = true

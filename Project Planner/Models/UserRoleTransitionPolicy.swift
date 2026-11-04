@@ -109,6 +109,8 @@ enum UserRoleTransitionPolicy {
 
     /// Permissions bundle aligned with **Add user** defaults, while applying sheet choices for manager / operative.
     /// - Administrator: full manager-style capability flags; annual leave self-book follows the existing permission flag.
+    /// RULEBOOK 1.28.0: the stored Timesheet self-sign is carried unchanged for every type (it reads off below admin;
+    /// `keepStoredLockedPermissions` keeps it out of a demotion's write).
     static func permissions(
         for kind: ManagedAccountKind,
         carryingFrom current: UserPermissions,
@@ -129,6 +131,7 @@ enum UserRoleTransitionPolicy {
                 smallWorks: true,
                 operativeMode: true,
                 annualLeaveSelfBook: false,
+                timesheetSelfSign: current.timesheetSelfSign,
                 weeklyReports: false,
                 subContractors: false,
                 siteAudit: op.siteAudit
@@ -156,6 +159,7 @@ enum UserRoleTransitionPolicy {
                 smallWorks: m.smallWorks,
                 operativeMode: false,
                 annualLeaveSelfBook: m.annualLeaveSelfBook,
+                timesheetSelfSign: current.timesheetSelfSign,
                 weeklyReports: m.weeklyReports,
                 dailyOverview: m.dailyOverview,
                 subContractors: m.subContractors,
@@ -174,6 +178,7 @@ enum UserRoleTransitionPolicy {
                 smallWorks: true,
                 operativeMode: false,
                 annualLeaveSelfBook: annualLeaveSelfBook,
+                timesheetSelfSign: current.timesheetSelfSign,
                 weeklyReports: true,
                 dailyOverview: true,
                 subContractors: true,
@@ -272,7 +277,7 @@ enum UserTypeChangeReadBack {
 enum UserPermissionsDraftMerge {
     static let flags: [WritableKeyPath<UserPermissions, Bool>] = [
         \.adminAccess, \.manager, \.operatives, \.skills, \.qualifications, \.materials, \.projects,
-        \.smallWorks, \.operativeMode, \.annualLeaveSelfBook, \.weeklyReports, \.dailyOverview,
+        \.smallWorks, \.operativeMode, \.annualLeaveSelfBook, \.timesheetSelfSign, \.weeklyReports, \.dailyOverview,
         \.subContractors, \.siteAudit, \.wholesalersOrderHistory,
     ]
 

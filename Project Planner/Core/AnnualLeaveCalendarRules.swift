@@ -57,9 +57,9 @@ enum AnnualLeaveCalendarRules {
 }
 
 enum AnnualLeaveSelfBookPolicy {
-    /// `canSelfBookAnnualLeave(user, roster)` (§9): own leave is booked approved with the `annualLeaveSelfBook`
-    /// permission outside operative mode, or as an admin / super admin outside operative mode with no active
-    /// line manager (self-approved). Everyone else sends a pending request to `leaveApproverIds`.
+    /// `canSelfBookAnnualLeave(user, roster)` (§9, RULEBOOK 1.28.0): own leave is booked approved with Annual Leave
+    /// Management (`annualLeaveSelfBook`) outside operative mode, or as the organisation's Super Admin. Having no line
+    /// manager does not self-book anyone. Everyone else sends a pending request to `leaveApproverIds`.
     /// `users` is the organisation roster (`UserStore.organizationUsers`).
     static func canSelfBookAnnualLeave(for user: AppUser, users: [AppUser]) -> Bool {
         CanonicalBusinessEngine.canSelfBookAnnualLeave(

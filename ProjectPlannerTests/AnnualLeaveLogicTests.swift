@@ -361,28 +361,47 @@ final class AnnualLeaveLogicTests: XCTestCase {
         XCTAssertNil(AnnualLeaveApproval.lineManagerRequiredError(for: report, users: [admin, report]))
         XCTAssertEqual(AnnualLeaveApproval.usersMissingLineManager([admin, report, director]).map(\.id).contains("dir-1"), true)
         XCTAssertFalse(AnnualLeaveApproval.usersMissingLineManager([admin, report, director]).map(\.id).contains("op-1"))
-        XCTAssertFalse(AnnualLeaveApproval.usersMissingLineManager([admin, report, director]).map(\.id).contains("admin-1"))
+        // RULEBOOK 1.28.0: an admin with no line manager and the self-manage toggles off is listed too.
+        XCTAssertTrue(AnnualLeaveApproval.usersMissingLineManager([admin, report, director]).map(\.id).contains("admin-1"))
+        var toggledAdmin = admin
+        toggledAdmin.permissions.annualLeaveSelfBook = true
+        toggledAdmin.permissions.timesheetSelfSign = true
+        XCTAssertFalse(AnnualLeaveApproval.usersMissingLineManager([toggledAdmin, report, director]).map(\.id).contains("admin-1"))
     }
 
-    /// Rulebook 1.3.0 §8, §9: an admin with no active line manager is self-approved — own leave saves approved
-    /// behind "Submit" and the timesheet is self-signed. An admin with a line manager asks like everyone else.
+    /// RULEBOOK 1.28.0 §8, §9 (replaces the 1.3.0 rule): having no line manager no longer self-approves an admin.
+    /// The self-manage toggles decide — Annual Leave Management self-books, Timesheet self-sign self-signs — and an
+    /// admin may have no line manager only with both on. An admin with a line manager and the toggles off asks.
     func testAdminWithoutLineManagerIsSelfApproved() {
         let admin = staff("admin-1", role: .admin, permissions: UserPermissions(adminAccess: true))
         let manager = staff("mgr-1", role: .manager, permissions: UserPermissions(manager: true), lineManagers: ["admin-1"])
         let managedAdmin = staff("admin-2", role: .admin, permissions: UserPermissions(adminAccess: true), lineManagers: ["mgr-1"])
-        let users = [admin, manager, managedAdmin]
+        var toggledAdmin = staff("admin-3", role: .admin, permissions: UserPermissions(adminAccess: true), hasNoLineManager: true)
+        toggledAdmin.permissions.annualLeaveSelfBook = true
+        toggledAdmin.permissions.timesheetSelfSign = true
+        let users = [admin, manager, managedAdmin, toggledAdmin]
 
-        XCTAssertNil(AnnualLeaveApproval.lineManagerRequiredError(for: admin, users: users))
-        XCTAssertTrue(AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: admin, users: users))
-        XCTAssertEqual(RulebookPeople.timesheetSelfSigned(admin, users: users), true)
-        XCTAssertEqual(RulebookPeople.leaveSubmitLabel(admin, users: users), "Submit")
+        XCTAssertEqual(
+            AnnualLeaveApproval.lineManagerRequiredError(for: admin, users: users),
+            CanonicalBusinessEngine.constant("ADMIN_LINE_MANAGER_REQUIRED_MESSAGE", as: String.self)
+        )
+        XCTAssertFalse(AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: admin, users: users))
+        XCTAssertEqual(RulebookPeople.timesheetSelfSigned(admin, users: users), false)
+        XCTAssertEqual(RulebookPeople.leaveSubmitLabel(admin, users: users), "Submit request")
+
+        XCTAssertNil(AnnualLeaveApproval.lineManagerRequiredError(for: toggledAdmin, users: users))
+        XCTAssertTrue(AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: toggledAdmin, users: users))
+        XCTAssertEqual(RulebookPeople.timesheetSelfSigned(toggledAdmin, users: users), true)
+        XCTAssertEqual(RulebookPeople.leaveSubmitLabel(toggledAdmin, users: users), "Submit")
 
         XCTAssertFalse(AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: managedAdmin, users: users))
         XCTAssertEqual(RulebookPeople.timesheetSelfSigned(managedAdmin, users: users), false)
         XCTAssertEqual(RulebookPeople.leaveSubmitLabel(managedAdmin, users: users), "Submit request")
 
-        // A manager is never self-signed, line manager or not.
-        XCTAssertEqual(RulebookPeople.timesheetSelfSigned(manager, users: users), false)
+        // A manager is never self-signed, line manager or not, whatever is stored.
+        var storedManager = manager
+        storedManager.permissions.timesheetSelfSign = true
+        XCTAssertEqual(RulebookPeople.timesheetSelfSigned(storedManager, users: users), false)
     }
 
     /// Rulebook 1.3.0 §13: recipient rules never name the actor or the subject under any of their ids.
