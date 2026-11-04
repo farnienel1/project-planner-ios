@@ -66,7 +66,8 @@ final class Rulebook1260Tests: XCTestCase {
         let today = try XCTUnwrap(CanonicalBusinessEngine.jobQueryPlan(manager, documentIds: ["J1"]))
         let off = try XCTUnwrap(CanonicalBusinessEngine.jobQueryPlan(manager, documentIds: ["J1"], enforced: false))
         XCTAssertEqual(today as NSDictionary, off as NSDictionary)
-        let kinds = (off["queries"] as? [[String: Any]])?.compactMap { $0["kind"] as? String }
+        let offQueries: [[String: Any]] = try XCTUnwrap(off["queries"] as? [[String: Any]])
+        let kinds: [String] = offQueries.compactMap { $0["kind"] as? String }
         XCTAssertEqual(kinds, ["all", "all"])
         let bookingsToday = try XCTUnwrap(CanonicalBusinessEngine.bookingQueryPlan(manager, visibleJobIds: ["J1"], ownBookingIds: nil))
         let bookingsOff = try XCTUnwrap(CanonicalBusinessEngine.bookingQueryPlan(manager, visibleJobIds: ["J1"], ownBookingIds: nil, enforced: false))
@@ -76,24 +77,36 @@ final class Rulebook1260Tests: XCTestCase {
 
     func testSwitchOnRestrictsAManagerAndAnOperative() throws {
         let manager = JobAccessViewer(role: role(manager: true), projectsToggle: false, smallWorksToggle: false, uid: "U-M", ids: ["U-M"], email: "m@x.com")
-        let managed = try XCTUnwrap(CanonicalBusinessEngine.jobQueryPlan(manager, documentIds: [], enforced: true)["queries"] as? [[String: Any]])
-        XCTAssertEqual(managed.compactMap { $0["kind"] as? String }, ["managed", "managed"])
-        XCTAssertEqual(managed.first?["value"] as? String, "U-M")
+        let managedPlan: [String: Any] = try XCTUnwrap(CanonicalBusinessEngine.jobQueryPlan(manager, documentIds: [], enforced: true))
+        let managed: [[String: Any]] = try XCTUnwrap(managedPlan["queries"] as? [[String: Any]])
+        let managedKinds: [String] = managed.compactMap { $0["kind"] as? String }
+        XCTAssertEqual(managedKinds, ["managed", "managed"])
+        let managedValue: String? = managed.first?["value"] as? String
+        XCTAssertEqual(managedValue, "U-M")
         XCTAssertFalse(CanonicalBusinessEngine.readsEveryBooking(manager, enforced: true))
 
         let operative = JobAccessViewer(role: role(operative: true), projectsToggle: false, smallWorksToggle: false, uid: "U-OP", ids: ["U-OP"], email: "op@x.com")
-        let jobs = try XCTUnwrap(CanonicalBusinessEngine.jobQueryPlan(operative, documentIds: ["J1"], enforced: true)["queries"] as? [[String: Any]])
-        XCTAssertEqual(jobs.compactMap { $0["kind"] as? String }, ["documents", "documents"], "an operative's jobs by id only")
-        XCTAssertEqual(jobs.first?["ids"] as? [String], ["J1", "j1"])
-        let bookings = try XCTUnwrap(CanonicalBusinessEngine.bookingQueryPlan(operative, visibleJobIds: ["J1"], ownBookingIds: ["U-OP", "OPROW-1"], enforced: true)["queries"] as? [[String: Any]])
+        let jobPlan: [String: Any] = try XCTUnwrap(CanonicalBusinessEngine.jobQueryPlan(operative, documentIds: ["J1"], enforced: true))
+        let jobs: [[String: Any]] = try XCTUnwrap(jobPlan["queries"] as? [[String: Any]])
+        let jobKinds: [String] = jobs.compactMap { $0["kind"] as? String }
+        XCTAssertEqual(jobKinds, ["documents", "documents"], "an operative's jobs by id only")
+        let jobIds: [String]? = jobs.first?["ids"] as? [String]
+        XCTAssertEqual(jobIds, ["J1", "j1"])
+        let bookingPlan: [String: Any] = try XCTUnwrap(CanonicalBusinessEngine.bookingQueryPlan(
+            operative, visibleJobIds: ["J1"], ownBookingIds: ["U-OP", "OPROW-1"], enforced: true
+        ))
+        let bookings: [[String: Any]] = try XCTUnwrap(bookingPlan["queries"] as? [[String: Any]])
         XCTAssertEqual(bookings.count, 1)
-        XCTAssertEqual(bookings.first?["kind"] as? String, "own")
-        XCTAssertEqual(bookings.first?["values"] as? [String], ["U-OP", "OPROW-1"], "only their own bookings")
+        let bookingKind: String? = bookings.first?["kind"] as? String
+        XCTAssertEqual(bookingKind, "own")
+        let bookingValues: [String]? = bookings.first?["values"] as? [String]
+        XCTAssertEqual(bookingValues, ["U-OP", "OPROW-1"], "only their own bookings")
 
-        let scope = CanonicalBusinessEngine.warningScopeFor(
+        let scope: [String: Any] = CanonicalBusinessEngine.warningScopeFor(
             viewer: manager, visibleJobIds: ["J1"], bookings: [], managerBookings: [], people: [], operatives: [], enforced: true
         )
-        XCTAssertEqual(scope["unbookedLabour"] as? Bool, false, "a restricted manager reads no unbooked labour once reads are enforced")
+        let unbooked: Bool? = scope["unbookedLabour"] as? Bool
+        XCTAssertEqual(unbooked, false, "a restricted manager reads no unbooked labour once reads are enforced")
     }
 
     // MARK: privatePay
