@@ -257,6 +257,17 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertEqual(days.last.map(OrganizationRulebookContext.dayKey), "2026-11-08")
     }
 
+    /// The selected day, the lines on it and their labels are organisation days too, so they agree with the
+    /// organisation-calendar week strip on a phone in another zone.
+    func testMaterialsSelectionUsesOrganisationDays() {
+        let lateMonday = orgDay("2026-11-02").addingTimeInterval(23.5 * 3600)
+        let earlyTuesday = orgDay("2026-11-03").addingTimeInterval(0.5 * 3600)
+        XCTAssertTrue(MaterialsDay.same(orgDay("2026-11-02"), lateMonday))
+        XCTAssertFalse(MaterialsDay.same(lateMonday, earlyTuesday))
+        XCTAssertEqual(MaterialsDay.formatter("d MMM").timeZone, OrganizationRulebookContext.timeZone)
+        XCTAssertEqual(MaterialsDay.formatter("EEE").string(from: lateMonday).isEmpty, false)
+    }
+
     // MARK: 13. No Swift fallbacks (`bookingIdsForAccount`, `lineManagerIds`, `userTimesheetSubjects`)
 
     /// With the script answering, the account's ids are the rulebook's (`bookingIdsForAccount`): own, former and the

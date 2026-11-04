@@ -53,7 +53,7 @@ struct MaterialsView: View {
         .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await MainActor.run {
-                let today = Calendar.current.startOfDay(for: Date())
+                let today = OrganizationRulebookContext.calendar.startOfDay(for: Date())
                 selectedDate = today
                 currentWeek = today
             }
@@ -67,7 +67,7 @@ struct MaterialsView: View {
             Task {
                 if let intervals = note.userInfo?["materialBookingDayIntervals"] as? [TimeInterval], !intervals.isEmpty {
                     await MainActor.run {
-                        let cal = Calendar.current
+                        let cal = OrganizationRulebookContext.calendar
                         let days = intervals.map { cal.startOfDay(for: Date(timeIntervalSince1970: $0)) }
                         if let target = days.min() {
                             selectedDate = target
@@ -101,7 +101,7 @@ struct MaterialsView: View {
     /// When Firestore returns rows, the week strip may still be on “this week” while all bookings are on other dates — jump to a week that has data.
     private func syncWeekSelectionToLoadedMaterialsIfNothingForCurrentDay() {
         guard !materials.isEmpty else { return }
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         let selectedDay = calendar.startOfDay(for: selectedDate)
         let hasMatch = materials.contains { calendar.isDate(calendar.startOfDay(for: $0.date), inSameDayAs: selectedDay) }
         if hasMatch { return }
@@ -363,13 +363,9 @@ private struct OperativeMaterialsView: View {
         }
     }
 
+    /// Lines on the selected organisation day (the week strip is organisation days, rulebook §1).
     private var materialsForSelectedDate: [MaterialItem] {
-        let calendar = Calendar.current
-        let selectedDay = calendar.startOfDay(for: selectedDate)
-        return materials.filter { material in
-            let materialDay = calendar.startOfDay(for: material.date)
-            return calendar.isDate(materialDay, inSameDayAs: selectedDay)
-        }
+        materials.filter { MaterialsDay.same($0.date, selectedDate) }
     }
 
     private func canManage(_ material: MaterialItem) -> Bool {
@@ -414,23 +410,26 @@ private struct OperativeMaterialsView: View {
     }
     
     private func isSelected(_ date: Date) -> Bool {
-        Calendar.current.isDate(date, inSameDayAs: selectedDate)
+        MaterialsDay.same(date, selectedDate)
     }
     
     private func dayName(for date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "EEE"
         return formatter.string(from: date)
     }
     
     private func dayNumber(for date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "d"
         return formatter.string(from: date)
     }
     
     private func monthName(for date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "MMM"
         return formatter.string(from: date)
     }
@@ -442,12 +441,14 @@ private struct OperativeMaterialsView: View {
             return ""
         }
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "d MMM"
         return "\(formatter.string(from: weekStart)) - \(formatter.string(from: weekEnd))"
     }
     
     private func formattedDate(_ date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateStyle = .medium
         return formatter.string(from: date)
     }
@@ -468,6 +469,7 @@ struct MaterialItemRow: View {
 
     private var timeString: String {
         let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         formatter.dateFormat = "HH:mm"
         return formatter.string(from: material.addedAt)
     }
