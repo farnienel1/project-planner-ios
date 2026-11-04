@@ -632,12 +632,15 @@ struct ProjectDetailView: View {
                 .environmentObject(subcontractorStore)
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
-        case .scheduling, .tasks, .location:
+        case .scheduling:
+            schedulingContent
+                .navigationTitle(tile.rawValue)
+                .navigationBarTitleDisplayMode(.inline)
+                .ppNavyNavigationBar()
+        case .tasks, .location:
             ScrollView {
                 VStack(spacing: 20) {
                     switch tile {
-                    case .scheduling:
-                        schedulingContent
                     case .tasks:
                         tasksContent
                     case .location:
@@ -653,13 +656,22 @@ struct ProjectDetailView: View {
         }
     }
     
+    /// Scheduling (docs/design/booking-ui 3.1): navy header with the job, week switcher and counts, then the light
+    /// sheet with the two booking cards, the week card and the legend.
     private var schedulingContent: some View {
-        VStack(spacing: 12) {
-            schedulingProjectContextCard
-            schedulingWeekPickerCard
-            schedulingDualActions
-            schedulingWeekOverviewSection
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                schedulingNavyHeader
+                VStack(alignment: .leading, spacing: 14) {
+                    schedulingDualActions
+                        .padding(.top, 16)
+                    schedulingWeekOverviewSection
+                }
+                .padding(.bottom, 28)
+                .ppContentSheet()
+            }
         }
+        .background(PPColor.page.ignoresSafeArea())
     }
 
     private func applyCatalogueDeepLinkFocus() {
@@ -699,48 +711,44 @@ struct ProjectDetailView: View {
         }
     }
 
-    /// Design reference: SchedulingView.tsx / scheduling_v2.html (person × day grid).
-    private var schedulingProjectContextCard: some View {
-        HStack(alignment: .top, spacing: 8) {
+    /// Header: client · location label, job type pill, large code, name, week switcher and the week's counts.
+    private var schedulingNavyHeader: some View {
+        let counts = schedulingWeekOperativeAndSubCounts
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 8) {
+                Text(schedulingClientSubtitle.uppercased())
+                    .font(.caption.weight(.semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(PPColor.onNavySecondary)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                PPOnNavyPill(text: schedulingCategoryBadgeText)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(project.jobNumber)
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(SchedulingV2Palette.projectCode)
+                    .font(.system(.largeTitle, design: .rounded))
+                    .fontWeight(.bold)
+                    .foregroundStyle(PPBookingColor.headerTint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 Text(project.siteName)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(SchedulingV2Palette.ink)
-                    .lineLimit(2)
-                Text(schedulingClientSubtitle)
-                    .font(.system(size: 12))
-                    .foregroundStyle(SchedulingV2Palette.muted)
+                    .font(.system(.title3, design: .rounded))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
                     .lineLimit(2)
             }
-            Spacer(minLength: 8)
-            Text(schedulingCategoryBadgeText)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(
-                    project.jobType == .smallWorks
-                        ? SchedulingV2Palette.subsPillText
-                        : SchedulingV2Palette.opsPillText
-                )
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(
-                    project.jobType == .smallWorks
-                        ? SchedulingV2Palette.subsPillBg
-                        : SchedulingV2Palette.opsPillBg
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .accessibilityElement(children: .combine)
+            schedulingWeekPickerCard
+            PPStatRow(items: [
+                PPStatItem(id: "ops", value: "\(counts.ops)", label: "Operatives & managers"),
+                PPStatItem(id: "subs", value: "\(counts.subs)", label: "Subcontractors"),
+            ])
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 12)
+        .padding(.bottom, PPMetrics.headerBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(SchedulingV2Palette.cardBorder, lineWidth: 0.5)
-        )
+        .ppNavyHeader()
     }
 
     private var schedulingCategoryBadgeText: String {
@@ -756,56 +764,41 @@ struct ProjectDetailView: View {
     }
 
     private var schedulingWeekPickerCard: some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .center, spacing: 10) {
             Button(action: { changeWeek(by: -1) }) {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(SchedulingV2Palette.muted)
-                    .frame(width: 28, height: 28)
             }
+            .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
             .accessibilityIdentifier("projectDetail.back2")
-            .buttonStyle(.plain)
-            VStack(spacing: 5) {
-                Text(schedulingWeekOfTitle)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(SchedulingV2Palette.ink)
-                HStack(spacing: 6) {
-                    let c = schedulingWeekOperativeAndSubCounts
-                    HStack(spacing: 4) {
-                        Image(systemName: "person.2.fill")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("\(c.ops) ops")
-                            .font(.system(size: 11, weight: .bold))
-                    }
-                    .foregroundStyle(SchedulingV2Palette.opsPillText)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 3)
-                    .background(SchedulingV2Palette.opsPillBg)
-                    .clipShape(Capsule())
-
-                    HStack(spacing: 4) {
-                        Image(systemName: "building.2.fill")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("\(c.subs) subs")
-                            .font(.system(size: 11, weight: .bold))
-                    }
-                    .foregroundStyle(SchedulingV2Palette.subsPillText)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 3)
-                    .background(SchedulingV2Palette.subsPillBg)
-                    .clipShape(Capsule())
-                }
+            .accessibilityLabel("Previous week")
+            VStack(spacing: 2) {
+                PPOnNavyEyebrow(text: "Week of")
+                Text(schedulingWeekDateText)
+                    .font(.headline)
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
             }
             .frame(maxWidth: .infinity)
+            .accessibilityElement(children: .combine)
             Button(action: { changeWeek(by: 1) }) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(SchedulingV2Palette.muted)
-                    .frame(width: 28, height: 28)
             }
+            .buttonStyle(PPOnNavyCircleButtonStyle(size: 36))
             .accessibilityIdentifier("projectDetail.chevronRight")
-            .buttonStyle(.plain)
+            .accessibilityLabel("Next week")
         }
+        .padding(10)
+        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5)
+        )
+    }
+
+    private var schedulingWeekDateText: String {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM yyyy"
+        return f.string(from: weekStartDate)
     }
 
     private var schedulingWeekOfTitle: String {
@@ -828,46 +821,43 @@ struct ProjectDetailView: View {
     }
 
     private var schedulingDualActions: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Button(action: {
                 scheduleOperativeSeedBooking = nil
                 scheduleOperativeGroupId = nil
                 showingScheduleOperative = true
             }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("Operatives & Managers")
-                        .font(.system(size: 13, weight: .bold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
-                .background(SchedulingV2Palette.opsBtn)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                schedulingActionCardLabel(title: "Book people", subtitle: "Operatives & managers", symbol: "person.2.fill", family: .plan)
             }
             .accessibilityIdentifier("projectDetail.person2Fill")
-            .buttonStyle(.plain)
+            .buttonStyle(PPPressableButtonStyle())
             Button(action: { showingScheduleSubcontractor = true }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "building.2.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("Subcontractors")
-                        .font(.system(size: 13, weight: .bold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
-                .background(SchedulingV2Palette.subsBtn)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                schedulingActionCardLabel(title: "Book a sub", subtitle: "Subcontractors", symbol: "building.2.fill", family: .people)
             }
             .accessibilityIdentifier("projectDetail.building2Fill")
-            .buttonStyle(.plain)
+            .buttonStyle(PPPressableButtonStyle())
         }
+    }
+
+    private func schedulingActionCardLabel(title: String, subtitle: String, symbol: String, family: PPFamily) -> some View {
+        HStack(spacing: 10) {
+            PPIconTile(symbol: symbol, family: family, size: 38, lifted: true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+            }
+            Spacer(minLength: 0)
+        }
+        .ppBookingCard(padding: 12)
+        .accessibilityElement(children: .combine)
     }
 
     private var schedulingOperativeGradient: LinearGradient {
@@ -887,26 +877,40 @@ struct ProjectDetailView: View {
     }
 
     private var schedulingWeekOverviewSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            schedulingGridHeader
-            schedulingSectionLabel("Operatives & Managers")
-            if schedulingOpsAndManagersRows.isEmpty {
-                schedulingEmptyRow("No operatives or managers booked this week")
-            } else {
-                ForEach(schedulingOpsAndManagersRows) { row in
-                    schedulingPersonGridRow(row)
+        let staffRows = schedulingOpsAndManagersRows
+        let subRows = schedulingSubcontractorRows
+        return VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
+                schedulingGridHeader
+                schedulingSectionLabel(
+                    "Operatives & managers",
+                    count: staffRows.isEmpty ? nil : "\(staffRows.count) \(staffRows.count == 1 ? "person" : "people")"
+                )
+                if staffRows.isEmpty {
+                    schedulingEmptyRow("No operatives or managers booked this week")
+                } else {
+                    ForEach(staffRows) { row in
+                        schedulingPersonGridRow(row)
+                    }
+                }
+                schedulingSectionLabel(
+                    "Subcontractors",
+                    count: subRows.isEmpty ? nil : "\(subRows.count)"
+                )
+                .padding(.top, 8)
+                if subRows.isEmpty {
+                    schedulingEmptyRow("No subcontractors booked this week") {
+                        showingScheduleSubcontractor = true
+                    }
+                } else {
+                    ForEach(subRows) { row in
+                        schedulingPersonGridRow(row)
+                    }
                 }
             }
-            schedulingSectionLabel("Subcontractors")
-                .padding(.top, 10)
-            if schedulingSubcontractorRows.isEmpty {
-                schedulingEmptyRow("No subcontractors booked this week")
-            } else {
-                ForEach(schedulingSubcontractorRows) { row in
-                    schedulingPersonGridRow(row)
-                }
-            }
+            .ppBookingCard(padding: 12)
             SchedulingV2Legend()
+                .padding(.horizontal, 4)
         }
     }
 
@@ -1195,133 +1199,137 @@ struct ProjectDetailView: View {
         }
     }
 
+    /// Day strip: weekday, date and a count pill per day ("–" when none). Today filled navy, weekends muted.
     private var schedulingGridHeader: some View {
         let dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        return HStack(alignment: .bottom, spacing: 0) {
-            Text("Person")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(SchedulingV2Palette.softMuted)
-                .textCase(.uppercase)
-                .frame(width: schedulingPersonColumnWidth, alignment: .leading)
-                .padding(.bottom, 4)
-            HStack(spacing: 3) {
-                ForEach(Array(weekDays.enumerated()), id: \.offset) { index, day in
-                    let isToday = Calendar.current.isDateInToday(day)
-                    let isWeekend = index >= 5
-                    let count = index < schedulingDayHeadcounts.count ? schedulingDayHeadcounts[index] : 0
-                    VStack(spacing: 3) {
-                        Text(index < dow.count ? dow[index] : "")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(SchedulingV2Palette.softMuted)
-                            .textCase(.uppercase)
-                        Text("\(Calendar.current.component(.day, from: day))")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(
-                                isToday ? SchedulingV2Palette.today
-                                    : isWeekend ? SchedulingV2Palette.weekendMute
-                                    : SchedulingV2Palette.ink
-                            )
-                            .frame(width: 26, height: 26)
-                            .overlay(
-                                Circle()
-                                    .stroke(isToday ? SchedulingV2Palette.today : Color.clear, lineWidth: 2)
-                            )
-                        Text(count > 0 ? "\(count)" : "–")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(
-                                count > 0
-                                    ? (isToday ? SchedulingV2Palette.today : SchedulingV2Palette.opsPillText)
-                                    : SchedulingV2Palette.weekendMute
-                            )
-                            .padding(.horizontal, count > 0 ? 5 : 0)
-                            .padding(.vertical, 1)
-                            .background(
-                                count > 0
-                                    ? (isToday ? SchedulingV2Palette.countTodayBg : SchedulingV2Palette.countHasBg)
-                                    : Color.clear
-                            )
-                            .clipShape(Capsule())
-                            .frame(minHeight: 14)
-                    }
-                    .frame(maxWidth: .infinity)
+        let counts = schedulingDayHeadcounts
+        return HStack(spacing: 4) {
+            ForEach(Array(weekDays.enumerated()), id: \.offset) { index, day in
+                let isToday = Calendar.current.isDateInToday(day)
+                let isWeekend = index >= 5
+                let count = index < counts.count ? counts[index] : 0
+                VStack(spacing: 3) {
+                    Text(index < dow.count ? dow[index] : "")
+                        .font(.caption2.weight(.bold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(isToday ? Color.white.opacity(0.8) : (isWeekend ? Color.secondary.opacity(0.6) : Color.secondary))
+                    Text("\(Calendar.current.component(.day, from: day))")
+                        .font(.headline)
+                        .monospacedDigit()
+                        .foregroundStyle(isToday ? Color.white : (isWeekend ? Color.secondary : Color.primary))
+                    Text(count > 0 ? "\(count)" : "–")
+                        .font(.caption2.weight(.bold))
+                        .monospacedDigit()
+                        .foregroundStyle(isToday ? PPBookingColor.selected : (count > 0 ? PPColor.brand : Color.secondary))
+                        .padding(.horizontal, 6)
+                        .frame(minWidth: 18, minHeight: 16)
+                        .background(
+                            isToday ? Color.white : (count > 0 ? PPColor.brand.opacity(0.12) : Color.clear),
+                            in: Capsule()
+                        )
                 }
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity)
+                .background(
+                    isToday ? PPBookingColor.selected : (isWeekend ? PPBookingColor.field.opacity(0.5) : PPBookingColor.field),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(day.formatted(date: .complete, time: .omitted)), \(count) booked\(isToday ? ", today" : "")")
             }
         }
-        .padding(.bottom, 10)
+        .padding(.bottom, 6)
     }
 
-    private func schedulingSectionLabel(_ title: String) -> some View {
-        HStack(spacing: 6) {
+    private func schedulingSectionLabel(_ title: String, count: String? = nil) -> some View {
+        HStack(spacing: 8) {
             Text(title)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(SchedulingV2Palette.softMuted)
+                .font(.caption.weight(.bold))
+                .tracking(0.6)
                 .textCase(.uppercase)
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+            if let count {
+                Text(count)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
             Rectangle()
-                .fill(Color.black.opacity(0.09))
+                .fill(Color(.separator).opacity(0.6))
                 .frame(height: 0.5)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
     }
 
-    private func schedulingEmptyRow(_ message: String) -> some View {
-        Text(message)
-            .font(.system(size: 12))
-            .foregroundStyle(Color(red: 0xB0 / 255, green: 0xB4 / 255, blue: 0xBC / 255))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(style: StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
-                    .foregroundStyle(Color.black.opacity(0.12))
-            )
+    /// Dashed empty card with the original text; the subcontractor one also offers a Book link (same action as
+    /// "Book a sub").
+    private func schedulingEmptyRow(_ message: String, onBook: (() -> Void)? = nil) -> some View {
+        HStack(spacing: 8) {
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if let onBook {
+                Button("Book", action: onBook)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(PPColor.brand)
+                    .accessibilityIdentifier("projectDetail.bookSubEmpty")
+                    .accessibilityHint("Opens Schedule subcontractor")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color(.separator), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+        )
     }
 
+    /// Name row (not tappable, as before) above seven day chips aligned to the strip. Chip taps are unchanged.
     private func schedulingPersonGridRow(_ row: SchedulingGridPersonRow) -> some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
                 Text(row.initials)
-                    .font(.system(size: 9, weight: .heavy))
+                    .font(.caption2.weight(.heavy))
                     .foregroundStyle(.white)
                     .frame(width: 26, height: 26)
-                    .background(schedulingRoleColor(row.role))
-                    .clipShape(Circle())
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(row.name)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(SchedulingV2Palette.ink)
-                        .lineLimit(2)
-                    Text(row.role.badge)
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(schedulingRoleColor(row.role))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(schedulingRoleColor(row.role).opacity(0.14))
-                        .clipShape(Capsule())
-                        .accessibilityIdentifier("scheduling.badge.\(row.role.badge)")
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(schedulingRoleColor(row.role), in: Circle())
+                    .accessibilityHidden(true)
+                Text(row.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(row.role.badge)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(schedulingRoleColor(row.role))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(schedulingRoleColor(row.role).opacity(0.14), in: Capsule())
+                    .accessibilityIdentifier("scheduling.badge.\(row.role.badge)")
+                Spacer(minLength: 0)
             }
-            .frame(width: schedulingPersonColumnWidth, alignment: .leading)
-            .padding(.trailing, 4)
+            .accessibilityElement(children: .combine)
             .accessibilityIdentifier("scheduling.person.\(row.id)")
 
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 ForEach(Array(row.days.enumerated()), id: \.element.id) { index, day in
                     SchedulingV2BookingCell(
                         kind: day.kind,
                         isToday: Calendar.current.isDateInToday(day.date),
-                        isWeekend: index >= 5
+                        isWeekend: index >= 5,
+                        accessibilityDay: day.date.formatted(date: .abbreviated, time: .omitted),
+                        accessibilityPerson: row.name
                     ) {
                         handleSchedulingCellTap(row: row, day: day)
                     }
                 }
             }
         }
-        .padding(.vertical, 2)
-        .frame(minHeight: 42)
+        .padding(.vertical, 6)
     }
 
     private func handleSchedulingCellTap(row: SchedulingGridPersonRow, day: SchedulingGridDayCell) {

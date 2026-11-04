@@ -99,11 +99,18 @@ enum SchedulingV2CellKindBuilder {
     }
 }
 
+/// One person-day chip on the Scheduling week (docs/design/booking-ui 3.1): Standard (blue), Std + OT (blue STD top,
+/// amber striped OT bottom), OT only (amber stripes), Annual leave, Half day (split), empty (dashed). Display only;
+/// the tap is the caller's existing action.
 struct SchedulingV2BookingCell: View {
     let kind: SchedulingV2CellKind
     let isToday: Bool
     let isWeekend: Bool
+    var accessibilityDay: String = ""
+    var accessibilityPerson: String = ""
     let action: () -> Void
+
+    private static let otInk = Color(red: 0.36, green: 0.22, blue: 0.0)
 
     var body: some View {
         Button(action: action) {
@@ -112,51 +119,59 @@ struct SchedulingV2BookingCell: View {
                 cellContent
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 40)
-            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .frame(height: 46)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(todayOverlay)
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .accessibilityIdentifier("schedulingV2BookingCell.button")
+        .accessibilityLabel(accessibilityText)
         .buttonStyle(.plain)
+    }
+
+    private var accessibilityText: String {
+        let what: String
+        switch kind {
+        case .empty: what = "Not booked"
+        case .standard(let h): what = "\(SchedulingV2CellKindBuilder.hoursLabel(h)) standard"
+        case .overtimeOnly(let h): what = "\(SchedulingV2CellKindBuilder.hoursLabel(h)) overtime"
+        case .split(let std, let ot):
+            what = "\(SchedulingV2CellKindBuilder.hoursLabel(std)) standard, \(SchedulingV2CellKindBuilder.hoursLabel(ot)) overtime"
+        case .annualLeave: what = "Annual leave"
+        case .halfDay(let h, let label): what = "\(label) half day, \(SchedulingV2CellKindBuilder.hoursLabel(h))"
+        }
+        return [accessibilityPerson, accessibilityDay, what].filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
     @ViewBuilder
     private var cellBackground: some View {
         switch kind {
         case .empty:
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(isWeekend ? Color.black.opacity(0.015) : Color.black.opacity(0.03))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isWeekend ? PPBookingColor.field.opacity(0.4) : PPBookingColor.field.opacity(0.7))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(
-                            isToday
-                                ? SchedulingV2Palette.today.opacity(0.4)
-                                : Color.black.opacity(isWeekend ? 0.05 : 0.08),
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(
+                            isToday ? PPColor.brand.opacity(0.5) : Color(.separator),
                             style: StrokeStyle(lineWidth: isToday ? 1.5 : 1, dash: [4, 3])
                         )
                 )
         case .standard:
-            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(SchedulingV2Palette.std)
+            PPBookingColor.standard
         case .overtimeOnly:
-            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(SchedulingV2Palette.ot)
+            PPOvertimeFill()
         case .annualLeave:
-            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(SchedulingV2Palette.al)
+            PPBookingColor.leave
         case .halfDay:
-            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(SchedulingV2Palette.half)
+            HStack(spacing: 0) {
+                PPBookingColor.standard
+                PPBookingColor.halfDayLight
+            }
         case .split:
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        stops: [
-                            .init(color: SchedulingV2Palette.std, location: 0),
-                            .init(color: SchedulingV2Palette.std, location: 0.5),
-                            .init(color: SchedulingV2Palette.ot, location: 0.5),
-                            .init(color: SchedulingV2Palette.ot, location: 1),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
+            VStack(spacing: 0) {
+                PPBookingColor.standard
+                PPOvertimeFill()
+            }
         }
     }
 
@@ -166,72 +181,47 @@ struct SchedulingV2BookingCell: View {
         case .empty:
             EmptyView()
         case .standard(let hours):
-            VStack(spacing: 1) {
-                Text(SchedulingV2CellKindBuilder.hoursLabel(hours))
-                    .font(.system(size: 10, weight: .heavy))
-                    .foregroundStyle(.white)
-                Text("Std")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .textCase(.uppercase)
-            }
+            cellLabel(SchedulingV2CellKindBuilder.hoursLabel(hours), "Std", ink: .white)
         case .overtimeOnly(let hours):
-            VStack(spacing: 1) {
-                Text(SchedulingV2CellKindBuilder.hoursLabel(hours))
-                    .font(.system(size: 10, weight: .heavy))
-                    .foregroundStyle(.white)
-                Text("OT")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .textCase(.uppercase)
-            }
+            cellLabel(SchedulingV2CellKindBuilder.hoursLabel(hours), "OT", ink: Self.otInk)
         case .annualLeave:
             Text("AL")
-                .font(.system(size: 10, weight: .heavy))
+                .font(.caption.weight(.heavy))
                 .foregroundStyle(.white)
         case .halfDay(let hours, let label):
-            VStack(spacing: 1) {
-                Text(SchedulingV2CellKindBuilder.hoursLabel(hours))
-                    .font(.system(size: 10, weight: .heavy))
-                    .foregroundStyle(.white)
-                Text(label)
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .textCase(.uppercase)
-            }
+            cellLabel(SchedulingV2CellKindBuilder.hoursLabel(hours), label, ink: .white)
+                .shadow(color: .black.opacity(0.25), radius: 1)
         case .split(let stdHours, let otHours):
-            VStack(spacing: 2) {
-                VStack(spacing: 0) {
-                    Text(SchedulingV2CellKindBuilder.hoursLabel(stdHours))
-                        .font(.system(size: 9, weight: .heavy))
-                        .foregroundStyle(.white)
-                    Text("Std")
-                        .font(.system(size: 6.5, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .textCase(.uppercase)
-                }
-                Rectangle()
-                    .fill(Color.white.opacity(0.3))
-                    .frame(width: 18, height: 0.5)
-                VStack(spacing: 0) {
-                    Text(SchedulingV2CellKindBuilder.hoursLabel(otHours))
-                        .font(.system(size: 9, weight: .heavy))
-                        .foregroundStyle(.white)
-                    Text("OT")
-                        .font(.system(size: 6.5, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .textCase(.uppercase)
-                }
+            VStack(spacing: 0) {
+                cellLabel(SchedulingV2CellKindBuilder.hoursLabel(stdHours), "Std", ink: .white, compact: true)
+                    .frame(maxHeight: .infinity)
+                cellLabel(SchedulingV2CellKindBuilder.hoursLabel(otHours), "OT", ink: Self.otInk, compact: true)
+                    .frame(maxHeight: .infinity)
             }
-            .padding(.vertical, 2)
         }
+    }
+
+    private func cellLabel(_ hours: String, _ caption: String, ink: Color, compact: Bool = false) -> some View {
+        VStack(spacing: 0) {
+            Text(hours)
+                .font(.system(size: compact ? 9.5 : 11, weight: .heavy))
+                .monospacedDigit()
+            Text(caption)
+                .font(.system(size: compact ? 6.5 : 7.5, weight: .bold))
+                .textCase(.uppercase)
+                .opacity(0.85)
+        }
+        .foregroundStyle(ink)
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
+        .padding(.horizontal, 1)
     }
 
     @ViewBuilder
     private var todayOverlay: some View {
         if isToday, kind != .empty {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .stroke(SchedulingV2Palette.today.opacity(0.65), lineWidth: 2)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(PPBookingColor.selected, lineWidth: 2)
         }
     }
 }
@@ -242,51 +232,43 @@ struct SchedulingV2Legend: View {
     }
 }
 
-/// Simple wrapping legend without UIKit dependency.
+/// Standard, Std + OT, OT only, Ann. leave, Half day.
 private struct FlexWrapLegend: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                legendItem(label: "Standard", color: SchedulingV2Palette.std)
-                legendSplit
-                legendItem(label: "OT only", color: SchedulingV2Palette.ot)
+            HStack(spacing: 12) {
+                legendItem("Standard") { PPBookingColor.standard }
+                legendItem("Std + OT") {
+                    VStack(spacing: 0) {
+                        PPBookingColor.standard
+                        PPOvertimeFill()
+                    }
+                }
+                legendItem("OT only") { PPOvertimeFill() }
             }
-            HStack(spacing: 10) {
-                legendItem(label: "Ann. Leave", color: SchedulingV2Palette.al)
-                legendItem(label: "Half day", color: SchedulingV2Palette.half)
+            HStack(spacing: 12) {
+                legendItem("Ann. leave") { PPBookingColor.leave }
+                legendItem("Half day") {
+                    HStack(spacing: 0) {
+                        PPBookingColor.standard
+                        PPBookingColor.halfDayLight
+                    }
+                }
             }
         }
-        .font(.system(size: 10, weight: .semibold))
-        .foregroundStyle(Color(red: 0x6B / 255, green: 0x72 / 255, blue: 0x80 / 255))
-        .padding(.top, 8)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Legend: Standard, Standard plus overtime, Overtime only, Annual leave, Half day")
     }
 
-    private func legendItem(label: String, color: Color) -> some View {
-        HStack(spacing: 4) {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(color)
-                .frame(width: 10, height: 10)
+    private func legendItem<Swatch: View>(_ label: String, @ViewBuilder swatch: () -> Swatch) -> some View {
+        HStack(spacing: 5) {
+            swatch()
+                .frame(width: 12, height: 12)
+                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
             Text(label)
-        }
-    }
-
-    private var legendSplit: some View {
-        HStack(spacing: 4) {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        stops: [
-                            .init(color: SchedulingV2Palette.std, location: 0),
-                            .init(color: SchedulingV2Palette.std, location: 0.5),
-                            .init(color: SchedulingV2Palette.ot, location: 0.5),
-                            .init(color: SchedulingV2Palette.ot, location: 1),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(width: 10, height: 10)
-            Text("Std + OT")
         }
     }
 }
