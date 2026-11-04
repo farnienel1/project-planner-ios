@@ -335,7 +335,7 @@ extension FirebaseBackend {
     /// meanwhile is never lost), then of its `settings/variationItem_{id}` copy (best effort, also a transaction). The
     /// list is always built from the stored document, never from the screen's copy. Writes exactly `evidence`,
     /// `evidenceCount`, `removedEvidence` plus `updatedByUid` and write metadata. Returns whether either document
-    /// changed (false when the file is not on the stored variation); throws only when both writes failed.
+    /// changed (false when the file is not on the stored variation); throws when nothing was recorded and a write failed.
     @discardableResult
     func recordVariationEvidenceRemoval(variationId: String, evidenceId: String, organizationId: String) async throws -> Bool {
         let orgId = normalizedOrganizationId(organizationId)
@@ -367,7 +367,8 @@ extension FirebaseBackend {
                 print("⚠️ [Variations] evidence removal not recorded on \(ref.path): \(error.localizedDescription)")
             }
         }
-        if failures == refs.count, let firstError { throw firstError }
+        // Nothing recorded anywhere and a write failed: throw, so the caller keeps the file and never deletes it.
+        if !changed, failures > 0, let firstError { throw firstError }
         return changed
     }
 

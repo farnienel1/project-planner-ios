@@ -126,12 +126,18 @@ class OperativeStore: ObservableObject {
     }
 
     /// A switch changed: on → lay the catalogue pay profiles over; off → read the rows again, so no overlaid value stays.
+    /// The `privatePay` value last seen by `securitySwitchesChanged`.
+    private var lastPrivatePay = SecuritySwitchContext.privatePay
+
     private func securitySwitchesChanged() {
-        if SecuritySwitchContext.privatePay {
+        let privatePay = SecuritySwitchContext.privatePay
+        defer { lastPrivatePay = privatePay }
+        if privatePay {
             scheduleCataloguePayOverlay()
         } else {
             cataloguePayOverlayGeneration &+= 1
-            guard firebaseBackend?.currentOrganization != nil else { return }
+            // Reload only when private pay was just switched off (an enforcedReads flip alone changes nothing here).
+            guard lastPrivatePay, firebaseBackend?.currentOrganization != nil else { return }
             loadData()
         }
     }
