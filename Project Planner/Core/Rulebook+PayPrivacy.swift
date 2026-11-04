@@ -159,6 +159,13 @@ extension AppUser {
         ]
     }
 
+    /// The pay a screen shows (RULEBOOK 1.26.0 §8, `CanonicalBusinessEngine` `overlayPayProfile` gated by `privatePay`):
+    /// the pay profile laid over the users document while the switch is on; the users document as stored while it is
+    /// off, whatever the pay profile says.
+    func payShown(with profile: [String: Any]?, privatePay: Bool) -> AppUser {
+        privatePay ? overlayingPayProfile(profile) : self
+    }
+
     /// `self` with its pay read pay profile first (`overlayPayProfile`), the users document second. `profile` is the
     /// `payProfiles/{id}` document as stored (nil: none, or not readable by this viewer).
     func overlayingPayProfile(_ profile: [String: Any]?) -> AppUser {
@@ -197,11 +204,15 @@ extension UserStore {
     /// RULEBOOK 1.13.0 §8 (Q1 step C): reads `payProfiles/{subjectId}` when the signed-in person may see this
     /// person's pay (`canViewPersonPay`) and lays it over the loaded row (`overlayPayProfile`). Returns the row as
     /// shown; the roster copy is updated so other screens show the same pay.
+    ///
+    /// RULEBOOK 1.26.0 §8: only while `privatePay` is on for the organisation (`AppUser.payShown`). While it is off pay
+    /// is read from the users document as stored: an older build writes pay only there, so a pay profile may be stale,
+    /// and seeding the editor from it would show (and save back) an old rate.
     @discardableResult
     func refreshPayFromPayProfile(of subject: AppUser) async -> AppUser {
-        guard canViewPay(of: subject), let firebaseBackend else { return subject }
+        guard SecuritySwitchContext.privatePay, canViewPay(of: subject), let firebaseBackend else { return subject }
         guard let profile = await firebaseBackend.loadPayProfile(subjectId: subject.id) else { return subject }
-        let overlaid = subject.overlayingPayProfile(profile)
+        let overlaid = subject.payShown(with: profile, privatePay: SecuritySwitchContext.privatePay)
         if overlaid != subject, let index = organizationUsers.firstIndex(where: { $0.id == subject.id }) {
             organizationUsers[index] = overlaid
         }

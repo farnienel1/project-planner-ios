@@ -142,4 +142,22 @@ final class Rulebook1260Tests: XCTestCase {
         let shown = await FirebaseBackend().overlayRosterPayIfPrivate([user])
         XCTAssertEqual(shown.first?.dayRate, 200)
     }
+
+    /// Releasing a main-actor store at the end of a test hits a Swift runtime crash in this host.
+    private static var retained: [AnyObject] = []
+
+    /// Manage Users and My Profile seed pay from the users document while `privatePay` is off: a stale pay profile is
+    /// ignored in the editor seed (`AppUser.payShown`, `UserStore.refreshPayFromPayProfile`), and used once it is on.
+    func testTheEditorSeedIgnoresAStaleProfileWhileTheSwitchIsOff() async {
+        SecuritySwitchContext.reset()
+        var user = LogicFixtures.selfEmployedUser(id: "OP-1", dayRate: 200)
+        user.payBasis = "day"
+        let stale: [String: Any] = ["dayRate": 150, "payBasis": "day", "userId": "OP-1"]
+        XCTAssertEqual(user.payShown(with: stale, privatePay: false).dayRate, 200)
+        XCTAssertEqual(user.payShown(with: stale, privatePay: true).dayRate, 150)
+        let store = UserStore()
+        Self.retained.append(store)
+        let seeded = await store.refreshPayFromPayProfile(of: user)
+        XCTAssertEqual(seeded.dayRate, 200, "with the switch off nothing is read from the pay profile")
+    }
 }

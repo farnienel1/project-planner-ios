@@ -187,8 +187,14 @@ struct SettingsProfileDetailView: View {
             .task(id: userStore.currentUser?.id) { await loadBillingDetails() }
             .task(id: userStore.currentUser?.id) {
                 guard let me = userStore.currentUser else { return }
+                // RULEBOOK 1.26.0 §8 (`AppUser.payShown`, `CanonicalBusinessEngine` `overlayPayProfile`): the pay profile
+                // only while `privatePay` is on; otherwise the users document as stored.
+                guard SecuritySwitchContext.privatePay else {
+                    payShownUser = nil
+                    return
+                }
                 let profile = await firebaseBackend.loadPayProfile(subjectId: me.id)
-                payShownUser = me.overlayingPayProfile(profile)
+                payShownUser = me.payShown(with: profile, privatePay: SecuritySwitchContext.privatePay)
             }
     }
 

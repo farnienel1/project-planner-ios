@@ -277,16 +277,16 @@ extension FirebaseBackend {
                     NSLog("PLANNED_LISTENER_FAILED label=%@ source=%d attempt=%d error=%@", label, index, attempt, error.localizedDescription)
                     // Counted as answered (from cache), so the other sources can still add their rows.
                     deliver(index, [], true)
-                    // RULEBOOK 1.26.0: refused by the rules (a security switch the plan did not know about yet). No
-                    // backoff loop: the owner forgets this listener and the next re-plan (switch change, foreground)
-                    // attaches the plan again — once, replacing this one.
+                    // RULEBOOK 1.26.0: refused by the rules (a security switch the plan did not know about yet, or a
+                    // passing refusal: billing reopened, a membership or token race). The owner also marks this plan for
+                    // re-attach, so the next re-plan (switch change, foreground, plan input) replaces it — which removes
+                    // this registration and so cancels its pending retry: never two listeners for one target.
                     if Self.isPermissionDenied(error), let onRefused {
-                        Self.postPlannedListenerFailed(label: label, error: error)
                         Task { @MainActor in onRefused() }
-                        return
                     }
                     // A failed listener is dead: say so (the "Last updated" offline state) and attach it again
-                    // with backoff (2 s, 4 s, … up to 60 s) until it answers or the plan is replaced.
+                    // with backoff (2 s, 4 s, … up to 60 s) until it answers or the plan is replaced. The other sources
+                    // of the plan keep delivering; this one counts as answered from cache meanwhile.
                     Self.postPlannedListenerFailed(label: label, error: error)
                     let delay = Self.plannedListenerRetryDelay(attempt: attempt)
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -361,8 +361,9 @@ extension FirebaseBackend {
             fromDocument: { snapshot in snapshot.data().map { (id: snapshot.documentID, data: $0) } },
             documentId: { $0.id },
             onRefused: {
-                // Forget only this listener (never a newer replacement): the next re-plan attaches it again.
-                if let token = tokenBox.value { registry.remove(key: key, token: token) }
+                // Keep this listener (it retries on backoff) but let the next re-plan replace it — only this one,
+                // never a newer replacement.
+                if let token = tokenBox.value { registry.markForReattach(key: key, token: token) }
             }
         ) { [weak self] rows, fromCache in
             guard let self, self.acceptsLiveSnapshot(organizationId: orgId) else { return }

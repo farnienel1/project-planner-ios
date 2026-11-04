@@ -3399,8 +3399,9 @@ struct EditUserView: View {
         UserStore.storedPay(of: user).amount
     }
 
-    /// RULEBOOK 1.13.0 §8 (Q1 step C): pay is read pay profile first (`overlayPayProfile`), users document second.
-    /// Drafts the editor has not touched follow the pay profile's values.
+    /// RULEBOOK 1.13.0 §8 (Q1 step C): pay is read pay profile first (`overlayPayProfile`), users document second —
+    /// 1.26.0: only while `privatePay` is on (`UserStore.refreshPayFromPayProfile`); off, the editor is seeded from the
+    /// users document. Drafts the editor has not touched follow the pay shown.
     private func refreshPayFromPayProfile() async {
         let before = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
         let untouchedRate = dayRateText == Self.formatPayrollRateText(user: before)

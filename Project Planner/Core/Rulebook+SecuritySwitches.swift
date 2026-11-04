@@ -223,7 +223,7 @@ extension FirebaseBackend {
         guard !profiles.isEmpty else { return users }
         return users.map { user in
             let profile = profiles[user.id] ?? user.formerUserIds.lazy.compactMap { profiles[$0] }.first
-            return profile.map { user.overlayingPayProfile($0) } ?? user
+            return profile.map { user.payShown(with: $0, privatePay: true) } ?? user
         }
     }
 }

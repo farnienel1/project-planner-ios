@@ -7914,10 +7914,9 @@ class FirebaseBackend: ObservableObject {
             fromDocument: { _ in nil },
             documentId: { $0.documentID },
             onRefused: { [weak self] in
-                // RULEBOOK 1.26.0: refused by the rules — forget this target so the next re-plan attaches once.
+                // RULEBOOK 1.26.0: refused by the rules. The listener keeps retrying on backoff; forgetting its target
+                // lets the next re-plan replace it (removing it cancels the pending retry, so never two listeners).
                 guard let self, self.bookingsLiveListenerTarget == target else { return }
-                self.bookingsLiveListener?.remove()
-                self.bookingsLiveListener = nil
                 self.bookingsLiveListenerTarget = nil
             }
         ) { [weak self] documents, fromCache in
@@ -8121,9 +8120,8 @@ class FirebaseBackend: ObservableObject {
             fromDocument: { _ in nil },
             documentId: { $0.documentID },
             onRefused: { [weak self] in
+                // Same as bookings: keep retrying, and let the next re-plan replace it.
                 guard let self, self.managerScheduleLiveListenerTarget == target else { return }
-                self.managerScheduleLiveListener?.remove()
-                self.managerScheduleLiveListener = nil
                 self.managerScheduleLiveListenerTarget = nil
             }
         ) { [weak self] documents, fromCache in
