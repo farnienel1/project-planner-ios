@@ -2007,7 +2007,10 @@ var ProjectPlannerCanonical = (() => {
     "pushTokens",
     "pushTokenUpdatedAt",
     "notificationPreferences",
-    "formerUserIds"
+    "formerUserIds",
+    // Rulebook 1.31.1 (F5): the invitation an account was created from (written once, with the invitation marked used in
+    // the same batch); the security rules accept a placeholder copy only with it.
+    "invitationId"
   ];
   var USER_FORMER_IDS_FIELD = "formerUserIds";
   function parseFormerUserIds(data) {
@@ -10454,8 +10457,8 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/rulebookStamp.ts
   function rulebookStamp() {
     return {
-      version: true ? "1.31.0" : "",
-      sha256: true ? "0f1071f709e0c26b94e5305d2e3d5f0dd998a9bf5a85a996be07ad2c0c8dc6bb" : ""
+      version: true ? "1.31.3" : "",
+      sha256: true ? "0b2674347e478136cb6848884df6a4789b7202c9ab8d1195271260e2d9958920" : ""
     };
   }
 
