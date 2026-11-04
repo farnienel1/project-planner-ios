@@ -68,7 +68,8 @@ final class Rulebook1110PermissionLevelsTests: XCTestCase {
         XCTAssertTrue(effective.materials)
         XCTAssertTrue(effective.siteAudit)
         XCTAssertFalse(effective.wholesalersOrderHistory)
-        XCTAssertEqual(CanonicalBusinessEngine.lockedPermissionFields(manager.permissionSubject).map { Set($0) }, ["materials", "siteAudit"])
+        // 1.28.0: Timesheet self-sign is admin-only, so it is locked (off) for a manager too, as web canonical.test.ts asserts.
+        XCTAssertEqual(CanonicalBusinessEngine.lockedPermissionFields(manager.permissionSubject).map { Set($0) }, ["materials", "siteAudit", "timesheetSelfSign"])
     }
 
     func testAdminRowsAreAllOnAndLockedExceptAnnualLeaveManagement() {
