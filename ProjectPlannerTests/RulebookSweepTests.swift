@@ -301,4 +301,29 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertEqual(CanonicalBusinessEngine.timesheetDocumentSubjectId("timesheet_user_with_underscore_1761955200"), "user_with_underscore")
         XCTAssertEqual(CanonicalBusinessEngine.timesheetDocumentSubjectId("settings"), "")
     }
+
+    // MARK: 16. Own-profile save: changed fields only (`userProfileWriteFields`)
+
+    /// A phone-number edit sends the phone only; a name edit sends the name group, never the email or phone again.
+    func testProfileIdentitySaveSendsOnlyChangedFields() throws {
+        var loaded = staffUser(id: "uid-1", email: "ada@example.com")
+        loaded.mobileNumber = "07000 000000"
+        let phoneOnly = try XCTUnwrap(FirebaseBackend.userIdentityChanges(
+            firstName: "Ada", surname: "Lovelace", email: "ada@example.com", mobileNumber: "07111 111111", previous: loaded
+        ))
+        XCTAssertEqual(Set(phoneOnly.keys), ["mobileNumber"])
+        XCTAssertEqual(phoneOnly["mobileNumber"] as? String, "07111 111111")
+
+        let rename = try XCTUnwrap(FirebaseBackend.userIdentityChanges(
+            firstName: "Augusta", surname: "Lovelace", email: "ada@example.com", mobileNumber: "07000 000000", previous: loaded
+        ))
+        XCTAssertTrue(rename.keys.contains("firstName"))
+        XCTAssertFalse(rename.keys.contains("email"))
+        XCTAssertFalse(rename.keys.contains("mobileNumber"))
+
+        let unchanged = try XCTUnwrap(FirebaseBackend.userIdentityChanges(
+            firstName: "Ada", surname: "Lovelace", email: "ADA@example.com ", mobileNumber: "07000 000000", previous: loaded
+        ))
+        XCTAssertTrue(unchanged.isEmpty)
+    }
 }

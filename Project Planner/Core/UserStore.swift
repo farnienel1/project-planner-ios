@@ -2269,12 +2269,15 @@ class UserStore: ObservableObject {
         do {
             for id in idsToPatch {
                 do {
+                    // Only the changed identity fields of each document (`userProfileWriteFields` against the row
+                    // this device loaded for that id).
                     try await firebaseBackend.patchUserIdentity(
                         userId: id,
                         firstName: trimmedFirst,
                         surname: trimmedSurname,
                         email: savedEmail,
-                        mobileNumber: mobileOut
+                        mobileNumber: mobileOut,
+                        previous: organizationUsers.first(where: { $0.id == id })
                     )
                 } catch {
                     print("🔥🔥🔥 DEBUG: identity patch skipped for \(id): \(error.localizedDescription)")

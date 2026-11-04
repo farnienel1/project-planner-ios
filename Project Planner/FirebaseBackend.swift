@@ -5870,14 +5870,8 @@ class FirebaseBackend: ObservableObject {
         deviceSessionProfile = user
     }
 
-    /// Name, email, and phone only. Does not touch organisation, role, or permission flags.
-    func patchUserIdentity(
-        userId: String,
-        firstName: String,
-        surname: String,
-        email: String,
-        mobileNumber: String?
-    ) async throws {
+    /// The identity fields a profile save writes, as native Firestore values ("no phone" is `FieldValue.delete()`).
+    static func userIdentityPayload(firstName: String, surname: String, email: String, mobileNumber: String?) -> [String: Any] {
         let trimmedFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -5887,19 +5881,63 @@ class FirebaseBackend: ObservableObject {
             "surname": trimmedSurname,
             "lastName": trimmedSurname,
             "email": trimmedEmail,
-            "updatedAt": Timestamp(date: Date())
         ]
         if !display.isEmpty {
             payload["name"] = display
             payload["displayName"] = display
         }
         let trimmedMobile = mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedMobile.isEmpty {
-            payload["mobileNumber"] = trimmedMobile
-        } else {
-            payload["mobileNumber"] = FieldValue.delete()
+        payload["mobileNumber"] = trimmedMobile.isEmpty ? FieldValue.delete() as Any : trimmedMobile as Any
+        return payload
+    }
+
+    /// The identity fields of a profile save that changed against the copy the editor loaded (`previous`):
+    /// `userProfileWriteFields` (RULEBOOK §1 partial writes; the name fields travel together as its name group). With
+    /// no loaded copy, every identity field. Nil when the script did not answer.
+    static func userIdentityChanges(
+        firstName: String,
+        surname: String,
+        email: String,
+        mobileNumber: String?,
+        previous: AppUser?
+    ) -> [String: Any]? {
+        let next = userIdentityPayload(firstName: firstName, surname: surname, email: email, mobileNumber: mobileNumber)
+        guard let previous else { return next }
+        let before = userIdentityPayload(
+            firstName: previous.firstName,
+            surname: previous.surname,
+            email: previous.email,
+            mobileNumber: previous.mobileNumber
+        ).filter { !($0.value is FieldValue) }
+        guard let write = CanonicalBusinessEngine.peopleDocumentWrite("userProfileWriteFields", before: before, next: next) else {
+            return nil
         }
-        try await db.collection("users").document(userId).updateData(payload)
+        return write.firestoreFields(from: next)
+    }
+
+    /// Name, email, and phone only. Does not touch organisation, role, or permission flags. Sends only the fields that
+    /// changed against `previous` (the profile the editor loaded), never all of them (RULEBOOK §1; a full identity
+    /// write cost the rules evaluation on every save).
+    func patchUserIdentity(
+        userId: String,
+        firstName: String,
+        surname: String,
+        email: String,
+        mobileNumber: String?,
+        previous: AppUser? = nil
+    ) async throws {
+        guard let changes = Self.userIdentityChanges(
+            firstName: firstName,
+            surname: surname,
+            email: email,
+            mobileNumber: mobileNumber,
+            previous: previous
+        ) else {
+            throw CanonicalWriteUnavailableError(function: "userProfileWriteFields")
+        }
+        guard !changes.isEmpty else { return }
+        try await db.collection("users").document(userId)
+            .updateData(WriteMetadata.stamped(changes, userId: auth.currentUser?.uid))
     }
 
     // MARK: - Sensitive profile (users/{uid}/private/taxIds)
