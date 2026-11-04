@@ -59,6 +59,9 @@ class UserStore: ObservableObject {
     private var lastOrganizationUsersLoadAt: Date?
     private var currentUserListener: ListenerRegistration?
     private var currentUserListenerTarget: String?
+    /// Counts `users/{uid}` snapshots; only the newest one's device-session result is applied (RULEBOOK §12:
+    /// an older copy finishing its async step late must not roll back the photo or any other field).
+    private var currentUserSnapshotGeneration = 0
     /// Live roster: `users where organizationId == org` (RULEBOOK §1, §11). Keyed to one organisation;
     /// results that arrive after an organisation switch are ignored.
     private var organizationUsersListener: ListenerRegistration?
@@ -873,6 +876,7 @@ class UserStore: ObservableObject {
         currentUserListener?.remove()
         currentUserListener = nil
         currentUserListenerTarget = nil
+        currentUserSnapshotGeneration += 1
         organizationUsers = []
         organizationUsersFinishedLoadOrganizationId = nil
         organizationUserEmailClaims = nil
@@ -897,8 +901,12 @@ class UserStore: ObservableObject {
                 NSLog("CURRENT_USER_KEPT id=%@ — parseUserDocument did not answer for the live copy", user.id)
                 return
             }
+            self.currentUserSnapshotGeneration += 1
+            let generation = self.currentUserSnapshotGeneration
             Task { @MainActor in
                 let resolved = await self.firebaseBackend?.applyDeviceSessionIfNeeded(to: user) ?? user
+                // A newer snapshot arrived while this one was resolved: it decides the profile.
+                guard generation == self.currentUserSnapshotGeneration else { return }
                 self.currentUser = resolved
             }
         }

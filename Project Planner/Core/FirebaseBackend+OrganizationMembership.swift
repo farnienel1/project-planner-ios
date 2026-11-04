@@ -707,7 +707,12 @@ extension FirebaseBackend {
             creatorUserId: creator,
             sharedUserData: sharedData
         )
-        return deviceSessionProfile ?? user
+        guard var session = deviceSessionProfile else { return user }
+        // RULEBOOK §12: the photo is personal; its upload time comes with it so avatars refresh in this company too.
+        session.profilePhotoURL = user.profilePhotoURL
+        session.profilePhotoUpdatedAt = user.profilePhotoUpdatedAt
+        deviceSessionProfile = session
+        return session
     }
 
     /// No membership snapshot yet: use the members-map role only. Do not copy toggles from another company.
