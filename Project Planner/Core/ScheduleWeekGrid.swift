@@ -265,7 +265,10 @@ enum ScheduleWeekGrid {
         let saveOperativeId: UUID? = {
             guard role == .operative else { return nil }
             let matches = operativeIds.compactMap { id in operatives.first { $0.id == id } }
-            return StaffEmailIdentity.preferredOperative(matches) { _ in 0 }?.id
+            if let preferred = StaffEmailIdentity.preferredOperative(matches) { _ in 0 }?.id { return preferred }
+            // An operative-level account with a login but no Operatives-list row is booked under its users id, as web
+            // Book labour does (#262; counted by `bookingIdsForAccount`) — never as a manager site booking.
+            return leading.map { AccountLabourBooking.operativeId(for: $0.user) }
         }()
         return ScheduleWeekPerson(
             id: leading?.user.id
@@ -362,5 +365,36 @@ enum ScheduleWeekGrid {
             ids.formUnion(StaffEmailIdentity.userIds(sharing: user.email, in: users))
         }
         return ids.sorted()
+    }
+}
+
+/// Labour bookings for an operative-level account that has no Operatives-list row (owner decision 4 Nov, "Judgement
+/// call in #262", owner to confirm): the booking's `operativeId` is the users id, mapped in-app by
+/// `Booking.internalOperativeId(for:)`. The in-memory row is never written to `operatives`.
+enum AccountLabourBooking {
+    static func operativeId(for user: AppUser) -> UUID {
+        Booking.internalOperativeId(for: user.id)
+    }
+
+    static func operative(for user: AppUser) -> Operative {
+        Operative(
+            id: operativeId(for: user),
+            firstName: user.firstName,
+            lastName: user.surname,
+            email: user.email,
+            startDate: user.createdAt,
+            tradeTypePreset: user.tradeTypePreset,
+            tradeTypeCustom: user.tradeTypeCustom
+        )
+    }
+
+    /// The account a labour booking's `operativeId` names when it is a users id (no catalogue row), else nil.
+    static func account(forOperativeId id: UUID, users: [AppUser]) -> AppUser? {
+        let stored = Booking.storedOperativeId(for: id)
+        guard stored.caseInsensitiveCompare(id.uuidString) != .orderedSame else { return nil }
+        return users.first {
+            $0.id.caseInsensitiveCompare(stored) == .orderedSame
+                || $0.sameEmailUserIds.contains { $0.caseInsensitiveCompare(stored) == .orderedSame }
+        }
     }
 }

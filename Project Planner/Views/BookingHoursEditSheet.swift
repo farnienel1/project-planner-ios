@@ -1911,6 +1911,11 @@ struct LabourBookingEditOptions: Equatable {
     /// Whether the booking's operative is PAYE on the booking's day: the roster account with the operative's email,
     /// read through `AppUser.employmentType(on:)` (`employmentTypeOnDay`). False when no account matches.
     static func isPaye(_ booking: Booking, operatives: [Operative], users: [AppUser]) -> Bool {
+        // A booking saved under a users id (no Operatives-list row, web Book labour #262) is that account's.
+        if operatives.first(where: { $0.id == booking.operativeId }) == nil,
+           let account = AccountLabourBooking.account(forOperativeId: booking.operativeId, users: users) {
+            return account.employmentType(on: booking.date) == .paye
+        }
         guard let operative = operatives.first(where: { $0.id == booking.operativeId }) else { return false }
         let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard let user = users.first(where: {

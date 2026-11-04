@@ -41,6 +41,19 @@ struct BookLabourCandidate: Identifiable {
         return t == "—" || t.isEmpty ? nil : t
     }
 
+    /// The labour-booking person: the catalogue row the rulebook row names, else (an operative-level account with a
+    /// login but no Operatives-list row) the account itself, booked under its users id as web Book labour does (#262;
+    /// the rulebook counts it, `bookingIdsForAccount`). Owner decision 4 Nov "Judgement call in #262" — owner to confirm.
+    var bookingOperative: Operative? {
+        if let linkedOperative { return linkedOperative }
+        guard usesOperativeProjectBookings else { return nil }
+        return Self.accountOperative(user)
+    }
+
+    static func accountOperative(_ user: AppUser) -> Operative {
+        AccountLabourBooking.operative(for: user)
+    }
+
     var canBookOtherLocations: Bool {
         !user.permissions.operativeMode && (user.permissions.manager || user.permissions.adminAccess || user.isSuperAdmin)
     }
@@ -371,9 +384,29 @@ struct BookLabourFlowView: View {
 
     private var unbookedCount: Int { candidates.count }
 
+    /// The viewer's warning scope (`warningScopeFor`, the same one Warnings uses) can list unbooked labour.
+    private var viewerScopeListsUnbookedLabour: Bool {
+        let scope = WarningScopeSupport.scope(
+            bookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
+        return CanonicalBusinessEngine.warningScopeListsUnbookedLabour(scope)
+    }
+
     private var pickPersonView: some View {
         Group {
-            if candidates.isEmpty {
+            if candidates.isEmpty && !viewerScopeListsUnbookedLabour {
+                // RULEBOOK 1.31.0 §5 (web #262 `bookLabourListPhase` `noAccess`): a viewer whose warning scope cannot
+                // list unbooked labour is told so — never "Everyone is booked".
+                ContentUnavailableView(
+                    BookLabourCopy.noAccessTitle,
+                    systemImage: "eye.slash",
+                    description: Text(BookLabourCopy.noAccessMessage)
+                )
+                .padding()
+            } else if candidates.isEmpty {
                 ContentUnavailableView(
                     "Everyone is booked",
                     systemImage: "checkmark.circle",
@@ -689,7 +722,7 @@ struct BookLabourFlowView: View {
                                 ForEach(Array(list.enumerated()), id: \.element.id) { idx, project in
                                     Button {
                                         let party = activeParty(fallback: person)
-                                        if party.contains(where: { $0.usesOperativeProjectBookings && $0.linkedOperative == nil }) {
+                                        if party.contains(where: { $0.usesOperativeProjectBookings && $0.bookingOperative == nil }) {
                                             errorBanner = party.count == 1
                                                 ? "No operative profile is linked to this user."
                                                 : "No operative profile is linked to one of the selected users."
@@ -871,7 +904,7 @@ struct BookLabourFlowView: View {
     @ViewBuilder
     private func pickCustomOperativeHoursView(person: BookLabourCandidate, project: Project) -> some View {
         Group {
-            if let op = person.linkedOperative {
+            if let op = person.bookingOperative {
                 let draft = operativeDraft(for: project.id, operativeId: op.id)
                 let header = partyHeaderName(fallback: person)
                 OperativeCustomHoursSheet(
@@ -912,7 +945,7 @@ struct BookLabourFlowView: View {
 
     @ViewBuilder
     private func pickSlotOperativeView(person: BookLabourCandidate, project: Project) -> some View {
-        if let op = person.linkedOperative {
+        if let op = person.bookingOperative {
             let draft = operativeDraft(for: project.id, operativeId: op.id)
             let existingPaidHours = existingPaidHoursForOperative(op.id)
             let newPaidHours = paidHours(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
@@ -1600,7 +1633,7 @@ struct BookLabourFlowView: View {
         // dropped (that person is not booked) first; dropping everyone saves nothing.
         func leavePersonKey(_ person: BookLabourCandidate) -> BookingLeaveConflictInputs.Person {
             if personUsesOperativeProjectPath(person, locationType: locationType, project: resolvedProject),
-               let op = person.linkedOperative {
+               let op = person.bookingOperative {
                 var leavePerson = BookingLeaveConflictInputs.person(
                     operativeId: op.id,
                     operatives: operativeStore.allOperatives,
@@ -1648,7 +1681,7 @@ struct BookLabourFlowView: View {
                 let person = entry.candidate
                 guard personUsesOperativeProjectPath(person, locationType: locationType, project: resolvedProject),
                       let project = resolvedProject,
-                      let op = person.linkedOperative,
+                      let op = person.bookingOperative,
                       let lines = operativeClashDetailLines(
                           operativeId: op.id,
                           projectId: project.id,
@@ -1716,7 +1749,7 @@ struct BookLabourFlowView: View {
             let bookedByName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
             for person in people {
                 if personUsesOperativeProjectPath(person, locationType: locationType, project: resolvedProject) {
-                    guard let op = person.linkedOperative, let project = resolvedProject, let bookedBy else {
+                    guard let op = person.bookingOperative, let project = resolvedProject, let bookedBy else {
                         if firstError == nil {
                             firstError = "No operative profile is linked to \(person.displayName)."
                         }
@@ -2324,4 +2357,10 @@ final class BookLabourCandidateCache {
 
     var key: Key?
     var value: [BookLabourCandidate]?
+}
+
+/// Book labour copy shared with web `components/book-labour/BookLabourFlowScreen.tsx` (#262).
+enum BookLabourCopy {
+    static let noAccessTitle = "You can't see unbooked labour for the whole company"
+    static let noAccessMessage = "Unbooked labour is listed for people who can see every booking. Ask an admin to book this day."
 }

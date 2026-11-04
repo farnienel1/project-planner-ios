@@ -201,7 +201,7 @@ enum StaffEmailIdentity {
     ) -> Set<String> {
         var keys = Set<String>()
         for id in operativeIds {
-            let email = operatives.first { $0.id == id }?.email
+            let email = operativeBookingEmail(id, operatives: operatives, users: users)
             keys.insert(personKey(email: email, fallbackId: "op:\(id.uuidString)"))
         }
         for id in userIds {
@@ -212,6 +212,15 @@ enum StaffEmailIdentity {
             keys.insert("sub:\(id.uuidString)")
         }
         return keys
+    }
+
+    /// The email of the person a labour booking's `operativeId` names: the catalogue row's, else — a booking saved
+    /// under a users id (an account with no Operatives-list row, web Book labour #262) — that account's, so the
+    /// booking sits in the account's row, never a separate `op:` row. Display grouping only; who the booking counts for
+    /// is still `bookingIdsForAccount`.
+    static func operativeBookingEmail(_ id: UUID, operatives: [Operative], users: [AppUser]) -> String? {
+        if let row = operatives.first(where: { $0.id == id }) { return row.email }
+        return AccountLabourBooking.account(forOperativeId: id, users: users)?.email
     }
 
     struct SchedulePersonBucket: Equatable {
@@ -229,7 +238,7 @@ enum StaffEmailIdentity {
         var operativeByKey: [String: [UUID]] = [:]
         var userByKey: [String: [String]] = [:]
         for id in operativeIds {
-            let email = operatives.first { $0.id == id }?.email
+            let email = operativeBookingEmail(id, operatives: operatives, users: users)
             let key = personKey(email: email, fallbackId: "op:\(id.uuidString)")
             operativeByKey[key, default: []].append(id)
         }
