@@ -499,6 +499,9 @@ struct OperativeCustomHoursSheet: View {
     var showsBreakControls: Bool
     var showsBreakdown: Bool
     var showsFooterNote: Bool
+    /// Shows "This user is PAYE and is not paid hourly." while keeping the break and overtime controls (a PAYE
+    /// operative's booking still has hours, a break and an overtime rate). Without break controls the line shows too.
+    var showsPayeNote: Bool
     var forceSolidBlueTimeline: Bool
     /// When false, content is shown in the parent `NavigationStack` (avoids nested covers).
     var embedsNavigation: Bool
@@ -556,6 +559,7 @@ struct OperativeCustomHoursSheet: View {
         showsBreakControls: Bool = true,
         showsBreakdown: Bool = true,
         showsFooterNote: Bool = true,
+        showsPayeNote: Bool = false,
         forceSolidBlueTimeline: Bool = false,
         embedsNavigation: Bool = true,
         initialChoice: OperativeDayBookingChoice?,
@@ -582,6 +586,7 @@ struct OperativeCustomHoursSheet: View {
         self.showsBreakControls = showsBreakControls
         self.showsBreakdown = showsBreakdown
         self.showsFooterNote = showsFooterNote
+        self.showsPayeNote = showsPayeNote
         self.forceSolidBlueTimeline = forceSolidBlueTimeline
         self.embedsNavigation = embedsNavigation
         self.initialChoice = initialChoice
@@ -642,7 +647,7 @@ struct OperativeCustomHoursSheet: View {
                     fallbackMinute: 30
                 )
             }
-            included = showsBreakControls ? !ic.isBreakRemoved : false
+            included = Self.initialBreakIncluded(initialChoice: ic, showsBreakControls: showsBreakControls)
             if let m = ic.otMultiplierOverride {
                 otm = m
             }
@@ -659,7 +664,7 @@ struct OperativeCustomHoursSheet: View {
             )
             // A new booking starts with the unpaid break on, as web (`breakRemoved` false); it only matters on a day whose
             // break is unpaid (`unpaidBreakAppliesOnDay`).
-            included = showsBreakControls
+            included = Self.initialBreakIncluded(initialChoice: nil, showsBreakControls: showsBreakControls)
         }
 
         _startHour = State(initialValue: startHM.0)
@@ -673,6 +678,16 @@ struct OperativeCustomHoursSheet: View {
         _breakIncluded = State(initialValue: included)
         _otRate = State(initialValue: otm)
         initialOtRate = otm
+    }
+
+    /// The Unpaid break state the sheet opens with: an existing booking's own stored state (`isBreakRemoved`), on for
+    /// a new booking (web `breakRemoved` false), and off only when the sheet shows no break controls at all (a
+    /// subcontractor, a timesheet overtime line). Save writes `isBreakRemoved = !breakIncluded`, so a booking opened
+    /// and saved unchanged keeps its stored break.
+    static func initialBreakIncluded(initialChoice: OperativeDayBookingChoice?, showsBreakControls: Bool) -> Bool {
+        guard showsBreakControls else { return false }
+        guard let initialChoice else { return true }
+        return !initialChoice.isBreakRemoved
     }
 
     private var startMinutes: Int {
@@ -1022,7 +1037,7 @@ struct OperativeCustomHoursSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             WeekendBookingNoteView(days: noteDays, policy: policy)
                 .padding(.top, 14)
-            if !showsBreakControls {
+            if !showsBreakControls || showsPayeNote {
                 Label("This user is PAYE and is not paid hourly.", systemImage: "info.circle")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -1858,5 +1873,29 @@ private struct UnpaidBreakWarningSheet: View {
         }
         .overlay(shape.strokeBorder(prominent ? Color.clear : PPBookingColor.cardBorder, lineWidth: 0.5))
         .contentShape(shape)
+    }
+}
+
+// MARK: - Edit booking options for a labour booking
+
+/// What Edit booking shows for a labour (`bookings`) booking, the same from Scheduling and Daily Overview: the break
+/// controls, breakdown, footer and overtime rate for every person (RULEBOOK 1.29.0 §25: the rate applies to PAYE
+/// bookings too), with the PAYE note added for a PAYE operative. Hiding the controls for PAYE also opened the sheet
+/// with the break off, so Save rewrote `isBreakRemoved = true` on a booking nobody changed.
+struct LabourBookingEditOptions: Equatable {
+    let showsBreakControls: Bool
+    let showsBreakdown: Bool
+    let showsFooterNote: Bool
+    let showsPayeNote: Bool
+    let allowsOtMultiplierOverride: Bool
+
+    static func forOperative(isPaye: Bool) -> LabourBookingEditOptions {
+        LabourBookingEditOptions(
+            showsBreakControls: true,
+            showsBreakdown: true,
+            showsFooterNote: true,
+            showsPayeNote: isPaye,
+            allowsOtMultiplierOverride: true
+        )
     }
 }

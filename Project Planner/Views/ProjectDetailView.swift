@@ -1568,20 +1568,23 @@ struct ProjectDetailView: View {
     private func projectDetailBookingEditSheet(for target: DailyOverviewEditTarget) -> some View {
         switch target {
         case .operative(let booking, _, let personName):
-            let payeMode = isPayeOperativeBooking(booking)
+            // Same controls as Daily Overview for every person; PAYE only adds its note. The sheet opens on the
+            // booking's stored break (`OperativeCustomHoursSheet.initialBreakIncluded`), so Save keeps it.
+            let options = LabourBookingEditOptions.forOperative(isPaye: isPayeOperativeBooking(booking))
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
                 referenceDay: booking.date,
                 title: "Edit booking",
-                subtitle: payeMode ? nil : bookingEditSubtitle(date: booking.date),
+                subtitle: bookingEditSubtitle(date: booking.date),
                 headerName: personName,
                 headerInitials: PlannerUIInitials.from(personName),
                 // RULEBOOK 1.29.0 §25: Edit Booking's overtime rate applies to every person's booking, PAYE included
                 // (CanonicalBusinessEngine.overtimeRateControl).
-                allowsOtMultiplierOverride: true,
-                showsBreakControls: !payeMode,
-                showsBreakdown: !payeMode,
-                showsFooterNote: !payeMode,
+                allowsOtMultiplierOverride: options.allowsOtMultiplierOverride,
+                showsBreakControls: options.showsBreakControls,
+                showsBreakdown: options.showsBreakdown,
+                showsFooterNote: options.showsFooterNote,
+                showsPayeNote: options.showsPayeNote,
                 initialChoice: OperativeDayBookingChoice(from: booking),
                 onSave: { start, end, isBreakRemoved, otMult in
                     bookingEditTarget = nil
