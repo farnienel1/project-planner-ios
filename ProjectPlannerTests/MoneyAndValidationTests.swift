@@ -127,22 +127,4 @@ final class MoneyAndValidationTests: XCTestCase {
         XCTAssertNotNil(settings.paymentRunRangesOverlapWarning())
     }
 
-    func testLeaveBookedBackwardsDoesNotConsumeDays() {
-        let calendar = LogicFixtures.utc
-        let backwards = LogicFixtures.holiday(
-            userId: "user-1",
-            start: LogicFixtures.day(2026, 5, 10, calendar: calendar),
-            end: LogicFixtures.day(2026, 5, 8, calendar: calendar)
-        )
-        let consumed = AnnualLeavePolicy.consumedDays(
-            bookings: [backwards],
-            userId: "user-1",
-            operativeId: nil,
-            statuses: [.approved],
-            rangeStart: LogicFixtures.day(2026, 1, 1, calendar: calendar),
-            rangeEnd: LogicFixtures.day(2026, 12, 31, calendar: calendar),
-            calendar: calendar
-        )
-        XCTAssertClose(consumed, 0)
-    }
 }

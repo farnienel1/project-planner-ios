@@ -325,21 +325,21 @@ extension CanonicalBusinessEngine {
 /// Admins and super admins (not in operative mode) may decide every request in the organisation;
 /// anyone else only a request whose `leaveApproverIds` names them. Nobody decides their own.
 enum AnnualLeaveApproval {
-    /// The requester's account: `userId`, else the account on the operative row's email.
+    /// The requester's account: `resolveBookingPerson` on the record's stored `userId`, else its `operativeId` — an
+    /// old invite id, a same-email id or a catalogue row on the account's email all find the same person (§9, §13).
+    /// Never a Swift email or operative-mode match. Nil when nobody is found or the script did not answer.
     static func requester(
         for booking: HolidayBooking,
         users: [AppUser],
         operatives: [Operative]
     ) -> AppUser? {
-        if let uid = booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines), !uid.isEmpty,
-           let user = users.first(where: { $0.id == uid || $0.sameEmailUserIds.contains(uid) || $0.formerUserIds.contains(uid) }) {
-            return user
-        }
-        if let oid = booking.operativeId,
-           let operative = operatives.first(where: { $0.id == oid }) {
-            let email = operative.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard !email.isEmpty else { return nil }
-            return users.first(where: { $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == email })
+        let input = bookingPersonInput(operatives: operatives, users: users)
+        let stored = [booking.userId, booking.operativeIdRaw]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for id in stored {
+            guard let accountId = CanonicalBusinessEngine.resolveBookingPerson(id, input)?.accountId else { continue }
+            if let user = users.first(where: { $0.id == accountId }) { return user }
         }
         return nil
     }

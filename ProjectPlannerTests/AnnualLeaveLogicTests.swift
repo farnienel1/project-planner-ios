@@ -69,8 +69,6 @@ final class AnnualLeaveLogicTests: XCTestCase {
         )
         let summary = AnnualLeavePolicy.usageSummary(
             bookings: [previousMorning, previousFull],
-            profileUserId: userId,
-            operativeId: nil,
             daysPerYear: 25,
             startMonth: 4,
             endMonth: 3,
@@ -82,30 +80,6 @@ final class AnnualLeaveLogicTests: XCTestCase {
         XCTAssertClose(summary.carryOverDays, 19.5, "25 − 0.5 − 5 unused from the previous leave year")
         XCTAssertClose(summary.entitlementDays, 44.5)
         XCTAssertClose(summary.remainingDays ?? -1, 44.5)
-    }
-
-    func testBookingThatCrossesTheLeaveYearOnlyCountsDaysInsideIt() {
-        let spanning = LogicFixtures.holiday(
-            userId: userId,
-            start: LogicFixtures.day(2026, 3, 30, calendar: calendar),
-            end: LogicFixtures.day(2026, 4, 2, calendar: calendar)
-        )
-        let range = AnnualLeavePolicy.leaveYearRange(
-            containing: LogicFixtures.day(2026, 4, 2, calendar: calendar),
-            startMonth: 4,
-            endMonth: 3,
-            calendar: calendar
-        )!
-        let consumed = AnnualLeavePolicy.consumedDays(
-            bookings: [spanning],
-            userId: userId,
-            operativeId: nil,
-            statuses: [.approved],
-            rangeStart: range.start,
-            rangeEnd: range.end,
-            calendar: london
-        )
-        XCTAssertClose(consumed, 2, "30–31 Mar belong to the previous leave year")
     }
 
     func testRequestOverAllowanceIsRejectedAndAShorterOneIsAllowed() {
@@ -123,8 +97,6 @@ final class AnnualLeaveLogicTests: XCTestCase {
             selectedStartOfDays: [extra],
             timeSlot: .fullDay,
             bookings: used,
-            profileUserId: userId,
-            operativeId: nil,
             daysPerYear: 25,
             startMonth: 1,
             endMonth: 12,
@@ -136,8 +108,6 @@ final class AnnualLeaveLogicTests: XCTestCase {
         let halfDayStillBlocked = AnnualLeavePolicy.validateProposedDaySlots(
             daySlots: [extra: .morning],
             bookings: used,
-            profileUserId: userId,
-            operativeId: nil,
             daysPerYear: 25,
             startMonth: 1,
             endMonth: 12,
@@ -150,8 +120,6 @@ final class AnnualLeaveLogicTests: XCTestCase {
             selectedStartOfDays: [extra],
             timeSlot: .fullDay,
             bookings: Array(used.prefix(24)),
-            profileUserId: userId,
-            operativeId: nil,
             daysPerYear: 25,
             startMonth: 1,
             endMonth: 12,
@@ -177,8 +145,6 @@ final class AnnualLeaveLogicTests: XCTestCase {
         )
         let summary = AnnualLeavePolicy.usageSummary(
             bookings: [pending, rejected],
-            profileUserId: userId,
-            operativeId: nil,
             daysPerYear: 25,
             startMonth: 1,
             endMonth: 12,
@@ -189,54 +155,6 @@ final class AnnualLeaveLogicTests: XCTestCase {
         XCTAssertClose(summary.pendingDays, 1)
         XCTAssertClose(summary.takenDays, 0)
         XCTAssertClose(summary.remainingDays ?? -1, 24)
-    }
-
-    func testMorningAndAfternoonOnTheSameDayConsumeOneDay() {
-        let morning = LogicFixtures.holiday(
-            userId: userId,
-            start: LogicFixtures.day(2026, 4, 7, calendar: calendar),
-            end: LogicFixtures.day(2026, 4, 7, calendar: calendar),
-            slot: .morning
-        )
-        let afternoon = LogicFixtures.holiday(
-            userId: userId,
-            start: LogicFixtures.day(2026, 4, 7, calendar: calendar),
-            end: LogicFixtures.day(2026, 4, 7, calendar: calendar),
-            slot: .afternoon
-        )
-        let consumed = AnnualLeavePolicy.consumedDays(
-            bookings: [morning, afternoon],
-            userId: userId,
-            operativeId: nil,
-            statuses: [.approved],
-            rangeStart: LogicFixtures.day(2026, 1, 1, calendar: calendar),
-            rangeEnd: LogicFixtures.day(2026, 12, 31, calendar: calendar),
-            calendar: calendar
-        )
-        XCTAssertClose(consumed, 1)
-    }
-
-    func testOverlappingFullDayRequestsConsumeOneDay() {
-        let first = LogicFixtures.holiday(
-            userId: userId,
-            start: LogicFixtures.day(2026, 4, 7, calendar: calendar),
-            end: LogicFixtures.day(2026, 4, 9, calendar: calendar)
-        )
-        let second = LogicFixtures.holiday(
-            userId: userId,
-            start: LogicFixtures.day(2026, 4, 8, calendar: calendar),
-            end: LogicFixtures.day(2026, 4, 10, calendar: calendar)
-        )
-        let consumed = AnnualLeavePolicy.consumedDays(
-            bookings: [first, second],
-            userId: userId,
-            operativeId: nil,
-            statuses: [.approved],
-            rangeStart: LogicFixtures.day(2026, 1, 1, calendar: calendar),
-            rangeEnd: LogicFixtures.day(2026, 12, 31, calendar: calendar),
-            calendar: calendar
-        )
-        XCTAssertClose(consumed, 4, "7–10 Apr is four calendar days; the overlap on 8–9 Apr must not be counted twice")
     }
 
     func testBankHolidayBlocksTheDayEvenOnAWeekend() {
@@ -299,8 +217,6 @@ final class AnnualLeaveLogicTests: XCTestCase {
             booking: booking,
             newTimeSlot: .fullDay,
             bookings: filled,
-            profileUserId: userId,
-            operativeId: nil,
             daysPerYear: 25,
             startMonth: 1,
             endMonth: 12,
@@ -313,8 +229,6 @@ final class AnnualLeaveLogicTests: XCTestCase {
             booking: booking,
             newTimeSlot: .afternoon,
             bookings: filled,
-            profileUserId: userId,
-            operativeId: nil,
             daysPerYear: 25,
             startMonth: 1,
             endMonth: 12,

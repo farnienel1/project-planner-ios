@@ -1816,10 +1816,7 @@ struct EditUserView: View {
     private func currentRemainingDays(for subject: AppUser) -> Double {
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let summary = AnnualLeavePolicy.usageSummary(
-            bookings: holidayStore.bookings,
-            profileUserId: subject.id,
-            operativeId: nil,
-            profileEmail: subject.email,
+            bookings: holidayStore.myBookings(account: subject, operatives: operativeStore.allOperatives),
             daysPerYear: subject.annualLeaveDaysPerYear,
             startMonth: subject.annualLeaveYearStartMonth,
             endMonth: subject.annualLeaveYearEndMonth,
@@ -4285,10 +4282,7 @@ struct EditUserView: View {
                     return
                 }
                 let summary = AnnualLeavePolicy.usageSummary(
-                    bookings: holidayStore.bookings,
-                    profileUserId: subjectUser.id,
-                    operativeId: nil,
-                    profileEmail: subjectUser.email,
+                    bookings: holidayStore.myBookings(account: subjectUser, operatives: operativeStore.allOperatives),
                     daysPerYear: days,
                     startMonth: annualLeaveStartMonth,
                     endMonth: annualLeaveEndMonth,

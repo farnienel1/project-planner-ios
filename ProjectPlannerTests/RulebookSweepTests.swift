@@ -32,4 +32,61 @@ final class RulebookSweepTests: XCTestCase {
         let span = AnnualLeaveDisplaySpan(bookings: [request, saturday])
         XCTAssertEqual(span.dayTotal, 3)
     }
+
+    // MARK: 2. Leave balance matching (`leaveRecordsForAccount`)
+
+    private func staffUser(id: String, email: String, formerUserIds: [String] = [], operativeMode: Bool = true) -> AppUser {
+        var u = AppUser(
+            id: id,
+            email: email,
+            organizationId: "org-test",
+            role: operativeMode ? .operative : .manager,
+            firstName: "Ada",
+            surname: "Lovelace",
+            isActive: true,
+            passwordSet: true,
+            permissions: UserPermissions(operativeMode: operativeMode)
+        )
+        u.formerUserIds = formerUserIds
+        return u
+    }
+
+    /// Leave booked under an old invite id counts towards the person's balance: the balance reads the account's
+    /// records (`leaveRecordsForAccount` via `HolidayStore.myBookings`). It used to compare `userId` with the
+    /// current id or the email only, so this day was never taken from the allowance.
+    func testLeaveUnderAFormerIdCountsInTheBalance() {
+        let person = staffUser(id: "uid-new", email: "ada@example.com", formerUserIds: ["invite-old"])
+        let store = HolidayStore()
+        store.bookings = [
+            LogicFixtures.holiday(userId: "INVITE-OLD", start: orgDay("2026-11-04"), end: orgDay("2026-11-04")),
+            LogicFixtures.holiday(userId: "someone-else", start: orgDay("2026-11-05"), end: orgDay("2026-11-05")),
+        ]
+        let mine = store.myBookings(account: person, operatives: [])
+        XCTAssertEqual(mine.map(\.userId), ["INVITE-OLD"])
+        let summary = AnnualLeavePolicy.usageSummary(
+            bookings: mine,
+            daysPerYear: 25,
+            startMonth: 1,
+            endMonth: 12,
+            carriesOver: false,
+            referenceDate: orgDay("2026-11-04")
+        )
+        XCTAssertEqual(summary.takenDays, 1)
+        XCTAssertEqual(summary.remainingDays, 24)
+    }
+
+    /// The requester behind a leave record is `resolveBookingPerson`: a catalogue row on the account's email finds the
+    /// account (no Swift email match, no operative-mode filter).
+    func testLeaveRequesterResolvesThroughTheRulebook() {
+        let account = staffUser(id: "uid-1", email: "Ada@Example.com", operativeMode: false)
+        let operativeId = UUID()
+        let catalogue = LogicFixtures.operative(id: operativeId, email: "ada@example.com")
+        var record = LogicFixtures.holiday(userId: "", start: orgDay("2026-11-04"), end: orgDay("2026-11-04"))
+        record.userId = nil
+        record.operativeIdRaw = catalogue.documentId
+        XCTAssertEqual(
+            AnnualLeaveApproval.requester(for: record, users: [account], operatives: [catalogue])?.id,
+            "uid-1"
+        )
+    }
 }

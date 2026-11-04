@@ -907,10 +907,7 @@ struct OperativeAnnualLeaveCalendarView: View {
         let defaults = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let user = leaveProfileUser
         return AnnualLeavePolicy.usageSummary(
-            bookings: holidayStore.bookings,
-            profileUserId: user?.id ?? person.userId ?? "",
-            operativeId: person.operativeId,
-            profileEmail: user?.email,
+            bookings: personHolidayBookings,
             daysPerYear: user?.annualLeaveDaysPerYear ?? defaults.daysPerYear,
             startMonth: user?.annualLeaveYearStartMonth ?? defaults.startMonth,
             endMonth: user?.annualLeaveYearEndMonth ?? defaults.endMonth,
@@ -929,13 +926,11 @@ struct OperativeAnnualLeaveCalendarView: View {
 
     /// RULEBOOK 1.9.0 §9: the person's leave by every id of their account (`leaveRecordsForAccount`).
     private var personHolidayBookings: [HolidayBooking] {
-        if let account = leaveProfileUser {
-            return holidayStore.myBookings(account: account, operatives: operativeStore.allOperatives, operativeId: person.operativeId)
-        }
-        return holidayStore.myBookings(
-            userId: person.userId,
+        holidayStore.myBookings(
+            account: leaveProfileUser,
+            operatives: operativeStore.allOperatives,
             operativeId: person.operativeId,
-            email: nil
+            userId: person.userId
         )
     }
 

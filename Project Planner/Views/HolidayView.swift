@@ -96,10 +96,7 @@ struct HolidayView: View {
         let oid = currentOperative?.id
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         return AnnualLeavePolicy.usageSummary(
-            bookings: holidayStore.bookings,
-            profileUserId: u.id,
-            operativeId: oid,
-            profileEmail: u.email,
+            bookings: holidayStore.myBookings(account: u, operatives: operativeStore.allOperatives, operativeId: oid),
             daysPerYear: u.annualLeaveDaysPerYear,
             startMonth: u.annualLeaveYearStartMonth,
             endMonth: u.annualLeaveYearEndMonth,
@@ -147,12 +144,11 @@ struct HolidayView: View {
     }
 
     private var selfBookedApprovedHolidayBookings: [HolidayBooking] {
-        guard canShowSelfServeBookedAnnualLeave, let uid = firebaseBackend.currentUser?.uid else { return [] }
-        return holidayStore.bookings
+        guard canShowSelfServeBookedAnnualLeave, firebaseBackend.currentUser?.uid != nil else { return [] }
+        return signedInLeave
             .filter {
                 $0.status == .approved &&
                 $0.cancellationRequestedAt == nil &&
-                bookingMatchesSignedInUser($0, uid: uid) &&
                 !$0.isOperativeRequest
             }
             .sorted { $0.startDate > $1.startDate }
@@ -166,22 +162,22 @@ struct HolidayView: View {
         case pendingHalf(HolidayBooking)
     }
 
-    private func bookingMatchesSignedInUser(_ booking: HolidayBooking, uid: String) -> Bool {
-        AnnualLeavePolicy.holidayUserMatches(
-            bookingUserId: booking.userId,
-            profileUserId: uid,
-            profileEmail: firebaseBackend.currentUser?.email ?? holidayProfileUser?.email
+    /// RULEBOOK 1.9.0 §9, §10: the signed-in person's leave by every id of their account (`leaveRecordsForAccount`
+    /// through `HolidayStore.myBookings`), never by the uid or the email alone.
+    private var signedInLeave: [HolidayBooking] {
+        holidayStore.myBookings(
+            account: holidayProfileUser,
+            operatives: operativeStore.allOperatives,
+            operativeId: currentOperative?.id,
+            userId: firebaseBackend.currentUser?.uid
         )
     }
 
     /// RULEBOOK 1.23.0 §9 `CanonicalBusinessEngine.leaveDayKind`: the signed-in person's leave on the organisation day —
     /// leave days only, rejected never, approved with a pending cancellation still approved, fixed order.
     private func calendarDayKind(for day: Date) -> CalendarDayKind {
-        guard let uid = firebaseBackend.currentUser?.uid else { return .none }
-        let oid = currentOperative?.id
-        let mine = holidayStore.bookings.filter { booking in
-            bookingMatchesSignedInUser(booking, uid: uid) || (oid != nil && booking.operativeId == oid)
-        }
+        guard firebaseBackend.currentUser?.uid != nil else { return .none }
+        let mine = signedInLeave
         guard let answer = CanonicalBusinessEngine.leaveDayAnswer(
             records: mine.map(\.rulebookLeaveRecord),
             dayKey: OrganizationRulebookContext.dayKey(day),
@@ -434,9 +430,7 @@ struct HolidayView: View {
                             return AnnualLeavePolicy.validateTimeSlotIncreaseAgainstAllowance(
                                 booking: booking,
                                 newTimeSlot: updated.timeSlot,
-                                bookings: holidayStore.bookings,
-                                profileUserId: u.id,
-                                operativeId: currentOperative?.id,
+                                bookings: holidayStore.myBookings(account: u, operatives: operativeStore.allOperatives, operativeId: currentOperative?.id),
                                 daysPerYear: u.annualLeaveDaysPerYear,
                                 startMonth: u.annualLeaveYearStartMonth,
                                 endMonth: u.annualLeaveYearEndMonth,
@@ -1087,27 +1081,25 @@ struct HolidayView: View {
         return people
     }
 
+    /// The team row a leave record belongs to: the requester account the rulebook resolves (`resolveBookingPerson`
+    /// through `AnnualLeaveApproval.requester`), else the catalogue row on the record's `operativeId`.
     private func teamPerson(for booking: HolidayBooking) -> AnnualLeavePerson? {
-        teamPeople.first { person in
-            let email = person.userId.flatMap { uid in
-                userStore.organizationUsers.first(where: { $0.id == uid })?.email
-            }
-            if AnnualLeavePolicy.holidayUserMatches(bookingUserId: booking.userId, profileUserId: person.userId, profileEmail: email) {
-                return true
-            }
-            if let oid = person.operativeId, booking.operativeId == oid { return true }
-            return false
+        if let requester = AnnualLeaveApproval.requester(
+            for: booking,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        ), let person = teamPeople.first(where: { $0.userId == requester.id }) {
+            return person
         }
+        guard let oid = booking.operativeId else { return nil }
+        return teamPeople.first { $0.operativeId == oid }
     }
 
     private func teamBalance(for person: AnnualLeavePerson) -> (remaining: Double?, allowance: Double, taken: Double, hasAllowance: Bool, used: Double)? {
         guard let user = teamUser(for: person) else { return nil }
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let summary = AnnualLeavePolicy.usageSummary(
-            bookings: holidayStore.bookings,
-            profileUserId: user.id,
-            operativeId: person.operativeId,
-            profileEmail: user.email,
+            bookings: holidayStore.myBookings(account: user, operatives: operativeStore.allOperatives, operativeId: person.operativeId),
             daysPerYear: user.annualLeaveDaysPerYear,
             startMonth: user.annualLeaveYearStartMonth,
             endMonth: user.annualLeaveYearEndMonth,
@@ -1129,9 +1121,10 @@ struct HolidayView: View {
         if let uid = person.userId {
             return userStore.organizationUsers.first { $0.id == uid }
         }
-        if let oid = person.operativeId,
-           let operative = operativeStore.allOperatives.first(where: { $0.id == oid }) {
-            return userStore.organizationUsers.first { $0.email.lowercased() == operative.email.lowercased() }
+        if let oid = person.operativeId {
+            // `resolveBookingPerson`: the account behind the catalogue row (same email, former or alias ids).
+            return LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+                .person(for: oid).user
         }
         return nil
     }
@@ -1521,19 +1514,11 @@ struct HolidayView: View {
         selectedDates.sorted()
     }
 
-    private func hasExistingHoliday(on day: Date, userId: String?, operativeId: UUID?) -> Bool {
-        holidayStore.bookings.contains { booking in
-            guard booking.status != .rejected else { return false }
-            let matchesUser = AnnualLeavePolicy.holidayUserMatches(
-                bookingUserId: booking.userId,
-                profileUserId: userId,
-                profileEmail: holidayProfileUser?.email
-            )
-            let matchesOperative = operativeId != nil && booking.operativeId == operativeId
-            guard matchesUser || matchesOperative else {
-                return false
-            }
-            return LeaveRecordDays.covers(booking, day: day)
+    /// The signed-in person already has leave (not rejected) on `day`: their records (`leaveRecordsForAccount`) whose
+    /// leave days (`leaveRecordDayKeys`) include it.
+    private func hasExistingHoliday(on day: Date) -> Bool {
+        signedInLeave.contains { booking in
+            booking.status != .rejected && LeaveRecordDays.covers(booking, day: day)
         }
     }
 
@@ -1546,9 +1531,7 @@ struct HolidayView: View {
             daySlots: Dictionary(startOfDays.map { day in
                 (day, selectedDaySlots[day] ?? selectedHolidayTimeSlot)
             }, uniquingKeysWith: { first, _ in first }),
-            bookings: holidayStore.bookings,
-            profileUserId: u.id,
-            operativeId: currentOperative?.id,
+            bookings: holidayStore.myBookings(account: u, operatives: operativeStore.allOperatives, operativeId: currentOperative?.id),
             daysPerYear: u.annualLeaveDaysPerYear,
             startMonth: u.annualLeaveYearStartMonth,
             endMonth: u.annualLeaveYearEndMonth,
@@ -1606,7 +1589,7 @@ struct HolidayView: View {
                             ?? "Operative"
                     }()
                     for day in selectedDays {
-                        if hasExistingHoliday(on: day, userId: uid, operativeId: operativeId) {
+                        if hasExistingHoliday(on: day) {
                             throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
                         }
                     }
@@ -1641,7 +1624,7 @@ struct HolidayView: View {
                         return
                     }
                     for day in selectedDays {
-                        if hasExistingHoliday(on: day, userId: uid, operativeId: nil) {
+                        if hasExistingHoliday(on: day) {
                             throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
                         }
                     }
