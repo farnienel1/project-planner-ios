@@ -33,6 +33,10 @@ class UserStore: ObservableObject {
     private var privatePayOverlayGeneration = 0
     /// True while the overlay's own result is being published (it must not schedule another read).
     private var publishingPrivatePayOverlay = false
+    /// RULEBOOK 1.31.0 §11: every `users` document of the open organisation, unfolded (one row per document, not per
+    /// email), from the last roster load plus live changes. `organizationUserDocumentsOrganizationId` names its company.
+    private(set) var organizationUserDocuments: [AppUser] = []
+    private var organizationUserDocumentsOrganizationId: String?
     /// Folded same-email `users` document id → the id the roster kept, from the last roster load.
     /// Bookings saved under the folded id (often the person's sign-in uid) must count for the kept person.
     private(set) var organizationUserIdAliases: [String: String] = [:]
@@ -45,6 +49,9 @@ class UserStore: ObservableObject {
     @Published var selfEmailChangeNotice: String?
     
     private(set) var firebaseBackend: FirebaseBackend?
+    /// Company activity notices written after Manage Users changes (RULEBOOK 1.31.0 `job_manager_removed`,
+    /// `operative_deleted`). Set by `NotificationService.setUserStore`.
+    weak var notificationService: NotificationService?
     private var smartCache: SmartCacheService?
     @Published var isOffline: Bool = false
     /// Throttle `lastSeenAt` writes (foreground heartbeats).
@@ -587,6 +594,8 @@ class UserStore: ObservableObject {
             }
             organizationUserEmailClaims = roster.claimedEmails
             organizationUserIdAliases = roster.userIdAliases
+            organizationUserDocuments = roster.documents
+            organizationUserDocumentsOrganizationId = requestedOrganizationId
             publishRoster(listed, organizationId: requestedOrganizationId)
             startOrganizationUsersListener(organizationId: requestedOrganizationId)
         } catch {
@@ -731,6 +740,13 @@ class UserStore: ObservableObject {
             Task { await self.loadOrganizationUsers(forceRefresh: true) }
         }
         guard !changed.isEmpty else { return }
+        if organizationUserDocumentsOrganizationId == organizationId {
+            organizationUserDocuments = Self.liveRosterMerge(
+                onScreen: organizationUserDocuments,
+                changed: changed,
+                isTombstoned: { RosterRetention.isTombstoned($0, organizationId: organizationId) }
+            )
+        }
         let merged = Self.liveRosterMerge(
             onScreen: organizationUsers,
             changed: changed,
@@ -906,6 +922,32 @@ class UserStore: ObservableObject {
         rosterIndex(for: userId).map { organizationUsers[$0] }
     }
 
+    /// RULEBOOK 1.31.0 §11 (platform guardrail 1): every users document of the open organisation, unfolded. Falls
+    /// back to the folded roster (with each person's same-email ids as rows of their own) until a full load has read
+    /// the documents for this organisation.
+    var unfoldedOrganizationUsers: [AppUser] {
+        let openOrg = normalizedOrganizationId(firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "")
+        if !organizationUserDocuments.isEmpty, organizationUserDocumentsOrganizationId == openOrg {
+            var rows = organizationUserDocuments
+            // A person on screen the document read did not return (anchored, healed) stays in.
+            let known = Set(rows.map { $0.id.lowercased() })
+            rows += organizationUsers.filter { !known.contains($0.id.lowercased()) }
+            return rows
+        }
+        return organizationUsers
+    }
+
+    /// `RulebookPeople.roster` over the unfolded documents, with `organizationId` as each document stores it.
+    var unfoldedRosterRows: [[String: Any]] {
+        unfoldedOrganizationUsers.map { user in
+            var row = RulebookPeople.person(user)
+            row["organizationId"] = user.storedOrganizationId ?? user.organizationId
+            row["firstName"] = user.firstName
+            row["surname"] = user.surname
+            return row
+        }
+    }
+
     /// Call when the user signs out so deleted/other-org users don't persist in the UI.
     func clearOnSignOut() {
         stopOrganizationUsersListener()
@@ -915,6 +957,8 @@ class UserStore: ObservableObject {
         currentUserListenerTarget = nil
         currentUserSnapshotGeneration += 1
         organizationUsers = []
+        organizationUserDocuments = []
+        organizationUserDocumentsOrganizationId = nil
         organizationUsersFinishedLoadOrganizationId = nil
         organizationUserEmailClaims = nil
         currentUser = nil
@@ -1502,7 +1546,11 @@ class UserStore: ObservableObject {
     /// Whether the signed-in user may change permissions for `target` in **Manage / edit user**.
     func canEditTargetUserPermissions(_ target: AppUser) -> Bool {
         guard let acting = currentUser else { return false }
-        if target.isSuperAdmin || isOrganizationCreator(userId: target.id) { return false }
+        if target.isSuperAdmin || isOrganizationCreator(userId: target.id) {
+            // RULEBOOK 1.31.0 (hand-off): the Super Admin edits their own profile — the rules allow it; only their own
+            // self-manage toggles are fixed (`lockedPermissionFields`). Nobody else edits the Super Admin.
+            return isSamePerson(acting, target)
+        }
         if acting.permissions.operativeMode { return false }
         if hasAdminAccess() { return true }
         if isActingManagerOperativeManagementOnly() {
@@ -1511,6 +1559,12 @@ class UserStore: ObservableObject {
         return false
     }
     
+    /// The signed-in person and `target` are one person (their id or a folded same-email id).
+    private func isSamePerson(_ acting: AppUser, _ target: AppUser) -> Bool {
+        let ids = Set(([acting.id] + acting.sameEmailUserIds).map { $0.lowercased() })
+        return ids.contains(target.id.lowercased())
+    }
+
     func canViewReports() -> Bool {
         if isOperativeMode() { return false }
         return true
@@ -1524,6 +1578,8 @@ class UserStore: ObservableObject {
         let options: [String: Any] = [
             "roster": roster,
             "creatorUserId": firebaseBackend?.currentOrganization?.creatorUserId ?? NSNull(),
+            // RULEBOOK 1.31.0 (owner decision 7): a manager with the Operatives permission deletes operatives only.
+            "actorManagesOperatives": actorManagesOperativesOnly,
         ]
         guard let raw = CanonicalBusinessEngine.callJSON(
             "userDeleteRefusal",
@@ -1884,16 +1940,50 @@ class UserStore: ObservableObject {
             return false
         }
 
-        let alsoDemoteUserIds = organizationUsers
-            .filter { $0.isSuperAdmin && $0.id != newId }
-            .map(\.id)
+        // RULEBOOK 1.31.0 §11 `superAdminTransferWrites`: one batch — the organisation's creator and members entry, the
+        // new Super Admin (both self-manage toggles on), and every outgoing Super Admin (kept self-approved when they
+        // have no line manager; owner decision 4 Nov). Before 1.31.0 these were separate writes.
+        guard let writes = CanonicalBusinessEngine.superAdminTransferWrites(
+            organizationId: organizationId,
+            fromUserId: currentUser.id,
+            toUserId: newId,
+            previousCreatorUserId: firebaseBackend.currentOrganization?.creatorUserId,
+            roster: unfoldedRosterRows
+        ) else {
+            errorMessage = "Couldn't work out the change: the rules did not load. Nothing was changed."
+            return false
+        }
 
         do {
-            try await firebaseBackend.transferOrganizationOwnership(
-                organizationId: organizationId,
-                newCreatorUserId: newId,
-                alsoDemoteUserIds: alsoDemoteUserIds
-            )
+            let db = Firestore.firestore()
+            let batch = db.batch()
+            let actor = Auth.auth().currentUser?.uid
+            for write in writes {
+                let ref = db.document(write.path)
+                var fields: [String: Any] = [:]
+                for (key, value) in write.fields { fields[key] = value }
+                switch write.kind {
+                case "membership":
+                    // Admins may not read another person's membership: a merge-set of the nested flags (created when
+                    // missing), as web `transferSuperAdmin`.
+                    var flat: [String: Any] = ["organizationId": organizationId, "updatedAt": FieldValue.serverTimestamp()]
+                    var nested: [String: Any] = [:]
+                    for (key, value) in fields {
+                        if key.hasPrefix("permissions.") { nested[String(key.dropFirst("permissions.".count))] = value } else { flat[key] = value }
+                    }
+                    flat["permissions"] = nested
+                    batch.setData(flat, forDocument: ref, merge: true)
+                case "userProfile":
+                    batch.updateData(WriteMetadata.stamped(fields, userId: actor), forDocument: ref)
+                default:
+                    fields["updatedAt"] = FieldValue.serverTimestamp()
+                    batch.updateData(fields, forDocument: ref)
+                }
+            }
+            try await batch.commit()
+            if organizationIdsMatch(firebaseBackend.currentOrganization?.firestoreDocumentId, organizationId) {
+                firebaseBackend.currentOrganization?.creatorUserId = newId
+            }
             await loadCurrentUser()
             await loadOrganizationUsers()
             return true
@@ -1913,34 +2003,6 @@ class UserStore: ObservableObject {
              }
              
              // MARK: - User Management
-             
-             func deactivateUser(userId: String) async {
-                 guard let firebaseBackend = firebaseBackend else { return }
-                 if isOrganizationCreator(userId: userId) { return }
-                 if rosterRow(for: userId)?.isSuperAdmin == true { return }
-                 
-                 do {
-                     // Writes only `isActive` (+ WriteMetadata) — never the whole profile from this copy.
-                     var updatedUser = organizationUsers.first { $0.id == userId }
-                     updatedUser?.isActive = false
-                     
-                     if let user = updatedUser {
-                         try await firebaseBackend.updateUserActiveFlag(userId: user.id, isActive: false)
-                         await firebaseBackend.patchMembershipAccountActiveIfExists(
-                             userId: user.id,
-                             organizationId: user.organizationId,
-                             accountActive: false
-                         )
-                         
-                         // Update local array
-                         if let index = rosterIndex(for: userId) {
-                             organizationUsers[index] = user
-                         }
-                     }
-                 } catch {
-                     print("🔥🔥🔥 DEBUG: Error deactivating user: \(error)")
-                 }
-             }
              
              func deleteUser(_ user: AppUser, bookingStore: BookingStore?, operativeStore: OperativeStore?) async {
                  guard let firebaseBackend = firebaseBackend else {
@@ -1966,10 +2028,18 @@ class UserStore: ObservableObject {
                     errorMessage = refusal
                     return
                 }
+                // RULEBOOK 1.31.0 §11 `lineManagerChangeBlock`: a line manager is not deleted while anyone reports to them.
+                if let blocked = lineManagerChangeBlockMessage(for: user, change: .delete) {
+                    errorMessage = blocked
+                    return
+                }
                 guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
                     errorMessage = "Organization not loaded."
                     return
                 }
+                let rosterBeforeDelete = unfoldedRosterRows
+                let targetRole = Self.staffAccountRole(for: user)
+                let deletedOperative = targetRole.isOperativeMode && !targetRole.isAdmin && !targetRole.isSuperAdmin
                 guard let actorUid = Auth.auth().currentUser?.uid else {
                     errorMessage = "Sign in again to delete this person."
                     return
@@ -2012,6 +2082,9 @@ class UserStore: ObservableObject {
                         "operativeRows": (operativeStore?.operatives ?? []).map { ["id": $0.documentId, "email": $0.email] as [String: Any] },
                         "managerRows": (operativeStore?.managers ?? []).map { ["id": $0.firestoreDocumentId, "email": $0.email] as [String: Any] },
                         "invitations": invitationRows,
+                        // RULEBOOK 1.31.0: an operatives manager's plan deletes only bookings dated after today
+                        // (`operativesManagerMayDeleteBooking`) and runs the account step one write at a time.
+                        "actorManagesOperatives": actorManagesOperativesOnly,
                         "nowIso": CanonicalBusinessEngine.isoString(from: Date()),
                         "tz": OrganizationRulebookContext.timeZoneIdentifier,
                     ]
@@ -2046,7 +2119,9 @@ class UserStore: ObservableObject {
                             try await batch.commit()
                             print("🔥🔥🔥 DEBUG: ✅ userDeleteWrites step \(index) (\(step["step"] as? String ?? "?")) done")
                         } catch {
-                            if index == 0 { throw error }
+                            // Any `account` step refused stops the delete (an operatives manager's account step is
+                            // several single writes, RULEBOOK 1.31.0).
+                            if index == 0 || (step["step"] as? String) == "account" { throw error }
                             print("🔥🔥🔥 DEBUG: ⚠️ userDeleteWrites step \(step["step"] as? String ?? "?") refused: \(error.localizedDescription)")
                             break
                         }
@@ -2067,6 +2142,13 @@ class UserStore: ObservableObject {
                 organizationUsers.removeAll { sameEmail($0) || $0.id == userId }
                 RosterRetention.save(organizationUsers, organizationId: organizationId)
                 print("🔥🔥🔥 DEBUG: ✅ User removed from local array")
+                // RULEBOOK 1.31.0 §11, §13: a deleted manager is taken off their jobs (`job_manager_removed`); the admins
+                // hear that an operative was deleted (`operative_deleted`). Best effort — the delete is done.
+                await removeFromManagedJobs(user, change: .delete, roster: rosterBeforeDelete)
+                if deletedOperative {
+                    let name = userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? userEmail : userName
+                    await notificationService?.notifyOperativeDeleted(userId: userId, name: name.isEmpty ? "An operative" : name)
+                }
                 await loadOrganizationUsers()
                  print("🔥🔥🔥 DEBUG: ✅ Reloaded organization users after deletion")
                  print("🔥🔥🔥 DEBUG: ========== DELETE USER COMPLETE ==========")
@@ -2084,7 +2166,8 @@ class UserStore: ObservableObject {
     ) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = rosterIndex(for: userId) else { return false }
-        if isOrganizationCreator(userId: userId) {
+        // The company owner's name is changed by the owner only (RULEBOOK 1.31.0: the Super Admin edits their own profile).
+        if isOrganizationCreator(userId: userId) && Auth.auth().currentUser?.uid != userId {
             errorMessage = "Could not save this name."
             return false
         }
@@ -2416,6 +2499,14 @@ class UserStore: ObservableObject {
                 ?? "The Super Admin's account type cannot be changed here."
             return (false, nil)
         }
+        // RULEBOOK 1.31.0 §11 `lineManagerChangeBlock`: a line manager is not made an operative while anyone reports
+        // to them; the refusal lists the reports.
+        if let blocked = lineManagerChangeBlockMessage(for: person, change: .level(kind)) {
+            errorMessage = blocked
+            return (false, nil)
+        }
+        // The roster as it was before the change, for `jobManagerRemovalWrites` after it.
+        let rosterBeforeChange = unfoldedRosterRows
         let orgId = normalizedOrganizationId(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "")
         // The person as the plan reads them (web passes the stored document): every stored toggle, top level and nested,
         // so `accountTypeWritePermissions` keeps the saved toggles the new level cannot change.
@@ -2425,13 +2516,17 @@ class UserStore: ObservableObject {
         personRow["organizationId"] = person.organizationId
         // `members.{uid}` and the membership go on the id the organisation's members map knows for this person (the
         // fold may show a same-email document with another id); the shown document is written as a same-email one.
-        let planId = Self.membersKeyId(for: person, members: firebaseBackend.organizationMembersSnapshot.flatMap {
+        let membersMap = firebaseBackend.organizationMembersSnapshot.flatMap {
             organizationIdsMatch($0.organizationId, orgId) ? $0.members : nil
-        })
+        }
+        let planId = Self.membersKeyId(for: person, members: membersMap)
         personRow["id"] = planId
-        // The roster the plan scans for same-email documents of this organisation. The fold keeps one row per email,
-        // so the person's other documents are read here (their own `organizationId` decides whether they are written).
-        var roster: [[String: Any]] = organizationUsers.map { ["id": $0.id, "email": $0.email, "organizationId": $0.organizationId] }
+        // The roster the plan scans for same-email documents of this organisation: RULEBOOK 1.31.0 the UNFOLDED users
+        // documents (`unfoldedOrganizationUsers`), never the email fold; a document still missing is read here (its
+        // own `organizationId` decides whether it is written).
+        var roster: [[String: Any]] = unfoldedOrganizationUsers.map {
+            ["id": $0.id, "email": $0.email, "organizationId": $0.storedOrganizationId ?? $0.organizationId]
+        }
         for aliasId in ([person.id] + person.sameEmailUserIds) where aliasId.caseInsensitiveCompare(planId) != .orderedSame
             && !roster.contains(where: { ($0["id"] as? String)?.caseInsensitiveCompare(aliasId) == .orderedSame }) {
             guard case .present(let alias) = await firebaseBackend.probeOrganizationUser(userId: aliasId, organizationId: orgId),
@@ -2446,7 +2541,8 @@ class UserStore: ObservableObject {
             // Only the toggles the sheet shows for the new level (web `changeAccountType` passes the sheet's values).
             // The whole map carried in-effect values for toggles the sheet does not show, so admin → manager wrote
             // `wholesalersOrderHistory: true` (an admin has it in effect) over a stored false.
-            permissions: sheetToggles
+            permissions: sheetToggles,
+            members: membersMap
         ) else {
             errorMessage = "Could not work out the change. Nothing was changed."
             return (false, nil)
@@ -2505,6 +2601,9 @@ class UserStore: ObservableObject {
                 }
             }
 
+            // RULEBOOK 1.31.0 §11: made an operative → off every job they manage, admins told (`job_manager_removed`).
+            // Admin ↔ manager keeps every job (`changeRemovesJobManager` is false).
+            await removeFromManagedJobs(person, change: .level(kind), roster: rosterBeforeChange)
             // Never delete leave (owner decision 4 Nov): a type change only affects future leave.
             return (true, note)
         }
@@ -3132,8 +3231,10 @@ class UserStore: ObservableObject {
              
              // MARK: - User Active Status
              
-             /// Sets `isActive` on **every** `users/*` document for this person in the org (same email),
-             /// so duplicates (invite UUID + Auth uid) do not leave one doc stuck `true`.
+             /// RULEBOOK 1.31.0 §11 `userActiveWrites`: `isActive` on every users document of the person in this
+             /// organisation (their same-email copies included, read from the unfolded roster) and `accountActive` on their
+             /// membership, in one batch. A line manager is not deactivated while anyone reports to them
+             /// (`lineManagerChangeBlock`); a deactivated manager is taken off their jobs (`jobManagerRemovalWrites`).
              func updateUserActiveStatus(for user: AppUser, isActive: Bool) async -> Bool {
                  guard firebaseBackend != nil else {
                      errorMessage = "Unable to connect."
@@ -3147,79 +3248,63 @@ class UserStore: ObservableObject {
                      errorMessage = "The Super Admin cannot be deactivated."
                      return false
                  }
-                 
+                 if !isActive, let blocked = lineManagerChangeBlockMessage(for: user, change: .deactivate) {
+                     errorMessage = blocked
+                     return false
+                 }
+                 let rosterBeforeChange = unfoldedRosterRows
+                 let writes = CanonicalBusinessEngine.userActiveWrites(
+                     organizationId: organizationId,
+                     personId: user.id,
+                     email: user.email,
+                     isActive: isActive,
+                     roster: unfoldedOrganizationUsers.map { row in
+                         ["id": row.id, "email": row.email, "organizationId": row.storedOrganizationId ?? row.organizationId]
+                     }
+                 )
+                 guard !writes.isEmpty else {
+                     errorMessage = "Couldn't work out the change: the rules did not load. Nothing was changed."
+                     return false
+                 }
+                 // Memberships are admin writes (web `setUserActive`): a manager with the Operatives permission writes the
+                 // users documents only.
+                 let actorIsAdmin = currentUser.map { Self.staffAccountRole(for: $0) }.map { ($0.isAdmin || $0.isSuperAdmin) && !$0.isOperativeMode } ?? false
                  let db = Firestore.firestore()
-                 let emailNormalized = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                 let emailRaw = user.email.trimmingCharacters(in: .whitespacesAndNewlines)
-                 
-                 var docIds = Set<String>()
-                 docIds.insert(user.id)
-                 
+                 let batch = db.batch()
+                 let actor = Auth.auth().currentUser?.uid
+                 for write in writes {
+                     let ref = db.document(write.path)
+                     var fields: [String: Any] = [:]
+                     for (key, value) in write.fields { fields[key] = value }
+                     switch write.kind {
+                     case "membership":
+                         guard actorIsAdmin else { continue }
+                         fields["updatedAt"] = FieldValue.serverTimestamp()
+                         batch.setData(fields, forDocument: ref, merge: true)
+                     default:
+                         batch.updateData(WriteMetadata.stamped(fields, userId: actor), forDocument: ref)
+                     }
+                 }
                  do {
-                     let snapLower = try await db.collection("users")
-                         .whereField("organizationId", isEqualTo: organizationId)
-                         .whereField("email", isEqualTo: emailNormalized)
-                         .getDocuments(source: .server)
-                     for d in snapLower.documents { docIds.insert(d.documentID) }
-                     
-                     if emailRaw != emailNormalized {
-                         let snapRaw = try await db.collection("users")
-                             .whereField("organizationId", isEqualTo: organizationId)
-                             .whereField("email", isEqualTo: emailRaw)
-                             .getDocuments(source: .server)
-                         for d in snapRaw.documents { docIds.insert(d.documentID) }
-                     }
-                     
-                     var updatedCount = 0
-                     for docId in docIds {
-                         let ref = db.collection("users").document(docId)
-                         let doc = try await ref.getDocument(source: .server)
-                         guard doc.exists, let data = doc.data() else { continue }
-                         let docOrgId = organizationIdFromFirestore(data["organizationId"]) ?? ""
-                         let lastUsedIsThisOrg = docOrgId.compare(organizationId, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-                         let docEmailNorm = ((data["email"] as? String) ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                         let sameRowAsUI = (docId == user.id)
-                         guard docEmailNorm == emailNormalized || sameRowAsUI else { continue }
-
-                         // `users/{uid}.isActive` is the last-used organisation only.
-                         if lastUsedIsThisOrg {
-                             try await ref.updateData(WriteMetadata.stamped(
-                                 ["isActive": isActive],
-                                 userId: Auth.auth().currentUser?.uid
-                             ))
-                             updatedCount += 1
-                             print("🔥🔥🔥 DEBUG: ✅ isActive=\(isActive) on users/\(docId)")
-                         }
-
-                         let patchedMembership = await firebaseBackend?.patchMembershipAccountActiveIfExists(
-                             userId: docId,
-                             organizationId: organizationId,
-                             accountActive: isActive
-                         ) ?? false
-                         if patchedMembership, !lastUsedIsThisOrg {
-                             updatedCount += 1
-                         }
-                     }
-                     
-                     if updatedCount == 0 {
-                         errorMessage = "Could not update this user in Firestore (no matching documents)."
-                         print("🔥🔥🔥 DEBUG: ❌ updateUserActiveStatus: 0 documents updated for \(emailNormalized)")
-                         return false
-                     }
-                     
-                     for i in organizationUsers.indices {
-                         if organizationUsers[i].email.lowercased() == emailNormalized {
-                             organizationUsers[i].isActive = isActive
-                         }
-                     }
-                     await loadOrganizationUsers()
-                     errorMessage = nil
-                     return true
+                     try await batch.commit()
                  } catch {
                      errorMessage = "Failed to update active status: \(error.localizedDescription)"
                      print("🔥🔥🔥 DEBUG: ❌ Error updating user active status: \(error)")
                      return false
                  }
+                 let emailNormalized = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                 for i in organizationUsers.indices {
+                     if organizationUsers[i].id == user.id
+                         || (!emailNormalized.isEmpty && organizationUsers[i].email.lowercased() == emailNormalized) {
+                         organizationUsers[i].isActive = isActive
+                     }
+                 }
+                 errorMessage = nil
+                 if !isActive {
+                     await removeFromManagedJobs(user, change: .deactivate, roster: rosterBeforeChange)
+                 }
+                 await loadOrganizationUsers()
+                 return true
              }
              
              // MARK: - Resend Invitation Email

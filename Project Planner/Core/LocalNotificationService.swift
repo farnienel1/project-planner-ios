@@ -46,6 +46,12 @@ class LocalNotificationService {
         case .operativeCreated:
             content.title = "New Operative Created"
             content.body = details.isEmpty ? "John Smith has been added as a new operative." : details
+        case .operativeDeleted:
+            content.title = "Operative deleted"
+            content.body = details.isEmpty ? "An operative was deleted." : details
+        case .jobManagerRemoved:
+            content.title = "Manager removed from jobs"
+            content.body = details.isEmpty ? "A manager was removed from their jobs." : details
         case .managerCreated:
             content.title = "New Manager Created"
             content.body = details.isEmpty ? "Jane Doe has been added as a new manager." : details

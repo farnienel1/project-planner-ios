@@ -1019,9 +1019,13 @@ class FirebaseBackend: ObservableObject {
             try await auth.sendPasswordReset(withEmail: email)
             return
         }
+        // RULEBOOK 1.31.0 §11 `userPermissionFlag`: the top-level value when stored, else `permissions.{key}` (this read
+        // took the nested value first). A flag stored in neither place keeps the invite default.
         let permissionsMap = data["permissions"] as? [String: Any] ?? [:]
         func permissionFlag(_ key: String, default defaultValue: Bool) -> Bool {
-            firestoreBool(permissionsMap[key]) ?? firestoreBool(data[key]) ?? defaultValue
+            guard firestoreBool(data[key]) != nil || firestoreBool(permissionsMap[key]) != nil else { return defaultValue }
+            return CanonicalBusinessEngine.userPermissionFlag((Self.firestoreJSON(data) as? [String: Any]) ?? [:], key: key)
+                ?? firestoreBool(data[key]) ?? firestoreBool(permissionsMap[key]) ?? defaultValue
         }
         let permissions = UserPermissions(
             adminAccess: permissionFlag("adminAccess", default: false),
@@ -5834,14 +5838,6 @@ class FirebaseBackend: ObservableObject {
         try await updateUserDocumentWithPayProfile(userId: user.id, payload: WriteMetadata.stamped(changes, userId: uid))
     }
 
-    /// Deactivate / reactivate: only `isActive` plus `WriteMetadata` on `users/{uid}` (RULEBOOK §11).
-    func updateUserActiveFlag(userId: String, isActive: Bool) async throws {
-        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        try await db.collection("users").document(trimmed)
-            .updateData(WriteMetadata.stamped(["isActive": isActive], userId: auth.currentUser?.uid))
-    }
-
     /// True when this phone is in a different company from `users/{uid}.organizationId`.
     private func sessionsAreSeparate(for user: AppUser) -> Bool {
         guard user.id == auth.currentUser?.uid,
@@ -6445,185 +6441,6 @@ class FirebaseBackend: ObservableObject {
         ])
     }
 
-    // MARK: - Ownership transfer (Super Admin reassignment)
-
-    /// Transfers organisation ownership to another administrator.
-    /// Writes `creatorUserId`, `isSuperAdmin`, `adminAccess`, and `role` only. Other permission toggles stay as they are.
-    /// - Parameter alsoDemoteUserIds: Roster users who already have `isSuperAdmin`, including people whose `organizationId` is another company.
-    func transferOrganizationOwnership(
-        organizationId: String,
-        newCreatorUserId: String,
-        alsoDemoteUserIds: [String] = []
-    ) async throws {
-        let orgId = normalizedOrganizationId(organizationId)
-        let newId = newCreatorUserId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !orgId.isEmpty, !newId.isEmpty else {
-            throw ownershipTransferError("Organization or new Super Admin is missing.")
-        }
-        guard let signedInId = currentUser?.uid.trimmingCharacters(in: .whitespacesAndNewlines), !signedInId.isEmpty else {
-            throw ownershipTransferError("You need to be signed in to change the Super Admin.")
-        }
-        guard signedInId != newId else {
-            throw ownershipTransferError("You are already the Super Admin.")
-        }
-
-        let orgRef = db.collection("organizations").document(orgId)
-        let orgSnap = try await orgRef.getDocument()
-        guard orgSnap.exists else {
-            throw ownershipTransferError("Organization not loaded.")
-        }
-        let previousCreatorId = (orgSnap.data()?["creatorUserId"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let signedInSnap = try await db.collection("users").document(signedInId).getDocument()
-        let signedInFlag = signedInSnap.exists && storedUserFlag(signedInSnap.data() ?? [:], "isSuperAdmin")
-        guard signedInFlag else {
-            throw ownershipTransferError("Only the Super Admin can transfer ownership.")
-        }
-
-        let newOwnerSnap = try await db.collection("users").document(newId).getDocument()
-        guard newOwnerSnap.exists, let newOwnerData = newOwnerSnap.data() else {
-            throw ownershipTransferError("That administrator could not be found.")
-        }
-        guard !storedUserFlag(newOwnerData, "operativeMode") else {
-            throw ownershipTransferError("Cannot make an operative the Super Admin.")
-        }
-        guard storedUserIsAdmin(newOwnerData) else {
-            throw ownershipTransferError("Only an Admin can be made Super Admin.")
-        }
-
-        var outgoing = await currentSuperAdminUserIds(
-            organizationId: orgId,
-            previousCreatorUserId: previousCreatorId,
-            signedInUserId: signedInId,
-            alsoDemoteUserIds: alsoDemoteUserIds
-        )
-        outgoing.remove(newId)
-
-        let now = Timestamp(date: Date())
-        try await orgRef.updateData([
-            "creatorUserId": newId,
-            "updatedAt": now
-        ])
-
-        for userId in outgoing {
-            let fields = outgoingAdministratorFields(at: now)
-            try await writeSuperAdminTransferFields(userId: userId, fields: fields)
-            await patchOrgMembershipSuperAdminFields(userId: userId, organizationId: orgId, fields: fields)
-        }
-        let ownerFields = incomingSuperAdminFields(at: now)
-        try await writeSuperAdminTransferFields(userId: newId, fields: ownerFields)
-        await patchOrgMembershipSuperAdminFields(userId: newId, organizationId: orgId, fields: ownerFields)
-
-        if organizationIdsMatch(currentOrganization?.firestoreDocumentId, orgId) {
-            currentOrganization?.creatorUserId = newId
-        }
-    }
-
-    private func ownershipTransferError(_ message: String) -> NSError {
-        NSError(domain: "OwnershipTransfer", code: 403, userInfo: [NSLocalizedDescriptionKey: message])
-    }
-
-    /// Top-level flag wins. Nested `permissions` covers website writes. Missing is false.
-    private func storedUserFlag(_ data: [String: Any], _ key: String) -> Bool {
-        let nested = data["permissions"] as? [String: Any] ?? [:]
-        if let top = firestoreBool(data[key]) { return top }
-        if let nestedValue = firestoreBool(nested[key]) { return nestedValue }
-        return false
-    }
-
-    private func storedUserIsAdmin(_ data: [String: Any]) -> Bool {
-        if storedUserFlag(data, "adminAccess") { return true }
-        let role = (data["role"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? ""
-        return role == UserRole.admin.rawValue || role.contains("admin")
-    }
-
-    /// People who must leave the super-admin role: every `isSuperAdmin` user linked to this organisation, the signed-in super admin, and the previous creator.
-    private func currentSuperAdminUserIds(
-        organizationId: String,
-        previousCreatorUserId: String?,
-        signedInUserId: String,
-        alsoDemoteUserIds: [String]
-    ) async -> Set<String> {
-        var ids = Set<String>()
-        func add(_ raw: String?) {
-            let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !trimmed.isEmpty else { return }
-            ids.insert(trimmed)
-        }
-        add(previousCreatorUserId)
-        add(signedInUserId)
-        for userId in alsoDemoteUserIds { add(userId) }
-
-        let orgUsers = (try? await userDocuments(whereOrganizationIdEquals: organizationId, required: false)) ?? []
-        for doc in orgUsers where storedUserFlag(doc.data(), "isSuperAdmin") {
-            add(doc.documentID)
-        }
-        return ids
-    }
-
-    private func outgoingAdministratorFields(at now: Timestamp) -> [String: Any] {
-        [
-            "isSuperAdmin": false,
-            "adminAccess": true,
-            "role": UserRole.admin.rawValue,
-            "permissions.adminAccess": true,
-            "updatedAt": now
-        ]
-    }
-
-    private func incomingSuperAdminFields(at now: Timestamp) -> [String: Any] {
-        [
-            "isSuperAdmin": true,
-            "adminAccess": true,
-            "role": UserRole.admin.rawValue,
-            "permissions.adminAccess": true,
-            "updatedAt": now
-        ]
-    }
-
-    /// Keeps an existing phone-session snapshot in step with the transfer. Does not create a membership document.
-    private func patchOrgMembershipSuperAdminFields(userId: String, organizationId: String, fields: [String: Any]) async {
-        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let orgId = normalizedOrganizationId(organizationId)
-        guard !trimmed.isEmpty, !orgId.isEmpty else { return }
-        let ref = db.collection("users").document(trimmed).collection("orgMemberships").document(orgId)
-        do {
-            // RULEBOOK 1.10.0 §14: `orgMembershipWriteFields` (admin) — nested `permissions.adminAccess`, role, super
-            // admin; never a flat merge. Only an existing membership is updated.
-            _ = ref
-            try await writeOrgMembership(
-                userId: trimmed,
-                organizationId: orgId,
-                next: [
-                    "role": fields["role"] as? String ?? UserRole.admin.rawValue,
-                    "isSuperAdmin": fields["isSuperAdmin"] as? Bool ?? false,
-                    "permissions": ["adminAccess": (fields["permissions.adminAccess"] as? Bool) ?? (fields["adminAccess"] as? Bool) ?? true],
-                ],
-                writer: "admin"
-            )
-        } catch {
-            print("🔥🔥🔥 DEBUG: membership super-admin flag patch skipped for \(trimmed): \(error.localizedDescription)")
-        }
-    }
-
-    /// Partial update. A nested `permissions.adminAccess` write keeps every other toggle. If that map is not a map, the top-level fields still save.
-    private func writeSuperAdminTransferFields(userId: String, fields: [String: Any]) async throws {
-        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let ref = db.collection("users").document(trimmed)
-        let snap = try await ref.getDocument()
-        guard snap.exists else { return }
-        do {
-            try await ref.updateData(fields)
-        } catch {
-            var topLevel = fields
-            topLevel.removeValue(forKey: "permissions.adminAccess")
-            try await ref.updateData(topLevel)
-        }
-    }
-    
     // Placeholder cleanup no longer needed - placeholders are no longer created
     
     func verifyOrganizationStructure() async {
