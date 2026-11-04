@@ -319,6 +319,11 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertTrue(subject.map(ids.contains) ?? false)
     }
 
+    /// The organisation-wide read of exported sheets without `userId` is memoised for web's 20 seconds.
+    func testExportedHistoryReadIsMemoisedLikeWeb() {
+        XCTAssertEqual(FirebaseBackend.exportedHistoryMemoSeconds, 20, "web EXPORTED_HISTORY_TTL_MS")
+    }
+
     // MARK: 16. Own-profile save: changed fields only (`userProfileWriteFields`)
 
     /// A phone-number edit sends the phone only; a name edit sends the name group, never the email or phone again.

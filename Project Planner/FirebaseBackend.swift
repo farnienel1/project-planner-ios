@@ -10526,7 +10526,22 @@ extension FirebaseBackend {
     /// RULEBOOK 1.31.0 §8: exported sheets an older build stored without `userId` (web's exported-history fast path,
     /// `exportedAt != null`). Each row carries `__documentId` and `__subjectId`, the subject read from the document id
     /// (`timesheetDocumentSubjectId`). Rows that do carry `userId` are left to `listTimesheetStates`.
-    func listExportedTimesheetsWithoutUserId(organizationId: String) async throws -> [[String: Any]] {
+    /// Memoised per organisation for `exportedHistoryMemoSeconds` (web's `EXPORTED_HISTORY_TTL_MS`, 20 s), so
+    /// reopening the Exported list does not repeat the organisation-wide read.
+    func listExportedTimesheetsWithoutUserId(organizationId: String, now: Date = Date()) async throws -> [[String: Any]] {
+        let key = normalizedOrganizationId(organizationId)
+        if let hit = Self.exportedWithoutUserIdMemo[key], now.timeIntervalSince(hit.at) < Self.exportedHistoryMemoSeconds {
+            return hit.rows
+        }
+        let rows = try await readExportedTimesheetsWithoutUserId(organizationId: organizationId)
+        Self.exportedWithoutUserIdMemo[key] = (now, rows)
+        return rows
+    }
+
+    static let exportedHistoryMemoSeconds: TimeInterval = 20
+    private static var exportedWithoutUserIdMemo: [String: (at: Date, rows: [[String: Any]])] = [:]
+
+    private func readExportedTimesheetsWithoutUserId(organizationId: String) async throws -> [[String: Any]] {
         let snapshot = try await db.collection("organizations")
             .document(organizationId)
             .collection("settings")
