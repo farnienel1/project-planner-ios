@@ -366,7 +366,8 @@ struct OperativeMaterialsPanel: View {
 }
 
 enum MaterialsWeekHelpers {
-    static func weekDays(containing date: Date, calendar: Calendar = .current) -> [Date] {
+    /// Monday–Sunday in the organisation zone (rulebook §1: the week starts on Monday), never the phone's locale week.
+    static func weekDays(containing date: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> [Date] {
         guard let weekInterval = calendar.dateInterval(of: .weekOfYear, for: date) else { return [] }
         return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: weekInterval.start) }
     }

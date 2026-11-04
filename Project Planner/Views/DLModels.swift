@@ -369,7 +369,7 @@ enum DLFormat {
     static func stamp(_ d: Date)   -> String { timeFmt.string(from: d) }
 
     static func weekCommencing(_ d: Date) -> String {
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         let start = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: d)) ?? d
         return "W/C \(day(start))"
     }

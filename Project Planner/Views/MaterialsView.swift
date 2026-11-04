@@ -406,7 +406,7 @@ private struct OperativeMaterialsView: View {
     }
     
     private var weekDays: [Date] {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: currentWeek)?.start else {
             return []
         }
@@ -436,7 +436,7 @@ private struct OperativeMaterialsView: View {
     }
     
     private var weekRangeString: String {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: currentWeek)?.start,
               let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart) else {
             return ""
@@ -915,7 +915,7 @@ private struct MaterialEntrySection: View {
 enum MaterialsWeekNavigation {
     /// Moving the week arrows used to update only `currentWeek`, so the list still filtered an old day while the strip showed another week.
     static func applyWeekDelta(_ weeks: Int, currentWeek: inout Date, selectedDate: inout Date) {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         guard let anchor = calendar.date(byAdding: .weekOfYear, value: weeks, to: currentWeek) else { return }
         guard let oldWeekStart = calendar.dateInterval(of: .weekOfYear, for: currentWeek)?.start,
               let newWeekStart = calendar.dateInterval(of: .weekOfYear, for: anchor)?.start else { return }
