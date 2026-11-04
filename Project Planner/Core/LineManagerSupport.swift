@@ -52,7 +52,8 @@ extension AppUser {
     /// legacy single id, none when `hasNoLineManager`; with the live roster only active managers count, an old
     /// invite id is resolved to its roster row, and the person never counts under any of their ids.
     var canonicalLineManagerIds: [String] {
-        RulebookRosterSnapshot.lineManagerIds(self) ?? (hasNoLineManager ? [] : lineManagerUserIds)
+        // Empty when the script did not answer (fail closed; no Swift copy of the rule, AGENTS.md Rule 0).
+        RulebookRosterSnapshot.lineManagerIds(self) ?? []
     }
 
     func isLineManager(_ managerUserId: String) -> Bool {

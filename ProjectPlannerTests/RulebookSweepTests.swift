@@ -255,4 +255,17 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertEqual(days.first.map(OrganizationRulebookContext.dayKey), "2026-11-02")
         XCTAssertEqual(days.last.map(OrganizationRulebookContext.dayKey), "2026-11-08")
     }
+
+    // MARK: 13. No Swift fallbacks (`bookingIdsForAccount`, `lineManagerIds`, `userTimesheetSubjects`)
+
+    /// With the script answering, the account's ids are the rulebook's (`bookingIdsForAccount`): own, former and the
+    /// catalogue row on its email. The Swift copy used when the script did not answer is gone (fail closed).
+    func testAccountIdsComeOnlyFromTheRulebook() {
+        let person = staffUser(id: "uid-1", email: "ada@example.com", formerUserIds: ["invite-1"])
+        let catalogue = LogicFixtures.operative(id: UUID(), email: "ADA@example.com")
+        let ids = labourBookingIds(for: person, operatives: [catalogue])
+        XCTAssertTrue(ids.contains(catalogue.id))
+        XCTAssertTrue(ids.contains(Booking.internalOperativeId(for: "invite-1")))
+        XCTAssertTrue(ids.contains(Booking.internalOperativeId(for: "uid-1")))
+    }
 }

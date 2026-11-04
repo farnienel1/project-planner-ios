@@ -7533,10 +7533,8 @@ class FirebaseBackend: ObservableObject {
             scheduleHistoryStart = day
             return true
         }
-        let day = Calendar.current.startOfDay(for: date)
-        guard day < current else { return false }
-        scheduleHistoryStart = day
-        return true
+        // The script did not answer: the download is left as it is (no Swift copy of `bookingLoadStart`).
+        return false
     }
 
     /// Weekly report, invoicing, and a project week outside the launch window ask for the archive.

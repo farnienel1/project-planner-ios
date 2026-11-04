@@ -1161,14 +1161,11 @@ class UserStore: ObservableObject {
         if isUserTimesheetRosterLoading {
             return true
         }
-        if let ids = UserTimesheetAccessRulebook.subjectUserIds(viewer: user, members: organizationUsers) {
-            return !ids.isEmpty
+        // `userTimesheetSubjects`; closed when the script did not answer (no Swift copy of the rule, AGENTS.md Rule 0).
+        guard let ids = UserTimesheetAccessRulebook.subjectUserIds(viewer: user, members: organizationUsers) else {
+            return false
         }
-        return organizationUsers.contains { orgUser in
-            guard orgUser.permissions.operativeMode else { return false }
-            guard orgUser.isActive else { return false }
-            return orgUser.isLineManager(user.id)
-        }
+        return !ids.isEmpty
     }
 
     /// The profile, or this organisation's roster, has not arrived yet. Screens wait instead of deciding on an empty list.
@@ -1181,22 +1178,13 @@ class UserStore: ObservableObject {
     /// `userTimesheetSubjects` decides once the packed script has it; before that, the screen's previous filter.
     func userTimesheetSubjectUsers() -> [AppUser] {
         guard let viewer = displayUser else { return [] }
-        let users: [AppUser]
-        if let ids = UserTimesheetAccessRulebook.subjectUserIds(viewer: viewer, members: organizationUsers) {
-            let wanted = Set(ids)
-            users = organizationUsers.filter { wanted.contains($0.id) }
-        } else if CanonicalBusinessEngine.seesEveryUserTimesheet(Self.staffAccountRole(for: viewer)) == true {
-            users = organizationUsers.filter { user in
-                user.isActive
-                && (user.permissions.operativeMode || user.permissions.manager || user.permissions.adminAccess || user.role == .manager || user.role == .admin)
-            }
-        } else {
-            users = organizationUsers.filter { user in
-                user.isActive && user.isLineManager(viewer.id)
-            }
+        // `userTimesheetSubjects`; empty when the script did not answer (no Swift copy of the rule, AGENTS.md Rule 0).
+        guard let ids = UserTimesheetAccessRulebook.subjectUserIds(viewer: viewer, members: organizationUsers) else {
+            return []
         }
-        // RULEBOOK 1.30.2 `userTimesheetSubjects`: never the viewer (their own sheet is My Timesheets). The script
-        // already leaves them out; the fallback lists (script did not answer) must not add them back.
+        let wanted = Set(ids)
+        let users = organizationUsers.filter { wanted.contains($0.id) }
+        // RULEBOOK 1.30.2 `userTimesheetSubjects`: never the viewer (their own sheet is My Timesheets).
         let viewerIds = Set(RulebookPeople.ownerIds(for: viewer, users: organizationUsers).map { $0.lowercased() })
         return users
             .filter { !viewerIds.contains($0.id.lowercased()) }

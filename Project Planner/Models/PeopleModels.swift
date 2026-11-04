@@ -475,12 +475,7 @@ func labourBookingIds(for user: AppUser, operatives: [Operative]) -> Set<UUID> {
     let ids = CanonicalBusinessEngine.bookingIdsForAccount(
         account,
         operatives: operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.documentId, email: $0.email) }
-    ) ?? {
-        // The script did not answer: the account's own ids and the catalogue rows on its email.
-        let key = StaffEmailIdentity.emailKey(user.email)
-        let catalogue = key.isEmpty ? [] : operatives.filter { StaffEmailIdentity.emailKey($0.email) == key }.map(\.documentId)
-        return [user.id] + user.formerUserIds + user.sameEmailUserIds + catalogue
-    }()
+    ) ?? []  // The script did not answer: no ids (fail closed; no Swift copy of the rule, AGENTS.md Rule 0).
     return Set(ids.map { Booking.internalOperativeId(for: $0) })
 }
 
