@@ -1046,6 +1046,18 @@ enum TimesheetDraftStore {
                 return !firestoreValuesEqual(value, server?[key])
             }
             fields = fields.filter { keep.contains($0.key) }
+            // RULEBOOK 1.30.1 §8 `timesheetPriceWorkJobNumberError(previous, next)`: the owner's added or edited price
+            // work entries need a job number; entries they did not touch (older ones without one) never block. Compared
+            // with the sheet as this editor loaded it, else as stored. A reviewer's save never asks.
+            let loadedEntries = loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId)
+                .flatMap { asFirestoreMap($0)["priceWorkEntries"] as? [Any] }
+            let previousEntries = loadedEntries ?? (server?["priceWorkEntries"] as? [Any]) ?? []
+            if let message = CanonicalBusinessEngine.timesheetPriceWorkJobNumberError(
+                previous: previousEntries,
+                next: asFirestoreMap(draft)["priceWorkEntries"] as? [Any] ?? []
+            ) {
+                return message
+            }
         }
         var changed: [String: Any] = [:]
         if server != nil, let loaded = loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId) {
@@ -4436,7 +4448,7 @@ private struct OperativeTimesheetReviewView: View {
                 ForEach(Array(draft.priceWorkEntries.enumerated()), id: \.element.id) { index, row in
                     managerExtraRow(
                         title: row.title,
-                        subtitle: "Agreed with: \(row.agreedManagerName) · \(row.startDate.formatted(date: .abbreviated, time: .omitted)) · \(row.jobNumber)",
+                        subtitle: "Agreed with: \(row.agreedManagerName) · \(row.startDate.formatted(date: .abbreviated, time: .omitted)) · \(CanonicalBusinessEngine.priceWorkJobNumberText(row.jobNumber))",
                         amount: row.amount,
                         decision: row.managerDecision,
                         revisedAmount: row.managerRevisedAmount,
@@ -5194,6 +5206,11 @@ private struct TimesheetMoneyEntrySheet: View {
         self.onSavePriceWork = onSave
     }
 
+    /// RULEBOOK 1.30.1 `priceWorkJobNumberError`: price work only (an expense's job number stays optional).
+    private var jobNumberError: String? {
+        mode == .priceWork ? CanonicalBusinessEngine.priceWorkJobNumberError(jobNumber) : nil
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -5202,8 +5219,14 @@ private struct TimesheetMoneyEntrySheet: View {
                     Divider().overlay(ProjectWorksRevampColors.border)
                     labeledMultiline("Description", text: $details)
                     Divider().overlay(ProjectWorksRevampColors.border)
-                    labeledField("Job number", text: $jobNumber)
+                    labeledField(mode == .priceWork ? "Job number (required)" : "Job number", text: $jobNumber)
                     suggestionRow(jobSuggestions) { jobNumber = $0 }
+                    // RULEBOOK 1.30.1: a new price work entry needs a job number (`priceWorkJobNumberError`).
+                    if let jobNumberError, !(entryTitle.isEmpty && amountText.isEmpty) {
+                        Text(jobNumberError)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red)
+                    }
                     Divider().overlay(ProjectWorksRevampColors.border)
                     labeledField("Amount", text: $amountText, keyboard: .decimalPad)
                 }
@@ -5267,7 +5290,7 @@ private struct TimesheetMoneyEntrySheet: View {
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button(mode == .expense ? "Add expense" : "Add price work") {
-                    guard let amount, amount > 0 else { return }
+                    guard let amount, amount > 0, jobNumberError == nil else { return }
                     if mode == .expense {
                         onSaveExpense(
                             .init(
@@ -5286,7 +5309,7 @@ private struct TimesheetMoneyEntrySheet: View {
                                 id: UUID(),
                                 title: entryTitle.isEmpty ? "Untitled price work" : entryTitle,
                                 details: details,
-                                jobNumber: jobNumber,
+                                jobNumber: jobNumber.trimmingCharacters(in: .whitespacesAndNewlines),
                                 agreedManagerName: managerName.isEmpty ? "Manager" : managerName,
                                 startDate: date,
                                 endDate: includeEndDate ? endDate : nil,
@@ -5297,7 +5320,7 @@ private struct TimesheetMoneyEntrySheet: View {
                     dismiss()
                 }
                 .accessibilityIdentifier("timesheets.addExpense")
-                .disabled(amount == nil || (amount ?? 0) <= 0 || (mode == .expense && receiptName == nil))
+                .disabled(amount == nil || (amount ?? 0) <= 0 || (mode == .expense && receiptName == nil) || jobNumberError != nil)
             }
         }
         .onChange(of: receiptItem) { _, newItem in
@@ -6463,7 +6486,7 @@ private enum TimesheetInvoiceRows {
                 if fromOverride, let line = overridePriceWork[key(id)] {
                     rows.append(moneyRow(prefix: "pw", id: line.id, date: line.date, jobNumber: line.jobNumber, projectName: "Price work", details: line.title, amount: amount))
                 } else if let entry = priceWork[key(id)] {
-                    rows.append(moneyRow(prefix: "pw", id: entry.id.uuidString, date: entry.startDate, jobNumber: entry.jobNumber, projectName: "Price work", details: entry.title, amount: amount))
+                    rows.append(moneyRow(prefix: "pw", id: entry.id.uuidString, date: entry.startDate, jobNumber: CanonicalBusinessEngine.priceWorkJobNumberText(entry.jobNumber), projectName: "Price work", details: entry.title, amount: amount))
                 }
             case "expense":
                 if fromOverride, let line = overrideExpenses[key(id)] {

@@ -6,6 +6,8 @@ import XCTest
 /// report readiness, the report snapshot and its pages, the §24 clean-up selection), who sees whose items, the
 /// self-employed timesheet rows, personal site audits and the privacy sentence. Every answer comes from the packed
 /// script; these tests lock the Swift inputs and readings, the same cases web's `canonical.test.ts` asserts.
+/// RULEBOOK 1.30.1 (`priceWorkJobNumber.ts`): price work needs a job number — `priceWorkJobNumberError`,
+/// `priceWorkJobNumberText`, `timesheetPriceWorkJobNumberError` — locked here too.
 @MainActor
 final class Rulebook1300Tests: XCTestCase {
     private let org = "TEST-ORG-130"
@@ -113,7 +115,7 @@ final class Rulebook1300Tests: XCTestCase {
 
     func testPriceWorkValidationNeedsNameDatesAndAnApproverFromTheCandidates() {
         let base: [String: Any] = [
-            "title": "TEST-Tiling", "details": "", "startDate": "2026-11-04", "endDate": "2026-11-05",
+            "title": "TEST-Tiling", "details": "", "jobNumber": "J-1042", "startDate": "2026-11-04", "endDate": "2026-11-05",
             "approvedByUserId": "mia", "amount": "150",
         ]
         func error(_ change: [String: Any]) -> String? {
@@ -123,6 +125,8 @@ final class Rulebook1300Tests: XCTestCase {
         }
         XCTAssertNil(error([:]))
         XCTAssertEqual(error(["title": ""]), "Enter a name.")
+        XCTAssertEqual(error(["jobNumber": ""]), "Add the job number for this price work.", "1.30.1: required")
+        XCTAssertEqual(error(["jobNumber": String(repeating: "9", count: 61)]), "The job number can be up to 60 characters.")
         XCTAssertEqual(error(["endDate": "2026-11-01"]), "Choose the dates from and to (the same day is allowed).")
         XCTAssertNil(error(["endDate": "2026-11-04"]), "the same day is allowed")
         XCTAssertEqual(error(["approvedByUserId": ""]), "Choose who approved this price work.")
@@ -169,7 +173,7 @@ final class Rulebook1300Tests: XCTestCase {
 
     func testPriceWorkWriteFieldsStoreTheApproverNameAndOnlyTheAllowedKeys() throws {
         let draft: [String: Any] = [
-            "title": "TEST-Tiling", "details": "Bathroom", "startDate": "2026-11-04", "endDate": "2026-11-06",
+            "title": "TEST-Tiling", "details": "Bathroom", "jobNumber": " J-1042 ", "startDate": "2026-11-04", "endDate": "2026-11-06",
             "approvedByUserId": "mia", "amount": "150", "evidence": [[String: Any]](),
         ]
         let fields = try XCTUnwrap(CanonicalBusinessEngine.priceWorkWriteFields(
@@ -178,9 +182,10 @@ final class Rulebook1300Tests: XCTestCase {
         XCTAssertEqual(fields["approvedByUserId"] as? String, "mia")
         XCTAssertEqual(fields["approvedByName"] as? String, "Mia Test")
         XCTAssertEqual(Set(fields.keys), [
-            "userId", "title", "details", "startDate", "endDate", "approvedByUserId", "approvedByName", "amount",
+            "userId", "title", "details", "jobNumber", "startDate", "endDate", "approvedByUserId", "approvedByName", "amount",
             "currency", "evidence", "createdBy",
         ])
+        XCTAssertEqual(fields["jobNumber"] as? String, "J-1042", "1.30.1: stored trimmed")
         XCTAssertNil(CanonicalBusinessEngine.priceWorkWriteFields(
             userId: "op2", draft: draft, person: person("sam"), roster: roster, currency: "GBP", organizationId: org
         ), "only the person writes their own price work")
@@ -377,6 +382,67 @@ final class Rulebook1300Tests: XCTestCase {
         XCTAssertEqual(evidence.name, CanonicalBusinessEngine.personalSiteAuditTitle(audit))
         XCTAssertTrue(CanonicalBusinessEngine.payeClaimEvidencePathBelongsTo(copyPath, organizationId: org, userId: "sam"),
                       "the frozen copy sits in the claim folder, where line managers and admins may read it")
+    }
+
+    // MARK: 1.30.1 price work job number
+
+    func testPriceWorkJobNumberIsRequiredOnNewItemsAndShownAsADashWhenAnOlderItemHasNone() throws {
+        XCTAssertNil(CanonicalBusinessEngine.priceWorkJobNumberError("J-1042"))
+        XCTAssertEqual(CanonicalBusinessEngine.priceWorkJobNumberError("  "), "Add the job number for this price work.")
+        XCTAssertEqual(CanonicalBusinessEngine.priceWorkJobNumberMax, 60)
+        XCTAssertEqual(CanonicalBusinessEngine.priceWorkJobNumberText(nil), "—")
+        XCTAssertEqual(CanonicalBusinessEngine.priceWorkJobNumberText(" J-7 "), "J-7")
+        let older = try XCTUnwrap(CanonicalBusinessEngine.parsePayeClaimDocument(
+            kind: .priceWork, docId: "P0",
+            data: ["userId": "sam", "title": "TEST-Old", "startDate": "2026-11-02", "endDate": "2026-11-02", "amount": 40,
+                   "approvedByUserId": "mia", "approvedByName": "Mia Test"],
+            organizationId: org
+        ))
+        XCTAssertEqual(older.jobNumber, "", "an item stored before 1.30.1 stays valid")
+        let row = try XCTUnwrap(CanonicalBusinessEngine.payeClaimListRow(older, currency: "GBP"))
+        XCTAssertTrue(row.subtitle.contains("—"), "the list shows — for the missing job number")
+        let current = try XCTUnwrap(CanonicalBusinessEngine.parsePayeClaimDocument(
+            kind: .priceWork, docId: "P1",
+            data: ["userId": "sam", "title": "TEST-Tiling", "jobNumber": "J-1042", "startDate": "2026-11-04", "endDate": "2026-11-04",
+                   "amount": 150, "approvedByUserId": "mia", "approvedByName": "Mia Test"],
+            organizationId: org
+        ))
+        XCTAssertEqual(current.jobNumber, "J-1042")
+        var snapshot = try XCTUnwrap(CanonicalBusinessEngine.payeClaimReportSnapshot(
+            kind: .priceWork, userId: "sam", userName: "Sam Test", companyName: "", currency: "GBP",
+            rangeStart: "2026-11-01", rangeEnd: "2026-11-30", items: [older, current], generatedBy: "sam"
+        ))
+        snapshot["generatedAt"] = 1_762_250_100_000.0
+        let report = try XCTUnwrap(CanonicalBusinessEngine.parsePayeClaimReportDocument(docId: "R2", data: snapshot))
+        let headings = try XCTUnwrap(CanonicalBusinessEngine.payeClaimReportRows(report)).rows.map(\.heading)
+        XCTAssertTrue(headings.contains { $0.contains("—") && $0.contains("TEST-Old") })
+        XCTAssertTrue(headings.contains { $0.contains("J-1042") && $0.contains("TEST-Tiling") })
+    }
+
+    func testTheOwnersTimesheetSaveAsksForAJobNumberOnlyOnAddedOrEditedPriceWork() {
+        let old: [String: Any] = [
+            "id": "PW-OLD", "title": "Tiles", "details": "", "jobNumber": "", "agreedManagerName": "Bo",
+            "startDate": 1_762_000_000_000.0, "endDate": NSNull(), "amount": 200,
+        ]
+        XCTAssertNil(CanonicalBusinessEngine.timesheetPriceWorkJobNumberError(previous: [old], next: [old]),
+                     "an untouched older entry without a job number never blocks a save")
+        var reviewed = old
+        reviewed["managerDecision"] = "declined"
+        XCTAssertNil(CanonicalBusinessEngine.timesheetPriceWorkJobNumberError(previous: [old], next: [reviewed]),
+                     "a reviewer's decision is not an owner edit")
+        var edited = old
+        edited["amount"] = 250
+        XCTAssertEqual(CanonicalBusinessEngine.timesheetPriceWorkJobNumberError(previous: [old], next: [edited]),
+                       "Add the job number for this price work.")
+        let added: [String: Any] = [
+            "id": "PW-NEW", "title": "Grout", "details": "", "jobNumber": "J-9", "agreedManagerName": "Bo",
+            "startDate": 1_762_100_000_000.0, "endDate": NSNull(), "amount": 50,
+        ]
+        XCTAssertNil(CanonicalBusinessEngine.timesheetPriceWorkJobNumberError(previous: [old], next: [old, added]))
+        var addedWithout = added
+        addedWithout["jobNumber"] = ""
+        XCTAssertEqual(CanonicalBusinessEngine.timesheetPriceWorkJobNumberError(previous: [old], next: [old, addedWithout]),
+                       "Add the job number for this price work.")
     }
 
     func testThePrivacyPolicyCarriesThePersonalSiteAuditSentenceWithoutAPackVersionChange() throws {

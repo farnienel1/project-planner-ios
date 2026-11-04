@@ -437,7 +437,9 @@ struct PayeClaimsRangeView: View {
         let dates = row.startDate == row.endDate
             ? CanonicalBusinessEngine.formatPayePayrunDay(row.startDate)
             : "\(CanonicalBusinessEngine.formatPayePayrunDay(row.startDate)) – \(CanonicalBusinessEngine.formatPayePayrunDay(row.endDate))"
-        return [dates, row.jobNumber, row.approvedByName.isEmpty ? "" : "Agreed by \(row.approvedByName)", "Timesheet: \(row.managerDecision)"]
+        // RULEBOOK 1.30.1: price work shows its job number, or "—" for an entry stored before (`priceWorkJobNumberText`).
+        let job = kind == .priceWork ? CanonicalBusinessEngine.priceWorkJobNumberText(row.jobNumber) : row.jobNumber
+        return [dates, job, row.approvedByName.isEmpty ? "" : "Agreed by \(row.approvedByName)", "Timesheet: \(row.managerDecision)"]
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
     }
@@ -651,7 +653,7 @@ struct AddPayeClaimSheet: View {
     private var draftError: String? {
         if priceWork {
             let draft: [String: Any] = [
-                "title": title, "details": details, "startDate": fromKey, "endDate": toKey,
+                "title": title, "details": details, "jobNumber": jobNumber, "startDate": fromKey, "endDate": toKey,
                 "approvedByUserId": approver, "amount": amount,
             ]
             return CanonicalBusinessEngine.priceWorkValidationError(draft: draft, person: person, roster: roster, organizationId: organizationId)
@@ -672,9 +674,13 @@ struct AddPayeClaimSheet: View {
                         .accessibilityIdentifier("payeClaims.add.title")
                     TextField("Description", text: $details, axis: .vertical)
                         .lineLimit(3...6)
-                    if !priceWork {
-                        TextField("Job number", text: $jobNumber)
-                    }
+                    // RULEBOOK 1.30.1: price work needs a job number (`priceWorkJobNumberError` inside the validator).
+                    TextField(priceWork ? "Job number (required)" : "Job number", text: $jobNumber)
+                        .accessibilityIdentifier("payeClaims.add.jobNumber")
+                        .onChange(of: jobNumber) { _, value in
+                            let max = CanonicalBusinessEngine.priceWorkJobNumberMax
+                            if value.count > max { jobNumber = String(value.prefix(max)) }
+                        }
                 }
                 Section {
                     DatePicker(priceWork ? "From" : "Date", selection: $from, displayedComponents: .date)
@@ -867,7 +873,7 @@ struct AddPayeClaimSheet: View {
             let evidenceJSON = uploaded.map(\.json)
             if priceWork {
                 let draft: [String: Any] = [
-                    "title": title, "details": details, "startDate": fromKey, "endDate": toKey,
+                    "title": title, "details": details, "jobNumber": jobNumber, "startDate": fromKey, "endDate": toKey,
                     "approvedByUserId": approver, "amount": amount, "evidence": evidenceJSON,
                 ]
                 _ = try await firebaseBackend.addPriceWork(draft: draft, person: person, roster: roster)

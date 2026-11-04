@@ -244,6 +244,36 @@ extension CanonicalBusinessEngine {
         )
     }
 
+    // MARK: Price work job number (1.30.1, `priceWorkJobNumber.ts`)
+
+    /// `PRICE_WORK_JOB_NUMBER_MAX` (60).
+    nonisolated static var priceWorkJobNumberMax: Int {
+        constant("PRICE_WORK_JOB_NUMBER_MAX", as: Int.self) ?? 60
+    }
+
+    /// `priceWorkJobNumberError(value)`: nil when the job number is usable (trimmed, 1–60), else the message.
+    nonisolated static func priceWorkJobNumberError(_ value: String) -> String? {
+        let answer = callJSON("priceWorkJobNumberError", arguments: [value])
+        if let message = answer as? String { return message }
+        return answer == nil ? "The rulebook did not answer. Try again." : nil
+    }
+
+    /// `priceWorkJobNumberText(value)`: the stored job number, or "—" for price work stored before 1.30.1.
+    nonisolated static func priceWorkJobNumberText(_ value: String?) -> String {
+        if let text = callJSON("priceWorkJobNumberText", arguments: [RulebookJSON.orNull(value)]) as? String { return text }
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "—" : trimmed
+    }
+
+    /// `timesheetPriceWorkJobNumberError(previous, next)`: the owner's added or edited timesheet price work entries need
+    /// a job number; untouched entries never block. Entries are the stored shape (JSON: dates as ms or ISO). Nil when
+    /// the save may go ahead, and also when the script did not answer (an older script never blocks a save).
+    nonisolated static func timesheetPriceWorkJobNumberError(previous: [Any], next: [Any]) -> String? {
+        let before = FirebaseBackend.firestoreJSON(previous)
+        let after = FirebaseBackend.firestoreJSON(next)
+        return callJSON("timesheetPriceWorkJobNumberError", arguments: [before, after]) as? String
+    }
+
     // MARK: Evidence
 
     /// `payeClaimEvidencePath({ organizationId, userId, unixMs, extension })`. Nil when an id is unusable.
