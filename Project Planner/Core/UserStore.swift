@@ -2356,34 +2356,7 @@ class UserStore: ObservableObject {
                              RosterRetention.save(organizationUsers, organizationId: orgId)
                          }
 
-                         if let holidayStore,
-                            UserRoleTransitionPolicy.shouldClearPendingAnnualLeave(
-                                old: previousPermissions,
-                                new: sanitized,
-                                oldHasNoLineManager: saved.hasNoLineManager,
-                                newHasNoLineManager: saved.hasNoLineManager,
-                                oldLineManagerUserIds: saved.lineManagerUserIds,
-                                newLineManagerUserIds: saved.lineManagerUserIds,
-                                users: organizationUsers
-                            ) {
-                             await holidayStore.deletePendingHolidayRequestsFor(
-                                 userId: userId,
-                                 operativeId: linkedOperativeUUID
-                             )
-                         }
-
-                         if let holidayStore,
-                            UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
-                                old: previousPermissions,
-                                new: sanitized,
-                                oldHasNoLineManager: saved.hasNoLineManager,
-                                newHasNoLineManager: saved.hasNoLineManager,
-                                oldLineManagerUserIds: saved.lineManagerUserIds,
-                                newLineManagerUserIds: saved.lineManagerUserIds,
-                                users: organizationUsers
-                            ) {
-                             await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: userId)
-                         }
+                         // Never delete leave (owner decision 4 Nov): the change only affects future leave.
 
                          return true
                      }
@@ -2465,7 +2438,6 @@ class UserStore: ObservableObject {
             errorMessage = message
             return (false, nil)
         case .ok(let role, let effective, let writes, let note):
-            let previousPermissions = person.permissions
             do {
                 try await firebaseBackend.commitAccountTypeChangeWrites(
                     writes,
@@ -2515,31 +2487,7 @@ class UserStore: ObservableObject {
                 }
             }
 
-            if let holidayStore {
-                let users = organizationUsers
-                if UserRoleTransitionPolicy.shouldClearPendingAnnualLeave(
-                    old: previousPermissions,
-                    new: saved.permissions,
-                    oldHasNoLineManager: saved.hasNoLineManager,
-                    newHasNoLineManager: saved.hasNoLineManager,
-                    oldLineManagerUserIds: saved.lineManagerUserIds,
-                    newLineManagerUserIds: saved.lineManagerUserIds,
-                    users: users
-                ) {
-                    await holidayStore.deletePendingHolidayRequestsFor(userId: person.id, operativeId: linkedOperativeUUID)
-                }
-                if UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
-                    old: previousPermissions,
-                    new: saved.permissions,
-                    oldHasNoLineManager: saved.hasNoLineManager,
-                    newHasNoLineManager: saved.hasNoLineManager,
-                    oldLineManagerUserIds: saved.lineManagerUserIds,
-                    newLineManagerUserIds: saved.lineManagerUserIds,
-                    users: users
-                ) {
-                    await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: person.id)
-                }
-            }
+            // Never delete leave (owner decision 4 Nov): a type change only affects future leave.
             return (true, note)
         }
     }

@@ -2302,7 +2302,7 @@ struct EditUserView: View {
             }
                 .accessibilityIdentifier("editUser.continue")
         } message: {
-            Text("Any annual leave that this user had booked in themselves, will disappear. They will be notified about this and will need to request annual leave bookings moving forward.")
+            Text(ManageUsersLeaveCopy.selfBookOffMessage)
         }
     }
 
@@ -4055,8 +4055,6 @@ struct EditUserView: View {
 
         var permissionsSuccess = true
         var didPersistPermissions = false
-        let previousPermissions = subjectUser.permissions
-        let previousHasNoLineManager = subjectUser.hasNoLineManager
         if canEditPermissionsMatrix && !isViewingSuperAdminProfile {
             // Only the flags changed on this screen are sent, laid over the stored copy. A draft opened from an
             // older row never writes that row's flags back (an older copy turned an admin's adminAccess off).
@@ -4309,25 +4307,8 @@ struct EditUserView: View {
             await holidayStore.loadData()
         }
 
-        let finalPermissions = didPersistPermissions ? permissions : subjectUser.permissions
-        let finalHasNoLineManager = hasNoLineManagerChanged ? hasNoLineManagerDraft : subjectUser.hasNoLineManager
-        let finalLineManagerUserIds = managerAssignmentChanged
-            ? Array(selectedLineManagerUserIds).sorted()
-            : subjectUser.lineManagerUserIds
-        let needsSelfBookClear = UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
-            old: previousPermissions,
-            new: finalPermissions,
-            oldHasNoLineManager: previousHasNoLineManager,
-            newHasNoLineManager: finalHasNoLineManager,
-            oldLineManagerUserIds: subjectUser.lineManagerUserIds,
-            newLineManagerUserIds: finalLineManagerUserIds,
-            users: userStore.organizationUsers
-        )
-        if needsSelfBookClear && permissionsSuccess && operativeDetailsSuccess {
-            await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: user.id)
-            // RULEBOOK 1.10.0 §13: switching self-book off writes no notice.
-            await holidayStore.loadData()
-        }
+        // Never delete leave (owner decision 4 Nov): switching Annual Leave Management off keeps every approved and
+        // pending record; only future leave is requested instead of saved approved.
 
         await MainActor.run {
             isUpdating = false

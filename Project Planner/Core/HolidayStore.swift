@@ -358,37 +358,9 @@ class HolidayStore: ObservableObject {
         }
     }
 
-    /// Removes self-booked approved annual leave when a user moves off the self-book path.
-    func deleteSelfBookedApprovedHolidaysFor(userId: String) async {
-        let trimmedUid = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let toDelete = bookings.filter { booking in
-            guard booking.userId == trimmedUid else { return false }
-            guard booking.status == .approved, booking.cancellationRequestedAt == nil else { return false }
-            if let approver = booking.approvedByUserId?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !approver.isEmpty,
-               approver != trimmedUid {
-                return false
-            }
-            return true
-        }
-        for booking in toDelete {
-            await deleteBooking(booking)
-        }
-    }
-
-    /// Removes **pending** holiday rows for a person moving off the approval/request flow (see `UserRoleTransitionPolicy`).
-    func deletePendingHolidayRequestsFor(userId: String, operativeId: UUID?) async {
-        let trimmedUid = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let pendingForPerson = bookings.filter { booking in
-            guard booking.status == .pending else { return false }
-            if booking.userId == trimmedUid { return true }
-            if let oid = operativeId, booking.operativeId == oid { return true }
-            return false
-        }
-        for booking in pendingForPerson {
-            await deleteBooking(booking)
-        }
-    }
+    // Owner decision 4 Nov ("Never delete leave"): changing Annual Leave Management, the line manager or the account
+    // type never deletes a person's approved or pending leave. The toggle only decides whether *future* leave saves
+    // approved or is requested (`canSelfBookAnnualLeave`). The two helpers that deleted it are gone.
 
     /// Approve in one partial update (`holidayDecisionWriteFields`).
     func approveBooking(_ booking: HolidayBooking, approvedByUserId: String) async {

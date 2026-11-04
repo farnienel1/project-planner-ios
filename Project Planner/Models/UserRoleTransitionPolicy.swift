@@ -186,60 +186,6 @@ enum UserRoleTransitionPolicy {
             )
         }
     }
-
-    /// User was on the self-book path and is moving to request/approval routing.
-    /// `CanonicalBusinessEngine.canSelfBookAnnualLeave(user:roster:)` decides each side; pass the person's line managers and the roster
-    /// so an admin who has an active line manager is not taken for a self-approved admin.
-    static func shouldClearSelfBookedAnnualLeave(
-        old: UserPermissions,
-        new: UserPermissions,
-        oldHasNoLineManager: Bool,
-        newHasNoLineManager: Bool,
-        oldLineManagerUserIds: [String] = [],
-        newLineManagerUserIds: [String] = [],
-        users: [AppUser] = []
-    ) -> Bool {
-        let oldUser = transitionUser("transition-old", permissions: old, hasNoLineManager: oldHasNoLineManager, lineManagerUserIds: oldLineManagerUserIds)
-        let newUser = transitionUser("transition-new", permissions: new, hasNoLineManager: newHasNoLineManager, lineManagerUserIds: newLineManagerUserIds)
-        return AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: oldUser, users: users)
-            && !AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: newUser, users: users)
-    }
-
-    /// User was on the “request / approval” holiday path and is moving to self-book.
-    static func shouldClearPendingAnnualLeave(
-        old: UserPermissions,
-        new: UserPermissions,
-        oldHasNoLineManager: Bool = false,
-        newHasNoLineManager: Bool = false,
-        oldLineManagerUserIds: [String] = [],
-        newLineManagerUserIds: [String] = [],
-        users: [AppUser] = []
-    ) -> Bool {
-        let oldUser = transitionUser("transition-old", permissions: old, hasNoLineManager: oldHasNoLineManager, lineManagerUserIds: oldLineManagerUserIds)
-        let newUser = transitionUser("transition-new", permissions: new, hasNoLineManager: newHasNoLineManager, lineManagerUserIds: newLineManagerUserIds)
-        return AnnualLeaveSelfBookPolicy.usesAnnualLeaveRequestFlow(for: oldUser, users: users)
-            && AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: newUser, users: users)
-    }
-
-    private static func transitionUser(
-        _ id: String,
-        permissions: UserPermissions,
-        hasNoLineManager: Bool,
-        lineManagerUserIds: [String]
-    ) -> AppUser {
-        var user = AppUser(
-            id: id,
-            email: "",
-            organizationId: "",
-            role: .manager,
-            permissions: permissions,
-            hasNoLineManager: hasNoLineManager
-        )
-        if !hasNoLineManager && !lineManagerUserIds.isEmpty {
-            user.setLineManagerUserIds(lineManagerUserIds)
-        }
-        return user
-    }
 }
 
 /// Change user type read-back. After the write, the server copy of `users/{uid}` is read again and the screen
@@ -288,4 +234,10 @@ enum UserPermissionsDraftMerge {
         }
         return result
     }
+}
+
+/// Edit User copy for switching Annual Leave Management off. Owner decision 4 Nov ("Never delete leave"): the toggle
+/// only decides whether future leave saves approved or is requested; existing approved and pending leave stays.
+enum ManageUsersLeaveCopy {
+    static let selfBookOffMessage = "Their existing annual leave stays as it is. From now on, their new annual leave will be sent as a request for approval."
 }
