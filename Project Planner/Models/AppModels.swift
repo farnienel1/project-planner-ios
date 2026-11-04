@@ -526,6 +526,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// copy (role viewer, no permissions). Such a copy never replaces a profile or roster row the rulebook did read
     /// (`ReaderDiagnostics` records it). Not encoded.
     var parsedWithoutRulebook: Bool = false
+    /// True for the placeholder `UserStore` puts on screen at launch before `users/{uid}` has been read (slow or
+    /// unreachable Firestore). It carries no stored acceptance, so the legal gate is never decided from it
+    /// (`showsLegalPackGate`). Not encoded.
+    var isProvisional: Bool = false
     /// RULEBOOK 1.9.0: the `parseUserDocument` `annualLeaveStored` keys (`daysPerYear`, `startMonth`, `endMonth`,
     /// `carriesOver`) the user document stores itself, for `CanonicalBusinessEngine.annualLeavePendingOmitFields`. Not encoded.
     var annualLeaveStoredKeys: [String] = []
