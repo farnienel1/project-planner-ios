@@ -1521,6 +1521,11 @@ struct EditUserView: View {
     @State private var showingSelfBookOffConfirmation = false
     @State private var selfBookOffConfirmationAccepted = false
     @State private var dayRateText: String
+    /// RULEBOOK 1.26.1 §8: the pay editor's record (`UserStore.payEditorRecord`, `CanonicalBusinessEngine`
+    /// `payEditorStartingValues`) — the starting value AND the save baseline. Nil until read; while `privatePay` is off
+    /// it is never read and the stored document is used, as before.
+    @State private var payRecord: AppUser?
+    @State private var payRecordLoaded = false
     /// RULEBOOK 1.14.0 `payRateRequiredError`, shown under the rate field after a refused save.
     @State private var payRateFieldError: String?
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
@@ -2075,7 +2080,7 @@ struct EditUserView: View {
     }
 
     private var employmentTypeChanged: Bool {
-        employmentTypeDraft != displayedUser.employmentType
+        employmentTypeDraft != payBaselineUser.employmentType
     }
 
     private var shouldConfirmEmploymentTypeChange: Bool {
@@ -2111,7 +2116,8 @@ struct EditUserView: View {
         let origTradeC = user.tradeTypeCustom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let tradeChanged = dayRateEligible && (trimmedTradeP != origTradeP || trimmedTradeC != origTradeC)
         let billingChanged = canViewTaxIds && (vatDraft.isDirty || utrDraft.isDirty)
-        let payrollRateDirty = isPayrollRateDirty(versus: user)
+        // RULEBOOK 1.26.1 §8: against the editor's record while `privatePay` is on; the opened row as before while off.
+        let payrollRateDirty = isPayrollRateDirty(versus: payRecord.map { user.withPayFields(of: $0) } ?? user)
         let operativeProfileChanged = (permissions.operativeMode || permissions.manager || permissions.adminAccess) && (
             LineManagerRulebook.selectionChanged(selectedLineManagerUserIds, from: user, roster: userStore.organizationUsers) ||
             hasNoLineManagerDraft != user.hasNoLineManager ||
@@ -2322,7 +2328,21 @@ struct EditUserView: View {
                         .padding(.top, 12)
                         .accessibilityIdentifier("editUser.accountTypeOutOfSync")
                 }
+                if payRecordLoading {
+                    // RULEBOOK 1.26.1 §8: with `privatePay` on, nothing is edited or saved before the starting record.
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Loading pay…")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, PPMetrics.screenGutter)
+                    .padding(.top, 12)
+                    .accessibilityIdentifier("editUser.payLoading")
+                }
                 editUserFormSections
+                    .disabled(payRecordLoading)
             }
         }
         .onAppear(perform: syncEditUserDraftsFromStore)
@@ -2382,8 +2402,8 @@ struct EditUserView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("editUser.saveFooter")
-                .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline)
-                .opacity((isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline) ? 0.55 : 1)
+                .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline || payRecordLoading)
+                .opacity((isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline || payRecordLoading) ? 0.55 : 1)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -2465,7 +2485,7 @@ struct EditUserView: View {
                         Capsule(style: .continuous)
                             .fill(hasChanges ? ManageUserProfilePalette.primaryBlue : Color(.systemGray5))
                     )
-                    .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline)
+                    .disabled(isUpdating || !hasChanges || lineManagerRoutingBlocked || !smartCache.isOnline || payRecordLoading)
             }
         }
     }
@@ -3402,21 +3422,39 @@ struct EditUserView: View {
     /// RULEBOOK 1.13.0 §8 (Q1 step C): pay is read pay profile first (`overlayPayProfile`), users document second —
     /// 1.26.0: only while `privatePay` is on (`UserStore.refreshPayFromPayProfile`); off, the editor is seeded from the
     /// users document. Drafts the editor has not touched follow the pay shown.
+    ///
+    /// RULEBOOK 1.26.1 §8 (`CanonicalBusinessEngine.payEditorStartingValues`): the record read here is both the drafts'
+    /// starting value and every save baseline (`payBaselineUser`). While `privatePay` is on the form and Save wait for it
+    /// (`payRecordLoading`), so no save runs on the pre-read value.
     private func refreshPayFromPayProfile() async {
         let before = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
         let untouchedRate = dayRateText == Self.formatPayrollRateText(user: before)
         let untouchedType = employmentTypeDraft == before.employmentType
         let after = await userStore.refreshPayFromPayProfile(of: before)
+        payRecord = SecuritySwitchContext.privatePay ? after : nil
+        payRecordLoaded = true
         guard after != before else { return }
         if untouchedRate { dayRateText = Self.formatPayrollRateText(user: after) }
         if untouchedType { employmentTypeDraft = after.employmentType }
+    }
+
+    /// True while `privatePay` is on and the editor's starting record has not been read yet.
+    private var payRecordLoading: Bool {
+        SecuritySwitchContext.privatePay && !payRecordLoaded
+    }
+
+    /// The save baseline (RULEBOOK 1.26.1 §8): the stored person with the pay fields of the editor's record — the same
+    /// record the drafts started from. Without a record (switch off) the stored person, exactly as before.
+    private var payBaselineUser: AppUser {
+        let stored = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        return payRecord.map { stored.withPayFields(of: $0) } ?? stored
     }
 
     /// `payRateRequiredError` for the person as this save will leave them: the draft employment type and the rate on
     /// the field (the stored rate when the field is untouched), read with the stored basis. Nil when the writer may
     /// not set this person's pay (`canChangePersonPay`) or the rule passes.
     private var payRateRequiredMessageForSave: String? {
-        let subject = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        let subject = payBaselineUser
         // The rate field is on the setup card; without it the person could not be given a rate here.
         guard showOperativeSetupCard, userStore.canViewPay(of: subject), userStore.canChangePay(of: subject) else { return nil }
         let stored = UserStore.storedPay(of: subject)
@@ -3936,7 +3974,7 @@ struct EditUserView: View {
                 }
             }
 
-            let rateSubject = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+            let rateSubject = payBaselineUser
             if shouldPromptDayRateEffectiveChoice(subjectUser: rateSubject) {
                 await MainActor.run {
                     isUpdating = false
@@ -3953,7 +3991,8 @@ struct EditUserView: View {
     private func runPersistUserEdits(dayRateEffectiveAt: Date?, employmentTypeEffectiveAt: Date?) async {
         await MainActor.run { isUpdating = true }
 
-        let subjectUser = userStore.organizationUsers.first(where: { $0.id == user.id }) ?? user
+        // RULEBOOK 1.26.1 §8 (`CanonicalBusinessEngine.payEditorStartingValues`): the baseline is the editor's record.
+        let subjectUser = payBaselineUser
         let linkedOpId = operativeStore.allOperatives.first(where: {
             $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
             subjectUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)

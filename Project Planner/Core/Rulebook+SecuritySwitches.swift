@@ -222,8 +222,9 @@ extension FirebaseBackend {
         }
         guard !profiles.isEmpty else { return users }
         return users.map { user in
-            let profile = profiles[user.id] ?? user.formerUserIds.lazy.compactMap { profiles[$0] }.first
-            return profile.map { user.payShown(with: $0, privatePay: true) } ?? user
+            // RULEBOOK 1.26.1 §8: the same `payEditorStartingValues` record the pay editors start from.
+            let profileId = ([user.id] + user.formerUserIds).first { profiles[$0] != nil }
+            return profileId.map { user.payShown(with: profiles[$0], profileId: $0, privatePay: true) } ?? user
         }
     }
 }
