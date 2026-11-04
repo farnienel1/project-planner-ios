@@ -128,4 +128,29 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertEqual(WarningsComputation.formatHours(8), "8")
         XCTAssertEqual(WarningsComputation.formatHours(7.25), ScheduleCoverageFormat.hours(7.25))
     }
+
+    // MARK: 5. Qualification reminders (`qualificationExpiryRows`)
+
+    /// The Tasks banner lists the rows the Home badge counts: an already-expired qualification is included and the
+    /// window is one calendar month on the organisation day (the banner used a 30-day device window without expired).
+    func testQualificationBannerRowsIncludeExpiredAndUseTheRulebookWindow() {
+        let reference = orgDay("2026-11-04")
+        var operative = LogicFixtures.operative(id: UUID(), email: "ada@example.com")
+        operative.qualificationExpiryDates = [
+            "EXPIRED": orgDay("2026-11-01"),
+            "SOON": orgDay("2026-11-14"),
+            "LATER": orgDay("2026-12-20"),
+        ]
+        let rows = CanonicalBusinessEngine.qualificationExpiryRows(
+            operatives: [operative.rulebookQualificationRow],
+            reference: reference
+        )
+        XCTAssertEqual(Set(rows?.map(\.qualificationName) ?? []), ["EXPIRED", "SOON"])
+        XCTAssertEqual(rows?.first(where: { $0.qualificationName == "EXPIRED" })?.daysUntilExpiry, -3)
+        let count = CanonicalBusinessEngine.qualificationExpiryCount(
+            operatives: [operative.rulebookQualificationRow],
+            reference: reference
+        )
+        XCTAssertEqual(count?.total, rows?.count, "the banner and the Home badge read the same rows")
+    }
 }

@@ -1509,12 +1509,10 @@ struct HomeView: View {
     /// RULEBOOK 1.23.0 §5 `CanonicalBusinessEngine.qualificationExpiryCount`: the signed-in operative's own rows from
     /// `qualificationExpiryRows` (organisation day, one calendar month, already expired included) — surfaced under Tasks.
     private var operativeQualificationExpiryReminderCount: Int {
-        guard userStore.isOperativeMode(),
-              let email = userStore.currentUser?.email else { return 0 }
-        let em = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let mine = operativeStore.allOperatives.filter {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
-        }
+        guard userStore.isOperativeMode(), let me = userStore.currentUser else { return 0 }
+        // Every catalogue row of this account (`bookingIdsForAccount`), never an email match here.
+        let ids = labourBookingIds(for: me, operatives: operativeStore.allOperatives)
+        let mine = operativeStore.allOperatives.filter { ids.contains($0.id) }
         guard !mine.isEmpty else { return 0 }
         return CanonicalBusinessEngine.qualificationExpiryCount(
             operatives: operativeStore.allOperatives.map(\.rulebookQualificationRow),

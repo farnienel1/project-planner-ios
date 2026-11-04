@@ -54,27 +54,29 @@ struct TasksDetailView: View {
         }
     }
 
+    /// RULEBOOK §5 `qualificationExpiryRows` for the signed-in operative's own catalogue rows (every row of their
+    /// account, `bookingIdsForAccount`): organisation day, one calendar month ahead, already expired included — the
+    /// rows the Home badge counts (`qualificationExpiryCount`). It used to be a 30-day device-calendar window that
+    /// dropped expired qualifications and found the operative by email.
     private var qualificationExpiryBannerItems: [(id: String, title: String, subtitle: String)] {
-        guard userStore.isOperativeMode(),
-              let email = userStore.currentUser?.email else { return [] }
-        let em = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let op = operativeStore.allOperatives.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
-        }) else { return [] }
-        let today = Calendar.current.startOfDay(for: Date())
-        guard let horizon = Calendar.current.date(byAdding: .day, value: 30, to: today) else { return [] }
-        var rows: [(String, String, String)] = []
-        for (qid, exp) in op.qualificationExpiryDates {
-            guard exp >= today && exp <= horizon,
-                  let q = op.qualifications.first(where: { $0.id == qid }) else { continue }
-            let days = Calendar.current.dateComponents([.day], from: today, to: exp).day ?? 0
-            rows.append((
-                id: qid,
-                title: "Qualification expiring: \(q.name)",
-                subtitle: days <= 0 ? "Renew today — tell your manager when complete." : "\(days) day(s) remaining. Tell your manager when you have renewed it."
-            ))
+        guard userStore.isOperativeMode(), let me = userStore.currentUser else { return [] }
+        let ids = labourBookingIds(for: me, operatives: operativeStore.allOperatives)
+        let mine = operativeStore.allOperatives.filter { ids.contains($0.id) }
+        guard !mine.isEmpty,
+              let rows = CanonicalBusinessEngine.qualificationExpiryRows(operatives: mine.map(\.rulebookQualificationRow))
+        else { return [] }
+        return rows.sorted { $0.dayKey < $1.dayKey }.map { row in
+            let days = row.daysUntilExpiry
+            let subtitle: String
+            if days < 0 {
+                subtitle = "Expired \(-days) day\(days == -1 ? "" : "s") ago. Tell your manager when you have renewed it."
+            } else if days == 0 {
+                subtitle = "Renew today — tell your manager when complete."
+            } else {
+                subtitle = "\(days) day\(days == 1 ? "" : "s") remaining. Tell your manager when you have renewed it."
+            }
+            return (id: row.id, title: "\(row.title): \(row.qualificationName)", subtitle: subtitle)
         }
-        return rows.sorted(by: { $0.1 < $1.1 })
     }
 
     /// Home Tasks hub: assigned-to-me is always personal. Admins see every job's tasks in Active / Overdue / Completed.
