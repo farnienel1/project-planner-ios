@@ -3015,7 +3015,7 @@ private struct PreviousTimesheetsView: View {
                     if let run = selectedRun {
                         summaryCard(run)
                         signatureCard(run)
-                        if run.isCompleted || (userStore.displayUser.map { TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: run.draft, user: $0) } ?? false),
+                        if run.isCompleted,
                            let selectedPeriod,
                            let currentUser = userStore.displayUser {
                             InvoiceTaxIdsOption(subject: currentUser, isOn: $includeTaxIds)
@@ -3225,7 +3225,8 @@ private struct PreviousTimesheetsView: View {
                     PreviousTimesheetRun(
                         id: "prev-\(Int(week.start.timeIntervalSince1970))",
                         week: week,
-                        draft: adjusted
+                        draft: adjusted,
+                        owner: userStore.displayUser
                     )
                 )
             }
@@ -3253,7 +3254,8 @@ private struct PreviousTimesheetsView: View {
                         PreviousTimesheetRun(
                             id: "prev-\(Int(week.start.timeIntervalSince1970))",
                             week: week,
-                            draft: merged
+                            draft: merged,
+                            owner: userStore.displayUser
                         )
                     )
                 }
@@ -3326,9 +3328,16 @@ private struct PreviousTimesheetRun: Identifiable {
     let id: String
     let week: WeekRange
     let draft: TimesheetDraft
+    /// RULEBOOK §8 `isTimesheetFullySigned(fields, hasLineManager)` for the owner (`timesheetSelfSigned`): a self-signed
+    /// sheet is complete with the owner's signature alone. It used to need a manager signature too, so a self-signed
+    /// admin's past runs read "Sign Off Pending" forever.
+    let isCompleted: Bool
 
-    var isCompleted: Bool {
-        draft.operativeSignedAt != nil && draft.managerSignedAt != nil
+    init(id: String, week: WeekRange, draft: TimesheetDraft, owner: AppUser?) {
+        self.id = id
+        self.week = week
+        self.draft = draft
+        self.isCompleted = owner.map { TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: $0) } ?? false
     }
 }
 

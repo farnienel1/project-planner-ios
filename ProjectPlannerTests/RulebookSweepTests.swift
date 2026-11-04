@@ -89,4 +89,33 @@ final class RulebookSweepTests: XCTestCase {
             "uid-1"
         )
     }
+
+    // MARK: 3. Past timesheet runs (`isTimesheetFullySigned`)
+
+    /// A self-signed admin's past run is complete with their own signature (`timesheetSelfSigned` →
+    /// `isTimesheetFullySigned(fields, hasLineManager: false)`); an operative's still waits for the line manager.
+    func testSelfSignedPastRunIsCompleteWithTheOwnersSignature() {
+        OrganizationRulebookContext.update(
+            from: Organization(firestoreDocumentId: "TEST-ORG-SWEEP", name: "TEST-Sweep", creatorUserId: "TEST-FOUNDER")
+        )
+        defer {
+            RulebookRosterSnapshot.update([])
+            OrganizationRulebookContext.update(from: nil)
+        }
+        var admin = AppUser(
+            id: "TEST-ADMIN-SS", email: "admin@example.test", organizationId: "TEST-ORG-SWEEP", role: .admin,
+            firstName: "Admin", surname: "Test", passwordSet: true,
+            permissions: UserPermissions(adminAccess: true, manager: true, timesheetSelfSign: true)
+        )
+        admin.hasNoLineManager = true
+        var operative = staffUser(id: "TEST-OP", email: "op@example.test")
+        operative.setLineManagerUserIds([admin.id])
+        RulebookRosterSnapshot.update([admin, operative])
+
+        var draft = TimesheetDraft()
+        draft.operativeSignedAt = orgDay("2026-10-30")
+        draft.operativeSignedByName = "Admin Test"
+        XCTAssertTrue(TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: admin))
+        XCTAssertFalse(TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative))
+    }
 }
