@@ -57,10 +57,43 @@ final class ForcedUpdateGate: ObservableObject {
                 NSLog("FORCED_UPDATE_CHECK_SKIPPED %@", error.localizedDescription)
             }
         }
-        guard let snapshot, snapshot.exists else {
-            updateRequired = false
+        guard let snapshot else {
+            // RULEBOOK 1.26.0: a failed read keeps the switches as last read; a refused listener re-attaches now.
+            Self.requestReplan()
             return
         }
-        updateRequired = Self.blocks(running: Self.runningBuild, config: snapshot.data())
+        apply(snapshot)
+        Self.requestReplan()
+        startListening(path: path)
+    }
+
+    /// RULEBOOK 1.26.0 §18: the same document carries the security switches (`CanonicalBusinessEngine.securitySwitches`).
+    /// A missing document is "both off".
+    private func apply(_ snapshot: DocumentSnapshot) {
+        guard snapshot.exists, let data = snapshot.data() else {
+            updateRequired = false
+            SecuritySwitchContext.update(config: nil)
+            return
+        }
+        updateRequired = Self.blocks(running: Self.runningBuild, config: data)
+        SecuritySwitchContext.update(config: FirebaseBackend.firestoreJSON(data) as? [String: Any])
+    }
+
+    private var listener: ListenerRegistration?
+
+    /// A live listener on `platformConfig/app` (readable signed in or out), so a switch the owner turns on or off
+    /// reaches the read plans without waiting for the next foreground. Attached once.
+    private func startListening(path: String) {
+        guard listener == nil else { return }
+        listener = Firestore.firestore().document(path).addSnapshotListener { [weak self] snapshot, error in
+            guard let snapshot, error == nil else { return }
+            Task { @MainActor [weak self] in self?.apply(snapshot) }
+        }
+    }
+
+    /// Launch and every foreground: job and booking listeners re-plan (an unchanged plan keeps its listeners; one the
+    /// rules refused at its first start attaches again — `FirebaseBackend.listenPlannedSources`).
+    static func requestReplan() {
+        NotificationCenter.default.post(name: .jobReadPlanDidChange, object: nil)
     }
 }

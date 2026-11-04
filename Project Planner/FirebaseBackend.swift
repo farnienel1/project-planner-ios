@@ -3274,7 +3274,7 @@ class FirebaseBackend: ObservableObject {
             throw RecordDeletedElsewhereError(collection: ref.parent.collectionID, documentId: ref.documentID)
         case .create:
             let createPayload = payload.filter { !($0.value is FieldValue) && !($0.value is NSNull) }
-            try await ref.setData(WriteMetadata.stamped(createPayload, userId: uid))
+            try await ref.setData(WriteMetadata.stamped(Self.sharedRosterRowWrite(createPayload, ref: ref), userId: uid))
             return
         case .update:
             break
@@ -3286,15 +3286,27 @@ class FirebaseBackend: ObservableObject {
         var changes = write.firestoreFields(from: payload)
         changes.removeValue(forKey: "updatedAt")
         guard !changes.isEmpty else { return }
+        let sharedChanges = Self.sharedRosterRowWrite(changes, ref: ref)
         guard let payProfileSubjectId else {
-            try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+            guard !sharedChanges.isEmpty else { return }
+            try await ref.updateData(WriteMetadata.stamped(sharedChanges, userId: uid))
             return
         }
         // RULEBOOK 1.13.0 §8 (Q1 step B): a catalogue row's changed pay goes to `payProfiles/{rowId}` in the same batch.
         let batch = db.batch()
-        batch.updateData(WriteMetadata.stamped(changes, userId: uid), forDocument: ref)
+        if !sharedChanges.isEmpty {
+            batch.updateData(WriteMetadata.stamped(sharedChanges, userId: uid), forDocument: ref)
+        }
         addPayProfileWrite(to: batch, subjectId: payProfileSubjectId, profileWrite: changes)
         try await batch.commit()
+    }
+
+    /// RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.sharedDocumentPayWrite`: an `operatives` / `managers` row takes no pay
+    /// field while `privatePay` is on for the organisation (web `saveOperative` / `saveManager`); every other write and
+    /// every write while the switch is off is unchanged.
+    nonisolated static func sharedRosterRowWrite(_ write: [String: Any], ref: DocumentReference) -> [String: Any] {
+        guard ["operatives", "managers"].contains(ref.parent.collectionID) else { return write }
+        return CanonicalBusinessEngine.sharedDocumentPayWrite(write, privatePay: SecuritySwitchContext.privatePay)
     }
 
     private static func operativeDocumentPayload(_ operative: Operative, organizationId: String) -> [String: Any] {
@@ -5775,7 +5787,14 @@ class FirebaseBackend: ObservableObject {
             let snapshot = try await ref.getDocument(source: .server)
             guard snapshot.exists, let stored = snapshot.data() else {
                 let create = payload.filter { !($0.value is FieldValue) }
-                try await ref.setData(WriteMetadata.stamped(create, userId: uid))
+                // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.sharedDocumentPayWrite`: with `privatePay` on the new
+                // users document carries no pay; the pay goes to `payProfiles/{uid}` once the document exists.
+                let privatePay = SecuritySwitchContext.privatePay
+                try await ref.setData(WriteMetadata.stamped(
+                    CanonicalBusinessEngine.sharedDocumentPayWrite(create, privatePay: privatePay),
+                    userId: uid
+                ))
+                if privatePay { try await writePayProfileOnly(subjectId: user.id, profileWrite: create) }
                 return
             }
             baseline = Self.userDocumentPayload(Self.parseAppUserDocument(userId: user.id, data: stored))
@@ -6270,7 +6289,12 @@ class FirebaseBackend: ObservableObject {
         let uid = auth.currentUser?.uid
         let userRef = db.collection("users").document(userId)
         let batch = db.batch()
-        batch.updateData(WriteMetadata.stamped(payload, userId: uid), forDocument: userRef)
+        // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.sharedDocumentPayWrite`: pay stays off `users/{uid}` while
+        // `privatePay` is on for the organisation (unchanged while it is off).
+        let shared = CanonicalBusinessEngine.sharedDocumentPayWrite(payload, privatePay: SecuritySwitchContext.privatePay)
+        if Self.hasFieldsBesidesMetadata(shared) {
+            batch.updateData(WriteMetadata.stamped(shared, userId: uid), forDocument: userRef)
+        }
         // RULEBOOK 1.13.0 §8 (Q1 step B): the pay fields go to `payProfiles/{uid}` in the same batch
         // (`payProfileWriteFieldsFromProfileWrite`).
         addPayProfileWrite(to: batch, subjectId: userId, profileWrite: payload)
@@ -7412,10 +7436,14 @@ class FirebaseBackend: ObservableObject {
                 
                 try await saveUser(newUser)
                 if let fields = Self.inviteUserRateFields(dayRate: newUser.dayRate) {
-                    try await db.collection("users").document(userId).setData([
-                        "payBasis": fields.payBasis,
-                        "dayRate": fields.dayRate
-                    ], merge: true)
+                    let rate: [String: Any] = ["payBasis": fields.payBasis, "dayRate": fields.dayRate]
+                    if SecuritySwitchContext.privatePay {
+                        // RULEBOOK 1.26.0 §8 (web `inviteUserCore`): the invited pay goes to `payProfiles/{placeholderId}`
+                        // after the placeholder exists, never onto the shared users document.
+                        try await writePayProfileOnly(subjectId: userId, profileWrite: rate)
+                    } else {
+                        try await db.collection("users").document(userId).setData(rate, merge: true)
+                    }
                 }
                 let inviteVAT = vatNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let inviteUTR = utrNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -7884,7 +7912,14 @@ class FirebaseBackend: ObservableObject {
             label: "bookings",
             fromQueryDocument: { $0 },
             fromDocument: { _ in nil },
-            documentId: { $0.documentID }
+            documentId: { $0.documentID },
+            onRefused: { [weak self] in
+                // RULEBOOK 1.26.0: refused by the rules — forget this target so the next re-plan attaches once.
+                guard let self, self.bookingsLiveListenerTarget == target else { return }
+                self.bookingsLiveListener?.remove()
+                self.bookingsLiveListener = nil
+                self.bookingsLiveListenerTarget = nil
+            }
         ) { [weak self] documents, fromCache in
             guard let self else { return }
             let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
@@ -8084,7 +8119,13 @@ class FirebaseBackend: ObservableObject {
             label: "managerSiteBookings",
             fromQueryDocument: { $0 },
             fromDocument: { _ in nil },
-            documentId: { $0.documentID }
+            documentId: { $0.documentID },
+            onRefused: { [weak self] in
+                guard let self, self.managerScheduleLiveListenerTarget == target else { return }
+                self.managerScheduleLiveListener?.remove()
+                self.managerScheduleLiveListener = nil
+                self.managerScheduleLiveListenerTarget = nil
+            }
         ) { [weak self] documents, fromCache in
             guard let self else { return }
             let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
@@ -8437,12 +8478,26 @@ class FirebaseBackend: ObservableObject {
             .setData(WriteMetadata.stamped(payload, userId: auth.currentUser?.uid))
     }
 
+    /// RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.rateHistoryQueryPlan`: the whole collection while `privatePay` is off
+    /// (unchanged) or for a viewer who sees every pay; otherwise one `userId ==` query per person whose pay this viewer
+    /// may see, merged by document id.
     func loadOperativeDayRateHistory(organizationId: String) async throws -> OperativeDayRateHistoryCollection {
-        let snapshot = try await db.collection("organizations")
-            .document(organizationId)
-            .collection("operativeDayRateHistory")
-            .getDocuments()
-        return Self.operativeDayRateHistory(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+        let collection = db.collection("organizations").document(organizationId).collection("operativeDayRateHistory")
+        switch rateHistoryPlan {
+        case .all:
+            let snapshot = try await collection.getDocuments()
+            return Self.operativeDayRateHistory(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+        case .people(let ids):
+            var rows: [(id: String, data: [String: Any])] = []
+            var seen = Set<String>()
+            for id in ids {
+                let snapshot = try await collection.whereField("userId", isEqualTo: id).getDocuments()
+                for doc in snapshot.documents where seen.insert(doc.documentID).inserted {
+                    rows.append((id: doc.documentID, data: doc.data()))
+                }
+            }
+            return Self.operativeDayRateHistory(fromDocuments: rows)
+        }
     }
 
     /// RULEBOOK 1.6.0 §1 "Document readers", §8: `operativeDayRateHistory` rows are read only through the

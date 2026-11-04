@@ -96,7 +96,12 @@ extension FirebaseBackend {
     func jobReadSources(organizationId orgId: String, collection: String) -> (sources: [PlannedReadSource], signature: String) {
         let base = db.collection("organizations").document(orgId).collection(collection)
         guard let viewer = JobAccessContext.readViewer,
-              let plan = CanonicalBusinessEngine.jobQueryPlan(viewer, documentIds: JobAccessContext.operativeJobIds),
+              // RULEBOOK 1.26.0 §17: `enforced` is the organisation's `enforcedReads` switch (`securitySwitches`).
+              let plan = CanonicalBusinessEngine.jobQueryPlan(
+                viewer,
+                documentIds: JobAccessContext.operativeJobIds,
+                enforced: SecuritySwitchContext.switches(organizationId: orgId).enforcedReads
+              ),
               let queries = plan["queries"] as? [[String: Any]] else {
             return ([PlannedReadSource(kind: .query(base, withoutDateBound: nil))], "all")
         }
@@ -146,7 +151,8 @@ extension FirebaseBackend {
               let plan = CanonicalBusinessEngine.bookingQueryPlan(
                 viewer,
                 visibleJobIds: JobAccessContext.visibleJobIds,
-                ownBookingIds: JobAccessContext.ownBookingIds.isEmpty ? nil : JobAccessContext.ownBookingIds
+                ownBookingIds: JobAccessContext.ownBookingIds.isEmpty ? nil : JobAccessContext.ownBookingIds,
+                enforced: SecuritySwitchContext.switches(organizationId: orgId).enforcedReads
               ),
               let queries = plan["queries"] as? [[String: Any]] else {
             return ([bounded(base)], "all|\(startPart)")
@@ -226,6 +232,12 @@ extension FirebaseBackend {
         return rows
     }
 
+    /// Firestore "permission denied" (code 7): the security rules refused the read.
+    nonisolated static func isPermissionDenied(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7
+    }
+
     nonisolated static func isFailedPrecondition(_ error: Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 9
@@ -241,6 +253,7 @@ extension FirebaseBackend {
         fromQueryDocument: @escaping (QueryDocumentSnapshot) -> Doc,
         fromDocument: @escaping (DocumentSnapshot) -> Doc?,
         documentId: @escaping (Doc) -> String,
+        onRefused: (@MainActor () -> Void)? = nil,
         onChange: @escaping @MainActor (_ docs: [Doc], _ fromCache: Bool) -> Void
     ) -> ListenerRegistration {
         let registration = CompositeListenerRegistration()
@@ -264,6 +277,14 @@ extension FirebaseBackend {
                     NSLog("PLANNED_LISTENER_FAILED label=%@ source=%d attempt=%d error=%@", label, index, attempt, error.localizedDescription)
                     // Counted as answered (from cache), so the other sources can still add their rows.
                     deliver(index, [], true)
+                    // RULEBOOK 1.26.0: refused by the rules (a security switch the plan did not know about yet). No
+                    // backoff loop: the owner forgets this listener and the next re-plan (switch change, foreground)
+                    // attaches the plan again — once, replacing this one.
+                    if Self.isPermissionDenied(error), let onRefused {
+                        Self.postPlannedListenerFailed(label: label, error: error)
+                        Task { @MainActor in onRefused() }
+                        return
+                    }
                     // A failed listener is dead: say so (the "Last updated" offline state) and attach it again
                     // with backoff (2 s, 4 s, … up to 60 s) until it answers or the plan is replaced.
                     Self.postPlannedListenerFailed(label: label, error: error)
@@ -288,6 +309,8 @@ extension FirebaseBackend {
                     if let error {
                         NSLog("PLANNED_DOCUMENT_LISTENER_FAILED path=%@ error=%@", ref.path, error.localizedDescription)
                         deliver(index, [], false)
+                        // A job the operative may not read (or that is gone) is simply not listed; not a refusal of
+                        // the plan, so it is not re-attached.
                         return
                     }
                     guard let snapshot else { return }
@@ -330,16 +353,31 @@ extension FirebaseBackend {
         let target = "\(key):\(orgId)|plan:\(plan.signature)"
         let registry = liveListeners
         guard registry.needsAttach(key: key, target: target) else { return }
+        let tokenBox = PlannedListenerToken()
         let registration = Self.listenPlannedSources(
             plan.sources,
             label: key,
             fromQueryDocument: { (id: $0.documentID, data: $0.data()) },
             fromDocument: { snapshot in snapshot.data().map { (id: snapshot.documentID, data: $0) } },
-            documentId: { $0.id }
+            documentId: { $0.id },
+            onRefused: {
+                // Forget only this listener (never a newer replacement): the next re-plan attaches it again.
+                if let token = tokenBox.value { registry.remove(key: key, token: token) }
+            }
         ) { [weak self] rows, fromCache in
             guard let self, self.acceptsLiveSnapshot(organizationId: orgId) else { return }
             onChange(rows, fromCache)
         }
-        registry.set(key: key, target: target, remove: { registration.remove() })
+        tokenBox.value = registry.set(key: key, target: target, remove: { registration.remove() })
+    }
+}
+
+/// The registry token of a planned listener, set right after it is stored (`listenOrganizationPlan`).
+nonisolated final class PlannedListenerToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: UUID?
+    var value: UUID? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
     }
 }

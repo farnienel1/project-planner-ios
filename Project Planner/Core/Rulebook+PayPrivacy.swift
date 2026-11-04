@@ -106,11 +106,30 @@ extension FirebaseBackend {
 
     /// `users/{userId}` partial update plus its pay profile in ONE batch (RULEBOOK 1.13.0 Q1 step B), so pay is never
     /// written to one document without the other.
+    /// RULEBOOK 1.26.0 §8: the users half is `CanonicalBusinessEngine.sharedDocumentPayWrite(payload, { privatePay })`
+    /// — unchanged while the switch is off, without any pay field while it is on (pay then goes only to the pay
+    /// profile). A users half left with nothing but write metadata is not sent.
     func updateUserDocumentWithPayProfile(userId: String, payload: [String: Any]) async throws {
         let batch = db.batch()
-        batch.updateData(payload, forDocument: db.collection("users").document(userId))
+        let shared = CanonicalBusinessEngine.sharedDocumentPayWrite(payload, privatePay: SecuritySwitchContext.privatePay)
+        if Self.hasFieldsBesidesMetadata(shared) {
+            batch.updateData(shared, forDocument: db.collection("users").document(userId))
+        }
         addPayProfileWrite(to: batch, subjectId: userId, profileWrite: payload)
         try await batch.commit()
+    }
+
+    /// The pay-profile half of a write on its own (RULEBOOK 1.26.0, `privatePay` on: a new users document or invite
+    /// placeholder whose shared copy carries no pay). Nothing when the write has no pay field.
+    func writePayProfileOnly(subjectId: String, profileWrite: [String: Any]) async throws {
+        let batch = db.batch()
+        guard addPayProfileWrite(to: batch, subjectId: subjectId, profileWrite: profileWrite) else { return }
+        try await batch.commit()
+    }
+
+    /// True when a write names a field other than `updatedAt` / `updatedBy` / `updatedFrom`.
+    nonisolated static func hasFieldsBesidesMetadata(_ write: [String: Any]) -> Bool {
+        !Set(write.keys).subtracting(["updatedAt", "updatedBy", "updatedFrom"]).isEmpty
     }
 
     /// The pay profile document as stored, or nil when it does not exist or this viewer may not read it (the rules

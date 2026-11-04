@@ -462,7 +462,9 @@ enum WarningScopeSupport {
                 return row
             },
             people: users.map { ["id": $0.id, "email": $0.email, "formerIds": $0.formerUserIds + $0.sameEmailUserIds] },
-            operatives: operatives.map { ["id": $0.documentId, "email": $0.email] }
+            operatives: operatives.map { ["id": $0.documentId, "email": $0.email] },
+            // RULEBOOK 1.26.0 §17: with `enforcedReads` on a restricted viewer does not read every booking.
+            enforced: SecuritySwitchContext.enforcedReads
         )
         return (scope["kind"] as? String) == "all" ? nil : scope
     }
