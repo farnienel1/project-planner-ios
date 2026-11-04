@@ -4132,25 +4132,12 @@ private struct OperativeTimesheetsView: View {
         }
     }
 
+    /// RULEBOOK 1.31.0 §8 `exportedTimesheetHistorySubjects`: User Timesheets people, the viewer's own exported sheets
+    /// (read-only: `timesheetWriterIsReviewer` still refuses a review of one's own sheet) and inactive or deleted people
+    /// in scope. The Exported list and its "Exported, all runs" count both read this.
     private func usersForExportedHistory() -> [AppUser] {
         guard let currentUser = userStore.displayUser else { return [] }
-        if seesEveryTimesheet {
-            return userStore.organizationUsers
-                .filter { user in
-                    user.isActive
-                    && (user.permissions.operativeMode
-                        || user.permissions.manager
-                        || user.permissions.adminAccess
-                        || user.role == .manager
-                        || user.role == .admin)
-                }
-                .sorted(by: { $0.fullName < $1.fullName })
-        }
-        return userStore.organizationUsers
-            .filter { user in
-                user.isActive && user.isLineManager(currentUser.id)
-            }
-            .sorted(by: { $0.fullName < $1.fullName })
+        return userStore.exportedTimesheetHistoryUsers(viewer: currentUser)
     }
 
     /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals` for a list row: decided, as the export invoice

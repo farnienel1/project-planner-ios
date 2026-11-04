@@ -1160,6 +1160,24 @@ class UserStore: ObservableObject {
             .sorted(by: { $0.fullName < $1.fullName })
     }
 
+    /// RULEBOOK 1.31.0 §8 `exportedTimesheetHistorySubjects` (Exported list and its count): the people
+    /// `userTimesheetSubjects` lists, the viewer's own sheets and inactive people in scope, sorted by name. Empty when
+    /// the script did not answer (never a wider Swift list).
+    func exportedTimesheetHistoryUsers(viewer: AppUser) -> [AppUser] {
+        guard let ids = UserTimesheetAccessRulebook.exportedHistoryUserIds(viewer: viewer, members: organizationUsers) else {
+            return []
+        }
+        var seen = Set<String>()
+        var users: [AppUser] = []
+        for id in ids {
+            let match = organizationUsers.first { $0.id.caseInsensitiveCompare(id) == .orderedSame }
+                ?? (viewer.id.caseInsensitiveCompare(id) == .orderedSame ? viewer : nil)
+            guard let user = match, seen.insert(user.id.lowercased()).inserted else { continue }
+            users.append(user)
+        }
+        return users.sorted { $0.fullName < $1.fullName }
+    }
+
     func canAccessTimesheetsSurface() -> Bool {
         canAccessMyTimesheets() || canAccessOperativeTimesheets() || shouldShowTimesheetsDisabledMessage()
     }
