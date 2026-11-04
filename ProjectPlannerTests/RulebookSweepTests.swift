@@ -326,4 +326,28 @@ final class RulebookSweepTests: XCTestCase {
         ))
         XCTAssertTrue(unchanged.isEmpty)
     }
+
+    // MARK: 17. Variation deep links (`notificationDestination` → `variations`)
+
+    /// A renumbered-variations notice opens that job's Variations tile (web opens Variations); it used to fall back
+    /// to the notification inbox.
+    func testVariationNoticeOpensTheJobsVariations() {
+        let admin = levelUser(id: "admin", role: .admin, permissions: UserPermissions(adminAccess: true, manager: true))
+        var received: [String: Any]?
+        let token = NotificationCenter.default.addObserver(forName: .openWorkCatalogueDetail, object: nil, queue: nil) { note in
+            received = note.userInfo as? [String: Any]
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+        NotificationDeepLink.route(
+            userInfo: [
+                NotificationDeepLink.typeKey: "variation_renumbered",
+                NotificationDeepLink.relatedIdKey: "TEST-JOB-1",
+                NotificationDeepLink.userIdKey: VariationParentType.smallWork.rawValue,
+            ],
+            user: admin
+        )
+        XCTAssertEqual(received?["section"] as? String, "variations")
+        XCTAssertEqual(received?["isSmallWorks"] as? Bool, true)
+        XCTAssertEqual(received?["projectId"] as? UUID, JobKeys.inAppId("TEST-JOB-1"))
+    }
 }

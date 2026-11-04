@@ -149,11 +149,32 @@ enum NotificationDeepLink {
             deepLinkUserId: targetUserId
         ) else { return }
 
-        open(destination, weekStart: weekStart(from: userInfo))
+        open(destination, weekStart: weekStart(from: userInfo), variationParentType: targetUserId)
     }
 
-    private static func open(_ destination: CanonicalBusinessEngine.CanonicalNotificationDestination, weekStart: Date?) {
+    private static func open(
+        _ destination: CanonicalBusinessEngine.CanonicalNotificationDestination,
+        weekStart: Date?,
+        variationParentType: String? = nil
+    ) {
         switch destination.kind {
+        // RULEBOOK 1.10.0 §13 (`notificationDestination`): a variation notice opens Variations, as web
+        // (`hrefForNotificationDestination`). `variations` names the job; `variationDetail` names the variation, whose
+        // job is read from the variation itself. iOS keeps variations under each job, so both open that job's
+        // Variations; with no job they open the Projects tab (web's company list has no iOS screen).
+        case "variations":
+            openVariations(jobId: destination.relatedId, parentType: variationParentType)
+        case "variationDetail":
+            guard let variationId = destination.relatedId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !variationId.isEmpty,
+                  let orgId = OrganizationRulebookContext.organizationId else {
+                openVariations(jobId: nil, parentType: variationParentType)
+                return
+            }
+            Task { @MainActor in
+                let parent = await FirebaseBackend.variationParent(organizationId: orgId, variationId: variationId)
+                openVariations(jobId: parent?.parentId, parentType: parent?.parentType.rawValue ?? variationParentType)
+            }
         case "dailyOverviewDay":
             var payload: [String: Any] = ["route": MainMenuSurfaceRoute.dailyOverview.rawValue]
             if let dayKey = destination.dayKey { payload["dayKey"] = dayKey }
@@ -252,6 +273,25 @@ enum NotificationDeepLink {
         default:
             postSurface(["route": MainMenuSurfaceRoute.notifications.rawValue])
         }
+    }
+
+    /// The job's Variations tile (`WorkCatalogueDeepLink` section `variations`), or the job list when no job is known.
+    private static func openVariations(jobId: String?, parentType: String?) {
+        let smallWorks = parentType == VariationParentType.smallWork.rawValue
+        guard let raw = jobId?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("selectTab"),
+                object: nil,
+                userInfo: ["tab": smallWorks ? 2 : 1]
+            )
+            return
+        }
+        let info: [String: Any] = [
+            "projectId": JobKeys.inAppId(raw),
+            "isSmallWorks": smallWorks,
+            "section": "variations",
+        ]
+        NotificationCenter.default.post(name: .openWorkCatalogueDetail, object: nil, userInfo: info)
     }
 
     private static func postTimesheetTeam(

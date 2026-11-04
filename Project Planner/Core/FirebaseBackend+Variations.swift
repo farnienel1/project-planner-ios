@@ -12,6 +12,28 @@ import FirebaseStorage
 #endif
 
 extension FirebaseBackend {
+    /// The job a variation belongs to (`parseVariationDocument` → `parentId`, `parentType`), read from
+    /// `variations/{id}`, else its `settings/variationItem_{id}` copy. For a notification deep link that names a
+    /// variation only (`variationDetail`). Nil when neither copy can be read.
+    static func variationParent(
+        organizationId: String,
+        variationId: String,
+        db: Firestore = Firestore.firestore()
+    ) async -> (parentId: String, parentType: VariationParentType)? {
+        let org = db.collection("organizations").document(normalizedOrganizationId(organizationId))
+        let refs = [
+            org.collection("variations").document(variationId),
+            org.collection("settings").document("variationItem_\(variationId)"),
+        ]
+        for ref in refs {
+            guard let snapshot = try? await ref.getDocument(), let data = snapshot.data(),
+                  let variation = VariationCodec.variation(from: data, documentId: variationId),
+                  !variation.parentId.isEmpty else { continue }
+            return (variation.parentId, variation.parentType)
+        }
+        return nil
+    }
+
     private func variationsCollection(organizationId: String) -> CollectionReference {
         db.collection("organizations").document(normalizedOrganizationId(organizationId)).collection("variations")
     }
