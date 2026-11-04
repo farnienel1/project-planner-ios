@@ -268,16 +268,3 @@ extension CanonicalBusinessEngine {
         return CanonicalDocumentWrite(callJSON("managerSiteBookingUpdateWriteFields", arguments: [beforeJSON, peopleDocumentJSON(next)]))
     }
 }
-
-// MARK: - 1.31.0 job type
-
-extension CanonicalBusinessEngine {
-    /// RULEBOOK 1.31.0 §21 `jobTypeStoredFields(name, collection)`: the stored `jobType` / `customJobType` for a picker
-    /// type (small works always "Small Works"; a project its default type, else "CAT A"; `customJobType` the name when
-    /// it is not the collection's default, else nil — a save removes it). Nil when the script did not answer.
-    nonisolated static func jobTypeStoredFields(name: String, collection: String) -> (jobType: String, customJobType: String?)? {
-        guard let row = callJSON("jobTypeStoredFields", arguments: [name, collection]) as? [String: Any],
-              let jobType = row["jobType"] as? String else { return nil }
-        return (jobType, row["customJobType"] as? String)
-    }
-}

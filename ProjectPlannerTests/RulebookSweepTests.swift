@@ -270,30 +270,7 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertTrue(ids.contains(Booking.internalOperativeId(for: "uid-1")))
     }
 
-    // MARK: 15. 1.31.0 hand-off items (`jobTypeStoredFields`, `timesheetDocumentSubjectId`)
-
-    /// A job save writes the picker type through `jobTypeStoredFields`: a custom type switched back to CAT A removes
-    /// `customJobType`; small works always store "Small Works".
-    func testJobTypeIsStoredByTheRulebook() {
-        var job = Project(
-            jobNumber: "TEST-J-SWEEP",
-            siteName: "TEST-Site",
-            siteAddress: "1 Test Street",
-            client: Client(name: "TEST-Client"),
-            startDate: Date(),
-            endDate: Date(),
-            jobType: .catA,
-            manager: .custom
-        )
-        job.customJobType = "Fit-out"
-        var payload = FirebaseBackend.jobDocumentPayload(job, organizationId: "TEST-ORG")
-        XCTAssertEqual(payload["jobType"] as? String, "CAT A")
-        XCTAssertEqual(payload["customJobType"] as? String, "Fit-out")
-        job.customJobType = "CAT A"
-        payload = FirebaseBackend.jobDocumentPayload(job, organizationId: "TEST-ORG")
-        XCTAssertTrue(payload["customJobType"] is FieldValue, "a type back on the default removes customJobType")
-        XCTAssertEqual(CanonicalBusinessEngine.jobTypeStoredFields(name: "Snagging", collection: "smallWorks")?.jobType, "Small Works")
-    }
+    // MARK: 15. 1.31.0 hand-off item (`timesheetDocumentSubjectId`)
 
     /// Exported sheets stored without `userId` are matched by their document id.
     func testTimesheetSubjectIdComesFromTheDocumentId() {

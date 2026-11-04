@@ -2216,14 +2216,6 @@ class FirebaseBackend: ObservableObject {
         func orDelete(_ value: Any?) -> Any { value ?? FieldValue.delete() }
         let managerIds = job.allAssignedManagerIds.map { job.storedManagerId(for: $0) }
         let primaryManager = (job.managerId ?? job.allAssignedManagerIds.first).map { job.storedManagerId(for: $0) }
-        // RULEBOOK 1.31.0 §21 `jobTypeStoredFields`: the picker type as stored (a custom type switched back to the
-        // collection default removes `customJobType`). The model's own values only when the script did not answer.
-        let custom = job.customJobType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let pickerName = custom.isEmpty ? job.jobType.rawValue : custom
-        let storedType = CanonicalBusinessEngine.jobTypeStoredFields(
-            name: pickerName,
-            collection: job.jobType == .smallWorks ? "smallWorks" : "projects"
-        )
         return [
             "jobNumber": job.jobNumber,
             "siteName": job.siteName,
@@ -2241,8 +2233,8 @@ class FirebaseBackend: ObservableObject {
             ],
             "startDate": Timestamp(date: job.startDate),
             "endDate": Timestamp(date: job.endDate),
-            "jobType": storedType?.jobType ?? job.jobType.rawValue,
-            "customJobType": storedType.map { orDelete($0.customJobType) } ?? orDelete(job.customJobType),
+            "jobType": job.jobType.rawValue,
+            "customJobType": orDelete(job.customJobType),
             // The primary manager's name (web `managerLegacy`), else the legacy label as read; never "Custom"
             // (`parseJobDocument` reads "Custom" as no name).
             "manager": JobManagerLabel.storedValue(job),
