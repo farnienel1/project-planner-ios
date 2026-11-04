@@ -182,7 +182,7 @@ extension Booking {
     }
 }
 
-enum ScheduleCoverageFormat {
+nonisolated enum ScheduleCoverageFormat {
     /// Hours as the pay rule gives them, to the hundredth with trailing zeros dropped (7.25 → "7.25", 3.5 → "3.5",
     /// 8 → "8"). RULEBOOK 1.20.0: a derived weekday day is often a quarter hour (owner example 7.25h), so the display
     /// never rounds it to the half hour (it used to show 7.25 as "7.5").

@@ -118,4 +118,14 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertTrue(TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: admin))
         XCTAssertFalse(TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative))
     }
+
+    // MARK: 4. Warning hours (`ScheduleCoverageFormat.hours`)
+
+    /// Unbooked-labour and clash rows show hours as the pay rule gives them: 7.25h stays 7.25, never 7.5.
+    func testWarningHoursAreNotSnappedToTheHalfHour() {
+        XCTAssertEqual(WarningsComputation.formatHours(7.25), "7.25")
+        XCTAssertEqual(WarningsComputation.formatHours(3.5), "3.5")
+        XCTAssertEqual(WarningsComputation.formatHours(8), "8")
+        XCTAssertEqual(WarningsComputation.formatHours(7.25), ScheduleCoverageFormat.hours(7.25))
+    }
 }

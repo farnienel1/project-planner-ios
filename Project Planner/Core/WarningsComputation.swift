@@ -1583,12 +1583,10 @@ enum WarningsComputation {
         return ("\(formattedHours)-hour overlap", "Both bookings active during the overlapping period")
     }
 
-    nonisolated fileprivate static func formatHours(_ h: Double) -> String {
-        let rounded = (h * 2).rounded() / 2
-        if abs(rounded - rounded.rounded(.towardZero)) < 0.01 {
-            return String(format: "%.0f", rounded)
-        }
-        return String(format: "%.1f", rounded)
+    /// Hours as the pay rule gives them (`ScheduleCoverageFormat.hours`: to the hundredth, 7.25 stays "7.25"). The
+    /// clash timeline used to snap to the half hour, so a 7.25h booking read "7.5h" here and "7.25h" everywhere else.
+    nonisolated static func formatHours(_ h: Double) -> String {
+        ScheduleCoverageFormat.hours(h)
     }
 
     nonisolated fileprivate static func operativeTimelineEntry(
