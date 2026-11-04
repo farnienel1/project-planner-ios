@@ -152,7 +152,9 @@ final class RulebookCompanyActivityRegionTests: XCTestCase {
 
         XCTAssertEqual(
             CanonicalBusinessEngine.companyActivityNoticeTypes,
-            ["operative_created", "manager_created", "client_created", "project_created", "small_works_created", "warning_removed"]
+            // RULEBOOK 1.31.0 §11, §13: `operative_deleted` and `job_manager_removed` joined the company activity types.
+            ["operative_created", "manager_created", "client_created", "project_created", "small_works_created", "warning_removed",
+             "operative_deleted", "job_manager_removed"]
         )
         // Every company activity type is one the app decodes.
         for type in CanonicalBusinessEngine.companyActivityNoticeTypes {

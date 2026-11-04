@@ -96,6 +96,7 @@ class NotificationService: ObservableObject {
     
     func setUserStore(_ store: UserStore) {
         self.userStore = store
+        store.notificationService = self
     }
     
     func setOperativeStore(_ store: OperativeStore) {
@@ -553,6 +554,43 @@ class NotificationService: ObservableObject {
         )
     }
     
+    /// RULEBOOK 1.31.0 §13: an operative was deleted (`operative_deleted`, company activity, never the actor). Copy as
+    /// web `lib/stores/userStore.ts` `deleteUser`.
+    func notifyOperativeDeleted(userId: String, name: String) async {
+        await saveCompanyActivityNotice(
+            type: .operativeDeleted,
+            title: "Operative deleted",
+            message: "\(name) was deleted.",
+            relatedId: nil,
+            dedupeKey: "operativeDeleted|\(userId)"
+        )
+    }
+
+    /// RULEBOOK 1.31.0 §11: a person stopped being a manager and was taken off `jobCount` jobs
+    /// (`JOB_MANAGER_REMOVED_NOTICE_TYPE`, `jobManagerRemovedNoticeText`).
+    func notifyJobManagerRemoved(personId: String, name: String, jobCount: Int) async {
+        let text = CanonicalBusinessEngine.jobManagerRemovedNoticeText(name: name, jobCount: jobCount)
+        await saveCompanyActivityNotice(
+            type: .jobManagerRemoved,
+            title: text.title,
+            message: text.message,
+            relatedId: nil,
+            dedupeKey: "jobManagerRemoved|\(personId)|\(Int(Date().timeIntervalSince1970))"
+        )
+    }
+
+    /// RULEBOOK 1.31.0 §13 (owner decision 7): an operative-level person was invited (`operative_created`), by an admin
+    /// or a manager with the Operatives permission. Copy as web `lib/stores/inviteStore.ts`.
+    func notifyOperativeInvited(userId: String, name: String) async {
+        await saveCompanyActivityNotice(
+            type: .operativeCreated,
+            title: "Operative added",
+            message: "\(name) was added as an operative.",
+            relatedId: nil,
+            dedupeKey: "operativeInvited|\(userId)"
+        )
+    }
+
     func notifyManagerCreated(managerId: UUID, managerName: String, createdBy: String) async {
         await saveCompanyActivityNotice(
             type: .managerCreated,

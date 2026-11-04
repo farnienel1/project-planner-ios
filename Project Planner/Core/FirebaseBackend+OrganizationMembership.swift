@@ -221,27 +221,6 @@ extension FirebaseBackend {
         return true
     }
 
-    /// Writes `accountActive` only when that membership document already exists (`orgMembershipWriteFields`, admin).
-    /// Returns whether the membership document was updated. Never creates a stub.
-    @discardableResult
-    func patchMembershipAccountActiveIfExists(
-        userId: String,
-        organizationId: String,
-        accountActive: Bool
-    ) async -> Bool {
-        do {
-            return try await writeOrgMembership(
-                userId: userId,
-                organizationId: organizationId,
-                next: ["accountActive": accountActive],
-                writer: "admin"
-            )
-        } catch {
-            print("🔥🔥🔥 DEBUG: [OrgMembership] accountActive patch skipped: \(error.localizedDescription)")
-            return false
-        }
-    }
-
     /// RULEBOOK 1.10.0 §14: the membership as `parseOrgMembershipDocument` reads it (nested `permissions`, else the
     /// legacy flat keys, else the defaults). Nil when the script did not answer.
     static func orgMembership(organizationId: String, data: [String: Any]) -> (role: String, isSuperAdmin: Bool, accountActive: Bool, permissions: [String: Bool])? {

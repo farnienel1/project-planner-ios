@@ -62,4 +62,14 @@ enum UserTimesheetAccessRulebook {
         }
         return rows.compactMap { $0["userId"] as? String }
     }
+
+    /// RULEBOOK 1.31.0 `exportedTimesheetHistorySubjects`: member ids (plus the viewer) whose exported sheets the
+    /// viewer sees. Nil when the script did not answer.
+    static func exportedHistoryUserIds(viewer: AppUser, members: [AppUser]) -> [String]? {
+        let input = payload(viewer: viewer, members: members)
+        guard let rows = CanonicalBusinessEngine.callJSON("exportedTimesheetHistorySubjects", arguments: [input]) as? [[String: Any]] else {
+            return nil
+        }
+        return rows.compactMap { $0["userId"] as? String }
+    }
 }

@@ -5,6 +5,7 @@ The rules live in the files below. This file only imports them, so there is stil
 @AGENTS.md
 @docs/agent-rules/canonical-architecture.md
 @docs/agent-rules/advisor.md
+@docs/agent-rules/feature-completeness.md
 
 Read `docs/RULEBOOK.md` (a mirror of web's rulebook — never edit it here) before changing bookings, warnings, invoicing, labour, organisation context, dates, people, invites, notifications, or billing.
 

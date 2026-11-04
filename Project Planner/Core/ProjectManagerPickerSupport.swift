@@ -26,14 +26,14 @@ enum ProjectManagerPickerSupport {
         excluding selected: [Manager]
     ) -> [Manager] {
         let candidates = CanonicalBusinessEngine.jobManagerCandidates(
-            roster: JobManagerRulebook.roster(userStore.organizationUsers)
+            roster: JobManagerRulebook.roster(userStore.unfoldedOrganizationUsers)
         ) ?? []
         return availableManagers(candidates: candidates, catalogue: operativeStore.allManagers, excluding: selected)
     }
 
     /// True when `jobManagerCandidates` has nobody (the picker shows `JOB_MANAGER_NO_CANDIDATES_MESSAGE`).
     static func hasNoCandidates(userStore: UserStore) -> Bool {
-        CanonicalBusinessEngine.jobManagerCandidates(roster: JobManagerRulebook.roster(userStore.organizationUsers))?.isEmpty ?? false
+        CanonicalBusinessEngine.jobManagerCandidates(roster: JobManagerRulebook.roster(userStore.unfoldedOrganizationUsers))?.isEmpty ?? false
     }
 
     /// The candidates as `Manager` rows, less anyone already selected (by id, or by a non-empty email).
@@ -87,7 +87,7 @@ enum ProjectManagerPickerSupport {
     ) -> [ProjectManagerAssignmentRow] {
         let assignments = CanonicalBusinessEngine.jobManagerAssignments(
             job: JobManagerRulebook.job(project),
-            roster: JobManagerRulebook.roster(userStore.organizationUsers),
+            roster: JobManagerRulebook.roster(userStore.unfoldedOrganizationUsers),
             catalogue: JobManagerRulebook.catalogue(operativeStore.allManagers)
         )
         return assignedManagers(for: project, assignments: assignments, catalogue: operativeStore.allManagers)

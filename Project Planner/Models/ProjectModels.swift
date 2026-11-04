@@ -23,6 +23,10 @@ struct Project: Identifiable, Codable, Hashable {
     var jobType: JobType // Used only for determining collection (smallWorks vs projects)
     var customJobType: String? // Optional custom job type for display (e.g., "CAT A", "CAT B", "Small Works", etc.)
     var manager: ManagerLegacy
+    /// The stored `manager` label as a name (web writes the primary manager's name; `parseJobDocument` `managerName`,
+    /// which drops "Custom"). A new job writes its primary manager's name here, as web `buildProjectFirestorePayload`
+    /// does — never "Custom". Not part of the on-device cache.
+    var managerName: String? = nil
     var managerId: UUID? // Reference to actual Manager object
     var managerIds: [UUID] // Supports assigning multiple managers
     var isLive: Bool

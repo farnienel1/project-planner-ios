@@ -25,6 +25,8 @@ struct ManageUsersView: View {
     @State private var showingEditUser = false
     @State private var userToDelete: AppUser?
     @State private var showingDeleteConfirmation = false
+    /// A refused delete (RULEBOOK 1.31.0 `lineManagerChangeBlock` lists the reports; `userDeleteRefusal`).
+    @State private var deleteErrorMessage: String?
     @State private var selectedTab = 0 // 0: Admins, 1: Managers, 2: Operatives
     @State private var rosterSegment: UserRosterSegment = .active
     @State private var searchText = ""
@@ -135,6 +137,14 @@ struct ManageUsersView: View {
                 .environmentObject(notificationService)
                 .environmentObject(smartCache)
             }
+            .alert(
+                "Could not delete",
+                isPresented: Binding(get: { deleteErrorMessage != nil }, set: { if !$0 { deleteErrorMessage = nil } })
+            ) {
+                Button("OK") { deleteErrorMessage = nil }
+            } message: {
+                Text(deleteErrorMessage ?? "")
+            }
             .alert("Delete User", isPresented: $showingDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {
                     userToDelete = nil
@@ -145,10 +155,14 @@ struct ManageUsersView: View {
                         if userStore.canDeleteUser(user) {
                             Task {
                                 print("🔥🔥🔥 DEBUG: Delete button tapped for user: \(user.fullName)")
+                                userStore.errorMessage = nil
                                 await userStore.deleteUser(user, bookingStore: bookingStore, operativeStore: operativeStore)
                                 await userStore.loadOrganizationUsers()
                                 await MainActor.run {
                                     userToDelete = nil
+                                    if userStore.rosterRow(for: user.id) != nil, let message = userStore.errorMessage {
+                                        deleteErrorMessage = message
+                                    }
                                 }
                             }
                         }
@@ -1629,7 +1643,9 @@ struct EditUserView: View {
     }
     
     private var canEditPermissionsMatrix: Bool {
-        if isViewingSuperAdminProfile { return false }
+        // RULEBOOK 1.31.0: the Super Admin edits their own profile (photo, name, contact); their permissions stay
+        // locked (the save skips them on a Super Admin profile). Nobody else edits the Super Admin.
+        if isViewingSuperAdminProfile { return viewerIsEditedPerson && userStore.canEditTargetUserPermissions(displayedUser) }
         return userStore.canEditTargetUserPermissions(displayedUser)
     }
 
@@ -1685,6 +1701,14 @@ struct EditUserView: View {
         userStore.hasAdminAccess()
     }
     
+    /// RULEBOOK 1.31.0 (owner decision 7): a manager with the Operatives permission deactivates and deletes operatives
+    /// (operative level only); `userDeleteRefusal` / the security rules still decide each write.
+    private var canManageThisOperative: Bool {
+        guard userStore.actorManagesOperativesOnly else { return false }
+        let role = UserStore.staffAccountRole(for: displayedUser)
+        return role.isOperativeMode && !role.isManager && !role.isAdmin && !role.isSuperAdmin
+    }
+
     /// Password / invitation actions also available to managers who only manage operatives.
     private var canShowCredentialActions: Bool {
         canUseAdminAccountTools || (isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative))
@@ -1714,7 +1738,7 @@ struct EditUserView: View {
     }
 
     private var canEditIdentityDetails: Bool {
-        canEditPermissionsMatrix && !userStore.isOrganizationCreator(userId: user.id)
+        canEditPermissionsMatrix && (!userStore.isOrganizationCreator(userId: user.id) || viewerIsEditedPerson)
     }
 
     private var identityDirty: Bool {
@@ -2302,7 +2326,7 @@ struct EditUserView: View {
             }
                 .accessibilityIdentifier("editUser.continue")
         } message: {
-            Text("Any annual leave that this user had booked in themselves, will disappear. They will be notified about this and will need to request annual leave bookings moving forward.")
+            Text(ManageUsersLeaveCopy.selfBookOffMessage)
         }
     }
 
@@ -3171,7 +3195,8 @@ struct EditUserView: View {
     private var operativeAndManagerSetupCard: some View {
         ManageUserCard {
             VStack(spacing: 0) {
-                if permissions.operativeMode || permissions.manager || permissions.adminAccess {
+                // The Super Admin needs no line manager and never sets their own (RULEBOOK §8, §16).
+                if (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !isViewingSuperAdminProfile {
                     lineManagerPickRow
                     ManageUserCardDivider()
                 }
@@ -3627,7 +3652,7 @@ struct EditUserView: View {
                     .disabled(!smartCache.isOnline)
                 }
 
-                if canUseAdminAccountTools,
+                if canUseAdminAccountTools || canManageThisOperative,
                    !isViewingSuperAdminProfile {
                     ManageUserAccountActionButton(
                         iconName: "pause.circle.fill",
@@ -3657,7 +3682,7 @@ struct EditUserView: View {
                     }
                 }
 
-                if canUseAdminAccountTools,
+                if canUseAdminAccountTools || canManageThisOperative,
                    userStore.canDeleteUser(user),
                    !isViewingSuperAdminProfile {
                     ManageUserAccountActionButton(
@@ -3762,6 +3787,7 @@ struct EditUserView: View {
             if isViewingSuperAdminProfile {
                 ManageUserSectionTitle(text: "Permissions")
                 ManageUserCard {
+                    VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top, spacing: 12) {
                         ManageUserIconChip(
                             systemName: "lock.fill",
@@ -3778,6 +3804,34 @@ struct EditUserView: View {
                         }
                     }
                     .padding(16)
+                    // Owner decision 4 Nov: the Super Admin card shows both self-manage toggles on, greyed out, with a
+                    // note (RULEBOOK 1.28.0 `SUPER_ADMIN_SELF_MANAGE_MESSAGE`; the Super Admin reads both on).
+                    ManageUserPermissionToggleRow(
+                        iconName: "beach.umbrella.fill",
+                        iconBackground: ManageUserProfilePalette.chipBlueBg,
+                        iconForeground: ManageUserProfilePalette.chipBlueFg,
+                        title: "Annual Leave Management",
+                        subtitle: "Books their own annual leave without approval.",
+                        isOn: .constant(true),
+                        isDisabled: true
+                    )
+                    .accessibilityIdentifier("editUser.superAdmin.annualLeaveSelfBook")
+                    ManageUserPermissionToggleRow(
+                        iconName: "signature",
+                        iconBackground: ManageUserProfilePalette.chipBlueBg,
+                        iconForeground: ManageUserProfilePalette.chipBlueFg,
+                        title: "Timesheet self-sign",
+                        subtitle: "Signs their own timesheet without a line manager.",
+                        isOn: .constant(true),
+                        isDisabled: true
+                    )
+                    .accessibilityIdentifier("editUser.superAdmin.timesheetSelfSign")
+                    Text(SuperAdminCardCopy.selfManageNote)
+                        .font(.caption)
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 12)
+                    }
                 }
             } else if !canEditPermissionsMatrix {
                 Text("You do not have permission to change access for this user. Ask an organisation admin.")
@@ -4055,8 +4109,6 @@ struct EditUserView: View {
 
         var permissionsSuccess = true
         var didPersistPermissions = false
-        let previousPermissions = subjectUser.permissions
-        let previousHasNoLineManager = subjectUser.hasNoLineManager
         if canEditPermissionsMatrix && !isViewingSuperAdminProfile {
             // Only the flags changed on this screen are sent, laid over the stored copy. A draft opened from an
             // older row never writes that row's flags back (an older copy turned an admin's adminAccess off).
@@ -4118,7 +4170,7 @@ struct EditUserView: View {
         }
 
         var activeSuccess = true
-        if canUseAdminAccountTools && !isViewingSuperAdminProfile && isActive != subjectUser.isActive {
+        if (canUseAdminAccountTools || canManageThisOperative) && !isViewingSuperAdminProfile && isActive != subjectUser.isActive {
             activeSuccess = await userStore.updateUserActiveStatus(for: subjectUser, isActive: isActive)
         }
 
@@ -4309,25 +4361,8 @@ struct EditUserView: View {
             await holidayStore.loadData()
         }
 
-        let finalPermissions = didPersistPermissions ? permissions : subjectUser.permissions
-        let finalHasNoLineManager = hasNoLineManagerChanged ? hasNoLineManagerDraft : subjectUser.hasNoLineManager
-        let finalLineManagerUserIds = managerAssignmentChanged
-            ? Array(selectedLineManagerUserIds).sorted()
-            : subjectUser.lineManagerUserIds
-        let needsSelfBookClear = UserRoleTransitionPolicy.shouldClearSelfBookedAnnualLeave(
-            old: previousPermissions,
-            new: finalPermissions,
-            oldHasNoLineManager: previousHasNoLineManager,
-            newHasNoLineManager: finalHasNoLineManager,
-            oldLineManagerUserIds: subjectUser.lineManagerUserIds,
-            newLineManagerUserIds: finalLineManagerUserIds,
-            users: userStore.organizationUsers
-        )
-        if needsSelfBookClear && permissionsSuccess && operativeDetailsSuccess {
-            await holidayStore.deleteSelfBookedApprovedHolidaysFor(userId: user.id)
-            // RULEBOOK 1.10.0 §13: switching self-book off writes no notice.
-            await holidayStore.loadData()
-        }
+        // Never delete leave (owner decision 4 Nov): switching Annual Leave Management off keeps every approved and
+        // pending record; only future leave is requested instead of saved approved.
 
         await MainActor.run {
             isUpdating = false
@@ -4575,11 +4610,17 @@ struct EditUserView: View {
     private func deleteUser() {
         print("🔥🔥🔥 DEBUG: Delete user function called for: \(user.fullName)")
         Task {
+            userStore.errorMessage = nil
             await userStore.deleteUser(user, bookingStore: bookingStore, operativeStore: operativeStore)
             // Reload users after deletion
             await userStore.loadOrganizationUsers()
             await MainActor.run {
-                dismiss()
+                // A refused delete (RULEBOOK 1.31.0 `lineManagerChangeBlock` lists the reports) keeps the screen open.
+                if userStore.rosterRow(for: user.id) != nil, let message = userStore.errorMessage {
+                    saveErrorMessage = message
+                } else {
+                    dismiss()
+                }
             }
         }
     }
@@ -4646,5 +4687,13 @@ struct ManageUsersPushedFromHome: View {
                 isPresented = false
             }
         }
+    }
+}
+
+/// The note under the Super Admin's locked self-manage toggles (`SUPER_ADMIN_SELF_MANAGE_MESSAGE`, RULEBOOK 1.28.0).
+enum SuperAdminCardCopy {
+    static var selfManageNote: String {
+        CanonicalBusinessEngine.constant("SUPER_ADMIN_SELF_MANAGE_MESSAGE", as: String.self)
+            ?? "The Super Admin always books their own leave and signs their own timesheet."
     }
 }

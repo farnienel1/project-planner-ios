@@ -381,6 +381,10 @@ struct OrganizationUserRoster {
     /// belongs — that this load read. Their `users` document may name another company, so the live
     /// `organizationId` listener never returns them and must not be the reason they leave the list.
     var anchoredUserIds: Set<String> = []
+    /// RULEBOOK 1.31.0 §11: every `users` document read, before the `rosterPeople` email fold. Write builders that
+    /// must reach every document of a person (`accountTypeChangeWrites`, `userActiveWrites`, `jobManagerCandidates`,
+    /// `lineManagerReports`) read this, never the fold.
+    var documents: [AppUser] = []
 }
 
 // MARK: - User roster segments (Manage Users, Managers, Operatives)
@@ -2140,6 +2144,8 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         switch type {
         case .bookingCreated: return .bookingCreated
         case .operativeCreated: return .operativeCreated
+        // RULEBOOK 1.31.0: company activity (`companyActivity` toggle, read by the script).
+        case .operativeDeleted, .jobManagerRemoved: return nil
         case .managerCreated: return .managerCreated
         case .clientCreated: return .clientCreated
         case .projectCreated: return .projectCreated

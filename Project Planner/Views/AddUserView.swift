@@ -1189,6 +1189,18 @@ struct AddUserView: View {
                 utrNumber: canEnterTaxIds ? utrNumber : nil
             )
             
+            // RULEBOOK 1.31.0 §13 (owner decision 7): the admins hear that an operative was added (`operative_created`,
+            // company activity, never the actor) — invited by an admin or a manager with the Operatives permission.
+            if success {
+                let invited = invitePermissionsToWrite
+                if invited.operativeMode && !invited.manager && !invited.adminAccess {
+                    let name = "\(firstName) \(surname)".trimmingCharacters(in: .whitespacesAndNewlines)
+                    await userStore.notificationService?.notifyOperativeInvited(
+                        userId: email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                        name: name.isEmpty ? email : name
+                    )
+                }
+            }
             await MainActor.run {
                 isCreating = false
                 if success {

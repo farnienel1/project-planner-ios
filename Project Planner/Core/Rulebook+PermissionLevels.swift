@@ -299,7 +299,8 @@ extension CanonicalBusinessEngine {
         kind: RulebookPermissionLevel,
         organizationId: String,
         roster: [[String: Any]],
-        permissions: [String: Bool]?
+        permissions: [String: Bool]?,
+        members: [String: String]? = nil
     ) -> RulebookAccountTypeChange? {
         var input: [String: Any] = [
             "person": person,
@@ -308,6 +309,8 @@ extension CanonicalBusinessEngine {
             "roster": roster,
         ]
         if let permissions { input["permissions"] = permissions }
+        // RULEBOOK 1.31.0: a same-email document listed in `members` gets the new role too.
+        if let members { input["members"] = members }
         guard let result = callJSON("accountTypeChangeWrites", arguments: [input]) as? [String: Any] else { return nil }
         guard result["ok"] as? Bool == true else {
             return .refused(

@@ -751,8 +751,9 @@ struct CreateProjectView: View {
             errorMessage = "Please select a client"
             return
         }
-        guard !selectedManagers.isEmpty else {
-            errorMessage = "Please assign at least one manager"
+        // RULEBOOK 1.31.0 §11 `jobManagerRequiredError`: a new job needs a manager (the rules refuse a create without one).
+        if let managerError = CanonicalBusinessEngine.jobManagerRequiredError(managerIds: selectedManagers.map(\.firestoreDocumentId)) {
+            errorMessage = managerError
             return
         }
         guard projectStartDate <= projectEndDate else {
@@ -775,7 +776,7 @@ struct CreateProjectView: View {
                 selectedManagers,
                 operativeStore: operativeStore
             )
-            let project = Project(
+            var project = Project(
                 jobNumber: projectJobNumber.trimmingCharacters(in: .whitespacesAndNewlines),
                 siteName: projectSiteName.trimmingCharacters(in: .whitespacesAndNewlines),
                 addressLine1: projectAddressLine1.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -797,6 +798,8 @@ struct CreateProjectView: View {
                 latitude: hasPin ? pinLatitude : nil,
                 longitude: hasPin ? pinLongitude : nil
             )
+            // The primary manager's name in the legacy `manager` label (web `managerLegacy`), never "Custom".
+            project.managerName = resolvedManagers.first.map { $0.fullName.trimmingCharacters(in: .whitespacesAndNewlines) }
             do {
                 try await projectStore.addProject(project)
                 await MainActor.run {

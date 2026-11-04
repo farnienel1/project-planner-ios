@@ -1091,7 +1091,10 @@ struct ManagerScheduleContentView: View {
         .sheet(item: $operativeBookingEditTarget) { booking in
             let p = projectStore.projects.first(where: { $0.id == booking.projectId }) ??
                 projectStore.smallWorks.first(where: { $0.id == booking.projectId })
-            let personName = operativeStore.allOperatives.first { $0.id == booking.operativeId }?.name ?? "Booking"
+            // A booking saved under a users id (no Operatives-list row, web Book labour #262) shows that account's name.
+            let personName = operativeStore.allOperatives.first { $0.id == booking.operativeId }?.name
+                ?? AccountLabourBooking.account(forOperativeId: booking.operativeId, users: userStore.organizationUsers)?.fullName
+                ?? "Booking"
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
                 referenceDay: booking.date,

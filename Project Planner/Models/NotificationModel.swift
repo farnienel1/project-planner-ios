@@ -11,6 +11,11 @@ struct AppNotification: Identifiable, Codable, Hashable {
     nonisolated enum NotificationType: String, Codable, Sendable {
         case bookingCreated = "booking_created"
         case operativeCreated = "operative_created"
+        /// RULEBOOK 1.31.0 §13: an operative was deleted (company activity, `companyActivityRecipients`).
+        case operativeDeleted = "operative_deleted"
+        /// RULEBOOK 1.31.0 §11: a person stopped being a manager and was taken off their jobs
+        /// (`JOB_MANAGER_REMOVED_NOTICE_TYPE`, company activity).
+        case jobManagerRemoved = "job_manager_removed"
         case managerCreated = "manager_created"
         case clientCreated = "client_created"
         case projectCreated = "project_created"
