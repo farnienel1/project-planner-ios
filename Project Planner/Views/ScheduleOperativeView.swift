@@ -341,7 +341,10 @@ struct ScheduleOperativeView: View {
             noteDays: selectedDates.sorted(),
             title: pick.operativeId == nil ? "Hours" : "Edit booking",
             subtitle: pick.operativeId == nil ? "Applies to all selected operatives and dates" : pick.operativeDisplaySubtitle,
-            allowsOtMultiplierOverride: pick.operativeId != nil,
+            // RULEBOOK 1.32.0 §25 (decision A): the custom-hours create screen shows the rate pre-filled with the
+            // organisation's for the day — one rate for every selected operative and date ("Hours"), or one person's.
+            allowsOtMultiplierOverride: true,
+            createsBooking: true,
             initialChoice: pick.initialChoice,
             onSave: { start, end, breakRemoved, otMultiplierOverride in
                 operativeCustomHoursPick = nil
@@ -350,7 +353,7 @@ struct ScheduleOperativeView: View {
                     workStartTime: start,
                     workEndTime: end,
                     isBreakRemoved: breakRemoved,
-                    otMultiplierOverride: pick.operativeId == nil ? nil : otMultiplierOverride
+                    otMultiplierOverride: otMultiplierOverride
                 )
                 if let opId = pick.operativeId {
                     applyOperativeOverride(operativeId: opId, choice: newChoice)
@@ -358,7 +361,7 @@ struct ScheduleOperativeView: View {
                        newChoice.workStartTime == sharedBulkChoice.workStartTime,
                        newChoice.workEndTime == sharedBulkChoice.workEndTime,
                        newChoice.isBreakRemoved == sharedBulkChoice.isBreakRemoved,
-                       newChoice.otMultiplierOverride == nil {
+                       newChoice.otMultiplierOverride == sharedBulkChoice.otMultiplierOverride {
                         operativeDefaultChoice.removeValue(forKey: opId)
                     } else {
                         operativeDefaultChoice[opId] = newChoice
@@ -369,7 +372,7 @@ struct ScheduleOperativeView: View {
                         workStartTime: start,
                         workEndTime: end,
                         isBreakRemoved: breakRemoved,
-                        otMultiplierOverride: nil
+                        otMultiplierOverride: otMultiplierOverride
                     )
                     syncSharedBulkToAllSelectedDates()
                     operativeSlotOverrides.removeAll()
@@ -1743,7 +1746,12 @@ struct ScheduleOperativeView: View {
                 guard !dates.isEmpty else { continue }
                 for date in dates {
                     let ovKey = operativeOverrideKey(operative.id, date)
-                    let choice = resolvedChoice(operativeId: operative.id, date: date)
+                    var choice = resolvedChoice(operativeId: operative.id, date: date)
+                    // RULEBOOK 1.32.0 §25 (decision A): `otMultiplierOverride` is stored only when the rate differs
+                    // from the organisation's for that date (`overtimeMultiplierCreateFields`); custom hours only.
+                    choice.otMultiplierOverride = choice.timeSlot == .customHours
+                        ? CanonicalBusinessEngine.createOtMultiplierOverride(chosen: choice.otMultiplierOverride, on: date)
+                        : nil
                     // Replace = one partial update of the existing booking (same id) onto this job and slot — never a
                     // delete then a create, which offline left both bookings (each paid, RULEBOOK §8) and online could
                     // leave none when the create failed (launch data audit #7). An update also queues offline.

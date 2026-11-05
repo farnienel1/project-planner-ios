@@ -54,14 +54,6 @@ struct BookLabourCandidate: Identifiable {
         AccountLabourBooking.operative(for: user)
     }
 
-    /// Whether this candidate (not the viewer) is booked at other locations (office, working from home, site survey):
-    /// above operative level (`permissionLevelOf` via `canScheduleOperatives`) and not in operative mode
-    /// (`UserStore.staffAccountRole`), as before — an admin in operative mode is booked as an operative. No rulebook
-    /// rule names this for a candidate yet (reported to the web agent); `canScheduleOperatives` is a viewer rule.
-    var canBookOtherLocations: Bool {
-        guard !UserStore.staffAccountRole(for: user).isOperativeMode else { return false }
-        return CanonicalBusinessEngine.canScheduleOperatives(user.permissionSubject)
-    }
 }
 
 struct BookLabourFlowView: View {
@@ -555,11 +547,22 @@ struct BookLabourFlowView: View {
         bookingParty.isEmpty ? [fallback] : bookingParty
     }
 
+    /// RULEBOOK 1.32.0 §2 `canBookOtherLocationsFor(viewer, personUserIds)`: Office / Working from home / Site survey /
+    /// the custom items only when the viewer may book every person in the party there (admins anyone, a manager only
+    /// themself, operatives never), so a save is never refused after the fact. Jobs stay `bookableJobs`.
+    private func viewerMayBookOtherLocations(for people: [BookLabourCandidate]) -> Bool {
+        CanonicalBusinessEngine.canBookOtherLocationsFor(
+            userStore.displayJobAccessViewer,
+            personUserIds: people.map(\.user.id)
+        )
+    }
+
     // MARK: - Step 2: Destination type
 
     private func pickDestinationView(person: BookLabourCandidate) -> some View {
         let people = activeParty(fallback: person)
-        let otherEnabled = people.allSatisfy(\.canBookOtherLocations) && !scheduleOptions.enabledScheduleLocationPicks().isEmpty
+        let otherAllowed = viewerMayBookOtherLocations(for: people)
+        let otherEnabled = otherAllowed && !scheduleOptions.enabledScheduleLocationPicks().isEmpty
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 bookLabourPersonSummaryCard(people: people)
@@ -580,12 +583,12 @@ struct BookLabourFlowView: View {
                         phase = .pickProject(person, smallWorks: true)
                     }
                 )
-                if people.contains(where: \.canBookOtherLocations) && scheduleOptions.enabledScheduleLocationPicks().isEmpty {
+                if otherAllowed && scheduleOptions.enabledScheduleLocationPicks().isEmpty {
                     Text("Enable at least one location under App & account → General → My schedule to use Other.")
                         .font(.system(size: 11))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                         .padding(.horizontal, 4)
-                } else if !otherEnabled, people.contains(where: { !$0.canBookOtherLocations }) {
+                } else if !otherAllowed {
                     Text("Other is only available when every selected person can be booked to office / WFH locations.")
                         .font(.system(size: 11))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
@@ -600,7 +603,10 @@ struct BookLabourFlowView: View {
     // MARK: - Other locations
 
     private func pickOtherLocationView(person: BookLabourCandidate) -> some View {
-        let picks = scheduleOptions.enabledScheduleLocationPicks()
+        // RULEBOOK 1.32.0 §2: no non-job place is listed unless `canBookOtherLocationsFor` allows the whole party.
+        let picks = viewerMayBookOtherLocations(for: activeParty(fallback: person))
+            ? scheduleOptions.enabledScheduleLocationPicks()
+            : []
         return Group {
             if picks.isEmpty {
                 ContentUnavailableView(
@@ -678,7 +684,7 @@ struct BookLabourFlowView: View {
                     .contains(q)
             }
         }()
-        let otherEnabled = activeParty(fallback: person).allSatisfy(\.canBookOtherLocations)
+        let otherEnabled = viewerMayBookOtherLocations(for: activeParty(fallback: person))
             && !scheduleOptions.enabledScheduleLocationPicks().isEmpty
         return Group {
             if rawList.isEmpty {
@@ -881,7 +887,10 @@ struct BookLabourFlowView: View {
             subtitle: bookFlowDayLine,
             headerName: header,
             headerInitials: PlannerUIInitials.from(header),
-            allowsOtMultiplierOverride: false,
+            // RULEBOOK 1.32.0 §25 (decision A): every custom-hours create screen shows the rate, pre-filled with the
+            // organisation's for the day (`overtimeRateCreateControl`); manager site bookings carry it too, as web.
+            allowsOtMultiplierOverride: true,
+            createsBooking: true,
             embedsNavigation: false,
             initialChoice: OperativeDayBookingChoice(
                 timeSlot: .customHours,
@@ -890,7 +899,7 @@ struct BookLabourFlowView: View {
                 workEndTime: CanonicalBusinessEngine.customHoursPrefill(on: day, policy: dayPayrollPolicy).end,
                 isBreakRemoved: false
             ),
-            onSave: { start, end, breakRemoved, _ in
+            onSave: { start, end, breakRemoved, otMult in
                 savePartyBookings(
                     fallbackPerson: person,
                     slot: .customHours,
@@ -899,7 +908,8 @@ struct BookLabourFlowView: View {
                     customLocationName: customLocationName,
                     workStart: start,
                     workEnd: end,
-                    breakRemoved: breakRemoved
+                    breakRemoved: breakRemoved,
+                    otMultiplierOverride: otMult
                 )
             },
             onCancel: { goBack() }
@@ -920,6 +930,7 @@ struct BookLabourFlowView: View {
                     headerName: header,
                     headerInitials: PlannerUIInitials.from(header),
                     allowsOtMultiplierOverride: true,
+                    createsBooking: true,
                     embedsNavigation: false,
                     initialChoice: OperativeDayBookingChoice(
                         timeSlot: .customHours,
@@ -1747,6 +1758,12 @@ struct BookLabourFlowView: View {
         breakRemoved: Bool,
         otMultiplierOverride: Double?
     ) {
+        // RULEBOOK 1.32.0 §25 (decision A): `otMultiplierOverride` is stored only when the rate on screen differs from
+        // the organisation's for the day (`overtimeMultiplierCreateFields`), so a booking left at it follows later
+        // rate changes. Only custom hours carry a rate.
+        let storedRate: Double? = slot == .customHours
+            ? CanonicalBusinessEngine.createOtMultiplierOverride(chosen: otMultiplierOverride, on: day)
+            : nil
         isSaving = true
         Task {
             var firstError: String?
@@ -1767,7 +1784,7 @@ struct BookLabourFlowView: View {
                         workStart: workStart,
                         workEnd: workEnd,
                         breakRemoved: breakRemoved,
-                        otMultiplierOverride: otMultiplierOverride
+                        otMultiplierOverride: storedRate
                     ) {
                         continue
                     }
@@ -1780,7 +1797,7 @@ struct BookLabourFlowView: View {
                         workStartTime: workStart,
                         workEndTime: workEnd,
                         isBreakRemoved: breakRemoved,
-                        otMultiplierOverride: otMultiplierOverride
+                        otMultiplierOverride: storedRate
                     )
                     await notificationService.notifyBookedUsers(
                         projectName: project.siteName,
@@ -1811,7 +1828,8 @@ struct BookLabourFlowView: View {
                         customLocationName: customLocationName,
                         workStartTime: workStart,
                         workEndTime: workEnd,
-                        isBreakRemoved: breakRemoved
+                        isBreakRemoved: breakRemoved,
+                        otMultiplierOverride: storedRate
                     )
                     await managerScheduleStore.saveBooking(booking)
                 }

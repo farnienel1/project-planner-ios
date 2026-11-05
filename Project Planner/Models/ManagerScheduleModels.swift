@@ -57,6 +57,7 @@ struct ManagerSiteBooking: Identifiable, Codable, Hashable {
         workEndTime: String? = nil,
         isBreakRemoved: Bool = false,
         bookingGroupId: String? = nil,
+        otMultiplierOverride: Double? = nil,
         createdAt: Date? = nil,
         updatedAt: Date? = nil
     ) {
@@ -71,6 +72,7 @@ struct ManagerSiteBooking: Identifiable, Codable, Hashable {
         self.workEndTime = workEndTime
         self.isBreakRemoved = isBreakRemoved
         self.bookingGroupId = bookingGroupId
+        self.otMultiplierOverride = otMultiplierOverride
         self.createdAt = createdAt ?? Date()
         self.updatedAt = updatedAt ?? Date()
     }
