@@ -15,12 +15,14 @@ struct PPIconTile: View {
     var size: CGFloat = PPMetrics.menuIcon
     /// Soft coloured drop shadow. Used for the big Home quick-action icons only.
     var lifted: Bool = false
+    /// When set, the glyph is fitted into a square box of this edge instead of sized by font, so every symbol in a
+    /// grid of tiles has the same footprint. nil keeps the original font-sized glyph.
+    var glyphBox: CGFloat? = nil
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.29, style: .continuous)
 
-        Image(systemName: symbol)
-            .font(.system(size: size * 0.44, weight: .semibold))
+        glyph
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(.white)
             .frame(width: size, height: size)
@@ -28,6 +30,20 @@ struct PPIconTile: View {
             .overlay(shape.strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
             .shadow(color: lifted ? family.bottom.opacity(0.35) : .clear, radius: 7, x: 0, y: 5)
             .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var glyph: some View {
+        if let glyphBox {
+            Image(systemName: symbol)
+                .resizable()
+                .fontWeight(.semibold)
+                .scaledToFit()
+                .frame(width: glyphBox, height: glyphBox)
+        } else {
+            Image(systemName: symbol)
+                .font(.system(size: size * 0.44, weight: .semibold))
+        }
     }
 }
 

@@ -50,9 +50,11 @@ struct ScheduleSubcontractorView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
                             Text("Back")
+                                .lineLimit(1)
                         }
                         .foregroundStyle(.white)
                         .fontWeight(.semibold)
+                        .fixedSize()
                     }
                         .accessibilityIdentifier("scheduleSubcontractor.back")
                 }

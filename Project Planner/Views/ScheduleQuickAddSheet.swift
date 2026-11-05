@@ -101,6 +101,8 @@ struct ScheduleQuickAddSheet: View {
                     Button("Cancel", action: onCancel)
                         .accessibilityIdentifier("scheduleQuickAdd.cancel")
                         .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
         }

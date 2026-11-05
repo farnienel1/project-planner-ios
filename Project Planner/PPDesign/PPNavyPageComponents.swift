@@ -109,33 +109,21 @@ struct PPManageTileLabel: View {
     var badge: Int? = nil
     var badgeColor: Color = PPColor.brand
 
-    @ScaledMetric(relativeTo: .caption) private var labelSize: CGFloat = 12.5
-
     var body: some View {
-        VStack(spacing: 7) {
-            PPIconTile(symbol: symbol, family: family, size: PPMetrics.quickActionIcon, lifted: true)
-                .overlay(alignment: .topTrailing) {
-                    if let badge, badge > 0 {
-                        Text("\(badge)")
-                            .font(.caption2.weight(.bold))
-                            .monospacedDigit()
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
-                            .frame(minWidth: 20, minHeight: 20)
-                            .background(Capsule().fill(badgeColor))
-                            .overlay(Capsule().strokeBorder(PPColor.page, lineWidth: 2))
-                            .offset(x: 6, y: -6)
-                    }
-                }
-            Text(title)
-                .font(.system(size: labelSize, weight: .semibold))
-                .foregroundStyle(.primary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.85)
-                .frame(maxWidth: 82)
+        // Same tile as Home quick actions (PPQuickActionTile): fixed icon, glyph box and two reserved label lines.
+        PPQuickActionTile(title: title, symbol: symbol, family: family) {
+            if let badge, badge > 0 {
+                Text("\(badge)")
+                    .font(.caption2.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .frame(minWidth: 20, minHeight: 20)
+                    .background(Capsule().fill(badgeColor))
+                    .overlay(Capsule().strokeBorder(PPColor.page, lineWidth: 2))
+                    .offset(x: 6, y: -6)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .top)
     }
 }
 

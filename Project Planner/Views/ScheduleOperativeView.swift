@@ -296,9 +296,11 @@ struct ScheduleOperativeView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "chevron.left")
                             Text("Back")
+                                .lineLimit(1)
                         }
                         .foregroundStyle(.white)
                         .fontWeight(.semibold)
+                        .fixedSize()
                     }
                         .accessibilityIdentifier("scheduleOperative.back")
                 }

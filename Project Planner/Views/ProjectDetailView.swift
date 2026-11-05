@@ -839,43 +839,25 @@ struct ProjectDetailView: View {
     }
 
     private var schedulingDualActions: some View {
-        HStack(spacing: 10) {
+        // Both cards share PPBookingActionCardLabel + PPBookingActionCardButtonStyle; the vertical fixedSize lets
+        // each card fill the taller card's height so "Book people" and "Book a sub" always match.
+        HStack(alignment: .top, spacing: 10) {
             Button(action: {
                 scheduleOperativeSeedBooking = nil
                 scheduleOperativeGroupId = nil
                 showingScheduleOperative = true
             }) {
-                schedulingActionCardLabel(title: "Book people", subtitle: "Operatives & managers", symbol: "person.2.fill", family: .plan)
+                PPBookingActionCardLabel(title: "Book people", subtitle: "Operatives & managers", symbol: "person.2.fill", family: .plan)
             }
             .accessibilityIdentifier("projectDetail.person2Fill")
-            .buttonStyle(PPPressableButtonStyle())
+            .buttonStyle(PPBookingActionCardButtonStyle())
             Button(action: { showingScheduleSubcontractor = true }) {
-                schedulingActionCardLabel(title: "Book a sub", subtitle: "Subcontractors", symbol: "building.2.fill", family: .people)
+                PPBookingActionCardLabel(title: "Book a sub", subtitle: "Subcontractors", symbol: "building.2.fill", family: .people)
             }
             .accessibilityIdentifier("projectDetail.building2Fill")
-            .buttonStyle(PPPressableButtonStyle())
+            .buttonStyle(PPBookingActionCardButtonStyle())
         }
-    }
-
-    private func schedulingActionCardLabel(title: String, subtitle: String, symbol: String, family: PPFamily) -> some View {
-        HStack(spacing: 10) {
-            PPIconTile(symbol: symbol, family: family, size: 38, lifted: true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
-            }
-            Spacer(minLength: 0)
-        }
-        .ppBookingCard(padding: 12)
-        .accessibilityElement(children: .combine)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var schedulingOperativeGradient: LinearGradient {

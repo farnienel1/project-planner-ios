@@ -301,11 +301,65 @@ extension PPSectionHeader where Trailing == EmptyView {
 // MARK: - Quick actions (springboard-style 4-column grid)
 
 enum PPQuickActionGrid {
+    /// Equal-width columns, every cell top-aligned so a one-line label never pushes its icon down to centre it
+    /// against a two-line neighbour.
     static var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: PPMetrics.quickActionColumnSpacing),
+        Array(repeating: GridItem(.flexible(), spacing: PPMetrics.quickActionColumnSpacing, alignment: .top),
               count: PPMetrics.quickActionColumns)
     }
     static let rowSpacing = PPMetrics.quickActionRowSpacing
+    /// Icon tile edge, the same in every column.
+    static let iconSize: CGFloat = PPMetrics.quickActionIcon
+    /// Square box every glyph is fitted into, so wide symbols ("person.2.badge.gearshape.fill") and narrow ones
+    /// ("doc.text.fill") read at the same size.
+    static let glyphBox: CGFloat = PPMetrics.quickActionIcon * 0.46
+    static let iconLabelSpacing: CGFloat = 7
+    static let labelMaxWidth: CGFloat = 82
+    /// Lines reserved for every label, so one-line and two-line titles keep their icons on the same row line.
+    static let labelLines: Int = 2
+}
+
+/// The one quick-action tile: fixed icon tile, fixed glyph box and a label area that always reserves two lines.
+/// Used by Home quick actions (`PPQuickActionLabel`) and the job Manage grid (`PPManageTileLabel`), so the two
+/// cannot drift. Label only: no action, no data.
+struct PPQuickActionTile<IconOverlay: View>: View {
+    let title: String
+    let symbol: String
+    let family: PPFamily
+    let iconOverlay: IconOverlay
+
+    @ScaledMetric(relativeTo: .caption) private var labelSize: CGFloat = 12.5
+
+    init(title: String, symbol: String, family: PPFamily, @ViewBuilder iconOverlay: () -> IconOverlay) {
+        self.title = title
+        self.symbol = symbol
+        self.family = family
+        self.iconOverlay = iconOverlay()
+    }
+
+    var body: some View {
+        VStack(spacing: PPQuickActionGrid.iconLabelSpacing) {
+            PPIconTile(symbol: symbol, family: family,
+                       size: PPQuickActionGrid.iconSize, lifted: true,
+                       glyphBox: PPQuickActionGrid.glyphBox)
+                .frame(width: PPQuickActionGrid.iconSize, height: PPQuickActionGrid.iconSize)
+                .overlay(alignment: .topTrailing) { iconOverlay }
+            Text(title)
+                .font(.system(size: labelSize, weight: .semibold))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .lineLimit(PPQuickActionGrid.labelLines, reservesSpace: true)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: PPQuickActionGrid.labelMaxWidth, alignment: .top)
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+}
+
+extension PPQuickActionTile where IconOverlay == EmptyView {
+    init(title: String, symbol: String, family: PPFamily) {
+        self.init(title: title, symbol: symbol, family: family) { EmptyView() }
+    }
 }
 
 /// LABEL for each EXISTING quick-action Button / NavigationLink.
@@ -314,21 +368,8 @@ struct PPQuickActionLabel: View {
     let symbol: String
     let family: PPFamily
 
-    @ScaledMetric(relativeTo: .caption) private var labelSize: CGFloat = 12.5
-
     var body: some View {
-        VStack(spacing: 7) {
-            PPIconTile(symbol: symbol, family: family,
-                       size: PPMetrics.quickActionIcon, lifted: true)
-            Text(title)
-                .font(.system(size: labelSize, weight: .semibold))
-                .foregroundStyle(.primary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.85)
-                .frame(maxWidth: 82)
-        }
-        .frame(maxWidth: .infinity, alignment: .top)
+        PPQuickActionTile(title: title, symbol: symbol, family: family)
     }
 }
 
