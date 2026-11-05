@@ -1170,49 +1170,57 @@ struct ManageUserRowView: View {
         Task {
             let db = Firestore.firestore()
             do {
-                // Mark all existing invitations for this email as used so only the new link works
-                let existing = try await db.collection("invitations")
-                    .whereField("email", isEqualTo: user.email)
-                    .getDocuments()
-                for doc in existing.documents {
-                    try? await doc.reference.updateData(InvitationDocument.usedFields())
-                }
-
-                // Always create a brand new invitation (never reuse old link)
-                let invitationId = UUID().uuidString
-                var invitationData: [String: Any] = [
-                    "email": user.email,
-                    "organizationId": user.organizationId,
-                    "invitedBy": userStore.currentUser?.email ?? "System",
-                    "firstName": user.firstName,
-                    "surname": user.surname,
-                    "permissions": [
-                        "adminAccess": user.permissions.adminAccess,
-                        "manager": user.permissions.manager,
-                        "operatives": user.permissions.operatives,
-                        "skills": false,
-                        "qualifications": user.permissions.qualifications,
-                        "materials": user.permissions.materials,
-                        "projects": user.permissions.projects,
-                        "smallWorks": user.permissions.smallWorks,
-                        "operativeMode": user.permissions.operativeMode,
-                        "weeklyReports": user.permissions.weeklyReports,
-                        "dailyOverview": user.permissions.dailyOverview,
-                        "subContractors": user.permissions.subContractors,
-                        "siteAudit": user.permissions.siteAudit,
-                        "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory
-                    ],
-                    "createdAt": Timestamp(date: Date()),
-                    "isUsed": false
-                ]
-                if let mobileNumber = user.mobileNumber {
-                    invitationData["mobileNumber"] = mobileNumber
-                }
-                invitationData["employmentType"] = user.employmentType.rawValue
-                // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
-                // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
-                try RulebookRosterLists.requireInviteLevel(invitationData)
-                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                // Always a brand new invitation (never reuse an old link), created FIRST; only then are the earlier
+                // links closed, skipping the new one (RULEBOOK 1.31.1 §16: the queries name `organizationId` + `email`,
+                // + `invitedBy` for an operatives manager), so a refused create leaves the old link working.
+                let resend = try await InvitationDocument.resend(create: {
+                    // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
+                    let sender = try InvitationDocument.signedInSenderField()
+                    let invitationId = UUID().uuidString
+                    var invitationData: [String: Any] = [
+                        "email": user.email,
+                        "organizationId": user.organizationId,
+                        "invitedBy": sender,
+                        "firstName": user.firstName,
+                        "surname": user.surname,
+                        "permissions": [
+                            "adminAccess": user.permissions.adminAccess,
+                            "manager": user.permissions.manager,
+                            "operatives": user.permissions.operatives,
+                            "skills": false,
+                            "qualifications": user.permissions.qualifications,
+                            "materials": user.permissions.materials,
+                            "projects": user.permissions.projects,
+                            "smallWorks": user.permissions.smallWorks,
+                            "operativeMode": user.permissions.operativeMode,
+                            "weeklyReports": user.permissions.weeklyReports,
+                            "dailyOverview": user.permissions.dailyOverview,
+                            "subContractors": user.permissions.subContractors,
+                            "siteAudit": user.permissions.siteAudit,
+                            "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory
+                        ],
+                        "createdAt": Timestamp(date: Date()),
+                        "isUsed": false
+                    ]
+                    if let mobileNumber = user.mobileNumber {
+                        invitationData["mobileNumber"] = mobileNumber
+                    }
+                    invitationData["employmentType"] = user.employmentType.rawValue
+                    // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+                    // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
+                    try RulebookRosterLists.requireInviteLevel(invitationData)
+                    try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                    return invitationId
+                }, closeEarlier: { newInvitationId in
+                    await InvitationDocument.closeEarlierInvitations(
+                        organizationId: user.organizationId,
+                        email: user.email,
+                        excluding: newInvitationId,
+                        userStore: userStore
+                    )
+                })
+                let invitationId = resend.invitationId
+                let closedNote = InvitationDocument.closeSummary(resend.closed)
 
                 let success = await userStore.sendSignUpEmailWithVerification(
                     email: user.email,
@@ -1224,7 +1232,7 @@ struct ManageUserRowView: View {
                 await MainActor.run {
                     isSendingSignUpEmail = false
                     if success {
-                        rowEmailFeedback = "✅ Sign-up email with verification code sent successfully to \(user.email)"
+                        rowEmailFeedback = "✅ Sign-up email with verification code sent successfully to \(user.email)\n\(closedNote)"
                     } else {
                         rowEmailFeedback = "❌ Failed to send sign-up email. Please try again."
                     }
@@ -4434,7 +4442,7 @@ struct EditUserView: View {
     }
     
     private func createNewInvitation() async {
-        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before the old links are marked used.
+        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before anything is written.
         if let refusal = InvitationDocument.resendRefusal(subject: user, inviter: userStore.currentUser) {
             resendEmailMessage = "❌ \(refusal)"
             isResendingEmail = false
@@ -4442,64 +4450,66 @@ struct EditUserView: View {
         }
         let db = Firestore.firestore()
         do {
-            // Mark all existing invitations for this email as used so only the new link works
-            let existing = try await db.collection("invitations")
-                .whereField("email", isEqualTo: user.email)
-                .getDocuments()
-            for doc in existing.documents {
-                try? await doc.reference.updateData(InvitationDocument.usedFields())
-            }
-        } catch {
-            // Continue anyway; we'll create a new invitation
-        }
-
-        let invitationId = UUID().uuidString
-        var invitationData: [String: Any] = [
-            "email": user.email,
-            "organizationId": user.organizationId,
-            "invitedBy": userStore.currentUser?.email ?? "System",
-            "firstName": user.firstName,
-            "surname": user.surname,
-            "permissions": [
-                "adminAccess": permissions.adminAccess,
-                "manager": permissions.manager,
-                "operatives": permissions.operatives,
-                "skills": false,
-                "qualifications": permissions.qualifications,
-                "materials": permissions.materials,
-                "projects": permissions.projects,
-                "smallWorks": permissions.smallWorks,
-                "operativeMode": permissions.operativeMode,
-                "weeklyReports": permissions.weeklyReports,
-                "dailyOverview": permissions.dailyOverview,
-                "subContractors": permissions.subContractors,
-                "siteAudit": permissions.siteAudit,
-                "wholesalersOrderHistory": permissions.wholesalersOrderHistory
-            ],
-            "createdAt": Timestamp(date: Date()),
-            "isUsed": false
-        ]
-        
-        if let mobileNumber = user.mobileNumber {
-            invitationData["mobileNumber"] = mobileNumber
-        }
-        invitationData["employmentType"] = user.employmentType.rawValue
-        
-        do {
-            // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
-            // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
-            try RulebookRosterLists.requireInviteLevel(invitationData)
-            try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+            // A brand new invitation, created FIRST; only then are the earlier links closed, skipping the new one
+            // (RULEBOOK 1.31.1 §16: the queries name `organizationId` + `email`, + `invitedBy` for an operatives
+            // manager), so a refused create leaves the old link working.
+            let resend = try await InvitationDocument.resend(create: {
+                // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
+                let sender = try InvitationDocument.signedInSenderField()
+                let invitationId = UUID().uuidString
+                var invitationData: [String: Any] = [
+                    "email": user.email,
+                    "organizationId": user.organizationId,
+                    "invitedBy": sender,
+                    "firstName": user.firstName,
+                    "surname": user.surname,
+                    "permissions": [
+                        "adminAccess": permissions.adminAccess,
+                        "manager": permissions.manager,
+                        "operatives": permissions.operatives,
+                        "skills": false,
+                        "qualifications": permissions.qualifications,
+                        "materials": permissions.materials,
+                        "projects": permissions.projects,
+                        "smallWorks": permissions.smallWorks,
+                        "operativeMode": permissions.operativeMode,
+                        "weeklyReports": permissions.weeklyReports,
+                        "dailyOverview": permissions.dailyOverview,
+                        "subContractors": permissions.subContractors,
+                        "siteAudit": permissions.siteAudit,
+                        "wholesalersOrderHistory": permissions.wholesalersOrderHistory
+                    ],
+                    "createdAt": Timestamp(date: Date()),
+                    "isUsed": false
+                ]
+                if let mobileNumber = user.mobileNumber {
+                    invitationData["mobileNumber"] = mobileNumber
+                }
+                invitationData["employmentType"] = user.employmentType.rawValue
+                // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+                // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
+                try RulebookRosterLists.requireInviteLevel(invitationData)
+                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                return invitationId
+            }, closeEarlier: { newInvitationId in
+                await InvitationDocument.closeEarlierInvitations(
+                    organizationId: user.organizationId,
+                    email: user.email,
+                    excluding: newInvitationId,
+                    userStore: userStore
+                )
+            })
+            let closedNote = InvitationDocument.closeSummary(resend.closed)
 
             await userStore.resendInvitationEmail(
                 email: user.email,
                 firstName: user.firstName,
                 surname: user.surname,
-                invitationId: invitationId
+                invitationId: resend.invitationId
             )
 
             await MainActor.run {
-                resendEmailMessage = "✅ Verification email sent successfully to \(user.email)"
+                resendEmailMessage = "✅ Verification email sent successfully to \(user.email)\n\(closedNote)"
                 isResendingEmail = false
             }
         } catch {
@@ -4527,49 +4537,57 @@ struct EditUserView: View {
         Task {
             let db = Firestore.firestore()
             do {
-                // Mark all existing invitations for this email as used so only the new link works
-                let existing = try await db.collection("invitations")
-                    .whereField("email", isEqualTo: user.email)
-                    .getDocuments()
-                for doc in existing.documents {
-                    try? await doc.reference.updateData(InvitationDocument.usedFields())
-                }
-
-                // Always create a brand new invitation (never reuse old link)
-                let invitationId = UUID().uuidString
-                var invitationData: [String: Any] = [
-                    "email": user.email,
-                    "organizationId": user.organizationId,
-                    "invitedBy": userStore.currentUser?.email ?? "System",
-                    "firstName": user.firstName,
-                    "surname": user.surname,
-                    "permissions": [
-                        "adminAccess": user.permissions.adminAccess,
-                        "manager": user.permissions.manager,
-                        "operatives": user.permissions.operatives,
-                        "skills": false,
-                        "qualifications": user.permissions.qualifications,
-                        "materials": user.permissions.materials,
-                        "projects": user.permissions.projects,
-                        "smallWorks": user.permissions.smallWorks,
-                        "operativeMode": user.permissions.operativeMode,
-                        "weeklyReports": user.permissions.weeklyReports,
-                        "dailyOverview": user.permissions.dailyOverview,
-                        "subContractors": user.permissions.subContractors,
-                        "siteAudit": user.permissions.siteAudit,
-                        "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory
-                    ],
-                    "createdAt": Timestamp(date: Date()),
-                    "isUsed": false
-                ]
-                if let mobileNumber = user.mobileNumber {
-                    invitationData["mobileNumber"] = mobileNumber
-                }
-                invitationData["employmentType"] = user.employmentType.rawValue
-                // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
-                // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
-                try RulebookRosterLists.requireInviteLevel(invitationData)
-                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                // Always a brand new invitation (never reuse an old link), created FIRST; only then are the earlier
+                // links closed, skipping the new one (RULEBOOK 1.31.1 §16: the queries name `organizationId` + `email`,
+                // + `invitedBy` for an operatives manager), so a refused create leaves the old link working.
+                let resend = try await InvitationDocument.resend(create: {
+                    // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
+                    let sender = try InvitationDocument.signedInSenderField()
+                    let invitationId = UUID().uuidString
+                    var invitationData: [String: Any] = [
+                        "email": user.email,
+                        "organizationId": user.organizationId,
+                        "invitedBy": sender,
+                        "firstName": user.firstName,
+                        "surname": user.surname,
+                        "permissions": [
+                            "adminAccess": user.permissions.adminAccess,
+                            "manager": user.permissions.manager,
+                            "operatives": user.permissions.operatives,
+                            "skills": false,
+                            "qualifications": user.permissions.qualifications,
+                            "materials": user.permissions.materials,
+                            "projects": user.permissions.projects,
+                            "smallWorks": user.permissions.smallWorks,
+                            "operativeMode": user.permissions.operativeMode,
+                            "weeklyReports": user.permissions.weeklyReports,
+                            "dailyOverview": user.permissions.dailyOverview,
+                            "subContractors": user.permissions.subContractors,
+                            "siteAudit": user.permissions.siteAudit,
+                            "wholesalersOrderHistory": user.permissions.wholesalersOrderHistory
+                        ],
+                        "createdAt": Timestamp(date: Date()),
+                        "isUsed": false
+                    ]
+                    if let mobileNumber = user.mobileNumber {
+                        invitationData["mobileNumber"] = mobileNumber
+                    }
+                    invitationData["employmentType"] = user.employmentType.rawValue
+                    // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
+                    // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
+                    try RulebookRosterLists.requireInviteLevel(invitationData)
+                    try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                    return invitationId
+                }, closeEarlier: { newInvitationId in
+                    await InvitationDocument.closeEarlierInvitations(
+                        organizationId: user.organizationId,
+                        email: user.email,
+                        excluding: newInvitationId,
+                        userStore: userStore
+                    )
+                })
+                let invitationId = resend.invitationId
+                let closedNote = InvitationDocument.closeSummary(resend.closed)
 
                 let success = await userStore.sendSignUpEmailWithVerification(
                     email: user.email,
@@ -4582,8 +4600,8 @@ struct EditUserView: View {
                     isSendingSignUpEmail = false
                     isResendingEmail = false
                     if success {
-                        signUpEmailMessage = "✅ Sign-up email with verification code sent successfully to \(user.email)"
-                        resendEmailMessage = "✅ Sign-up email with verification code sent successfully to \(user.email)"
+                        signUpEmailMessage = "✅ Sign-up email with verification code sent successfully to \(user.email)\n\(closedNote)"
+                        resendEmailMessage = "✅ Sign-up email with verification code sent successfully to \(user.email)\n\(closedNote)"
                     } else {
                         signUpEmailMessage = "❌ Failed to send sign-up email. Please try again."
                         resendEmailMessage = "❌ Failed to send sign-up email. Please try again."

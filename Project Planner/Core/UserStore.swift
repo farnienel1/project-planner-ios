@@ -2156,14 +2156,19 @@ class UserStore: ObservableObject {
                             managerRows.append(["id": doc.documentID, "userId": doc.data()["userId"] as? String ?? "", "dateMs": date.timeIntervalSince1970 * 1000])
                         }
                     }
-                    var invitationRows: [[String: Any]] = []
-                    for variant in Array(Set([emailNormalized, emailRaw].filter { !$0.isEmpty })) {
-                        let invSnap = try await db.collection("invitations")
-                            .whereField("organizationId", isEqualTo: organizationId)
-                            .whereField("email", isEqualTo: variant)
-                            .getDocuments(source: .server)
-                        invitationRows += invSnap.documents.map { ["id": $0.documentID, "email": ($0.data()["email"] as? String) ?? variant] }
-                    }
+                    // RULEBOOK 1.31.1 §16 (fourth review B-1): an operatives manager lists only the invitations they
+                    // sent, so their query also names `invitedBy` (users id or sign-in email); an admin's names
+                    // `organizationId` + `email` only. A query the rules refuse is skipped; any other failure stops
+                    // the delete before anything is written. `userDeleteWrites` decides what is removed.
+                    let invitationLookups = InvitationDocument.lookupsForSignedInUser(
+                        organizationId: organizationId,
+                        email: emailRaw,
+                        userStore: self
+                    )
+                    let invitationRows: [[String: Any]] = try await InvitationDocument
+                        .fetch(invitationLookups, db: db, source: .server)
+                        .rows
+                        .map { ["id": $0.documentID, "email": ($0.data()["email"] as? String) ?? emailNormalized] }
                     let membersMap = firebaseBackend.organizationMembersSnapshot.flatMap {
                         organizationIdsMatch($0.organizationId, organizationId) ? $0.members : nil
                     }
