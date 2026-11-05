@@ -331,9 +331,10 @@ struct ProjectPlannerRootView: View {
             NoOrganisationView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
-        } else if let currentUser = userStore.currentUser, currentUser.showsLegalPackGate {
+        } else if let currentUser = userStore.currentUser, currentUser.showsLegalPackGate(isOnline: smartCache.isOnline) {
             // `legalPackNeedsAcceptance`: not accepted, or an older pack accepted. Decided only from a profile read
-            // from `users/{uid}`; the launch placeholder never flashes the gate (`showsLegalPackGate`).
+            // from `users/{uid}` (a cached copy waits for the server while online); the launch placeholder never
+            // flashes the gate (`showsLegalPackGate(isOnline:)`).
             PolicyAcceptanceView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)

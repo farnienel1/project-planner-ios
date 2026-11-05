@@ -705,11 +705,14 @@ extension FirebaseBackend {
                 userDocument: nil,
                 membership: nil,
                 creatorUserId: creator
-            )
+            ).carryingLegalAcceptance(from: user)
         }
         // RULEBOOK §12: the photo is personal; its upload time comes with it so avatars refresh in this company too.
         session.profilePhotoURL = user.profilePhotoURL
         session.profilePhotoUpdatedAt = user.profilePhotoUpdatedAt
+        // The legal acceptance lives on `users/{uid}`, never on the membership row: without this the session profile
+        // read `policyAccepted` false from `orgMemberships` and showed the legal gate after the accepted profile.
+        session = session.carryingLegalAcceptance(from: user)
         deviceSessionProfile = session
         return session
     }

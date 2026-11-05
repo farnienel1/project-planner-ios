@@ -4146,23 +4146,34 @@ class FirebaseBackend: ObservableObject {
             return nil
         }
         
-        return Self.parseAppUserDocument(userId: userId, data: data)
+        var parsed = Self.parseAppUserDocument(userId: userId, data: data)
+        // A server read that timed out falls back to the cache, which can predate the server copy.
+        parsed.readFromLocalCache = doc.metadata.isFromCache
+        return parsed
     }
 
+    /// Live `users/{uid}`. Metadata changes are included so the switch from a cached first snapshot to the server
+    /// copy is delivered even when the data is identical (the legal gate waits for it while online,
+    /// `AppUser.showsLegalPackGate(isOnline:)`); a snapshot whose data and source are both unchanged is skipped.
     func observeCurrentUserDocument(
         userId: String,
         onChange: @escaping @MainActor (AppUser?) -> Void
     ) -> ListenerRegistration {
-        db.collection("users").document(userId).addSnapshotListener { snapshot, error in
+        let memo = CurrentUserSnapshotMemo()
+        return db.collection("users").document(userId).addSnapshotListener(includeMetadataChanges: true) { snapshot, error in
             if let error {
                 print("🔥🔥🔥 DEBUG: current user listen error: \(error.localizedDescription)")
                 return
             }
             guard let snapshot, snapshot.exists, let data = snapshot.data() else {
+                memo.reset()
                 Task { @MainActor in onChange(nil) }
                 return
             }
-            let parsed = Self.parseAppUserDocument(userId: userId, data: data)
+            let fromCache = snapshot.metadata.isFromCache
+            guard memo.shouldForward(data: data, fromCache: fromCache) else { return }
+            var parsed = Self.parseAppUserDocument(userId: userId, data: data)
+            parsed.readFromLocalCache = fromCache
             Task { @MainActor in onChange(parsed) }
         }
     }
@@ -6012,30 +6023,54 @@ class FirebaseBackend: ObservableObject {
         ])
     }
 
+    /// The acceptance write web `LegalPackGate` makes (`updateDoc` on `users/{uid}`): `policyAccepted: true`,
+    /// `policyAcceptedAt`, `legalPackVersion`, `legalPackAcceptedAt`, `legalAcceptances`, plus `WriteMetadata`
+    /// (`updatedAt`, `updatedBy`, `updatedFrom: "ios"`). `legalPackNeedsAcceptance` reads `policyAccepted` first, so a
+    /// write without it brings the gate back on the next launch. Top-level keys only (no dotted keys).
+    static func legalPackAcceptanceWrite(
+        userId: String,
+        email: String,
+        organizationName: String,
+        authorisedToBind: Bool,
+        acceptedAt: Date,
+        signedInUserId: String?
+    ) -> [String: Any] {
+        let at = Timestamp(date: acceptedAt)
+        return WriteMetadata.stamped([
+            "policyAccepted": true,
+            "policyAcceptedAt": at,
+            "legalPackVersion": CustomerLegalPack.version,
+            "legalPackAcceptedAt": at,
+            "legalAcceptances": [
+                "saas": true,
+                "dpa": true,
+                "aup": true,
+                "privacy": true,
+                "authorisedToBind": authorisedToBind,
+                "organizationName": organizationName,
+                "email": email,
+                "userId": userId,
+            ] as [String: Any],
+        ], userId: signedInUserId)
+    }
+
+    /// Partial update of `users/{uid}` only (never the membership row, never a full profile save), so a phone open in
+    /// a company other than `users/{uid}.organizationId` stores the acceptance too.
     func recordLegalPackAcceptance(
         userId: String,
         email: String,
         organizationName: String,
-        authorisedToBind: Bool
+        authorisedToBind: Bool,
+        acceptedAt: Date = Date()
     ) async throws {
-        try await db.collection("users").document(userId).setData(
-            [
-                "legalPackVersion": CustomerLegalPack.version,
-                "legalPackAcceptedAt": Timestamp(date: Date()),
-                "legalAcceptances": [
-                    "saas": true,
-                    "dpa": true,
-                    "aup": true,
-                    "privacy": true,
-                    "authorisedToBind": authorisedToBind,
-                    "organizationName": organizationName,
-                    "email": email,
-                    "userId": userId,
-                ],
-                "updatedAt": Timestamp(date: Date()),
-            ],
-            merge: true
-        )
+        try await db.collection("users").document(userId).updateData(Self.legalPackAcceptanceWrite(
+            userId: userId,
+            email: email,
+            organizationName: organizationName,
+            authorisedToBind: authorisedToBind,
+            acceptedAt: acceptedAt,
+            signedInUserId: auth.currentUser?.uid
+        ))
     }
 
     /// Permission flags that differ, plus `updatedAt`. Never writes `organizationId` or `isSuperAdmin`.

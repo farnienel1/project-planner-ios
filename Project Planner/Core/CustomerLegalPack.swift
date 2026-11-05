@@ -307,8 +307,50 @@ extension AppUser {
     /// Whether the root view shows the legal gate. Only a profile read from `users/{uid}` by the rulebook reader
     /// decides it: the launch placeholder (`isProvisional`) and the identity-only copy (`parsedWithoutRulebook`)
     /// carry no stored acceptance, so they never show the gate; the real document decides once it arrives.
-    var showsLegalPackGate: Bool {
+    /// A copy from this phone's Firestore cache (`readFromLocalCache`) can be older than the server's (accepted on
+    /// another device since): while online the gate waits for the server snapshot; offline the cached copy decides.
+    func showsLegalPackGate(isOnline: Bool) -> Bool {
         guard !isProvisional, !parsedWithoutRulebook else { return false }
+        if readFromLocalCache && isOnline { return false }
         return needsLegalPackAcceptance
+    }
+
+    /// The acceptance stored on `users/{uid}` (`policyAccepted`, `policyAcceptedAt`, `legalPackVersion`) is personal,
+    /// not per organisation. A profile rebuilt for this phone's company (an `orgMemberships` row, a roster row) keeps
+    /// the acceptance of the `users/{uid}` copy it came from, and where that copy was read from.
+    func carryingLegalAcceptance(from source: AppUser) -> AppUser {
+        var copy = self
+        copy.policyAccepted = source.policyAccepted
+        copy.policyAcceptedAt = source.policyAcceptedAt
+        copy.legalPackVersion = source.legalPackVersion
+        copy.readFromLocalCache = source.readFromLocalCache
+        return copy
+    }
+}
+
+/// Remembers the last `users/{uid}` snapshot `FirebaseBackend.observeCurrentUserDocument` forwarded, so a listener
+/// with metadata changes forwards a snapshot only when its data or its source (cache / server) changed.
+nonisolated final class CurrentUserSnapshotMemo: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastData: NSDictionary?
+    private var lastFromCache: Bool?
+
+    func shouldForward(data: [String: Any], fromCache: Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let next = NSDictionary(dictionary: data)
+        if let lastData, let lastFromCache, lastFromCache == fromCache, lastData.isEqual(next) {
+            return false
+        }
+        lastData = next
+        lastFromCache = fromCache
+        return true
+    }
+
+    func reset() {
+        lock.lock()
+        lastData = nil
+        lastFromCache = nil
+        lock.unlock()
     }
 }

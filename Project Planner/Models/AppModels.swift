@@ -534,6 +534,10 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// unreachable Firestore). It carries no stored acceptance, so the legal gate is never decided from it
     /// (`showsLegalPackGate`). Not encoded.
     var isProvisional: Bool = false
+    /// True when this copy of `users/{uid}` came from this phone's Firestore cache (`metadata.isFromCache`), not a
+    /// server snapshot. A cached copy can be older than the server's, so while online the legal gate waits for the
+    /// server copy (`showsLegalPackGate(isOnline:)`). Not encoded.
+    var readFromLocalCache: Bool = false
     /// RULEBOOK 1.9.0: the `parseUserDocument` `annualLeaveStored` keys (`daysPerYear`, `startMonth`, `endMonth`,
     /// `carriesOver`) the user document stores itself, for `CanonicalBusinessEngine.annualLeavePendingOmitFields`. Not encoded.
     var annualLeaveStoredKeys: [String] = []

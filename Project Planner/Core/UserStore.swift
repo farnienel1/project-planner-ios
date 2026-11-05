@@ -1362,9 +1362,9 @@ class UserStore: ObservableObject {
         do {
             try await firebaseBackend.patchOwnUserTimesheetsEnabled(userId: userId, enabled: enabled)
             organizationUsers[index] = updated
-            if var cu = currentUser, cu.id == userId {
-                cu = updated
-                currentUser = cu
+            if let cu = currentUser, cu.id == userId {
+                // A roster row (possibly this phone's saved roster) never replaces the acceptance read from users/{uid}.
+                currentUser = updated.carryingLegalAcceptance(from: cu)
             }
             return true
         } catch {

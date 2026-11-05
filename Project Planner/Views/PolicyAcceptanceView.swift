@@ -137,11 +137,13 @@ struct PolicyAcceptanceView: View {
                     return
                 }
 
+                // The profile on screen is this phone's session (its company's role and rights); fall back to a
+                // fresh read of users/{uid} only when nothing is on screen yet.
                 var updatedUser: AppUser
-                if let loaded = try await firebaseBackend.getUserData(userId: authUser.uid) {
-                    updatedUser = loaded
-                } else if let current = userStore.currentUser {
+                if let current = userStore.currentUser, current.id == authUser.uid {
                     updatedUser = current
+                } else if let loaded = try await firebaseBackend.getUserData(userId: authUser.uid) {
+                    updatedUser = loaded
                 } else {
                     await MainActor.run {
                         isAccepting = false
@@ -150,17 +152,21 @@ struct PolicyAcceptanceView: View {
                     return
                 }
 
+                // One partial update of users/{uid} in web `LegalPackGate`'s shape, `policyAccepted: true` included
+                // (`legalPackNeedsAcceptance` reads it). No full profile save: in a company other than
+                // users/{uid}.organizationId that save wrote identity fields only and dropped the acceptance.
                 let now = Date()
-                updatedUser.policyAccepted = true
-                updatedUser.policyAcceptedAt = now
-                updatedUser.legalPackVersion = CustomerLegalPack.version
-                try await firebaseBackend.saveUser(updatedUser)
                 try await firebaseBackend.recordLegalPackAcceptance(
                     userId: authUser.uid,
                     email: updatedUser.email,
                     organizationName: orgName,
-                    authorisedToBind: isSuperAdmin ? authorisedToBind : false
+                    authorisedToBind: isSuperAdmin ? authorisedToBind : false,
+                    acceptedAt: now
                 )
+                updatedUser.policyAccepted = true
+                updatedUser.policyAcceptedAt = now
+                updatedUser.legalPackVersion = CustomerLegalPack.version
+                updatedUser.readFromLocalCache = false
 
                 await MainActor.run {
                     userStore.currentUser = updatedUser
