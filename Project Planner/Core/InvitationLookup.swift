@@ -12,19 +12,24 @@
 //  A resend creates the new invitation first and only then closes the earlier links (skipping the new one), so a
 //  refused create never leaves the person without a working link. Closed and refused marks are counted and shown.
 //
-//  Query plumbing for the rules' shape, not a business rule: no rulebook function owns invitation query constraints
-//  (reported to the web agent). The writes stay `invitationCreateFields` / `invitationUsedWriteFields` / `userDeleteWrites`.
+//  RULEBOOK 1.32.0: the query constraints come from `invitationListConstraints` (this organisation, the email as typed
+//  and lower case, and for an operatives manager each sender value), and a refused read is skipped only per
+//  `invitationReadErrorIsSkippable` (permission-denied). The writes stay `invitationCreateFields` /
+//  `invitationUsedWriteFields` / `userDeleteWrites`.
 //
 
 import Foundation
 import FirebaseAuth
 import FirebaseFirestore
 
-/// One `invitations` query: `organizationId` == and `email` ==, plus `invitedBy` == when set.
+/// One `invitations` query: the equality constraints `invitationListConstraints` returned for it, in order.
 nonisolated struct InvitationLookup: Equatable, Hashable, Sendable {
-    let organizationId: String
-    let email: String
-    let invitedBy: String?
+    let constraints: [InvitationQueryConstraint]
+
+    /// The value this query asks for `field` (`organizationId`, `email`, `invitedBy`), or nil when it does not name it.
+    func value(of field: String) -> String? {
+        constraints.first { $0.field == field }?.value
+    }
 }
 
 /// No sign-in email and no users id to name as the sender: the rules (`invitationSentByCaller`) would refuse the write.
@@ -74,42 +79,33 @@ extension InvitationDocument {
         return try senderField(authEmail: auth?.email, authUid: auth?.uid)
     }
 
-    /// Every form the signed-in sender's `invitedBy` may be stored under (read only): users id, sign-in email (as given
-    /// and lower case) and the profile email (older iOS invitations stored it). Blank values dropped, duplicates
-    /// removed, order kept.
+    /// The sender ids the signed-in account's `invitedBy` may be stored under (read only), handed to
+    /// `invitationListConstraints`, which also asks the lower-case form of each email: users id, sign-in email and the
+    /// profile email (older iOS invitations stored it). Blank values dropped, duplicates removed, order kept.
     nonisolated static func senderValues(authUid: String?, authEmail: String?, profileEmail: String?) -> [String] {
-        let trimmedAuthEmail = authEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let candidates = [
-            authUid?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-            trimmedAuthEmail,
-            trimmedAuthEmail.lowercased(),
-            profileEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-        ]
+        let candidates = [authUid, authEmail, profileEmail].map { $0?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
         var seen = Set<String>()
         return candidates.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
-    /// The queries for the invitations on `email` in `organizationId`. The email is asked as stored by
-    /// `invitationCreateFields` (lower case) and, for older rows, as typed. A caller who is not an admin
-    /// (`callerIsAdmin` false — an operatives manager) gets one query per sender form; an admin one per email form.
-    /// Empty when the organisation or email is blank, or a non-admin has no sender id (the rules would refuse it).
+    /// The queries for the invitations on `email` (as stored or typed, not pre-lowered) in `organizationId`, from
+    /// `invitationListConstraints`: an admin (`callerIsAdmin`) gets one per email form; anyone else (an operatives
+    /// manager) one per email form and sender value. Empty when the organisation or email is blank, or a non-admin has
+    /// no sender id (the rules would refuse it).
     nonisolated static func lookups(
         organizationId: String,
         email: String,
         callerIsAdmin: Bool,
         senders: [String]
     ) -> [InvitationLookup] {
-        let org = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let raw = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !org.isEmpty, !raw.isEmpty else { return [] }
-        let emails = raw.lowercased() == raw ? [raw] : [raw.lowercased(), raw]
-        if callerIsAdmin {
-            return emails.map { InvitationLookup(organizationId: org, email: $0, invitedBy: nil) }
-        }
-        let senderForms = senders.filter { !$0.isEmpty }
-        return emails.flatMap { address in
-            senderForms.map { InvitationLookup(organizationId: org, email: address, invitedBy: $0) }
-        }
+        CanonicalBusinessEngine.invitationListConstraints(
+            organizationId: organizationId,
+            email: email,
+            actorManagesOperatives: !callerIsAdmin,
+            senderIds: senders
+        )
+        .filter { !$0.isEmpty }
+        .map { InvitationLookup(constraints: $0) }
     }
 
     /// Whether the signed-in account lists every invitation on an email (an admin who is not only an operatives
@@ -131,13 +127,19 @@ extension InvitationDocument {
         )
     }
 
-    /// A Firestore permission denial (`FirebaseBackend.isPermissionDenied`).
+    /// A Firestore permission denial on a write (`FirebaseBackend.isPermissionDenied`): a refused mark is counted.
     nonisolated static func isPermissionDenied(_ error: Error) -> Bool {
         FirebaseBackend.isPermissionDenied(error)
     }
 
-    /// Runs `lookups` and returns each invitation once. A query the rules refuse (permission denied) is skipped and
-    /// counted; any other error is thrown.
+    /// `invitationReadErrorIsSkippable` on the error's Firestore code: an invitation read in a clean-up is skipped only
+    /// when the rules refused it; any other failure stops the clean-up.
+    nonisolated static func readErrorIsSkippable(_ error: Error) -> Bool {
+        CanonicalBusinessEngine.invitationReadErrorIsSkippable(code: FirestoreErrorCodeName.of(error))
+    }
+
+    /// Runs `lookups` and returns each invitation once. A query the rules refuse is skipped and counted
+    /// (`readErrorIsSkippable`); any other error is thrown.
     @MainActor
     static func fetch(
         _ lookups: [InvitationLookup],
@@ -147,18 +149,17 @@ extension InvitationDocument {
         var result = InvitationFetchResult()
         var seen = Set<String>()
         for lookup in lookups {
+            guard !lookup.constraints.isEmpty else { continue }
             var query: Query = db.collection("invitations")
-                .whereField("organizationId", isEqualTo: lookup.organizationId)
-                .whereField("email", isEqualTo: lookup.email)
-            if let sender = lookup.invitedBy {
-                query = query.whereField("invitedBy", isEqualTo: sender)
+            for constraint in lookup.constraints {
+                query = query.whereField(constraint.field, isEqualTo: constraint.value)
             }
             do {
                 let snapshot = try await query.getDocuments(source: source)
                 for document in snapshot.documents where seen.insert(document.documentID).inserted {
                     result.rows.append(document)
                 }
-            } catch let error where isPermissionDenied(error) {
+            } catch let error where readErrorIsSkippable(error) {
                 result.deniedQueries += 1
             }
         }

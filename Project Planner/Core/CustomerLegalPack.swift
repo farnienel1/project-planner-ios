@@ -293,6 +293,16 @@ extension CanonicalBusinessEngine {
     }
 }
 
+extension CustomerLegalPack {
+    /// RULEBOOK 1.32.0 `legalPackAcceptanceWriteFields` for this pack's `version`: the acceptance fields on
+    /// `users/{uid}` (`policyAccepted`, `policyAcceptedAt`, `legalPackVersion`, `legalPackAcceptedAt`) plus `updatedBy` /
+    /// `updatedFrom`, with `acceptedAt` (the app's timestamp value) in both "at" fields. Nil when the user id is blank
+    /// or the script did not answer.
+    static func acceptanceWriteFields(userId: String, acceptedAt: Any) -> [String: Any]? {
+        CanonicalBusinessEngine.legalPackAcceptanceWriteFields(userId: userId, version: version, acceptedAt: acceptedAt)
+    }
+}
+
 /// The legal gate on the root view (`AppUser.legalGateState`).
 enum LegalGateState: Equatable {
     /// The app opens.
