@@ -5261,7 +5261,9 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Admin: update organisation invoicing settings (`organizations/{orgId}.invoicing`).
-    func updateOrganizationInvoicingSettings(_ settings: OrganizationInvoicingSettings) async throws {
+    /// RULEBOOK 1.32.0 §4.5: `payePayday` is the PAYE payday picked on the same screen, saved by the same Save in the same
+    /// partial update (`payePaydayWriteFields` against the server copy, append-only history); nil leaves it unchanged.
+    func updateOrganizationInvoicingSettings(_ settings: OrganizationInvoicingSettings, payePayday: Int? = nil) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
             throw NSError(
                 domain: "FirebaseBackend",
@@ -5311,8 +5313,38 @@ class FirebaseBackend: ObservableObject {
                 patch["invoicing.\(key)"] = value
             }
         }
+        var paydayFields: [String: Any] = [:]
+        if let payePayday {
+            if let message = CanonicalBusinessEngine.payePaydayValidationError(payePayday) {
+                throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
+            }
+            let stored = FirebaseBackend.firestoreJSON(snap.data() ?? [:]) as? [String: Any] ?? [:]
+            paydayFields = CanonicalBusinessEngine.payePaydayWriteFields(
+                stored,
+                day: payePayday,
+                todayKey: OrganizationRulebookContext.dayKey(Date())
+            ) ?? [:]
+        }
+        for (key, value) in paydayFields {
+            // A brand-new `invoicing` map is written whole: its PAYE keys go inside it, not as dotted paths beside it.
+            if var map = patch["invoicing"] as? [String: Any], key.hasPrefix("invoicing.") {
+                map[String(key.dropFirst("invoicing.".count))] = value
+                patch["invoicing"] = map
+            } else {
+                patch[key] = value
+            }
+        }
         try await orgRef.updateData(WriteMetadata.stamped(patch, userId: auth.currentUser?.uid))
         guard var org = currentOrganization, organizationIdsMatch(org.firestoreDocumentId, orgId) else { return }
+        if !paydayFields.isEmpty {
+            var invoicing = OvertimeOrganizationDocument.invoicing(json: org.payePaydayJSON)
+            if let payday = paydayFields["invoicing.payePayday"] { invoicing["payePayday"] = payday }
+            if let history = paydayFields["invoicing.payePaydayHistory"] { invoicing["payePaydayHistory"] = history }
+            if JSONSerialization.isValidJSONObject(invoicing),
+               let bytes = try? JSONSerialization.data(withJSONObject: invoicing, options: [.sortedKeys]) {
+                org.payePaydayJSON = String(data: bytes, encoding: .utf8)
+            }
+        }
         org.settings.invoicing = settingsToSave
         org.updatedAt = Date()
         currentOrganization = org
@@ -6029,6 +6061,8 @@ class FirebaseBackend: ObservableObject {
     /// `policyAcceptedAt`, `legalPackVersion`, `legalPackAcceptedAt`, `legalAcceptances`, plus `WriteMetadata`
     /// (`updatedAt`, `updatedBy`, `updatedFrom: "ios"`). `legalPackNeedsAcceptance` reads `policyAccepted` first, so a
     /// write without it brings the gate back on the next launch. Top-level keys only (no dotted keys).
+    /// RULEBOOK 1.32.0: the acceptance fields and `updatedBy` / `updatedFrom` come from `legalPackAcceptanceWriteFields`
+    /// (`CustomerLegalPack.acceptanceWriteFields`); nil when it gives none (blank user id, script not loaded).
     static func legalPackAcceptanceWrite(
         userId: String,
         email: String,
@@ -6036,24 +6070,21 @@ class FirebaseBackend: ObservableObject {
         authorisedToBind: Bool,
         acceptedAt: Date,
         signedInUserId: String?
-    ) -> [String: Any] {
-        let at = Timestamp(date: acceptedAt)
-        return WriteMetadata.stamped([
-            "policyAccepted": true,
-            "policyAcceptedAt": at,
-            "legalPackVersion": CustomerLegalPack.version,
-            "legalPackAcceptedAt": at,
-            "legalAcceptances": [
-                "saas": true,
-                "dpa": true,
-                "aup": true,
-                "privacy": true,
-                "authorisedToBind": authorisedToBind,
-                "organizationName": organizationName,
-                "email": email,
-                "userId": userId,
-            ] as [String: Any],
-        ], userId: signedInUserId)
+    ) -> [String: Any]? {
+        guard var fields = CustomerLegalPack.acceptanceWriteFields(userId: userId, acceptedAt: Timestamp(date: acceptedAt)) else {
+            return nil
+        }
+        fields["legalAcceptances"] = [
+            "saas": true,
+            "dpa": true,
+            "aup": true,
+            "privacy": true,
+            "authorisedToBind": authorisedToBind,
+            "organizationName": organizationName,
+            "email": email,
+            "userId": userId,
+        ] as [String: Any]
+        return WriteMetadata.stamped(fields, userId: signedInUserId)
     }
 
     /// Partial update of `users/{uid}` only (never the membership row, never a full profile save), so a phone open in
@@ -6065,14 +6096,21 @@ class FirebaseBackend: ObservableObject {
         authorisedToBind: Bool,
         acceptedAt: Date = Date()
     ) async throws {
-        try await db.collection("users").document(userId).updateData(Self.legalPackAcceptanceWrite(
+        guard let write = Self.legalPackAcceptanceWrite(
             userId: userId,
             email: email,
             organizationName: organizationName,
             authorisedToBind: authorisedToBind,
             acceptedAt: acceptedAt,
             signedInUserId: auth.currentUser?.uid
-        ))
+        ) else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Could not record your acceptance."]
+            )
+        }
+        try await db.collection("users").document(userId).updateData(write)
     }
 
     /// Permission flags that differ, plus `updatedAt`. Never writes `organizationId` or `isSuperAdmin`.

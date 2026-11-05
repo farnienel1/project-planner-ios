@@ -40,10 +40,11 @@ final class Rulebook1311Tests: XCTestCase {
 
     // MARK: sender forms
 
-    func testSenderValuesCoverUidEmailAndLowerCaseWithoutDuplicates() {
+    /// 1.32.0: the lower-case form of each sender email is added by `invitationListConstraints`, not here.
+    func testSenderValuesCoverUidAndEmailsWithoutDuplicates() {
         XCTAssertEqual(
             InvitationDocument.senderValues(authUid: "TEST-UID", authEmail: "Ops@Example.test", profileEmail: "Ops@Example.test"),
-            ["TEST-UID", "Ops@Example.test", "ops@example.test"]
+            ["TEST-UID", "Ops@Example.test"]
         )
         XCTAssertEqual(
             InvitationDocument.senderValues(authUid: nil, authEmail: "", profileEmail: "ops@example.test"),
@@ -60,18 +61,22 @@ final class Rulebook1311Tests: XCTestCase {
             callerIsAdmin: true,
             senders: ["TEST-ADMIN"]
         )
-        XCTAssertEqual(lookups, [InvitationLookup(organizationId: "TEST-ORG", email: "invitee@example.test", invitedBy: nil)])
+        XCTAssertEqual(lookups, [InvitationLookup(constraints: [
+            InvitationQueryConstraint(field: "organizationId", value: "TEST-ORG"),
+            InvitationQueryConstraint(field: "email", value: "invitee@example.test"),
+        ])])
     }
 
-    func testAdminQueryAsksStoredLowerCaseThenTypedEmail() {
+    /// 1.32.0 `invitationListConstraints`: the email as typed, then lower case (de-duplicated).
+    func testAdminQueryAsksTypedThenLowerCaseEmail() {
         let lookups = InvitationDocument.lookups(
             organizationId: "TEST-ORG",
             email: " Invitee@Example.test ",
             callerIsAdmin: true,
             senders: []
         )
-        XCTAssertEqual(lookups.map(\.email), ["invitee@example.test", "Invitee@Example.test"])
-        XCTAssertTrue(lookups.allSatisfy { $0.organizationId == "TEST-ORG" && $0.invitedBy == nil })
+        XCTAssertEqual(lookups.map { $0.value(of: "email") }, ["Invitee@Example.test", "invitee@example.test"])
+        XCTAssertTrue(lookups.allSatisfy { $0.value(of: "organizationId") == "TEST-ORG" && $0.value(of: "invitedBy") == nil })
     }
 
     func testOperativesManagerQueryAlsoNamesEverySenderForm() {
@@ -82,8 +87,8 @@ final class Rulebook1311Tests: XCTestCase {
             callerIsAdmin: false,
             senders: senders
         )
-        XCTAssertEqual(lookups.map(\.invitedBy), ["TEST-OPS", "Ops@Example.test", "ops@example.test"])
-        XCTAssertTrue(lookups.allSatisfy { $0.organizationId == "TEST-ORG" && $0.email == "invitee@example.test" })
+        XCTAssertEqual(lookups.map { $0.value(of: "invitedBy") }, ["TEST-OPS", "Ops@Example.test", "ops@example.test"])
+        XCTAssertTrue(lookups.allSatisfy { $0.value(of: "organizationId") == "TEST-ORG" && $0.value(of: "email") == "invitee@example.test" })
     }
 
     func testNoQueryWithoutOrganisationEmailOrSender() {
@@ -139,10 +144,13 @@ final class Rulebook1311Tests: XCTestCase {
 
     // MARK: refusals
 
+    /// 1.32.0 `invitationReadErrorIsSkippable`: a clean-up skips only a permission-denied invitation read.
     func testOnlyPermissionDeniedIsSkipped() {
+        XCTAssertTrue(InvitationDocument.readErrorIsSkippable(NSError(domain: "FIRFirestoreErrorDomain", code: 7)))
+        XCTAssertFalse(InvitationDocument.readErrorIsSkippable(NSError(domain: "FIRFirestoreErrorDomain", code: 14)), "unavailable is rethrown")
+        XCTAssertFalse(InvitationDocument.readErrorIsSkippable(NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)))
+        // A refused mark (a write) is still counted as refused.
         XCTAssertTrue(InvitationDocument.isPermissionDenied(NSError(domain: "FIRFirestoreErrorDomain", code: 7)))
-        XCTAssertFalse(InvitationDocument.isPermissionDenied(NSError(domain: "FIRFirestoreErrorDomain", code: 14)), "unavailable is rethrown")
-        XCTAssertFalse(InvitationDocument.isPermissionDenied(NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)))
     }
 
     // MARK: what the person is told

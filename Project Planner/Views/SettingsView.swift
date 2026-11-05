@@ -65,6 +65,7 @@ struct SettingsView: View {
 
                     if userStore.hasAdminAccess(), firebaseBackend.currentOrganization != nil {
                         settingsHubSectionTitle("Company-wide")
+                        settingsHubPayePaydayBanner
                         settingsHubOrganisationPromoCard
                         Text("Tap to manage how \(firebaseBackend.currentOrganization?.name ?? "your organisation") runs — affects everyone in your team.")
                             .font(.footnote)
@@ -79,6 +80,16 @@ struct SettingsView: View {
                     settingsHubSignOut
 
                     PPVersionFooter(text: "Project Planner · v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")")
+                    // RULEBOOK 1.32.0 §15: the rules version (`rulebookVersionLabel`, packed stamp), shown to everyone.
+                    let rulesLabel = CanonicalBusinessEngine.rulebookVersionLabel()
+                    if !rulesLabel.isEmpty {
+                        Text(rulesLabel)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 2)
+                            .accessibilityIdentifier("settings.rulesVersion")
+                    }
                     // Job documents this device holds, to compare with web at a glance (web Projects / Small works
                     // lists, All tab). A difference means a document is being read differently: see
                     // `JOB_DOCUMENT_REFUSED` / `JOB_DOCUMENT_SHARES_ID` in the device log.
@@ -348,6 +359,27 @@ struct SettingsView: View {
         subtitle: String
     ) -> some View {
         PPMenuRowLabel(title: title, symbol: icon, family: family, subtitle: subtitle)
+    }
+
+    /// RULEBOOK 1.32.0 §4.5 `payePaydayBanner`: while no PAYE payday is set, admins (this section is admins only, as on
+    /// web Settings) see the banner, linking to Payment runs & timesheets where it is set.
+    @ViewBuilder
+    private var settingsHubPayePaydayBanner: some View {
+        if let banner = CanonicalBusinessEngine.payePaydayBanner(
+            organization: OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization),
+            loaded: firebaseBackend.currentOrganization != nil,
+            viewerIsAdmin: true
+        ) {
+            NavigationLink {
+                OrganisationInvoicingSettingsView()
+                    .environmentObject(firebaseBackend)
+            } label: {
+                PayePaydayBannerText(text: banner)
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 10)
+            .accessibilityIdentifier("settings.payePaydayBanner")
+        }
     }
 
     private var settingsHubOrganisationPromoCard: some View {
