@@ -8,6 +8,7 @@
 import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
+import Combine
 
 struct PolicyAcceptanceView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
@@ -18,7 +19,7 @@ struct PolicyAcceptanceView: View {
     /// "Checking your account…" while the server copy arrives) does not clear them.
     @ObservedObject var draft: PolicyAcceptanceDraft
 
-    init(draft: PolicyAcceptanceDraft = PolicyAcceptanceDraft()) {
+    init(draft: PolicyAcceptanceDraft) {
         self.draft = draft
     }
 
@@ -249,7 +250,7 @@ struct LegalDocumentCard: View {
 }
 
 #Preview {
-    PolicyAcceptanceView()
+    PolicyAcceptanceView(draft: PolicyAcceptanceDraft())
         .environmentObject(FirebaseBackend())
         .environmentObject(UserStore())
 }
