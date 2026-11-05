@@ -46,6 +46,7 @@ jobs:
             -testPlan ProjectPlanner-Full \
             -destination "platform=iOS Simulator,id=$sim" \
             -only-testing:ProjectPlannerUITests/Release1320ScreenChecksTests \
+            -parallel-testing-enabled NO \
             -resultBundlePath ScreenChecks.xcresult \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild.log
           status=${PIPESTATUS[0]}
@@ -61,9 +62,9 @@ jobs:
         run: |
           mkdir -p screenshots
           if [ -d ScreenChecks.xcresult ]; then
-            xcrun xcresulttool export attachments --path ScreenChecks.xcresult --output-path screenshots || true
+            xcrun xcresulttool export attachments --path ScreenChecks.xcresult --output-path screenshots > /dev/null || true
           fi
-          ls screenshots | head -50
+          echo "$(ls screenshots | wc -l) files exported"
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -73,3 +74,25 @@ jobs:
             screenshots
             xcodebuild.log
           if-no-files-found: warn
+      - name: Results (pass / fail and why)
+        if: always()
+        run: |
+          [ -d ScreenChecks.xcresult ] || { echo "No result bundle (the build or launch failed; see the Run step)."; exit 0; }
+          xcrun xcresulttool get test-results tests --path ScreenChecks.xcresult > results.json || { echo "xcresulttool could not read the results"; exit 0; }
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("results.json", "utf8"));
+            const out = [];
+            const walk = (n) => {
+              if (n.nodeType === "Test Case") {
+                const msgs = [];
+                const grab = (c) => { if (c.nodeType === "Failure Message") msgs.push(c.name); (c.children || []).forEach(grab); };
+                (n.children || []).forEach(grab);
+                out.push(`${n.result === "Passed" ? "PASS" : "FAIL"}  ${n.name}${msgs.length ? "\n        " + msgs.join("\n        ") : ""}`);
+              }
+              (n.children || []).forEach(walk);
+            };
+            (r.testNodes || []).forEach(walk);
+            const text = out.join("\n");
+            console.log(text);
+            if (process.env.GITHUB_STEP_SUMMARY) require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## Screen checks\n```\n" + text + "\n```\n");
+          '
