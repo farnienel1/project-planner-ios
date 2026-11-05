@@ -7,9 +7,13 @@
 //  Add (the person only), the list with its total, Add Price Work / Add Expense (Cancel at the top, the add button at the
 //  bottom), the item detail, Generate price work report / Generate expenses report (green once one item is in the range,
 //  `payeClaimReportReady`; a summary page and one page per piece of evidence, shared with the share sheet; a frozen copy
-//  in `payeClaimReports`). Users' view is read-only; a self-employed person's items are their timesheet entries
-//  (`timesheetClaimRows`). Every rule, figure, permission and write shape comes from `CanonicalBusinessEngine`
+//  in `payeClaimReports`). Users' view is read-only apart from the 1.32.0 review; a self-employed person's items are
+//  their timesheet entries (`timesheetClaimRows`). Every rule, figure, permission and write shape comes from `CanonicalBusinessEngine`
 //  (`Rulebook+PayeClaims.swift`); these views only pass inputs and show results. Online only.
+//  RULEBOOK 1.32.0 §26: items and reviews load under every id of the person (`overtimePersonIds`); in Users' view a
+//  reviewer (`canReviewPayeClaims`) ticks or crosses each item and presses one Approve (`payeClaimReviewWrites` →
+//  `payeClaimReviews`, "Approved X of Y"); each item shows its state (`payeClaimReviewState`) and "Needs an admin"
+//  where the reviewer cannot apply it (`payeClaimReviewOutcomeLabel`), as web `PayeClaimsScreen.tsx`.
 //
 
 import SwiftUI
@@ -293,12 +297,38 @@ struct PayeClaimsRangeView: View {
     @State private var notice: String?
     @State private var shareURL: URL?
     @State private var listener = OvertimeListeners()
+    @State private var reviews: [PayeClaimReviewRecord] = []
+    /// RULEBOOK 1.32.0 §26: the reviewer's ✓ / ✕ per item id (`approved` | `rejected`), not saved until Approve.
+    @State private var decisions: [String: String] = [:]
+    @State private var listenedIds: [String] = []
 
     private var subject: AppUser? { PayeClaimPeople.subject(subjectId, userStore: userStore) }
     private var selfEmployed: Bool { !(subject?.isPayeEmployment ?? true) }
     private var writable: Bool {
         guard scope == .mine, let uid = firebaseBackend.payeClaimsUid else { return false }
         return CanonicalBusinessEngine.canWritePayeClaim(viewerId: uid, itemUserId: subjectId)
+    }
+
+    /// RULEBOOK 1.32.0 (`overtimePersonIds`): every id this person's items may be filed under, users id first. Web's
+    /// claims screen passes no operatives rows (claims are written under the Auth uid), so neither does iOS.
+    private var personIds: [String] {
+        guard let subject else { return [subjectId] }
+        let ids = CanonicalBusinessEngine.overtimePersonIds(
+            person: RulebookPeople.person(subject),
+            roster: RulebookPeople.roster(userStore.organizationUsers),
+            operatives: []
+        )
+        return ids.isEmpty ? [subjectId] : ids
+    }
+
+    /// RULEBOOK 1.32.0 §26 `canReviewPayeClaims`: Users' view only, the person's active line managers and admins.
+    private var reviewer: Bool {
+        guard scope != .mine, let viewer = userStore.displayUser, let subject else { return false }
+        return CanonicalBusinessEngine.canReviewPayeClaims(
+            viewer: RulebookPeople.person(viewer),
+            subject: RulebookPeople.person(subject),
+            roster: RulebookPeople.roster(userStore.organizationUsers)
+        )
     }
 
     var body: some View {
@@ -313,7 +343,14 @@ struct PayeClaimsRangeView: View {
             }
         }
         .onAppear(perform: start)
-        .onDisappear { listener.stop() }
+        .onDisappear {
+            listener.stop()
+            listenedIds = []
+        }
+        .onChange(of: personIds) { _, ids in
+            // Only while listening (not for a self-employed person's timesheet rows, not after the screen closed).
+            if !listenedIds.isEmpty && ids != listenedIds { listen(ids) }
+        }
         .sheet(isPresented: $adding) {
             if let subject {
                 AddPayeClaimSheet(kind: kind, subject: subject, range: range)
@@ -334,6 +371,8 @@ struct PayeClaimsRangeView: View {
         let inRange = CanonicalBusinessEngine.payeClaimsInRange(items, start: range.start, end: range.end)
         let ready = CanonicalBusinessEngine.payeClaimReportReady(itemCount: inRange.count)
         let currency = OrganizationRulebookContext.currencyCode
+        let canReview = reviewer
+        let preview = reviewPlan(inRange)
         if let loadError {
             Text(loadError).foregroundStyle(.secondary)
         } else if !loaded {
@@ -343,34 +382,96 @@ struct PayeClaimsRangeView: View {
         }
         ForEach(inRange) { item in
             let row = CanonicalBusinessEngine.payeClaimListRow(item, currency: currency)
-            Button {
-                open = item
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(row?.title ?? item.title).font(.body.weight(.semibold))
-                        Spacer(minLength: 8)
-                        Text(row?.figure ?? "").font(.body.weight(.semibold))
+            let state = CanonicalBusinessEngine.payeClaimReviewState(item, reviews: reviews)
+            let decision = decisions[item.id]
+            let outcomeLabel = decision == nil ? nil : CanonicalBusinessEngine.payeClaimReviewOutcomeLabel(preview?.outcomes[item.id])
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    open = item
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(row?.title ?? item.title).font(.body.weight(.semibold))
+                            Spacer(minLength: 8)
+                            Text(row?.figure ?? "").font(.body.weight(.semibold))
+                        }
+                        Text((row?.subtitle ?? "") + (item.evidence.isEmpty ? "" : " · \(item.evidence.count) evidence"))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                    Text((row?.subtitle ?? "") + (item.evidence.isEmpty ? "" : " · \(item.evidence.count) evidence"))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .foregroundStyle(.primary)
                 }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
-                .foregroundStyle(.primary)
+                .buttonStyle(.plain)
+                // RULEBOOK 1.32.0 §26: the item's review state (`payeClaimReviewState`), the unsaved ✓ / ✕, and
+                // "Needs an admin" for an item the reviewer cannot apply (`payeClaimReviewOutcomeLabel`).
+                HStack(spacing: 8) {
+                    if let state {
+                        Text(state.label)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(reviewStateColor(state.state).opacity(0.15), in: Capsule())
+                            .foregroundStyle(reviewStateColor(state.state))
+                    }
+                    if let decision {
+                        Text("\(decision == "approved" ? "Ticked" : "Crossed") (not saved)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let outcomeLabel {
+                        Text(outcomeLabel)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.orange)
+                    }
+                    Spacer(minLength: 0)
+                    if canReview {
+                        Button {
+                            decisions[item.id] = "rejected"
+                        } label: {
+                            Image(systemName: "xmark").foregroundStyle(PPColor.danger)
+                        }
+                        .accessibilityLabel("Reject this item")
+                        .disabled(busy)
+                        Button {
+                            decisions[item.id] = "approved"
+                        } label: {
+                            Image(systemName: "checkmark").foregroundStyle(Color.green)
+                        }
+                        .accessibilityLabel("Approve this item")
+                        .disabled(busy)
+                    }
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.plain)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         }
         if !inRange.isEmpty {
             Text("Total \(OrgMoney.format(CanonicalBusinessEngine.payeClaimsTotal(amounts: inRange.map(\.amount))))")
                 .font(.subheadline.weight(.semibold))
         }
         if scope != .mine {
-            Text("Read-only. \(OvertimeScreenSupport.name(subject)) adds and sends these themselves.")
+            Text("\(OvertimeScreenSupport.name(subject)) adds these themselves.\(canReview ? " Tick or cross each item, then Approve." : "")")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+        }
+        if canReview && !inRange.isEmpty {
+            let writes = preview?.writes ?? []
+            Button {
+                Task { await approve(writes: writes, message: preview?.message ?? "") }
+            } label: {
+                Text(CanonicalBusinessEngine.overtimeText("OVERTIME_APPROVE_LABEL", fallback: "Approve"))
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(writes.isEmpty ? Color.gray.opacity(0.4) : Color.green, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .foregroundStyle(.white)
+            }
+            .disabled(busy || writes.isEmpty)
+            .accessibilityIdentifier("payeClaims.list.approve")
         }
         if writable {
             Button {
@@ -462,9 +563,16 @@ struct PayeClaimsRangeView: View {
             }
             return
         }
+        listen(personIds)
+    }
+
+    /// RULEBOOK 1.32.0 §26: the items and their reviews under every id of the person (`overtimePersonIds`), listened to
+    /// again when the ids change (the roster loading after the screen opened), as web keys its listeners on the ids.
+    private func listen(_ ids: [String]) {
         listener.stop()
-        if let registration = firebaseBackend.listenPayeClaims(
-            userId: subjectId,
+        listenedIds = ids
+        let registrations = firebaseBackend.listenPersonPayeClaims(
+            userIds: ids,
             kind: kind,
             onChange: { rows in
                 items = rows
@@ -473,10 +581,52 @@ struct PayeClaimsRangeView: View {
             onError: { error in
                 loadError = error.localizedDescription
             }
-        ) {
-            listener.add(registration)
-        } else {
+        )
+        guard !registrations.isEmpty else {
             loadError = "No organisation is open."
+            return
+        }
+        registrations.forEach { listener.add($0) }
+        let reviewRegistrations = firebaseBackend.listenPayeClaimReviews(userIds: ids, onChange: { rows in
+            reviews = rows
+        })
+        reviewRegistrations.forEach { listener.add($0) }
+    }
+
+    /// `payeClaimReviewWrites` for the current ✓ / ✕ (the preview Approve saves), or nil outside a reviewer's view.
+    private func reviewPlan(_ inRange: [PayeClaimItem]) -> PayeClaimReviewPlan? {
+        guard reviewer, let viewer = userStore.displayUser else { return nil }
+        return CanonicalBusinessEngine.payeClaimReviewWrites(
+            items: inRange,
+            decisions: decisions,
+            reviews: reviews,
+            subjectUserId: subjectId,
+            personIds: personIds,
+            // The security rules require `reviewedBy` to be the signed-in Auth uid.
+            reviewerId: firebaseBackend.payeClaimsUid ?? viewer.id,
+            reviewerIsAdmin: CanonicalBusinessEngine.overtimeDeciderIsAdmin(RulebookPeople.person(viewer))
+        )
+    }
+
+    /// RULEBOOK 1.32.0 §26 Approve: every review write in one batch, then the rulebook's "Approved X of Y" message.
+    private func approve(writes: [PayeClaimReviewWrite], message: String) async {
+        busy = true
+        notice = nil
+        defer { busy = false }
+        do {
+            try await firebaseBackend.savePayeClaimReviews(writes)
+            decisions = [:]
+            notice = message
+        } catch {
+            notice = error.localizedDescription.isEmpty ? "The review could not be saved." : error.localizedDescription
+        }
+    }
+
+    private func reviewStateColor(_ state: String) -> Color {
+        switch state {
+        case "approved": return .green
+        case "rejected": return PPColor.danger
+        default: return .orange
         }
     }
 
