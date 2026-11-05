@@ -184,33 +184,6 @@ extension FirebaseBackend {
         }
     }
 
-    // MARK: PAYE payday (§4.5, admins, online only)
-
-    /// Saves the PAYE payday with `payePaydayWriteFields` against the server document (append-only history). False when
-    /// nothing changed.
-    func savePayePayday(day: Int) async throws -> Bool {
-        let ref = try overtimeOrganizationRef()
-        let snapshot = try await ref.getDocument(source: .server)
-        let stored = FirebaseBackend.firestoreJSON(snapshot.data() ?? [:]) as? [String: Any] ?? [:]
-        let todayKey = OrganizationRulebookContext.dayKey(Date())
-        if let message = CanonicalBusinessEngine.payePaydayValidationError(day) {
-            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
-        }
-        guard let fields = CanonicalBusinessEngine.payePaydayWriteFields(stored, day: day, todayKey: todayKey) else { return false }
-        try await ref.updateData(WriteMetadata.stamped(fields, userId: overtimeUid))
-        if var org = currentOrganization, organizationIdsMatch(org.firestoreDocumentId, ref.documentID) {
-            var invoicing = OvertimeOrganizationDocument.invoicing(json: org.payePaydayJSON)
-            if let payday = fields["invoicing.payePayday"] { invoicing["payePayday"] = payday }
-            if let history = fields["invoicing.payePaydayHistory"] { invoicing["payePaydayHistory"] = history }
-            if JSONSerialization.isValidJSONObject(invoicing),
-               let bytes = try? JSONSerialization.data(withJSONObject: invoicing, options: [.sortedKeys]) {
-                org.payePaydayJSON = String(data: bytes, encoding: .utf8)
-                currentOrganization = org
-            }
-        }
-        return true
-    }
-
     // MARK: Requests (the PAYE person)
 
     /// Send for approval: withdraws the person's pending request for the same range (`overtimeRequestsToReplace`) and

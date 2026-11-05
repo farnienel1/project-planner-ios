@@ -135,6 +135,7 @@ struct OvertimeScreenScaffold<Content: View>: View {
 
 /// "Overtime, Expenses & Price Work" (`overtimeHubAccess`): My… for a PAYE person, Users'… for admins and line managers.
 struct OvertimeHubView: View {
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
 
     private var hubAccess: OvertimeHubAccess {
@@ -144,9 +145,23 @@ struct OvertimeHubView: View {
         )
     }
 
+    /// RULEBOOK 1.32.0 §4.5 `payePaydayBanner`, as web's Overtime hub: shown while no PAYE payday is set; the admin
+    /// wording for an admin outside operative mode (`isAdminOutsideOperativeMode`).
+    private var payePaydayBanner: String? {
+        CanonicalBusinessEngine.payePaydayBanner(
+            organization: OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization),
+            loaded: firebaseBackend.currentOrganization != nil,
+            viewerIsAdmin: userStore.displayUser.map { CanonicalBusinessEngine.overtimeDeciderIsAdmin(RulebookPeople.person($0)) } ?? false
+        )
+    }
+
     var body: some View {
         let access = hubAccess
         OvertimeScreenScaffold(title: CanonicalBusinessEngine.overtimeText("OVERTIME_HUB_LABEL", fallback: "Overtime, Expenses & Price Work")) {
+            if let banner = payePaydayBanner {
+                PayePaydayBannerText(text: banner)
+                    .accessibilityIdentifier("overtime.hub.payePaydayBanner")
+            }
             if !access.showButton {
                 Text("This section is for PAYE staff, admins and line managers.")
                     .foregroundStyle(.secondary)
@@ -1280,81 +1295,6 @@ struct OvertimeCogSheet: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - PAYE payday setting (§4.5)
-
-/// "Set PAYE payday" in Payment runs & timesheets: a day of the month 1–31, saved on its own (admins, online only).
-/// `payePaydayWriteFields` appends to the dated history, so a change applies from the next payrun.
-struct PayePaydayCard: View {
-    @EnvironmentObject var firebaseBackend: FirebaseBackend
-    let isOnline: Bool
-
-    @State private var picked: Int?
-    @State private var saving = false
-    @State private var message: String?
-
-    var body: some View {
-        let org = OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization)
-        let today = OvertimeScreenSupport.todayKey()
-        let saved = CanonicalBusinessEngine.payePayday(org)
-        let current = CanonicalBusinessEngine.payePayrunPeriod(org, dayKey: today)
-        let pending = CanonicalBusinessEngine.payePaydayHistory(org).filter { $0.effectiveFrom > today }.last
-        VStack(alignment: .leading, spacing: 10) {
-            Text(current.map { CanonicalBusinessEngine.payePayrunLabel($0) }
-                ?? "No PAYE payday set. PAYE overtime uses a custom date range until one is set.")
-                .font(.subheadline)
-            if let pending {
-                Text("Changes to day \(pending.day) from \(CanonicalBusinessEngine.formatPayePayrunDay(pending.effectiveFrom)).")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Picker(
-                CanonicalBusinessEngine.overtimeText("PAYE_PAYDAY_CONTROL_LABEL", fallback: "Set PAYE payday"),
-                selection: Binding(get: { picked ?? saved ?? 0 }, set: { picked = $0 == 0 ? nil : $0 })
-            ) {
-                Text("Not set").tag(0)
-                ForEach(1...31, id: \.self) { day in Text("Day \(day)").tag(day) }
-            }
-            .accessibilityIdentifier("payePayday.picker")
-            if let picked, picked >= 29 {
-                Text("In shorter months the payday is the last day of the month.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            if !isOnline {
-                Text(OfflinePolicy.onlineOnlyMessage).font(.footnote).foregroundStyle(.secondary)
-            }
-            Button(saving ? "Saving…" : "Save PAYE payday") {
-                Task { await save() }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(picked == nil || saving || !isOnline)
-            .accessibilityIdentifier("payePayday.save")
-            if let message {
-                Text(message).font(.footnote)
-            }
-        }
-        .padding(.vertical, 12)
-    }
-
-    private func save() async {
-        guard let day = picked else { return }
-        if let error = CanonicalBusinessEngine.payePaydayValidationError(day) {
-            message = error
-            return
-        }
-        saving = true
-        message = nil
-        do {
-            let wrote = try await firebaseBackend.savePayePayday(day: day)
-            message = wrote ? "PAYE payday saved. It applies from the next PAYE payrun." : "That is already the PAYE payday."
-            picked = nil
-        } catch {
-            message = error.localizedDescription
-        }
-        saving = false
     }
 }
 
