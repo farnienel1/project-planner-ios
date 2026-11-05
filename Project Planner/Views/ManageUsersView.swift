@@ -1170,20 +1170,20 @@ struct ManageUserRowView: View {
         Task {
             let db = Firestore.firestore()
             do {
-                // Mark all existing invitations for this email as used so only the new link works
-                let existing = try await db.collection("invitations")
-                    .whereField("email", isEqualTo: user.email)
-                    .getDocuments()
-                for doc in existing.documents {
-                    try? await doc.reference.updateData(InvitationDocument.usedFields())
-                }
+                // Mark the earlier invitations for this email used so only the new link works. RULEBOOK 1.31.1 §16:
+                // the query names `organizationId` + `email` (+ `invitedBy` for an operatives manager).
+                try await InvitationDocument.markEarlierInvitationsUsed(
+                    organizationId: user.organizationId,
+                    email: user.email,
+                    userStore: userStore
+                )
 
                 // Always create a brand new invitation (never reuse old link)
                 let invitationId = UUID().uuidString
                 var invitationData: [String: Any] = [
                     "email": user.email,
                     "organizationId": user.organizationId,
-                    "invitedBy": userStore.currentUser?.email ?? "System",
+                    "invitedBy": InvitationDocument.senderField(profileEmail: userStore.currentUser?.email, authEmail: Auth.auth().currentUser?.email, authUid: Auth.auth().currentUser?.uid),
                     "firstName": user.firstName,
                     "surname": user.surname,
                     "permissions": [
@@ -4442,13 +4442,13 @@ struct EditUserView: View {
         }
         let db = Firestore.firestore()
         do {
-            // Mark all existing invitations for this email as used so only the new link works
-            let existing = try await db.collection("invitations")
-                .whereField("email", isEqualTo: user.email)
-                .getDocuments()
-            for doc in existing.documents {
-                try? await doc.reference.updateData(InvitationDocument.usedFields())
-            }
+            // Mark the earlier invitations for this email used so only the new link works. RULEBOOK 1.31.1 §16: the
+            // query names `organizationId` + `email` (+ `invitedBy` for an operatives manager).
+            try await InvitationDocument.markEarlierInvitationsUsed(
+                organizationId: user.organizationId,
+                email: user.email,
+                userStore: userStore
+            )
         } catch {
             // Continue anyway; we'll create a new invitation
         }
@@ -4457,7 +4457,7 @@ struct EditUserView: View {
         var invitationData: [String: Any] = [
             "email": user.email,
             "organizationId": user.organizationId,
-            "invitedBy": userStore.currentUser?.email ?? "System",
+            "invitedBy": InvitationDocument.senderField(profileEmail: userStore.currentUser?.email, authEmail: Auth.auth().currentUser?.email, authUid: Auth.auth().currentUser?.uid),
             "firstName": user.firstName,
             "surname": user.surname,
             "permissions": [
@@ -4527,20 +4527,20 @@ struct EditUserView: View {
         Task {
             let db = Firestore.firestore()
             do {
-                // Mark all existing invitations for this email as used so only the new link works
-                let existing = try await db.collection("invitations")
-                    .whereField("email", isEqualTo: user.email)
-                    .getDocuments()
-                for doc in existing.documents {
-                    try? await doc.reference.updateData(InvitationDocument.usedFields())
-                }
+                // Mark the earlier invitations for this email used so only the new link works. RULEBOOK 1.31.1 §16:
+                // the query names `organizationId` + `email` (+ `invitedBy` for an operatives manager).
+                try await InvitationDocument.markEarlierInvitationsUsed(
+                    organizationId: user.organizationId,
+                    email: user.email,
+                    userStore: userStore
+                )
 
                 // Always create a brand new invitation (never reuse old link)
                 let invitationId = UUID().uuidString
                 var invitationData: [String: Any] = [
                     "email": user.email,
                     "organizationId": user.organizationId,
-                    "invitedBy": userStore.currentUser?.email ?? "System",
+                    "invitedBy": InvitationDocument.senderField(profileEmail: userStore.currentUser?.email, authEmail: Auth.auth().currentUser?.email, authUid: Auth.auth().currentUser?.uid),
                     "firstName": user.firstName,
                     "surname": user.surname,
                     "permissions": [
