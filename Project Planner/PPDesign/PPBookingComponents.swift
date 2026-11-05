@@ -624,9 +624,15 @@ struct PPOnNavyPillButtonStyle: ButtonStyle {
         configuration.label
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(tint)
+            // Never truncate in a toolbar ("Cancel" was showing as "C"): keep the label on one line at its full
+            // width and give it priority over the navigation title.
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 14)
             .frame(minHeight: 34)
             .background(Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.22 : 0.14)))
+            .fixedSize()
+            .layoutPriority(1)
             .ppPressEffect(configuration.isPressed)
     }
 }
