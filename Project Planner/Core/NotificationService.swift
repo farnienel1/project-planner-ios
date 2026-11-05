@@ -1370,7 +1370,8 @@ class NotificationService: ObservableObject {
     }
 
     /// `overtime_request_reviewed` ("Overtime update") to `overtimeReviewedRecipients(requester, decider, roster)`.
-    func notifyOvertimeRequestReviewed(requesterId: String, requestId: String) async {
+    /// 1.32.0: a partial approval (`complete` false) names the script's `reviewApprovalMessage` (`summary`), as web.
+    func notifyOvertimeRequestReviewed(requesterId: String, requestId: String, complete: Bool = true, summary: String = "") async {
         guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
         guard let recipients = CanonicalBusinessEngine.overtimeReviewedRecipients(
             requester: requesterId,
@@ -1382,7 +1383,9 @@ class NotificationService: ObservableObject {
                 organizationId: organizationId,
                 type: .overtimeRequestReviewed,
                 title: "Overtime update",
-                message: "Your overtime request was approved. Open Overtime to see the final hours.",
+                message: complete
+                    ? "Your overtime request was approved. Open Overtime to see the final hours."
+                    : "Part of your overtime request was approved (\(summary.hasSuffix(".") ? String(summary.dropLast()) : summary)). Open Overtime to see the final hours.",
                 userId: userId,
                 relatedKey: requestId
             )

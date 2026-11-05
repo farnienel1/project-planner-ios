@@ -12,18 +12,27 @@ import Foundation
 import FirebaseAuth
 @preconcurrency import FirebaseFirestore
 
-/// Why an approval was refused (`overtimeApprovalWrites` → `stale` / `refused` / `needsAdmin` / …): nothing was written.
+/// Why an approval was refused (`overtimeApprovalWrites` → `notPending` / `nothingApproved`, with the script's
+/// `reviewApprovalMessage`): nothing was written.
 nonisolated struct OvertimeApprovalRefused: LocalizedError {
     let message: String
     let bookingIds: [String]
     var errorDescription: String? { message }
 }
 
-/// What an approval left out (deleted, unreadable, or not the requester's bookings).
+/// What an approval applied, left waiting and left out (1.32.0 partial approval), and the script's `message`.
 nonisolated struct OvertimeApprovalResult: Sendable {
+    var appliedBookingIds: [String]
+    var waitingBookingIds: [String]
+    var droppedBookingIds: [String]
     var deletedBookingIds: [String]
     var unreadableBookingIds: [String]
     var foreignBookingIds: [String]
+    var lineOutcomes: [String: String]
+    /// True when the request is now approved (nothing left waiting); otherwise it stays `pending`.
+    var complete: Bool
+    /// `reviewApprovalMessage`: "Approved 2 of 5. …".
+    var message: String
     var requesterUserId: String
 }
 
@@ -250,10 +259,11 @@ extension FirebaseBackend {
 
     // MARK: Approval (line manager or admin, one transaction)
 
-    /// Approve Overtime Request (web `approveOvertimeRequest`): bookings the decider cannot read are left out (never read
-    /// inside the transaction); then one transaction re-reads the request and every booking, refuses the whole approval
-    /// when a booking changed since the request (`overtimeApprovalWrites`), and otherwise writes the bookings, one review
-    /// per line and the approved request together.
+    /// Approve (web `approveOvertimeRequest`): bookings the decider cannot read are left out (never read inside the
+    /// transaction); then one transaction re-reads the request and every booking and applies what `overtimeApprovalWrites`
+    /// lets this decider apply (1.32.0 partial approval: a changed booking or a line that needs an admin stays waiting),
+    /// writing the bookings, one review per applied line and the request (still `pending` until complete) together.
+    /// Throws `OvertimeApprovalRefused` with the script's message when nothing applies.
     func approveOvertimeRequest(
         requestId: String,
         decisions: [String: OvertimeAction],
@@ -352,37 +362,41 @@ extension FirebaseBackend {
                     errorPointer?.pointee = CanonicalWriteUnavailableError(function: "overtimeApprovalWrites") as NSError
                     return nil
                 }
-                switch plan {
-                case .refused(_, let bookingIds, let message):
-                    errorPointer?.pointee = OvertimeApprovalRefused(message: message, bookingIds: bookingIds) as NSError
+                guard plan.ok else {
+                    errorPointer?.pointee = OvertimeApprovalRefused(message: plan.message, bookingIds: plan.bookingIds) as NSError
                     return nil
-                case .ok(let bookingWrites, let reviewWrites, let requestFields, let deleted, let unreadableIds, let foreign):
-                    for write in bookingWrites {
-                        var update = write.set
-                        for key in write.remove { update[key] = FieldValue.delete() }
-                        transaction.updateData(
-                            WriteMetadata.stamped(update, userId: uid),
-                            forDocument: org.collection(write.collection).document(write.bookingId)
-                        )
-                    }
-                    for review in reviewWrites {
-                        var fields = review.fields
-                        fields["reviewedAt"] = FieldValue.serverTimestamp()
-                        transaction.setData(
-                            WriteMetadata.stamped(fields, userId: uid),
-                            forDocument: org.collection("overtimeReviews").document(review.docId)
-                        )
-                    }
-                    var requestUpdate = requestFields
-                    requestUpdate["decidedAt"] = FieldValue.serverTimestamp()
-                    transaction.updateData(WriteMetadata.stamped(requestUpdate, userId: uid), forDocument: requestRef)
-                    return [
-                        "deleted": deleted,
-                        "unreadable": unreadableIds,
-                        "foreign": foreign,
-                        "userId": request.userId,
-                    ] as NSDictionary
                 }
+                for write in plan.bookingWrites {
+                    var update = write.set
+                    for key in write.remove { update[key] = FieldValue.delete() }
+                    transaction.updateData(
+                        WriteMetadata.stamped(update, userId: uid),
+                        forDocument: org.collection(write.collection).document(write.bookingId)
+                    )
+                }
+                for review in plan.reviewWrites {
+                    var fields = review.fields
+                    fields["reviewedAt"] = FieldValue.serverTimestamp()
+                    transaction.setData(
+                        WriteMetadata.stamped(fields, userId: uid),
+                        forDocument: org.collection("overtimeReviews").document(review.docId)
+                    )
+                }
+                var requestUpdate = plan.requestFields
+                requestUpdate["decidedAt"] = FieldValue.serverTimestamp()
+                transaction.updateData(WriteMetadata.stamped(requestUpdate, userId: uid), forDocument: requestRef)
+                return [
+                    "applied": plan.appliedBookingIds,
+                    "waiting": plan.waitingBookingIds,
+                    "dropped": plan.droppedBookingIds,
+                    "deleted": plan.deletedBookingIds,
+                    "unreadable": plan.unreadableBookingIds,
+                    "foreign": plan.foreignBookingIds,
+                    "outcomes": plan.lineOutcomes,
+                    "complete": plan.complete,
+                    "message": plan.message,
+                    "userId": request.userId,
+                ] as NSDictionary
             } catch {
                 errorPointer?.pointee = error as NSError
                 return nil
@@ -390,9 +404,15 @@ extension FirebaseBackend {
         }
         let row = answer as? [String: Any] ?? [:]
         return OvertimeApprovalResult(
+            appliedBookingIds: row["applied"] as? [String] ?? [],
+            waitingBookingIds: row["waiting"] as? [String] ?? [],
+            droppedBookingIds: row["dropped"] as? [String] ?? [],
             deletedBookingIds: row["deleted"] as? [String] ?? [],
             unreadableBookingIds: row["unreadable"] as? [String] ?? [],
             foreignBookingIds: row["foreign"] as? [String] ?? [],
+            lineOutcomes: row["outcomes"] as? [String: String] ?? [:],
+            complete: row["complete"] as? Bool ?? false,
+            message: row["message"] as? String ?? "",
             requesterUserId: row["userId"] as? String ?? ""
         )
     }
