@@ -2158,7 +2158,8 @@ class UserStore: ObservableObject {
                     }
                     // RULEBOOK 1.31.1 §16 (fourth review B-1): an operatives manager lists only the invitations they
                     // sent, so their query also names `invitedBy` (users id or sign-in email); an admin's names
-                    // `organizationId` + `email` only. `userDeleteWrites` decides what is removed.
+                    // `organizationId` + `email` only. A query the rules refuse is skipped; any other failure stops
+                    // the delete before anything is written. `userDeleteWrites` decides what is removed.
                     let invitationLookups = InvitationDocument.lookupsForSignedInUser(
                         organizationId: organizationId,
                         email: emailRaw,
@@ -2166,6 +2167,7 @@ class UserStore: ObservableObject {
                     )
                     let invitationRows: [[String: Any]] = try await InvitationDocument
                         .fetch(invitationLookups, db: db, source: .server)
+                        .rows
                         .map { ["id": $0.documentID, "email": ($0.data()["email"] as? String) ?? emailNormalized] }
                     let membersMap = firebaseBackend.organizationMembersSnapshot.flatMap {
                         organizationIdsMatch($0.organizationId, organizationId) ? $0.members : nil
