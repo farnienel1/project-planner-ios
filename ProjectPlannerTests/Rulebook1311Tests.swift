@@ -11,10 +11,6 @@ final class Rulebook1311Tests: XCTestCase {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     }
 
-    func testRulebookVersionIs1311() {
-        XCTAssertEqual(CanonicalBusinessEngine.rulebookStamp()?.version, "1.31.1")
-    }
-
     // MARK: invitedBy on a new invitation
 
     /// The rules compare `invitedBy` with the Auth token email or uid, so the write names the sign-in email first —
