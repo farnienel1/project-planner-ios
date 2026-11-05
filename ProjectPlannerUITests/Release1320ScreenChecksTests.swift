@@ -25,16 +25,23 @@ final class Release1320ScreenChecksTests: PPUITestCase {
         add(attachment)
     }
 
-    /// More → a main-menu row (`mainMenu.row.<id>`). The tab bar is customisable, so Settings and Timesheets are
-    /// reached from the More sheet, which every role has.
-    private func openMenuRow(_ id: String) {
+    /// More → a row by its title. The tab bar is customisable, so Settings and Timesheets are reached from the More
+    /// sheet, which every role has. Its rows all carry `mainMenu.moreRow`, so the row is told apart by its label.
+    private func openMenuRow(title: String) {
         openMore()
-        scrollTo("mainMenu.row.\(id)", timeout: 10)
-        tap("mainMenu.row.\(id)")
+        let row = app.buttons
+            .matching(NSPredicate(format: "identifier == %@ AND label BEGINSWITH %@", "mainMenu.moreRow", title))
+            .firstMatch
+        let deadline = Date().addingTimeInterval(10)
+        while !(row.exists && row.isHittable) && Date() < deadline {
+            app.swipeUp()
+        }
+        XCTAssertTrue(row.exists, "More has no '\(title)' row")
+        if row.exists { row.tap() }
     }
 
     private func openSettings(role: String) {
-        openMenuRow("settings")
+        openMenuRow(title: "Settings")
         let shown = element("settings.back").waitForExistence(timeout: 8)
             || element("settings.rulesVersion").waitForExistence(timeout: 2)
             || element("settings.personFill").waitForExistence(timeout: 2)
@@ -93,7 +100,7 @@ final class Release1320ScreenChecksTests: PPUITestCase {
 
     func test_A05_adminOvertimeHubShowsPaydayBanner() {
         start("admin")
-        openMenuRow("invoicing")
+        openMenuRow(title: "Timesheets")
         let tile = element("invoicing.overtime")
         let card = element("invoicing.overtimeCard")
         if tile.waitForExistence(timeout: 5) {
