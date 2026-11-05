@@ -96,6 +96,36 @@ struct BookingEditHoursBreakdown {
     }
 }
 
+// MARK: - Overtime rate on a create screen (RULEBOOK 1.32.0 §25, decision A)
+
+/// "Overtime rate" on a custom-hours create screen that is not `OperativeCustomHoursSheet` (My Schedule), as web
+/// `CreateOvertimeRateField`: the options of `overtimeRateCreateControl` for `day`, shown pre-filled with the
+/// organisation's rate (`prefill`). `rate` nil means "left at the organisation's rate"; a pick equal to it is nil again
+/// (`overtimeMultiplierCreateFields`). The save stores it per day through `createOtMultiplierOverride`.
+struct BookingCreateOvertimeRateField: View {
+    let day: Date
+    @Binding var rate: Double?
+
+    var body: some View {
+        if let control = CanonicalBusinessEngine.overtimeRateCreateControl(on: day) {
+            Picker("Overtime rate", selection: Binding<Double>(
+                get: { rate ?? control.prefill },
+                set: { next in
+                    rate = CanonicalBusinessEngine.overtimeMultiplierCreateFields(
+                        chosen: next,
+                        organizationMultiplier: control.organizationMultiplier
+                    )
+                }
+            )) {
+                ForEach(control.options) { option in
+                    Text(option.label).tag(option.value)
+                }
+            }
+            .accessibilityIdentifier("bookingCreate.overtimeRate")
+        }
+    }
+}
+
 // MARK: - Timeline (00–24 axis)
 
 private struct BookingTimelineSegment: Identifiable {
@@ -496,6 +526,11 @@ struct OperativeCustomHoursSheet: View {
     var headerName: String?
     var headerInitials: String?
     var allowsOtMultiplierOverride: Bool
+    /// RULEBOOK 1.32.0 §25 (decision A): this sheet creates a booking, so the rate is always on screen pre-filled with
+    /// the organisation's rate for the day (`overtimeRateCreateControl`), and a pick equal to it is kept as "the
+    /// organisation's" (`overtimeMultiplierCreateFields`). The caller still stores the rate per booked day through
+    /// `CanonicalBusinessEngine.createOtMultiplierOverride`.
+    var createsBooking: Bool
     var showsBreakControls: Bool
     var showsBreakdown: Bool
     var showsFooterNote: Bool
@@ -559,6 +594,7 @@ struct OperativeCustomHoursSheet: View {
         headerName: String? = nil,
         headerInitials: String? = nil,
         allowsOtMultiplierOverride: Bool = false,
+        createsBooking: Bool = false,
         showsBreakControls: Bool = true,
         showsBreakdown: Bool = true,
         showsFooterNote: Bool = true,
@@ -587,6 +623,7 @@ struct OperativeCustomHoursSheet: View {
         self.headerName = headerName
         self.headerInitials = headerInitials
         self.allowsOtMultiplierOverride = allowsOtMultiplierOverride
+        self.createsBooking = createsBooking
         self.showsBreakControls = showsBreakControls
         self.showsBreakdown = showsBreakdown
         self.showsFooterNote = showsFooterNote
@@ -731,6 +768,23 @@ struct OperativeCustomHoursSheet: View {
                 otMultiplierOverride: otRate
             ),
             organization: OrganizationRulebookContext.payrollPolicyDocument ?? [:]
+        )
+    }
+
+    /// RULEBOOK 1.32.0 §25 `overtimeRateCreateControl` for the booking's day, on a create sheet only (nil otherwise):
+    /// the rate is shown pre-filled with the organisation's (`otRate` nil) even before the times reach overtime.
+    private var createRateControl: OvertimeRateCreateControl? {
+        guard createsBooking else { return nil }
+        return CanonicalBusinessEngine.overtimeRateCreateControl(on: rulebookDay)
+    }
+
+    /// The rate a pick leaves on screen. On a create sheet `overtimeMultiplierCreateFields` decides: a pick equal to
+    /// the organisation's rate for the day is the organisation's (nil), so nothing is stored for it (decision A).
+    private func pickedRate(_ value: Double?) -> Double? {
+        guard let value, let control = createRateControl else { return value }
+        return CanonicalBusinessEngine.overtimeMultiplierCreateFields(
+            chosen: value,
+            organizationMultiplier: control.organizationMultiplier
         )
     }
 
@@ -1064,7 +1118,8 @@ struct OperativeCustomHoursSheet: View {
                     breakRemovedNote
                 }
             }
-            if showsBreakControls, allowsOtMultiplierOverride, let control = overtimeRateControl, control.show || otRate != nil {
+            if showsBreakControls, allowsOtMultiplierOverride, let control = overtimeRateControl,
+               control.show || otRate != nil || createRateControl != nil {
                 overtimeRateCard(control)
             }
             if showsBreakdown && !weekendBreakdownLines.isEmpty {
@@ -1289,7 +1344,7 @@ struct OperativeCustomHoursSheet: View {
     private func rateChip(_ option: OvertimeRateOption, isSelected: Bool) -> some View {
         let caption = rateChipCaption(option)
         return Button {
-            otRate = option.value
+            otRate = pickedRate(option.value)
         } label: {
             VStack(spacing: 2) {
                 Text(option.title)
@@ -1388,7 +1443,7 @@ struct OperativeCustomHoursSheet: View {
                 overtimeSummary: overtimeSummary(bd),
                 initial: otRate,
                 onUse: { picked in
-                    otRate = picked
+                    otRate = pickedRate(picked)
                     showingRateSheet = false
                 },
                 onClose: { showingRateSheet = false }

@@ -452,12 +452,15 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
 fileprivate struct ManagerCustomHoursSheet: View {
     let context: CustomHoursEditorContext
     let policy: OrgPayrollTimePolicy
-    let onSave: (String, String, Bool) -> Void
+    /// Start, end, break removed, and the overtime rate on screen (nil = the organisation's, RULEBOOK 1.32.0 §25).
+    let onSave: (String, String, Bool, Double?) -> Void
     let onCancel: () -> Void
 
     @State private var startText: String
     @State private var endText: String
     @State private var breakRemoved = false
+    /// RULEBOOK 1.32.0 §25 (decision A): pre-filled with the organisation's rate (nil); stored per day only when changed.
+    @State private var overtimeRate: Double?
     @State private var errorMessage: String?
     /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): the confirm step before saving hours over the unpaid break.
     @State private var breakWarningMessage: String?
@@ -466,7 +469,7 @@ fileprivate struct ManagerCustomHoursSheet: View {
     /// RULEBOOK 1.19.0 `unpaidBreakAppliesOnDay`: the "No break" toggle only when a booked day takes an unpaid break off.
     private let breakApplies: Bool
 
-    init(context: CustomHoursEditorContext, policy: OrgPayrollTimePolicy, onSave: @escaping (String, String, Bool) -> Void, onCancel: @escaping () -> Void) {
+    init(context: CustomHoursEditorContext, policy: OrgPayrollTimePolicy, onSave: @escaping (String, String, Bool, Double?) -> Void, onCancel: @escaping () -> Void) {
         self.context = context
         self.policy = policy
         self.breakApplies = context.days.isEmpty
@@ -512,6 +515,9 @@ fileprivate struct ManagerCustomHoursSheet: View {
                         WeekendBookingNoteView(days: context.days, policy: policy)
                     }
                     WeekendBookingBreakdownView(lines: weekendBreakdownLines)
+                    // RULEBOOK 1.32.0 §25: pre-filled with the first booked day's organisation rate
+                    // (`overtimeRateCreateControl`); each day is stored against its own rate on save.
+                    BookingCreateOvertimeRateField(day: context.days.first ?? Date(), rate: $overtimeRate)
                 } footer: {
                     Text("Uses your organisation standard day (\(policy.standardDayStart)–\(policy.standardDayEnd)) as the default. Touching times (e.g. one job ends when the next starts) are allowed.")
                 }
@@ -582,7 +588,7 @@ fileprivate struct ManagerCustomHoursSheet: View {
             breakWarningMessage = warning
             return
         }
-        onSave(s, e, breakRemoved)
+        onSave(s, e, breakRemoved, overtimeRate)
     }
 }
 
@@ -773,6 +779,14 @@ struct ManagerScheduleContentView: View {
         )
     }
 
+    /// RULEBOOK 1.32.0 §2 `canBookOtherLocationsFor(viewer, [me])`: whether Office / Working from home / Site survey /
+    /// the custom items are offered on My Schedule (a manager or an admin for themself; operatives never).
+    /// The person is the viewer's own users id (the id the viewer's `ids` are built from), as web passes `user.id`.
+    private var mayBookOtherLocations: Bool {
+        guard let me = (userStore.displayUser ?? userStore.currentUser)?.id else { return false }
+        return CanonicalBusinessEngine.canBookOtherLocationsFor(userStore.displayJobAccessViewer, personUserIds: [me])
+    }
+
     private var myManagerId: UUID? {
         guard let email = userStore.currentUser?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
         return operativeStore.allManagers.first {
@@ -802,8 +816,9 @@ struct ManagerScheduleContentView: View {
 
     private var searchableLocationItems: [LocationSearchItem] {
         var out: [LocationSearchItem] = []
-        // Exactly `enabledScheduleLocations(options)` (rulebook), same rows as Book labour → Other.
-        for pick in appSettings.settings.myScheduleOptions.enabledScheduleLocationPicks() {
+        // Exactly `enabledScheduleLocations(options)` (rulebook), same rows as Book labour → Other, and only when
+        // `canBookOtherLocationsFor` lets the viewer book themself there (RULEBOOK 1.32.0 §2).
+        for pick in appSettings.settings.myScheduleOptions.enabledScheduleLocationPicks() where mayBookOtherLocations {
             out.append(LocationSearchItem(
                 id: "std:\(pick.id.lowercased())",
                 title: pick.title,
@@ -948,7 +963,7 @@ struct ManagerScheduleContentView: View {
             ManagerCustomHoursSheet(
                 context: ctx,
                 policy: payrollPolicy(for: policyDay),
-                onSave: { start, end, breakRemoved in
+                onSave: { start, end, breakRemoved, overtimeRate in
                     let captured = ctx
                     customHoursContext = nil
                     let daysToBook = captured.days.map { calendar.startOfDay(for: $0) }.sorted()
@@ -961,7 +976,8 @@ struct ManagerScheduleContentView: View {
                         locationType: captured.locationType,
                         locationId: captured.locationId,
                         customLocationName: captured.customLocationName,
-                        replaceBookingId: captured.replaceBookingId
+                        replaceBookingId: captured.replaceBookingId,
+                        overtimeRate: overtimeRate
                     )
                 },
                 onCancel: { customHoursContext = nil }
@@ -972,17 +988,18 @@ struct ManagerScheduleContentView: View {
             ManagerSelfBookingLocationPickerSheet(
                 day: bookingDay,
                 policy: payrollPolicy(for: bookingDay),
-                companyCustomLocations: appSettings.settings.myScheduleOptions.customItems.filter {
+                // RULEBOOK 1.32.0 §2 `canBookOtherLocationsFor`: the places that are not jobs only when the rule allows.
+                companyCustomLocations: mayBookOtherLocations ? appSettings.settings.myScheduleOptions.customItems.filter {
                     appSettings.settings.myScheduleOptions.customItemEnabled[$0] ?? true
-                },
-                showOffice: appSettings.settings.myScheduleOptions.showOffice,
-                showWorkingFromHome: appSettings.settings.myScheduleOptions.showWorkingFromHome,
-                showSiteSurvey: appSettings.settings.myScheduleOptions.showSiteSurvey,
+                } : [],
+                showOffice: mayBookOtherLocations && appSettings.settings.myScheduleOptions.showOffice,
+                showWorkingFromHome: mayBookOtherLocations && appSettings.settings.myScheduleOptions.showWorkingFromHome,
+                showSiteSurvey: mayBookOtherLocations && appSettings.settings.myScheduleOptions.showSiteSurvey,
                 projects: liveProjects,
                 smallWorks: liveSmallWorks,
                 myManagedProjects: myManagedProjects,
                 myManagedSmallWorks: myManagedSmallWorks,
-                onBook: { locationType, locationId, customName, slot, customStart, customEnd in
+                onBook: { locationType, locationId, customName, slot, customStart, customEnd, overtimeRate in
                     showAddBookingSheet = false
                     let daysToBook: [Date] = {
                         if isMultiDaySelectionEnabled, !selectedDates.isEmpty {
@@ -998,7 +1015,8 @@ struct ManagerScheduleContentView: View {
                         breakRemoved: false,
                         locationType: locationType,
                         locationId: locationId,
-                        customLocationName: customName
+                        customLocationName: customName,
+                        overtimeRate: overtimeRate
                     )
                 }
             )
@@ -1295,7 +1313,8 @@ struct ManagerScheduleContentView: View {
         locationId: UUID?,
         customLocationName: String?,
         replaceBookingId: UUID? = nil,
-        allowOverlap: Bool = false
+        allowOverlap: Bool = false,
+        overtimeRate: Double? = nil
     ) {
         guard let uid = firebaseBackend.currentUser?.uid else { return }
         let normalizedDays = days.map { calendar.startOfDay(for: $0) }
@@ -1406,7 +1425,8 @@ struct ManagerScheduleContentView: View {
                         customLocationName: customLocationName,
                         workStartTime: workStart,
                         workEndTime: workEnd,
-                        isBreakRemoved: breakRemoved
+                        isBreakRemoved: breakRemoved,
+                        overtimeRate: overtimeRate
                     )
                 }
             }
@@ -1927,7 +1947,8 @@ struct ManagerScheduleContentView: View {
         customLocationName: String? = nil,
         workStartTime: String? = nil,
         workEndTime: String? = nil,
-        isBreakRemoved: Bool = false
+        isBreakRemoved: Bool = false,
+        overtimeRate: Double? = nil
     ) {
         guard let uid = firebaseBackend.currentUser?.uid else { return }
         let b = ManagerSiteBooking(
@@ -1939,7 +1960,12 @@ struct ManagerScheduleContentView: View {
             customLocationName: customLocationName,
             workStartTime: workStartTime,
             workEndTime: workEndTime,
-            isBreakRemoved: isBreakRemoved
+            isBreakRemoved: isBreakRemoved,
+            // RULEBOOK 1.32.0 §25 (decision A): stored only when the rate differs from this day's organisation rate
+            // (`overtimeMultiplierCreateFields`); custom hours only.
+            otMultiplierOverride: timeSlot == .customHours
+                ? CanonicalBusinessEngine.createOtMultiplierOverride(chosen: overtimeRate, on: date)
+                : nil
         )
         Task {
             await managerScheduleStore.saveBooking(b)
@@ -2018,7 +2044,8 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
     let smallWorks: [Project]
     let myManagedProjects: [Project]
     let myManagedSmallWorks: [Project]
-    let onBook: (ManagerLocationType, UUID?, String?, ManagerTimeSlot, String?, String?) -> Void
+    /// Location, job, custom name, slot, custom start / end, and the overtime rate (nil = the organisation's).
+    let onBook: (ManagerLocationType, UUID?, String?, ManagerTimeSlot, String?, String?, Double?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
@@ -2192,8 +2219,8 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
                         day: day,
                         policy: policy,
                         target: target,
-                        onSave: { slot, customStart, customEnd in
-                            onBook(target.locationType, target.locationId, target.customLocationName, slot, customStart, customEnd)
+                        onSave: { slot, customStart, customEnd, overtimeRate in
+                            onBook(target.locationType, target.locationId, target.customLocationName, slot, customStart, customEnd, overtimeRate)
                         }
                     )
                 } label: {
@@ -2278,10 +2305,13 @@ fileprivate struct ManagerSelfBookingEntryView: View {
     let day: Date
     let policy: OrgPayrollTimePolicy
     let target: ManagerSelfBookingLocationPickerSheet.BookingTarget
-    let onSave: (ManagerTimeSlot, String?, String?) -> Void
+    /// Slot, custom start / end, and the overtime rate on screen (nil = the organisation's, RULEBOOK 1.32.0 §25).
+    let onSave: (ManagerTimeSlot, String?, String?, Double?) -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedSlot: ManagerTimeSlot = .fullDay
+    /// RULEBOOK 1.32.0 §25 (decision A): custom hours show the rate pre-filled with the organisation's (nil).
+    @State private var overtimeRate: Double?
     @State private var startTime: Date
     @State private var endTime: Date
     @State private var errorMessage: String?
@@ -2292,7 +2322,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
         day: Date,
         policy: OrgPayrollTimePolicy,
         target: ManagerSelfBookingLocationPickerSheet.BookingTarget,
-        onSave: @escaping (ManagerTimeSlot, String?, String?) -> Void
+        onSave: @escaping (ManagerTimeSlot, String?, String?, Double?) -> Void
     ) {
         self.day = day
         self.policy = policy
@@ -2369,6 +2399,25 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                     selectedSlot = .customHours
                     let rounded = BookingHMTimePickerSupport.roundDateToQuarterHour(newValue)
                     if rounded != newValue { endTime = rounded }
+                }
+
+                if selectedSlot == .customHours {
+                    // RULEBOOK 1.32.0 §25: `overtimeRateCreateControl` for this day, pre-filled with the organisation's.
+                    HStack {
+                        Text("Overtime rate")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                        Spacer(minLength: 8)
+                        BookingCreateOvertimeRateField(day: day, rate: $overtimeRate)
+                            .labelsHidden()
+                    }
+                    .padding(12)
+                    .background(ProjectWorksRevampColors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
+                    )
                 }
 
                 if let errorMessage {
@@ -2465,9 +2514,9 @@ fileprivate struct ManagerSelfBookingEntryView: View {
             return
         }
         if selectedSlot == .customHours {
-            onSave(.customHours, hhmm(startTime), hhmm(endTime))
+            onSave(.customHours, hhmm(startTime), hhmm(endTime), overtimeRate)
         } else {
-            onSave(selectedSlot, nil, nil)
+            onSave(selectedSlot, nil, nil, nil)
         }
         dismiss()
     }
@@ -2504,7 +2553,7 @@ fileprivate struct ManagerSelfBookingJobListView: View {
     let day: Date
     let policy: OrgPayrollTimePolicy
     let targets: [ManagerSelfBookingLocationPickerSheet.BookingTarget]
-    let onBook: (ManagerLocationType, UUID?, String?, ManagerTimeSlot, String?, String?) -> Void
+    let onBook: (ManagerLocationType, UUID?, String?, ManagerTimeSlot, String?, String?, Double?) -> Void
 
     var body: some View {
         ScrollView {
@@ -2515,8 +2564,8 @@ fileprivate struct ManagerSelfBookingJobListView: View {
                             day: day,
                             policy: policy,
                             target: target,
-                            onSave: { slot, customStart, customEnd in
-                                onBook(target.locationType, target.locationId, target.customLocationName, slot, customStart, customEnd)
+                            onSave: { slot, customStart, customEnd, overtimeRate in
+                                onBook(target.locationType, target.locationId, target.customLocationName, slot, customStart, customEnd, overtimeRate)
                             }
                         )
                     } label: {

@@ -1258,7 +1258,8 @@ private extension DailyOverviewView {
                         start: start,
                         end: end,
                         breakRemoved: breakRemoved,
-                        otMultiplierOverride: otMult
+                        otMultiplierOverride: otMult,
+                        rateShown: options.allowsOtMultiplierOverride
                     )
                 },
                 onCancel: { bookingEditTarget = nil },
@@ -1332,14 +1333,22 @@ private extension DailyOverviewView {
         start: String,
         end: String,
         breakRemoved: Bool,
-        otMultiplierOverride: Double?
+        otMultiplierOverride: Double?,
+        rateShown: Bool = true
     ) {
         var updated = booking
         updated.timeSlot = .customHours
         updated.workStartTime = start
         updated.workEndTime = end
         updated.isBreakRemoved = breakRemoved
-        updated.otMultiplierOverride = otMultiplierOverride
+        // RULEBOOK 1.32.0 §25 (review fix r274) `overtimeMultiplierMoveFields`: the rate on screen is kept on every
+        // save (a rate equal to the organisation's is removed, never stored); a rate not on screen keeps the stored one.
+        updated.otMultiplierOverride = CanonicalBusinessEngine.savedOtMultiplierOverride(
+            stored: booking.otMultiplierOverride,
+            chosen: otMultiplierOverride,
+            rateShown: rateShown,
+            on: booking.date
+        )
         updated.updatedAt = Date()
         // RULEBOOK 1.16.0 §5, §9: when the slot or times change, leave on that day is ticked or dropped first.
         let timesChanged = updated.timeSlot != booking.timeSlot
@@ -1376,7 +1385,14 @@ private extension DailyOverviewView {
         updated.workStartTime = start
         updated.workEndTime = end
         updated.isBreakRemoved = breakRemoved
-        updated.otMultiplierOverride = otMultiplierOverride
+        // RULEBOOK 1.32.0 §25 (review fix r274) `overtimeMultiplierMoveFields`: the manager site booking's rate on
+        // screen is kept on every save; a rate equal to the organisation's is removed, never stored.
+        updated.otMultiplierOverride = CanonicalBusinessEngine.savedOtMultiplierOverride(
+            stored: booking.otMultiplierOverride,
+            chosen: otMultiplierOverride,
+            rateShown: true,
+            on: booking.date
+        )
         updated.updatedAt = Date()
         let timesChanged = updated.timeSlot != booking.timeSlot
             || updated.workStartTime != booking.workStartTime
