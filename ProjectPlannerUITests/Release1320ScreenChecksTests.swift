@@ -87,11 +87,12 @@ final class Release1320ScreenChecksTests: PPUITestCase {
         scrollTo("payePayday.picker", timeout: 10)
         shot("A4 admin payday picker before")
         element("payePayday.picker").tap()
-        let day25 = app.buttons["Day 25"].firstMatch
-        if day25.waitForExistence(timeout: 3) {
-            day25.tap()
+        // The picker opens a 31-day menu; "Day 1" is always on screen, "Day 25" may need scrolling.
+        let day1 = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Day 1")).firstMatch
+        if day1.waitForExistence(timeout: 3) {
+            day1.tap()
         } else {
-            XCTFail("A4: the payday picker did not offer 'Day 25'")
+            XCTFail("A4: the payday picker did not offer 'Day 1'")
         }
         let note = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Press Save")).firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 3), "A4: no 'Press Save to apply it…' line after picking a day")
