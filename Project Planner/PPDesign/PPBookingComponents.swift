@@ -108,6 +108,68 @@ extension View {
     }
 }
 
+// MARK: - Booking action cards (Scheduling "Book people" / "Book a sub")
+
+/// Shared metrics for the side-by-side booking action cards, so the two cards cannot drift apart.
+enum PPBookingActionCardMetrics {
+    static let iconSize: CGFloat = 38
+    static let padding: CGFloat = 12
+    static let radius: CGFloat = 18
+    /// Fixed card height floor: icon plus a one-line title and a two-line subtitle.
+    static let minHeight: CGFloat = 72
+    static let subtitleLines: Int = 2
+}
+
+/// Icon, bold title and a subtitle that always reserves two lines, so a one-line subtitle ("Subcontractors")
+/// gives the same card height as a two-line one ("Operatives & managers"). Label only: no action, no data.
+struct PPBookingActionCardLabel: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let family: PPFamily
+
+    var body: some View {
+        HStack(spacing: 10) {
+            PPIconTile(symbol: symbol, family: family, size: PPBookingActionCardMetrics.iconSize, lifted: true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(PPBookingActionCardMetrics.subtitleLines, reservesSpace: true)
+                    .minimumScaleFactor(0.8)
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// One card style for every booking action card: same padding, radius, border, minimum height and press effect,
+/// and it fills the height its row offers (pair with `.fixedSize(horizontal: false, vertical: true)` on the row so
+/// both cards take the taller card's height). Look only; the button's action is unchanged.
+struct PPBookingActionCardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: PPBookingActionCardMetrics.radius, style: .continuous)
+        return configuration.label
+            .padding(PPBookingActionCardMetrics.padding)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: PPBookingActionCardMetrics.minHeight,
+                maxHeight: .infinity,
+                alignment: .leading
+            )
+            .background(PPColor.card, in: shape)
+            .overlay(shape.strokeBorder(PPBookingColor.cardBorder, lineWidth: 0.5))
+            .contentShape(shape)
+            .ppPressEffect(configuration.isPressed)
+    }
+}
+
 /// Section title on the light sheet with an optional trailing accessory ("N selected" chip, "+ Add people").
 struct PPSheetSectionTitle<Trailing: View>: View {
     let title: String
@@ -562,9 +624,15 @@ struct PPOnNavyPillButtonStyle: ButtonStyle {
         configuration.label
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(tint)
+            // Never truncate in a toolbar ("Cancel" was showing as "C"): keep the label on one line at its full
+            // width and give it priority over the navigation title.
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 14)
             .frame(minHeight: 34)
             .background(Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.22 : 0.14)))
+            .fixedSize()
+            .layoutPriority(1)
             .ppPressEffect(configuration.isPressed)
     }
 }
