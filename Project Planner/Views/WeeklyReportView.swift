@@ -996,7 +996,8 @@ struct WeeklyReportView: View {
             )
         )
 
-        // RULEBOOK 1.29.0 §7: PAYE overtime per person per job (hours only).
+        // RULEBOOK 1.29.0 §7: PAYE overtime per person per job (hours only). 1.32.0: per multiplier, "2h at ×1.5 = 3h",
+        // a row changed from the organisation rate marked (`payeOvertimeHoursCell`).
         let payeRows = payeOvertimeRows()
         let payeTotal = (payeRows.reduce(0) { $0 + $1.overtimeHours } * 100).rounded() / 100
         sections.append(
@@ -1005,7 +1006,7 @@ struct WeeklyReportView: View {
                 headers: ["Person", "Job No.", "Job", "Overtime hours"],
                 rows: payeRows.isEmpty
                     ? [["No PAYE overtime in this period", "", "", ""]]
-                    : payeRows.map { [$0.name, $0.jobNumber, $0.jobName, "\(ScheduleCoverageFormat.hours($0.overtimeHours))h"] },
+                    : payeRows.map { [$0.name, $0.jobNumber, $0.jobName, payeOvertimeHoursCell($0)] },
                 totalRow: payeRows.isEmpty ? nil : ["", "", "Total", "\(ScheduleCoverageFormat.hours(payeTotal))h"]
             )
         )
@@ -1041,16 +1042,16 @@ struct WeeklyReportView: View {
         )
 
         var payRows: [[String]] = []
-        let paySummaries = payrollPersonSummaries()
-        let totalAmount = reportGrandTotal(paySummaries)
-        for person in paySummaries {
+        // RULEBOOK 1.32.0 §7, §8: the pay summary follows `canViewPersonPay` (`reportPayForViewer`).
+        let payShown = payrollSummaryForViewer()
+        for person in payShown.summaries {
             for line in person.lines {
                 payRows.append([
                     person.name,
                     person.role,
                     line.rateTypeLabel,
                     line.daysCell(formatDays),
-                    formatCurrency(line.rate),
+                    line.rateText ?? formatCurrency(line.rate),
                     line.payLabel ?? formatCurrency(line.pay),
                 ])
             }
@@ -1061,7 +1062,8 @@ struct WeeklyReportView: View {
                 title: "💷  Pay Summary",
                 headers: ["Person", "Role", "Rate Type", "Days", "Rate", "Pay"],
                 rows: payRows,
-                totalRow: ["", "", "Grand Total", "", "", formatCurrency(totalAmount)]
+                totalRow: ["", "", "Grand Total", "", "", formatCurrency(payShown.grandTotal)],
+                note: payShown.hiddenNote
             )
         )
 
@@ -1157,7 +1159,7 @@ struct WeeklyReportView: View {
         rows.append(["", "", "Total", "", formatDays(additionalScheduleTotal)])
         rows.append([])
 
-        // RULEBOOK 1.29.0 §7: PAYE overtime per person per job (hours only).
+        // RULEBOOK 1.29.0 §7: PAYE overtime per person per job (hours only); 1.32.0 per multiplier (`payeOvertimeHoursCell`).
         rows.append(["PAYE OVERTIME"])
         rows.append(["Person", "Job Number", "Job", "Overtime hours"])
         let payeRows = payeOvertimeRows()
@@ -1165,7 +1167,7 @@ struct WeeklyReportView: View {
             rows.append(["No PAYE overtime in this period", "", "", ""])
         } else {
             for row in payeRows {
-                rows.append([row.name, row.jobNumber, row.jobName, "\(ScheduleCoverageFormat.hours(row.overtimeHours))h"])
+                rows.append([row.name, row.jobNumber, row.jobName, payeOvertimeHoursCell(row)])
             }
             let total = (payeRows.reduce(0) { $0 + $1.overtimeHours } * 100).rounded() / 100
             rows.append(["", "", "Total", "\(ScheduleCoverageFormat.hours(total))h"])
@@ -1194,16 +1196,16 @@ struct WeeklyReportView: View {
 
         rows.append(["PAY SUMMARY"])
         rows.append(["Person", "Role", "Rate Type", "Days", "Rate", "Pay"])
-        let paySummaries = payrollPersonSummaries()
-        let totalAmount = reportGrandTotal(paySummaries)
-        for person in paySummaries {
+        // RULEBOOK 1.32.0 §7, §8: the pay summary follows `canViewPersonPay` (`reportPayForViewer`).
+        let payShown = payrollSummaryForViewer()
+        for person in payShown.summaries {
             for line in person.lines {
                 rows.append([
                     person.name,
                     person.role,
                     line.rateTypeLabel,
                     line.daysCell(formatDays),
-                    formatCurrency(line.rate),
+                    line.rateText ?? formatCurrency(line.rate),
                     line.payLabel ?? formatCurrency(line.pay)
                 ])
             }
@@ -1216,7 +1218,10 @@ struct WeeklyReportView: View {
                 person.totalLabel ?? formatCurrency(person.totalPay)
             ])
         }
-        rows.append(["", "", "Grand Total", "", "", formatCurrency(totalAmount)])
+        rows.append(["", "", "Grand Total", "", "", formatCurrency(payShown.grandTotal)])
+        if let note = payShown.hiddenNote {
+            rows.append([note, "", "", "", "", ""])
+        }
 
         return rows.map { $0.map(csvEscape).joined(separator: ",") }.joined(separator: "\n")
     }
@@ -1583,7 +1588,7 @@ struct WeeklyReportView: View {
 
     /// Pay cells and the person total from the rulebook (`reportPayCell`, `reportPersonPayCell`):
     /// a PAYE line shows PAYE, no figure, and adds nothing to the totals.
-    private func settledSummary(name: String, role: String, lines: [PayrollRateLine]) -> PayrollPersonSummary {
+    private func settledSummary(name: String, role: String, lines: [PayrollRateLine], subject: AppUser?) -> PayrollPersonSummary {
         var settled: [PayrollRateLine] = []
         for line in lines {
             var copy = line
@@ -1600,13 +1605,88 @@ struct WeeklyReportView: View {
             role: role,
             lines: settled,
             totalPay: personCell?.pay ?? 0,
-            totalLabel: personCell?.label
+            totalLabel: personCell?.label,
+            subject: subject
         )
     }
 
-    private func reportGrandTotal(_ summaries: [PayrollPersonSummary]) -> Double {
-        let inputs = summaries.flatMap { $0.lines.map { CanonicalReportPayLine(isPaye: $0.isPaye, pay: $0.pay) } }
-        return CanonicalBusinessEngine.reportPayTotal(inputs) ?? 0
+    /// RULEBOOK 1.32.0 §7, §8 `reportPayForViewer` (owner decisions 5 Nov): the pay summary as this viewer may see it.
+    /// A person whose pay the viewer may not see (`canViewPersonPay`, default context — the weekly report is not a
+    /// timesheet review) keeps their hours with the rate and pay cells `PAY_HIDDEN_CELL_LABEL`; the grand total covers
+    /// the people shown only; `hiddenNote` is `PAY_HIDDEN_NOTE` when anyone was hidden. A row with no known person is
+    /// visible to admins only. Swift sends the rows and reads the cells back; nothing is decided here.
+    private func payrollSummaryForViewer() -> (summaries: [PayrollPersonSummary], grandTotal: Double, hiddenNote: String?) {
+        let summaries = payrollPersonSummaries()
+        let rows: [[String: Any]] = summaries.enumerated().map { index, person in
+            var row: [String: Any] = [
+                "summaryIndex": index,
+                "lines": person.lines.map { line -> [String: Any] in
+                    [
+                        "rate": line.rate ?? 0,
+                        "pay": RulebookJSON.orNull(line.pay),
+                        "payLabel": RulebookJSON.orNull(line.payLabel),
+                        "isPaye": line.isPaye,
+                    ]
+                },
+                "personTotal": person.totalPay,
+                "personTotalLabel": RulebookJSON.orNull(person.totalLabel),
+            ]
+            if let subject = person.subject { row["paySubject"] = subject.payAccessSubject }
+            return row
+        }
+        guard let shown = CanonicalBusinessEngine.reportPayForViewer(
+            rows: rows,
+            viewer: userStore.payViewerRow,
+            roster: userStore.organizationUsers.map(\.payAccessSubject)
+        ) else {
+            // The script did not answer: no pay figure is shown (§8 — pay stays hidden).
+            let hidden = summaries.map { person in
+                PayrollPersonSummary(
+                    name: person.name,
+                    role: person.role,
+                    lines: person.lines.map { line in
+                        var copy = line
+                        copy.rateText = ""
+                        copy.pay = nil
+                        copy.payLabel = ""
+                        return copy
+                    },
+                    totalPay: 0,
+                    totalLabel: "",
+                    subject: person.subject
+                )
+            }
+            return (hidden, 0, nil)
+        }
+        var out: [PayrollPersonSummary] = []
+        for row in shown.rows {
+            guard let index = (row["summaryIndex"] as? NSNumber)?.intValue, summaries.indices.contains(index) else { continue }
+            let person = summaries[index]
+            let cells = row["lines"] as? [[String: Any]] ?? []
+            var lines = person.lines
+            for (lineIndex, cell) in cells.enumerated() where lines.indices.contains(lineIndex) {
+                lines[lineIndex].rateText = cell["rateText"] as? String
+                lines[lineIndex].payLabel = cell["payLabel"] as? String
+                lines[lineIndex].pay = (cell["pay"] as? NSNumber)?.doubleValue
+            }
+            out.append(PayrollPersonSummary(
+                name: person.name,
+                role: person.role,
+                lines: lines,
+                totalPay: (row["personTotal"] as? NSNumber)?.doubleValue ?? 0,
+                totalLabel: row["personTotalLabel"] as? String,
+                subject: person.subject
+            ))
+        }
+        return (out, shown.grandTotal, shown.hiddenPeople > 0 ? CanonicalBusinessEngine.payHiddenNote : nil)
+    }
+
+    /// RULEBOOK 1.32.0 §7: a PAYE overtime row's hours cell — `multiplierText` ("2h at ×1.5 = 3h"), and on a row whose
+    /// bookings carry their own rate (`changedFromOrganization`) `OVERTIME_RATE_CHANGED_MARK` with the organisation's
+    /// rate, as web's weekly report shows it.
+    private func payeOvertimeHoursCell(_ row: WeeklyReportPayeOvertimeRow) -> String {
+        guard row.changedFromOrganization, let mark = CanonicalBusinessEngine.overtimeRateChangedMark else { return row.multiplierText }
+        return "\(row.multiplierText) (\(mark), ×\(ScheduleCoverageFormat.hours(row.organizationMultiplier)))"
     }
 
     private func reportingUser(for userId: String) -> AppUser? {
@@ -1664,6 +1744,8 @@ struct WeeklyReportView: View {
             var otMultiplier: Double
             var standardDayHours: Double
             var isPaye: Bool = false
+            /// RULEBOOK 1.32.0 §8: the person whose pay this row is (`reportPayForViewer` `paySubject`).
+            var subject: AppUser? = nil
         }
         var byKey: [String: Acc] = [:]
         let cal = CanonicalBusinessEngine.businessCalendar
@@ -1700,6 +1782,7 @@ struct WeeklyReportView: View {
             // RULEBOOK 1.19.0 §7: days under different working hours (standard day, overtime rate) are separate rows.
             let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(String(format: "%.3f", standardDayHours))|\(paye ? "paye" : "")"
             var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
+            acc.subject = acc.subject ?? linkedUser
             acc.normalHours += normalHours
             acc.otHours += otHours
             if let multiplied = booking.payrollHoursResult(policy: policy).multipliedHours {
@@ -1743,6 +1826,7 @@ struct WeeklyReportView: View {
             // RULEBOOK 1.19.0 §7: days under different working hours (standard day, overtime rate) are separate rows.
             let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(String(format: "%.3f", standardDayHours))|\(paye ? "paye" : "")"
             var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
+            acc.subject = acc.subject ?? manager
             acc.normalHours += normalHours
             acc.otHours += otHours
             if let multiplied = booking.payrollHoursResult(policy: policy).multipliedHours {
@@ -1816,7 +1900,14 @@ struct WeeklyReportView: View {
                     total += otPay
                 }
             }
-            summaries.append(PayrollPersonSummary(name: first.name, role: first.role, lines: lines, totalPay: total, totalLabel: nil))
+            summaries.append(PayrollPersonSummary(
+                name: first.name,
+                role: first.role,
+                lines: lines,
+                totalPay: total,
+                totalLabel: nil,
+                subject: entries.lazy.compactMap(\.subject).first
+            ))
         }
         return mergeTimesheetPay(into: summaries).sorted {
             if $0.name == $1.name { return $0.role < $1.role }
@@ -1913,6 +2004,7 @@ struct WeeklyReportView: View {
             var role: String
             var lines: [PayrollRateLine]
             var totalPay: Double
+            var subject: AppUser?
         }
         var map: [String: Acc] = [:]
         for summary in summaries {
@@ -1920,14 +2012,16 @@ struct WeeklyReportView: View {
                 name: summary.name,
                 role: summary.role,
                 lines: summary.lines,
-                totalPay: summary.totalPay
+                totalPay: summary.totalPay,
+                subject: summary.subject
             )
         }
-        func add(name: String, role: String, line: PayrollRateLine) {
+        func add(name: String, role: String, line: PayrollRateLine, userId: String) {
             let key = "\(name)|\(role)"
-            var acc = map[key] ?? Acc(name: name, role: role, lines: [], totalPay: 0)
+            var acc = map[key] ?? Acc(name: name, role: role, lines: [], totalPay: 0, subject: nil)
             acc.lines.append(line)
             acc.totalPay += line.pay ?? 0
+            acc.subject = acc.subject ?? userStore.organizationUsers.first { $0.id == userId }
             map[key] = acc
         }
         for (week, line) in timesheetFeed.labourLines(in: reportDateRange) {
@@ -1956,24 +2050,27 @@ struct WeeklyReportView: View {
                                 : nil
                         }
                         : nil
-                )
+                ),
+                userId: week.userId
             )
         }
         for (week, line) in timesheetFeed.moneyLines(\.priceWork, in: reportDateRange) {
             add(
                 name: week.personName,
                 role: week.role,
-                line: PayrollRateLine(rateTypeLabel: "Price work", days: 0, rate: nil, pay: line.amount)
+                line: PayrollRateLine(rateTypeLabel: "Price work", days: 0, rate: nil, pay: line.amount),
+                userId: week.userId
             )
         }
         for (week, line) in timesheetFeed.moneyLines(\.expenses, in: reportDateRange) {
             add(
                 name: week.personName,
                 role: week.role,
-                line: PayrollRateLine(rateTypeLabel: "Expenses", days: 0, rate: nil, pay: line.amount)
+                line: PayrollRateLine(rateTypeLabel: "Expenses", days: 0, rate: nil, pay: line.amount),
+                userId: week.userId
             )
         }
-        return map.values.map { settledSummary(name: $0.name, role: $0.role, lines: $0.lines) }
+        return map.values.map { settledSummary(name: $0.name, role: $0.role, lines: $0.lines, subject: $0.subject) }
     }
 
     private func formatDate(_ date: Date) -> String {
@@ -2073,8 +2170,11 @@ private struct PayrollRateLine {
     var pay: Double?
     /// PAYE on the line's day(s): hours stay, pay is not shown or totalled.
     var isPaye: Bool = false
-    /// `PAYE` when the cell shows that instead of a figure (`reportPayCell`).
+    /// `PAYE` when the cell shows that instead of a figure (`reportPayCell`); `PAY_HIDDEN_CELL_LABEL` when the viewer
+    /// may not see this person's pay (`reportPayForViewer`).
     var payLabel: String? = nil
+    /// RULEBOOK 1.32.0: `PAY_HIDDEN_CELL_LABEL` in the rate cell when the viewer may not see this person's pay.
+    var rateText: String? = nil
     /// RULEBOOK 1.20.4: an overtime row's `multipliedHoursText` when an unpaid break came off the multiplied hours.
     var hoursText: String? = nil
 
@@ -2090,8 +2190,11 @@ private struct PayrollPersonSummary {
     let role: String
     let lines: [PayrollRateLine]
     let totalPay: Double
-    /// `PAYE` when every line is PAYE (`reportPersonPayCell`).
+    /// `PAYE` when every line is PAYE (`reportPersonPayCell`); `PAY_HIDDEN_CELL_LABEL` when the pay is hidden.
     var totalLabel: String? = nil
+    /// RULEBOOK 1.32.0 §8: the person whose pay this is (`reportPayForViewer` `paySubject`); nil for a catalogue
+    /// operative with no account (then admins only).
+    var subject: AppUser? = nil
 }
 
 private struct WeeklyReportShareSheet: UIViewControllerRepresentable {

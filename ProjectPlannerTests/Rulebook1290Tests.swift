@@ -428,7 +428,8 @@ final class Rulebook1290Tests: XCTestCase {
             organization: org,
             range: ("2026-11-02", "2026-11-08")
         )
-        XCTAssertEqual(section.map(\.label), ["Sam · J-1042 · 4.5h"])
+        // RULEBOOK 1.32.0 §7: the label carries the multiplier ("3h at ×1.5 = 4.5h").
+        XCTAssertEqual(section.map(\.label), ["Sam · J-1042 · 3h at ×1.5 = 4.5h"])
         XCTAssertTrue(CanonicalBusinessEngine.weeklyReportPayeDay(employment: people[0], dayKey: "2026-11-04"))
         XCTAssertFalse(CanonicalBusinessEngine.weeklyReportPayeDay(employment: people[1], dayKey: "2026-11-04"))
         let switching: [String: Any] = ["employmentType": "paye", "employmentTypeTransitionFrom": "self_employed", "employmentTypeEffectiveAt": "2026-11-05T00:00:00Z"]
