@@ -25,13 +25,27 @@ final class Release1320ScreenChecksTests: PPUITestCase {
         add(attachment)
     }
 
+    /// More → a main-menu row (`mainMenu.row.<id>`). The tab bar is customisable, so Settings and Timesheets are
+    /// reached from the More sheet, which every role has.
+    private func openMenuRow(_ id: String) {
+        openMore()
+        scrollTo("mainMenu.row.\(id)", timeout: 10)
+        tap("mainMenu.row.\(id)")
+    }
+
     private func openSettings(role: String) {
-        if role == "operative" {
-            tap(PPID.homeQuickAction("op-settings"))
-        } else {
-            openTab("Settings")
-        }
-        SettingsScreen(test: self).assertVisible()
+        openMenuRow("settings")
+        let shown = element("settings.back").waitForExistence(timeout: 8)
+            || element("settings.rulesVersion").waitForExistence(timeout: 2)
+            || element("settings.personFill").waitForExistence(timeout: 2)
+        XCTAssertTrue(shown, "Settings did not open for \(role)")
+    }
+
+    /// Settings → the PAYE payday banner → Payment runs & timesheets (admins, org with no payday set).
+    private func openPaymentRunsFromBanner() {
+        openSettings(role: "admin")
+        scrollTo("settings.payePaydayBanner", timeout: 10)
+        element("settings.payePaydayBanner").tap()
     }
 
     private func assertRulesVersion(role: String) {
@@ -62,9 +76,7 @@ final class Release1320ScreenChecksTests: PPUITestCase {
 
     func test_A04_adminPaydayPickIsAnUnsavedChange() {
         start("admin")
-        openSettings(role: "admin")
-        SettingsScreen(test: self).openOrganisationHub()
-        SettingsScreen(test: self).openPaymentRuns()
+        openPaymentRunsFromBanner()
         scrollTo("payePayday.picker", timeout: 10)
         shot("A4 admin payday picker before")
         element("payePayday.picker").tap()
@@ -81,8 +93,7 @@ final class Release1320ScreenChecksTests: PPUITestCase {
 
     func test_A05_adminOvertimeHubShowsPaydayBanner() {
         start("admin")
-        openMore()
-        MoreSheet(test: self).tapRow("invoicing")
+        openMenuRow("invoicing")
         let tile = element("invoicing.overtime")
         let card = element("invoicing.overtimeCard")
         if tile.waitForExistence(timeout: 5) {
