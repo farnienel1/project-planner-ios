@@ -375,24 +375,24 @@ class UserStore: ObservableObject {
 
                 if let loaded = userData {
                     // Paint with the profile already read. The phone-session overlay must not hold Home blank.
-                    if Self.oneOffReadMayReplace(
+                    if let next = Self.oneOffReadProfile(
                         current: self.currentUser,
                         loaded: loaded,
                         generationAtStart: generationAtStart,
                         generationNow: currentUserSnapshotGeneration
                     ) {
-                        self.currentUser = loaded
+                        self.currentUser = next
                     }
                     userData = await firebaseBackend.applyDeviceSessionIfNeeded(to: loaded)
                 }
                 if let resolved = userData {
-                    if Self.oneOffReadMayReplace(
+                    if let next = Self.oneOffReadProfile(
                         current: self.currentUser,
                         loaded: resolved,
                         generationAtStart: generationAtStart,
                         generationNow: currentUserSnapshotGeneration
                     ) {
-                        self.currentUser = resolved
+                        self.currentUser = next
                     }
                 } else {
                     self.currentUser = nil
@@ -986,17 +986,22 @@ class UserStore: ObservableObject {
         errorMessage = nil
     }
 
-    /// Whether a one-off read of `users/{uid}` (`loadCurrentUser`) may replace the profile on screen. Not when a live
-    /// snapshot arrived while it ran (`currentUserSnapshotGeneration` moved: the listener copy is newer), and never a
-    /// cached copy over a server copy of the same person (a timed-out read falls back to the cache, which can predate
-    /// it, and would lift the legal gate).
-    static func oneOffReadMayReplace(current: AppUser?, loaded: AppUser, generationAtStart: Int, generationNow: Int) -> Bool {
+    /// The profile a one-off read of `users/{uid}` (`loadCurrentUser`) puts on screen, or nil to keep the one there.
+    /// - nil when a live snapshot arrived while the read ran (`currentUserSnapshotGeneration` moved): the listener
+    ///   copy is newer and resolves this phone's company itself.
+    /// - A cached read over a server copy of the same person (a timed-out read falls back to the cache): the read is
+    ///   still applied, because an organisation switch or membership refresh needs the new company's role and
+    ///   permissions, but the legal acceptance and its source stay the server copy's, so a stale cache never lifts the
+    ///   legal gate.
+    static func oneOffReadProfile(current: AppUser?, loaded: AppUser, generationAtStart: Int, generationNow: Int) -> AppUser? {
         guard let current, current.id == loaded.id, !current.isProvisional, !current.parsedWithoutRulebook else {
-            return true
+            return loaded
         }
-        if generationNow != generationAtStart { return false }
-        if loaded.readFromLocalCache && !current.readFromLocalCache { return false }
-        return true
+        if generationNow != generationAtStart { return nil }
+        if loaded.readFromLocalCache && !current.readFromLocalCache {
+            return loaded.carryingLegalAcceptance(from: current)
+        }
+        return loaded
     }
 
     /// The signed-in person's profile after their own roster row changed (Timesheets toggle): the row's fields, but

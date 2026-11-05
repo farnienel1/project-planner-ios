@@ -254,6 +254,8 @@ struct ProjectPlannerRootView: View {
     /// Set once a cached "not accepted" copy has waited `LegalGateState.cacheGraceSeconds` for the server copy; cleared
     /// when a server copy or another person arrives, so each cache-only phase gets its own grace period.
     @State private var legalCacheGraceExpired = false
+    /// The legal gate's ticks, kept while the gate is rebuilt (`PolicyAcceptanceDraft`).
+    @StateObject private var legalAcceptanceDraft = PolicyAcceptanceDraft()
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
@@ -351,7 +353,7 @@ struct ProjectPlannerRootView: View {
         } else if legalGateState == .gate {
             // `legalPackNeedsAcceptance`: not accepted, or an older pack accepted. Decided only from a profile read
             // from `users/{uid}`; the launch placeholder never flashes the gate (`AppUser.legalGateState`).
-            PolicyAcceptanceView()
+            PolicyAcceptanceView(draft: legalAcceptanceDraft)
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
         } else if legalGateState == .checking {

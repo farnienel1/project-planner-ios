@@ -159,29 +159,63 @@ final class LegalPackGateTests: XCTestCase {
 
     // MARK: - One-off read against the live copy (UserStore.loadCurrentUser)
 
-    func testLateCachedOneOffReadDoesNotReplaceTheServerSnapshot() {
+    func testLateCachedOneOffReadKeepsTheServerAcceptance() throws {
         let server = user(policyAccepted: false, legalPackVersion: nil)
         let lateCached = cachedCopy(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
-        XCTAssertFalse(UserStore.oneOffReadMayReplace(current: server, loaded: lateCached, generationAtStart: 3, generationNow: 3),
-                       "a timed-out read's cache copy never lifts the gate the server copy decided")
-        XCTAssertEqual(server.legalGateState(isOnline: true, cacheGraceExpired: false), .gate)
+        let next = try XCTUnwrap(UserStore.oneOffReadProfile(current: server, loaded: lateCached, generationAtStart: 3, generationNow: 3))
+        XCTAssertFalse(next.policyAccepted, "a timed-out read's cache copy never lifts the gate the server copy decided")
+        XCTAssertFalse(next.readFromLocalCache)
+        XCTAssertEqual(next.legalGateState(isOnline: true, cacheGraceExpired: false), .gate)
+    }
+
+    /// Organisation switch (`performQueuedOrganizationSwitch`) or foreground membership refresh whose read timed out
+    /// and fell back to the cache: the new company's role and permissions still go on screen; the acceptance stays.
+    func testOrganisationSwitchWithCachedReadAppliesTheNewCompanyAndKeepsTheAcceptance() throws {
+        var previousCompany = user(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
+        previousCompany.role = .admin
+        previousCompany.permissions = UserPermissions(adminAccess: true, manager: true, operatives: true)
+        previousCompany.organizationId = "TEST-org-A"
+
+        // The cached users/{uid} copy predates the acceptance; merged with the new company's membership row.
+        let cachedUsersDoc = cachedCopy(policyAccepted: false, legalPackVersion: nil)
+        let membership = FirebaseBackend.parseAppUserDocument(
+            userId: "TEST-uid",
+            data: ["email": "test-gate@example.com", "organizationId": "TEST-org-B", "role": "operative",
+                   "permissions": ["operativeMode": true]],
+            annualLeaveDefaults: nil
+        )
+        var newCompany = FirebaseBackend.mergedDeviceSessionProfile(membership, user: cachedUsersDoc)
+        newCompany.organizationId = "TEST-org-B"
+        XCTAssertTrue(newCompany.readFromLocalCache)
+
+        let next = try XCTUnwrap(UserStore.oneOffReadProfile(
+            current: previousCompany, loaded: newCompany, generationAtStart: 7, generationNow: 7
+        ), "a cached read is still applied on an organisation switch")
+        XCTAssertEqual(next.organizationId, "TEST-org-B")
+        XCTAssertEqual(next.role, membership.role, "the new company's role")
+        XCTAssertEqual(next.permissions, membership.permissions, "the new company's permissions")
+        XCTAssertNotEqual(next.permissions, previousCompany.permissions)
+        XCTAssertTrue(next.policyAccepted, "the server copy's acceptance")
+        XCTAssertEqual(next.legalPackVersion, CustomerLegalPack.version)
+        XCTAssertFalse(next.readFromLocalCache)
+        XCTAssertEqual(next.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
     }
 
     func testOneOffReadYieldsToASnapshotThatArrivedWhileItRan() {
         let live = user(policyAccepted: false, legalPackVersion: nil)
         let read = user(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
-        XCTAssertFalse(UserStore.oneOffReadMayReplace(current: live, loaded: read, generationAtStart: 3, generationNow: 4))
+        XCTAssertNil(UserStore.oneOffReadProfile(current: live, loaded: read, generationAtStart: 3, generationNow: 4))
     }
 
     func testOneOffReadReplacesPlaceholderCacheCopyOrNothing() {
         var placeholder = user(policyAccepted: true, legalPackVersion: nil)
         placeholder.isProvisional = true
         let read = cachedCopy(policyAccepted: false, legalPackVersion: nil)
-        XCTAssertTrue(UserStore.oneOffReadMayReplace(current: placeholder, loaded: read, generationAtStart: 1, generationNow: 2))
-        XCTAssertTrue(UserStore.oneOffReadMayReplace(current: nil, loaded: read, generationAtStart: 0, generationNow: 0))
+        XCTAssertEqual(UserStore.oneOffReadProfile(current: placeholder, loaded: read, generationAtStart: 1, generationNow: 2), read)
+        XCTAssertEqual(UserStore.oneOffReadProfile(current: nil, loaded: read, generationAtStart: 0, generationNow: 0), read)
         let server = user(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
-        XCTAssertTrue(UserStore.oneOffReadMayReplace(current: read, loaded: server, generationAtStart: 2, generationNow: 2),
-                      "a server read replaces a cached copy")
+        XCTAssertEqual(UserStore.oneOffReadProfile(current: read, loaded: server, generationAtStart: 2, generationNow: 2), server,
+                       "a server read replaces a cached copy")
     }
 
     // MARK: - Session and roster copies keep the users/{uid} acceptance
@@ -231,6 +265,19 @@ final class LegalPackGateTests: XCTestCase {
         XCTAssertTrue(next.policyAccepted)
         XCTAssertEqual(next.legalPackVersion, CustomerLegalPack.version)
         XCTAssertEqual(next.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
+    }
+
+    func testAcceptanceTicksSurviveARebuildForTheSamePersonOnly() {
+        let draft = PolicyAcceptanceDraft()
+        draft.keep(for: "TEST-uid")
+        draft.accepted[.privacy] = true
+        draft.authorisedToBind = true
+        draft.keep(for: "TEST-uid")
+        XCTAssertEqual(draft.accepted[.privacy], true, "a rebuild of the gate keeps the ticks")
+        XCTAssertTrue(draft.authorisedToBind)
+        draft.keep(for: "TEST-other-uid")
+        XCTAssertEqual(draft.accepted[.privacy], false, "another person starts unticked")
+        XCTAssertFalse(draft.authorisedToBind)
     }
 
     func testSnapshotMemoForwardsOnlyDataOrSourceChanges() {

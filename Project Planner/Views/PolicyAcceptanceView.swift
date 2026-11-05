@@ -14,10 +14,13 @@ struct PolicyAcceptanceView: View {
     @EnvironmentObject var userStore: UserStore
     @State private var isAccepting = false
     @State private var acceptError: String?
-    @State private var accepted: [CustomerLegalPack.DocumentID: Bool] = [
-        .saas: false, .dpa: false, .aup: false, .privacy: false
-    ]
-    @State private var authorisedToBind = false
+    /// The ticks live outside this view (the root view owns it), so a rebuild of the gate (for example a brief
+    /// "Checking your account…" while the server copy arrives) does not clear them.
+    @ObservedObject var draft: PolicyAcceptanceDraft
+
+    init(draft: PolicyAcceptanceDraft = PolicyAcceptanceDraft()) {
+        self.draft = draft
+    }
 
     private var isSuperAdmin: Bool { userStore.currentUser?.isSuperAdmin == true }
     private var orgName: String {
@@ -26,10 +29,10 @@ struct PolicyAcceptanceView: View {
             ?? "your organisation"
     }
     private var allDocsAccepted: Bool {
-        CustomerLegalPack.documents.allSatisfy { accepted[$0.id] == true }
+        CustomerLegalPack.documents.allSatisfy { draft.accepted[$0.id] == true }
     }
     private var canWelcome: Bool {
-        allDocsAccepted && (!isSuperAdmin || authorisedToBind) && !isAccepting
+        allDocsAccepted && (!isSuperAdmin || draft.authorisedToBind) && !isAccepting
     }
 
     var body: some View {
@@ -60,14 +63,14 @@ struct PolicyAcceptanceView: View {
                     ForEach(CustomerLegalPack.documents) { document in
                         LegalDocumentCard(
                             document: document,
-                            accepted: accepted[document.id] == true
+                            accepted: draft.accepted[document.id] == true
                         ) {
-                            accepted[document.id] = true
+                            draft.accepted[document.id] = true
                         }
                     }
 
                     if isSuperAdmin {
-                        Toggle(isOn: $authorisedToBind) {
+                        Toggle(isOn: $draft.authorisedToBind) {
                             Text("I confirm that I am authorised to accept these terms on behalf of the organisation named in this account (\(orgName)).")
                                 .font(.footnote)
                         }
@@ -119,6 +122,7 @@ struct PolicyAcceptanceView: View {
             Text(acceptError ?? "Please try again.")
         }
         .onAppear {
+            draft.keep(for: userStore.currentUser?.id)
             Task { await userStore.loadCurrentUser() }
         }
     }
@@ -160,7 +164,7 @@ struct PolicyAcceptanceView: View {
                     userId: authUser.uid,
                     email: updatedUser.email,
                     organizationName: orgName,
-                    authorisedToBind: isSuperAdmin ? authorisedToBind : false,
+                    authorisedToBind: isSuperAdmin ? draft.authorisedToBind : false,
                     acceptedAt: now
                 )
                 updatedUser.policyAccepted = true
@@ -248,6 +252,24 @@ struct LegalDocumentCard: View {
     PolicyAcceptanceView()
         .environmentObject(FirebaseBackend())
         .environmentObject(UserStore())
+}
+
+/// The legal gate's ticks for one signed-in person, kept across rebuilds of `PolicyAcceptanceView`.
+@MainActor
+final class PolicyAcceptanceDraft: ObservableObject {
+    @Published var accepted: [CustomerLegalPack.DocumentID: Bool] = [
+        .saas: false, .dpa: false, .aup: false, .privacy: false
+    ]
+    @Published var authorisedToBind = false
+    private(set) var userId: String?
+
+    /// Clears the ticks when another person is signed in.
+    func keep(for userId: String?) {
+        guard self.userId != userId else { return }
+        self.userId = userId
+        accepted = [.saas: false, .dpa: false, .aup: false, .privacy: false]
+        authorisedToBind = false
+    }
 }
 
 /// Shown while a cached `users/{uid}` copy says the terms need accepting and the server copy has not arrived yet
