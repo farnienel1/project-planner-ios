@@ -8,16 +8,20 @@
 import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
+import Combine
 
 struct PolicyAcceptanceView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
     @State private var isAccepting = false
     @State private var acceptError: String?
-    @State private var accepted: [CustomerLegalPack.DocumentID: Bool] = [
-        .saas: false, .dpa: false, .aup: false, .privacy: false
-    ]
-    @State private var authorisedToBind = false
+    /// The ticks live outside this view (the root view owns it), so a rebuild of the gate (for example a brief
+    /// "Checking your account…" while the server copy arrives) does not clear them.
+    @ObservedObject var draft: PolicyAcceptanceDraft
+
+    init(draft: PolicyAcceptanceDraft) {
+        self.draft = draft
+    }
 
     private var isSuperAdmin: Bool { userStore.currentUser?.isSuperAdmin == true }
     private var orgName: String {
@@ -26,10 +30,10 @@ struct PolicyAcceptanceView: View {
             ?? "your organisation"
     }
     private var allDocsAccepted: Bool {
-        CustomerLegalPack.documents.allSatisfy { accepted[$0.id] == true }
+        CustomerLegalPack.documents.allSatisfy { draft.accepted[$0.id] == true }
     }
     private var canWelcome: Bool {
-        allDocsAccepted && (!isSuperAdmin || authorisedToBind) && !isAccepting
+        allDocsAccepted && (!isSuperAdmin || draft.authorisedToBind) && !isAccepting
     }
 
     var body: some View {
@@ -60,14 +64,14 @@ struct PolicyAcceptanceView: View {
                     ForEach(CustomerLegalPack.documents) { document in
                         LegalDocumentCard(
                             document: document,
-                            accepted: accepted[document.id] == true
+                            accepted: draft.accepted[document.id] == true
                         ) {
-                            accepted[document.id] = true
+                            draft.accepted[document.id] = true
                         }
                     }
 
                     if isSuperAdmin {
-                        Toggle(isOn: $authorisedToBind) {
+                        Toggle(isOn: $draft.authorisedToBind) {
                             Text("I confirm that I am authorised to accept these terms on behalf of the organisation named in this account (\(orgName)).")
                                 .font(.footnote)
                         }
@@ -119,6 +123,7 @@ struct PolicyAcceptanceView: View {
             Text(acceptError ?? "Please try again.")
         }
         .onAppear {
+            draft.keep(for: userStore.currentUser?.id)
             Task { await userStore.loadCurrentUser() }
         }
     }
@@ -137,11 +142,13 @@ struct PolicyAcceptanceView: View {
                     return
                 }
 
+                // The profile on screen is this phone's session (its company's role and rights); fall back to a
+                // fresh read of users/{uid} only when nothing is on screen yet.
                 var updatedUser: AppUser
-                if let loaded = try await firebaseBackend.getUserData(userId: authUser.uid) {
-                    updatedUser = loaded
-                } else if let current = userStore.currentUser {
+                if let current = userStore.currentUser, current.id == authUser.uid {
                     updatedUser = current
+                } else if let loaded = try await firebaseBackend.getUserData(userId: authUser.uid) {
+                    updatedUser = loaded
                 } else {
                     await MainActor.run {
                         isAccepting = false
@@ -150,20 +157,24 @@ struct PolicyAcceptanceView: View {
                     return
                 }
 
+                // One partial update of users/{uid} in web `LegalPackGate`'s shape, `policyAccepted: true` included
+                // (`legalPackNeedsAcceptance` reads it). No full profile save: in a company other than
+                // users/{uid}.organizationId that save wrote identity fields only and dropped the acceptance.
                 let now = Date()
-                updatedUser.policyAccepted = true
-                updatedUser.policyAcceptedAt = now
-                updatedUser.legalPackVersion = CustomerLegalPack.version
-                try await firebaseBackend.saveUser(updatedUser)
                 try await firebaseBackend.recordLegalPackAcceptance(
                     userId: authUser.uid,
                     email: updatedUser.email,
                     organizationName: orgName,
-                    authorisedToBind: isSuperAdmin ? authorisedToBind : false
+                    authorisedToBind: isSuperAdmin ? draft.authorisedToBind : false,
+                    acceptedAt: now
                 )
+                updatedUser.policyAccepted = true
+                updatedUser.policyAcceptedAt = now
+                updatedUser.legalPackVersion = CustomerLegalPack.version
+                updatedUser.readFromLocalCache = false
 
                 await MainActor.run {
-                    userStore.currentUser = updatedUser
+                    userStore.applyLocalCurrentUser(updatedUser)
                     isAccepting = false
                 }
                 await userStore.loadCurrentUser()
@@ -239,7 +250,42 @@ struct LegalDocumentCard: View {
 }
 
 #Preview {
-    PolicyAcceptanceView()
+    PolicyAcceptanceView(draft: PolicyAcceptanceDraft())
         .environmentObject(FirebaseBackend())
         .environmentObject(UserStore())
+}
+
+/// The legal gate's ticks for one signed-in person, kept across rebuilds of `PolicyAcceptanceView`.
+@MainActor
+final class PolicyAcceptanceDraft: ObservableObject {
+    @Published var accepted: [CustomerLegalPack.DocumentID: Bool] = [
+        .saas: false, .dpa: false, .aup: false, .privacy: false
+    ]
+    @Published var authorisedToBind = false
+    private(set) var userId: String?
+
+    /// Clears the ticks when another person is signed in.
+    func keep(for userId: String?) {
+        guard self.userId != userId else { return }
+        self.userId = userId
+        accepted = [.saas: false, .dpa: false, .aup: false, .privacy: false]
+        authorisedToBind = false
+    }
+}
+
+/// Shown while a cached `users/{uid}` copy says the terms need accepting and the server copy has not arrived yet
+/// (`LegalGateState.checking`). Neutral: neither the app nor the terms, so an accepted account never sees the terms
+/// flash and an unaccepted one never sees the app.
+struct LegalGateCheckingView: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+            Text("Checking your account…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ProjectWorksRevampColors.canvas)
+        .accessibilityElement(children: .combine)
+    }
 }
