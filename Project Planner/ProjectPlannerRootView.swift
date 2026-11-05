@@ -251,6 +251,9 @@ struct ProjectPlannerRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     /// `platformConfig/app.minimumIosBuild`: blocks an outdated build with "Update required". Never blocks on a failed read.
     @StateObject private var forcedUpdate = ForcedUpdateGate()
+    /// Set once a cached "not accepted" copy has waited `LegalGateState.cacheGraceSeconds` for the server copy; cleared
+    /// when a server copy or another person arrives, so each cache-only phase gets its own grace period.
+    @State private var legalCacheGraceExpired = false
 
     /// Kept in sync with notifications only; routing uses `Auth` + `firebaseBackend` so we never sit on an empty “session” gate.
     @State private var firebaseAuthUID: String?
@@ -306,6 +309,20 @@ struct ProjectPlannerRootView: View {
         #endif
     }
 
+    /// `AppUser.legalGateState` for the profile on screen (nil profile: the app shell decides as before).
+    private var legalGateState: LegalGateState {
+        userStore.currentUser?.legalGateState(
+            isOnline: smartCache.isOnline,
+            cacheGraceExpired: legalCacheGraceExpired
+        ) ?? .open
+    }
+
+    /// Changes when the profile on screen changes person or moves between a cached and a server copy.
+    private var legalCacheGraceKey: String {
+        guard let user = userStore.currentUser else { return "" }
+        return "\(user.id)|\(user.readFromLocalCache)"
+    }
+
     @ViewBuilder
     private var authenticatedShell: some View {
         if userStore.isDeactivatedForLastUsedOrganization {
@@ -331,13 +348,20 @@ struct ProjectPlannerRootView: View {
             NoOrganisationView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
-        } else if let currentUser = userStore.currentUser, currentUser.showsLegalPackGate(isOnline: smartCache.isOnline) {
+        } else if legalGateState == .gate {
             // `legalPackNeedsAcceptance`: not accepted, or an older pack accepted. Decided only from a profile read
-            // from `users/{uid}` (a cached copy waits for the server while online); the launch placeholder never
-            // flashes the gate (`showsLegalPackGate(isOnline:)`).
+            // from `users/{uid}`; the launch placeholder never flashes the gate (`AppUser.legalGateState`).
             PolicyAcceptanceView()
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
+        } else if legalGateState == .checking {
+            // A cached copy says acceptance is needed: wait for the server copy, never open the app on it. After the
+            // grace period the cached copy decides (fail closed).
+            LegalGateCheckingView()
+                .task(id: userStore.currentUser?.id) {
+                    try? await Task.sleep(nanoseconds: UInt64(LegalGateState.cacheGraceSeconds * 1_000_000_000))
+                    if !Task.isCancelled { legalCacheGraceExpired = true }
+                }
         } else {
             VStack(spacing: 0) {
                 OfflineStatusBanner()
@@ -384,6 +408,10 @@ struct ProjectPlannerRootView: View {
             }
         }
         .task { await forcedUpdate.check() }
+        .onChange(of: legalCacheGraceKey) { _, _ in
+            // A server copy, or another signed-in person, ends the cache-only phase: the next one waits afresh.
+            legalCacheGraceExpired = false
+        }
         .onChange(of: firebaseAuthUID) { _, _ in
             // RULEBOOK 1.12.0 §18: `platformConfig/app` is readable signed out too; check again when the account changes.
             Task { await forcedUpdate.check() }

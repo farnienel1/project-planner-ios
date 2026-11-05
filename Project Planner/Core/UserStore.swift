@@ -319,6 +319,8 @@ class UserStore: ObservableObject {
         
         do {
             if let firebaseUser = Auth.auth().currentUser {
+                // A live snapshot that lands while this one-off read runs is newer: the read must not replace it.
+                let generationAtStart = currentUserSnapshotGeneration
                 // Load user data from Firestore
                 var userData = try await firebaseBackend.getUserData(userId: firebaseUser.uid)
 
@@ -373,10 +375,28 @@ class UserStore: ObservableObject {
 
                 if let loaded = userData {
                     // Paint with the profile already read. The phone-session overlay must not hold Home blank.
-                    self.currentUser = loaded
+                    if Self.oneOffReadMayReplace(
+                        current: self.currentUser,
+                        loaded: loaded,
+                        generationAtStart: generationAtStart,
+                        generationNow: currentUserSnapshotGeneration
+                    ) {
+                        self.currentUser = loaded
+                    }
                     userData = await firebaseBackend.applyDeviceSessionIfNeeded(to: loaded)
                 }
-                self.currentUser = userData
+                if let resolved = userData {
+                    if Self.oneOffReadMayReplace(
+                        current: self.currentUser,
+                        loaded: resolved,
+                        generationAtStart: generationAtStart,
+                        generationNow: currentUserSnapshotGeneration
+                    ) {
+                        self.currentUser = resolved
+                    }
+                } else {
+                    self.currentUser = nil
+                }
                 startCurrentUserListener(userId: firebaseUser.uid)
 
                 if userData?.isActive == false {
@@ -442,7 +462,7 @@ class UserStore: ObservableObject {
             ),
             policyAccepted: true
         )
-        // Not read from `users/{uid}`: the legal gate waits for the real document (`AppUser.showsLegalPackGate`).
+        // Not read from `users/{uid}`: the legal gate waits for the real document (`AppUser.legalGateState`).
         placeholder.isProvisional = true
         return placeholder
     }
@@ -966,6 +986,32 @@ class UserStore: ObservableObject {
         errorMessage = nil
     }
 
+    /// Whether a one-off read of `users/{uid}` (`loadCurrentUser`) may replace the profile on screen. Not when a live
+    /// snapshot arrived while it ran (`currentUserSnapshotGeneration` moved: the listener copy is newer), and never a
+    /// cached copy over a server copy of the same person (a timed-out read falls back to the cache, which can predate
+    /// it, and would lift the legal gate).
+    static func oneOffReadMayReplace(current: AppUser?, loaded: AppUser, generationAtStart: Int, generationNow: Int) -> Bool {
+        guard let current, current.id == loaded.id, !current.isProvisional, !current.parsedWithoutRulebook else {
+            return true
+        }
+        if generationNow != generationAtStart { return false }
+        if loaded.readFromLocalCache && !current.readFromLocalCache { return false }
+        return true
+    }
+
+    /// The signed-in person's profile after their own roster row changed (Timesheets toggle): the row's fields, but
+    /// the legal acceptance stays the one read from `users/{uid}` (a saved roster copy may be older).
+    static func currentUserReplacedByRosterRow(_ row: AppUser, current: AppUser) -> AppUser {
+        row.carryingLegalAcceptance(from: current)
+    }
+
+    /// Puts a profile this phone just changed itself on screen (the legal acceptance). Counts as the newest copy:
+    /// a live snapshot or one-off read already in flight does not replace it; the next live snapshot does.
+    func applyLocalCurrentUser(_ user: AppUser) {
+        currentUserSnapshotGeneration += 1
+        currentUser = user
+    }
+
     private func startCurrentUserListener(userId: String) {
         guard let firebaseBackend else { return }
         let target = "user:\(userId)"
@@ -1363,8 +1409,7 @@ class UserStore: ObservableObject {
             try await firebaseBackend.patchOwnUserTimesheetsEnabled(userId: userId, enabled: enabled)
             organizationUsers[index] = updated
             if let cu = currentUser, cu.id == userId {
-                // A roster row (possibly this phone's saved roster) never replaces the acceptance read from users/{uid}.
-                currentUser = updated.carryingLegalAcceptance(from: cu)
+                currentUser = Self.currentUserReplacedByRosterRow(updated, current: cu)
             }
             return true
         } catch {

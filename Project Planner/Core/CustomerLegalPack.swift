@@ -293,6 +293,19 @@ extension CanonicalBusinessEngine {
     }
 }
 
+/// The legal gate on the root view (`AppUser.legalGateState`).
+enum LegalGateState: Equatable {
+    /// The app opens.
+    case open
+    /// A cached copy says acceptance is needed and the server copy has not arrived yet: a neutral waiting screen.
+    case checking
+    /// `PolicyAcceptanceView`.
+    case gate
+
+    /// How long a cached "not accepted" copy waits for the server before it decides (the gate shows).
+    static let cacheGraceSeconds: Double = 5
+}
+
 extension AppUser {
     /// The legal gate (`legalPackNeedsAcceptance` against `CustomerLegalPack.version`); without the script, the stored
     /// acceptance flag decides.
@@ -304,15 +317,20 @@ extension AppUser {
         ) ?? !policyAccepted
     }
 
-    /// Whether the root view shows the legal gate. Only a profile read from `users/{uid}` by the rulebook reader
-    /// decides it: the launch placeholder (`isProvisional`) and the identity-only copy (`parsedWithoutRulebook`)
-    /// carry no stored acceptance, so they never show the gate; the real document decides once it arrives.
-    /// A copy from this phone's Firestore cache (`readFromLocalCache`) can be older than the server's (accepted on
-    /// another device since): while online the gate waits for the server snapshot; offline the cached copy decides.
-    func showsLegalPackGate(isOnline: Bool) -> Bool {
-        guard !isProvisional, !parsedWithoutRulebook else { return false }
-        if readFromLocalCache && isOnline { return false }
-        return needsLegalPackAcceptance
+    /// What the root view shows for the legal gate. It fails closed: the app never opens for a copy that says
+    /// acceptance is needed unless the server copy says otherwise.
+    /// - The launch placeholder (`isProvisional`) and the identity-only copy (`parsedWithoutRulebook`) carry no stored
+    ///   acceptance: `.open` (the real `users/{uid}` copy decides once it arrives).
+    /// - A copy that says accepted (`legalPackNeedsAcceptance` false): `.open`, even from the cache, so an accepted
+    ///   account never sees the terms flash.
+    /// - A copy that says acceptance is needed: `.gate` from the server, offline, or once `cacheGraceExpired`. A copy
+    ///   from this phone's Firestore cache (`readFromLocalCache`) while online and inside the grace period:
+    ///   `.checking` (a neutral "Checking your account…" screen, never the app) until the server snapshot decides.
+    func legalGateState(isOnline: Bool, cacheGraceExpired: Bool) -> LegalGateState {
+        guard !isProvisional, !parsedWithoutRulebook else { return .open }
+        guard needsLegalPackAcceptance else { return .open }
+        if readFromLocalCache && isOnline && !cacheGraceExpired { return .checking }
+        return .gate
     }
 
     /// The acceptance stored on `users/{uid}` (`policyAccepted`, `policyAcceptedAt`, `legalPackVersion`) is personal,

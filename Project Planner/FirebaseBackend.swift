@@ -4137,7 +4137,9 @@ class FirebaseBackend: ObservableObject {
                     db.collection("users").document(userId)
                 )
                 guard retry.exists, let data = retry.data() else { return nil }
-                return Self.parseAppUserDocument(userId: userId, data: data)
+                var parsed = Self.parseAppUserDocument(userId: userId, data: data)
+                parsed.readFromLocalCache = retry.metadata.isFromCache
+                return parsed
             }
             return nil
         }
@@ -4154,7 +4156,7 @@ class FirebaseBackend: ObservableObject {
 
     /// Live `users/{uid}`. Metadata changes are included so the switch from a cached first snapshot to the server
     /// copy is delivered even when the data is identical (the legal gate waits for it while online,
-    /// `AppUser.showsLegalPackGate(isOnline:)`); a snapshot whose data and source are both unchanged is skipped.
+    /// `AppUser.legalGateState`); a snapshot whose data and source are both unchanged is skipped.
     func observeCurrentUserDocument(
         userId: String,
         onChange: @escaping @MainActor (AppUser?) -> Void

@@ -169,7 +169,7 @@ struct PolicyAcceptanceView: View {
                 updatedUser.readFromLocalCache = false
 
                 await MainActor.run {
-                    userStore.currentUser = updatedUser
+                    userStore.applyLocalCurrentUser(updatedUser)
                     isAccepting = false
                 }
                 await userStore.loadCurrentUser()
@@ -248,4 +248,21 @@ struct LegalDocumentCard: View {
     PolicyAcceptanceView()
         .environmentObject(FirebaseBackend())
         .environmentObject(UserStore())
+}
+
+/// Shown while a cached `users/{uid}` copy says the terms need accepting and the server copy has not arrived yet
+/// (`LegalGateState.checking`). Neutral: neither the app nor the terms, so an accepted account never sees the terms
+/// flash and an unaccepted one never sees the app.
+struct LegalGateCheckingView: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+            Text("Checking your account…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ProjectWorksRevampColors.canvas)
+        .accessibilityElement(children: .combine)
+    }
 }

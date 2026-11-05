@@ -707,14 +707,20 @@ extension FirebaseBackend {
                 creatorUserId: creator
             ).carryingLegalAcceptance(from: user)
         }
-        // RULEBOOK §12: the photo is personal; its upload time comes with it so avatars refresh in this company too.
-        session.profilePhotoURL = user.profilePhotoURL
-        session.profilePhotoUpdatedAt = user.profilePhotoUpdatedAt
-        // The legal acceptance lives on `users/{uid}`, never on the membership row: without this the session profile
-        // read `policyAccepted` false from `orgMemberships` and showed the legal gate after the accepted profile.
-        session = session.carryingLegalAcceptance(from: user)
+        session = Self.mergedDeviceSessionProfile(session, user: user)
         deviceSessionProfile = session
         return session
+    }
+
+    /// The company-session profile (`orgMemberships/{org}`) with the personal fields of `users/{uid}` laid over it.
+    /// RULEBOOK §12: the photo is personal; its upload time comes with it so avatars refresh in this company too.
+    /// The legal acceptance lives on `users/{uid}`, never on the membership row: without it the session profile read
+    /// `policyAccepted` false from `orgMemberships` and showed the legal gate after the accepted profile.
+    static func mergedDeviceSessionProfile(_ session: AppUser, user: AppUser) -> AppUser {
+        var merged = session
+        merged.profilePhotoURL = user.profilePhotoURL
+        merged.profilePhotoUpdatedAt = user.profilePhotoUpdatedAt
+        return merged.carryingLegalAcceptance(from: user)
     }
 
     /// No membership snapshot yet: use the members-map role only. Do not copy toggles from another company.

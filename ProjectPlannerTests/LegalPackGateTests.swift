@@ -2,7 +2,7 @@ import XCTest
 import FirebaseFirestore
 @testable import Project_Planner
 
-/// The legal gate at launch (`AppUser.showsLegalPackGate` over `CanonicalBusinessEngine.legalPackNeedsAcceptance`).
+/// The legal gate at launch (`AppUser.legalGateState` over `CanonicalBusinessEngine.legalPackNeedsAcceptance`).
 /// The launch placeholder must never flash the terms screen; only a profile read from `users/{uid}` decides.
 @MainActor
 final class LegalPackGateTests: XCTestCase {
@@ -20,17 +20,17 @@ final class LegalPackGateTests: XCTestCase {
     func testProvisionalUserNeverShowsTheGate() {
         var placeholder = user(policyAccepted: true, legalPackVersion: nil)
         placeholder.isProvisional = true
-        XCTAssertFalse(placeholder.showsLegalPackGate(isOnline: true))
+        XCTAssertEqual(placeholder.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
 
         var notAccepted = user(policyAccepted: false, legalPackVersion: nil)
         notAccepted.isProvisional = true
-        XCTAssertFalse(notAccepted.showsLegalPackGate(isOnline: true))
+        XCTAssertEqual(notAccepted.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
     }
 
     func testIdentityOnlyFallbackNeverShowsTheGate() {
         var fallback = user(policyAccepted: false, legalPackVersion: nil)
         fallback.parsedWithoutRulebook = true
-        XCTAssertFalse(fallback.showsLegalPackGate(isOnline: true))
+        XCTAssertEqual(fallback.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
     }
 
     func testRealUserWithCurrentVersionDoesNotShowTheGate() {
@@ -39,12 +39,12 @@ final class LegalPackGateTests: XCTestCase {
             CanonicalBusinessEngine.legalPackNeedsAcceptance(policyAccepted: true, acceptedVersion: "1.1", currentVersion: "1.1"),
             "the packed script answers legalPackNeedsAcceptance"
         )
-        XCTAssertFalse(user(policyAccepted: true, legalPackVersion: "1.1").showsLegalPackGate(isOnline: true))
+        XCTAssertEqual(user(policyAccepted: true, legalPackVersion: "1.1").legalGateState(isOnline: true, cacheGraceExpired: false), .open)
     }
 
     func testRealUserMissingVersionShowsTheGate() {
-        XCTAssertTrue(user(policyAccepted: true, legalPackVersion: nil).showsLegalPackGate(isOnline: true))
-        XCTAssertTrue(user(policyAccepted: false, legalPackVersion: nil).showsLegalPackGate(isOnline: true))
+        XCTAssertEqual(user(policyAccepted: true, legalPackVersion: nil).legalGateState(isOnline: true, cacheGraceExpired: false), .gate)
+        XCTAssertEqual(user(policyAccepted: false, legalPackVersion: nil).legalGateState(isOnline: true, cacheGraceExpired: false), .gate)
     }
 
     func testOfflineCacheRoundTripKeepsAcceptedVersionAndDropsProvisional() throws {
@@ -53,7 +53,7 @@ final class LegalPackGateTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AppUser.self, from: JSONEncoder().encode(cached))
         XCTAssertEqual(decoded.legalPackVersion, "1.1")
         XCTAssertFalse(decoded.isProvisional, "not encoded")
-        XCTAssertFalse(decoded.showsLegalPackGate(isOnline: true))
+        XCTAssertEqual(decoded.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
     }
 
     // MARK: - The acceptance write (web `LegalPackGate` shape)
@@ -101,7 +101,7 @@ final class LegalPackGateTests: XCTestCase {
         let parsed = FirebaseBackend.parseAppUserDocument(userId: "TEST-uid", data: stored, annualLeaveDefaults: nil)
         XCTAssertTrue(parsed.policyAccepted)
         XCTAssertEqual(parsed.legalPackVersion, CustomerLegalPack.version)
-        XCTAssertFalse(parsed.showsLegalPackGate(isOnline: true))
+        XCTAssertEqual(parsed.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
     }
 
     /// The bug the owner saw: an iOS-only acceptance stored the version but not `policyAccepted`.
@@ -112,33 +112,76 @@ final class LegalPackGateTests: XCTestCase {
             "legalAcceptances": ["privacy": true],
         ]
         let parsed = FirebaseBackend.parseAppUserDocument(userId: "TEST-uid", data: stored, annualLeaveDefaults: nil)
-        XCTAssertTrue(parsed.showsLegalPackGate(isOnline: true), "read side unchanged until web lib/canonical decides")
+        XCTAssertEqual(parsed.legalGateState(isOnline: true, cacheGraceExpired: false), .gate, "read side unchanged until web lib/canonical decides")
     }
 
-    // MARK: - Cached copy, then server copy
+    // MARK: - Cached copy, then server copy (fails closed)
 
-    func testStaleCachedCopyWaitsForTheServerWhileOnline() {
-        var cached = user(policyAccepted: false, legalPackVersion: nil)
-        cached.readFromLocalCache = true
-        XCTAssertFalse(cached.showsLegalPackGate(isOnline: true), "an older cached users/{uid} must not flash the gate")
+    private func cachedCopy(policyAccepted: Bool, legalPackVersion: String?) -> AppUser {
+        var copy = user(policyAccepted: policyAccepted, legalPackVersion: legalPackVersion)
+        copy.readFromLocalCache = true
+        return copy
+    }
 
+    func testStaleUnacceptedCacheCopyWaitsOnCheckingThenServerOpensTheApp() {
+        let cached = cachedCopy(policyAccepted: false, legalPackVersion: nil)
+        XCTAssertEqual(cached.legalGateState(isOnline: true, cacheGraceExpired: false), .checking,
+                       "neither the terms flash nor the app while the server copy is on its way")
         let server = user(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
-        XCTAssertFalse(server.showsLegalPackGate(isOnline: true), "the server copy says accepted")
+        XCTAssertEqual(server.legalGateState(isOnline: true, cacheGraceExpired: false), .open, "the server copy says accepted")
     }
 
-    func testServerCopyThatNeedsAcceptanceShowsTheGate() {
-        var cached = user(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
-        cached.readFromLocalCache = true
-        XCTAssertFalse(cached.showsLegalPackGate(isOnline: true))
-
-        let server = user(policyAccepted: false, legalPackVersion: nil)
-        XCTAssertTrue(server.showsLegalPackGate(isOnline: true), "a genuinely unaccepted account still sees the gate")
+    func testUnacceptedCacheOnlyCopyIsGatedAfterTheGracePeriod() {
+        let cached = cachedCopy(policyAccepted: false, legalPackVersion: nil)
+        XCTAssertEqual(cached.legalGateState(isOnline: true, cacheGraceExpired: true), .gate,
+                       "Firestore stuck on the cache (captive portal, blocked host): the cached copy decides")
+        XCTAssertGreaterThan(LegalGateState.cacheGraceSeconds, 0)
     }
 
     func testOfflineTheCachedCopyDecides() {
-        var cached = user(policyAccepted: false, legalPackVersion: nil)
-        cached.readFromLocalCache = true
-        XCTAssertTrue(cached.showsLegalPackGate(isOnline: false))
+        XCTAssertEqual(cachedCopy(policyAccepted: false, legalPackVersion: nil)
+            .legalGateState(isOnline: false, cacheGraceExpired: false), .gate)
+    }
+
+    func testAcceptedCacheCopyOpensTheAppAndTheServerCanStillGate() {
+        let cached = cachedCopy(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
+        XCTAssertEqual(cached.legalGateState(isOnline: true, cacheGraceExpired: false), .open, "no flash for an accepted account")
+        let server = user(policyAccepted: false, legalPackVersion: nil)
+        XCTAssertEqual(server.legalGateState(isOnline: true, cacheGraceExpired: false), .gate,
+                       "a genuinely unaccepted account still sees the gate")
+    }
+
+    func testOlderAcceptedVersionInCacheNeverOpensTheApp() {
+        let cached = cachedCopy(policyAccepted: true, legalPackVersion: "1.0")
+        XCTAssertNotEqual(cached.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
+        XCTAssertEqual(cached.legalGateState(isOnline: true, cacheGraceExpired: true), .gate)
+    }
+
+    // MARK: - One-off read against the live copy (UserStore.loadCurrentUser)
+
+    func testLateCachedOneOffReadDoesNotReplaceTheServerSnapshot() {
+        let server = user(policyAccepted: false, legalPackVersion: nil)
+        let lateCached = cachedCopy(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
+        XCTAssertFalse(UserStore.oneOffReadMayReplace(current: server, loaded: lateCached, generationAtStart: 3, generationNow: 3),
+                       "a timed-out read's cache copy never lifts the gate the server copy decided")
+        XCTAssertEqual(server.legalGateState(isOnline: true, cacheGraceExpired: false), .gate)
+    }
+
+    func testOneOffReadYieldsToASnapshotThatArrivedWhileItRan() {
+        let live = user(policyAccepted: false, legalPackVersion: nil)
+        let read = user(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
+        XCTAssertFalse(UserStore.oneOffReadMayReplace(current: live, loaded: read, generationAtStart: 3, generationNow: 4))
+    }
+
+    func testOneOffReadReplacesPlaceholderCacheCopyOrNothing() {
+        var placeholder = user(policyAccepted: true, legalPackVersion: nil)
+        placeholder.isProvisional = true
+        let read = cachedCopy(policyAccepted: false, legalPackVersion: nil)
+        XCTAssertTrue(UserStore.oneOffReadMayReplace(current: placeholder, loaded: read, generationAtStart: 1, generationNow: 2))
+        XCTAssertTrue(UserStore.oneOffReadMayReplace(current: nil, loaded: read, generationAtStart: 0, generationNow: 0))
+        let server = user(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
+        XCTAssertTrue(UserStore.oneOffReadMayReplace(current: read, loaded: server, generationAtStart: 2, generationNow: 2),
+                      "a server read replaces a cached copy")
     }
 
     // MARK: - Session and roster copies keep the users/{uid} acceptance
@@ -151,10 +194,43 @@ final class LegalPackGateTests: XCTestCase {
             data: ["email": "test-gate@example.com", "organizationId": "TEST-other-org", "role": "manager"],
             annualLeaveDefaults: nil
         )
-        XCTAssertTrue(membership.showsLegalPackGate(isOnline: true), "the root cause of the flash in another company")
+        XCTAssertEqual(membership.legalGateState(isOnline: true, cacheGraceExpired: false), .gate, "the root cause of the flash in another company")
         let session = membership.carryingLegalAcceptance(from: usersDoc)
-        XCTAssertFalse(session.showsLegalPackGate(isOnline: true))
+        XCTAssertEqual(session.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
         XCTAssertEqual(session.legalPackVersion, CustomerLegalPack.version)
+    }
+
+    func testDeviceSessionMergeKeepsTheUsersDocumentAcceptance() {
+        var usersDoc = user(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
+        usersDoc.profilePhotoURL = "https://example.com/TEST-photo.jpg"
+        let membership = FirebaseBackend.parseAppUserDocument(
+            userId: "TEST-uid",
+            data: ["email": "test-gate@example.com", "organizationId": "TEST-other-org", "role": "operative"],
+            annualLeaveDefaults: nil
+        )
+        let merged = FirebaseBackend.mergedDeviceSessionProfile(membership, user: usersDoc)
+        XCTAssertTrue(merged.policyAccepted)
+        XCTAssertEqual(merged.legalPackVersion, CustomerLegalPack.version)
+        XCTAssertEqual(merged.profilePhotoURL, usersDoc.profilePhotoURL)
+        XCTAssertEqual(merged.role, membership.role, "the company's role stays the membership's")
+        XCTAssertEqual(merged.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
+
+        var cachedUsersDoc = usersDoc
+        cachedUsersDoc.policyAccepted = false
+        cachedUsersDoc.readFromLocalCache = true
+        let mergedCached = FirebaseBackend.mergedDeviceSessionProfile(membership, user: cachedUsersDoc)
+        XCTAssertTrue(mergedCached.readFromLocalCache, "the source of the users/{uid} copy comes with it")
+    }
+
+    func testTimesheetsToggleRosterRowKeepsTheAcceptance() {
+        let current = user(policyAccepted: true, legalPackVersion: CustomerLegalPack.version)
+        var rosterRow = user(policyAccepted: false, legalPackVersion: nil)
+        rosterRow.timesheetsEnabled = true
+        let next = UserStore.currentUserReplacedByRosterRow(rosterRow, current: current)
+        XCTAssertTrue(next.timesheetsEnabled)
+        XCTAssertTrue(next.policyAccepted)
+        XCTAssertEqual(next.legalPackVersion, CustomerLegalPack.version)
+        XCTAssertEqual(next.legalGateState(isOnline: true, cacheGraceExpired: false), .open)
     }
 
     func testSnapshotMemoForwardsOnlyDataOrSourceChanges() {
