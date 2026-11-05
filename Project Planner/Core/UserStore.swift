@@ -1496,11 +1496,12 @@ class UserStore: ObservableObject {
         }
     }
 
+    /// The Weekly report Home tile. RULEBOOK 1.32.0 §7, §11: `canOpenWeeklyReport` (admins and super admins only);
+    /// the tile placeholder stays while the profile loads, and opening asks `canOpenWeeklyReport()` again.
     func canViewWeeklyReports() -> Bool {
         if isOperativeMode() { return false }
         if isHomeProfileLoading { return true }
-        guard let u = displayUser else { return false }
-        return u.effectivePermissions.weeklyReports
+        return canOpenWeeklyReport()
     }
 
     func canViewDailyOverview() -> Bool {

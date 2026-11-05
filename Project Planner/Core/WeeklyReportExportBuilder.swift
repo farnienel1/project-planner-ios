@@ -13,6 +13,9 @@ enum WeeklyReportExportBuilder {
         let headers: [String]
         let rows: [[String]]
         let totalRow: [String]?
+        /// A line under the section (RULEBOOK 1.32.0: `PAY_HIDDEN_NOTE` under the Pay Summary when some people's pay is
+        /// hidden). Shown as given.
+        var note: String? = nil
     }
 
     struct Context {
@@ -65,6 +68,9 @@ enum WeeklyReportExportBuilder {
             }
             if let totalRow = section.totalRow {
                 rows.append(totalRow)
+            }
+            if let note = section.note, !note.isEmpty {
+                rows.append([note])
             }
             rows.append([""])
         }
@@ -332,6 +338,18 @@ enum WeeklyReportExportBuilder {
                 )
             }
             y += 20
+        }
+
+        if let note = section.note, !note.isEmpty {
+            if y > pageRect.height - 60 {
+                pdf.beginPage()
+                y = margin
+            }
+            (note as NSString).draw(
+                in: CGRect(x: margin + 4, y: y + 2, width: contentWidth - 8, height: 28),
+                withAttributes: [.font: UIFont.italicSystemFont(ofSize: 8.5), .foregroundColor: slate]
+            )
+            y += 30
         }
         return y
     }

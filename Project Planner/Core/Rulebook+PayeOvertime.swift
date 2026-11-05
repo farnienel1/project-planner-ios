@@ -412,14 +412,23 @@ nonisolated struct OvertimeReportRows: Codable, Hashable, Sendable {
     var total: String
 }
 
-/// One `weeklyReportPayeOvertime` row.
+/// One `weeklyReportPayeOvertime` row. RULEBOOK 1.32.0 §7: one row per PAYE person, job and multiplier, with the
+/// clock hours priced at `multiplier`, the organisation's rate on those days, whether the bookings carry their own rate
+/// different from it (`changedFromOrganization`), `multiplierText` ("2h at ×1.5 = 3h", `overtimeMultiplierText`) and
+/// `label` ("Sam · J-1042 · 2h at ×1.5 = 3h", plus " · changed from organisation rate (×1.5)" on an edited row).
 nonisolated struct WeeklyReportPayeOvertimeRow: Codable, Hashable, Sendable {
     var personId: String
     var name: String
     var jobId: String?
     var jobNumber: String
     var jobName: String
+    var clockHours: Double
+    var breakHours: Double
+    var multiplier: Double
+    var organizationMultiplier: Double
+    var changedFromOrganization: Bool
     var overtimeHours: Double
+    var multiplierText: String
     var label: String
 }
 
@@ -898,7 +907,14 @@ extension CanonicalBusinessEngine {
         callJSON("weeklyReportPayeDay", arguments: [employment, dayKey, overtimeTimeZone]) as? Bool ?? false
     }
 
-    /// `weeklyReportPayeOvertime`: one row per PAYE person per job, live from the bookings.
+    /// `OVERTIME_RATE_CHANGED_MARK` (1.32.0 §7): the weekly report's mark on a row whose multiplier was changed from the
+    /// organisation rate. Nil when the script did not answer.
+    nonisolated static var overtimeRateChangedMark: String? {
+        constant("OVERTIME_RATE_CHANGED_MARK", as: String.self)
+    }
+
+    /// `weeklyReportPayeOvertime`: one row per PAYE person, job and multiplier, live from the bookings (1.32.0: each
+    /// row carries its multiplier, `multiplierText`, and `changedFromOrganization`; `label` includes both).
     nonisolated static func weeklyReportPayeOvertime(
         people: [[String: Any]],
         bookings: [OvertimeBookingInput],

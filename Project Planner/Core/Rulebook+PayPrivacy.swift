@@ -58,10 +58,85 @@ extension CanonicalBusinessEngine {
         return callJSON("overlayPayProfile", arguments: [person, parsed]) as? [String: Any]
     }
 
-    /// `canViewPersonPay(viewer, subject, roster)`: the person, their active line managers, admins and super admins,
-    /// and managers with Operatives access for operatives. False when the script did not answer (pay stays hidden).
-    nonisolated static func canViewPersonPay(viewer: [String: Any], subject: [String: Any], roster: [[String: Any]]) -> Bool {
-        callJSON("canViewPersonPay", arguments: [viewer, subject, roster]) as? Bool ?? false
+    /// `canViewPersonPay(viewer, subject, roster, { context })`: the person, admins and super admins, managers with
+    /// Operatives access for operatives, and the platform owner. RULEBOOK 1.32.0 §8 (owner decisions 5 Nov): a line
+    /// manager who is none of those sees a report's pay only with `context` `.timesheetReview` (the timesheets they
+    /// review); `.profile` (people profile, Manage Users, rate history) never. False when the script did not answer
+    /// (pay stays hidden).
+    nonisolated static func canViewPersonPay(
+        viewer: [String: Any],
+        subject: [String: Any],
+        roster: [[String: Any]],
+        context: RulebookPayViewContext
+    ) -> Bool {
+        callJSON("canViewPersonPay", arguments: [viewer, subject, roster, ["context": context.rawValue]]) as? Bool ?? false
+    }
+
+    // MARK: Weekly report pay summary (1.32.0 §7, §8)
+
+    /// `PAY_HIDDEN_CELL_LABEL`: the rate and pay cells of a person whose pay the viewer may not see. Nil when the script
+    /// did not answer.
+    nonisolated static var payHiddenCellLabel: String? {
+        constant("PAY_HIDDEN_CELL_LABEL", as: String.self)
+    }
+
+    /// `PAY_HIDDEN_NOTE`: the note under the pay summary when some people's pay is hidden. Nil when the script did not
+    /// answer.
+    nonisolated static var payHiddenNote: String? {
+        constant("PAY_HIDDEN_NOTE", as: String.self)
+    }
+
+    /// `reportPayForViewer(rows, { viewer, roster })`: the weekly report pay summary for one viewer. Each row is
+    /// `{ lines: [{ rate, pay, rateText?, payLabel?, isPaye }], personTotal, personTotalLabel?, paySubject? }` plus any
+    /// keys the caller keeps (they come back unchanged, in the same order). A hidden row comes back with its rate and
+    /// pay cells `PAY_HIDDEN_CELL_LABEL`; `grandTotal` covers the visible rows only. Nil when the script did not answer.
+    nonisolated static func reportPayForViewer(
+        rows: [[String: Any]],
+        viewer: [String: Any]?,
+        roster: [[String: Any]]
+    ) -> RulebookReportPayForViewer? {
+        let input: [String: Any] = ["viewer": RulebookJSON.orNull(viewer), "roster": roster]
+        guard let answer = callJSON("reportPayForViewer", arguments: [rows, input]) as? [String: Any],
+              let out = answer["rows"] as? [[String: Any]] else { return nil }
+        return RulebookReportPayForViewer(
+            rows: out,
+            grandTotal: (answer["grandTotal"] as? NSNumber)?.doubleValue ?? 0,
+            hiddenPeople: (answer["hiddenPeople"] as? NSNumber)?.intValue ?? 0
+        )
+    }
+
+    // MARK: Weekly report access (1.32.0 §7, §11)
+
+    /// `canOpenWeeklyReport(user)` (owner decision 5 Nov): admins and super admins only, read from the level (a
+    /// manager's stored `weeklyReports` is ignored); an inactive person never. Every way in asks this. False when the
+    /// script did not answer.
+    nonisolated static func canOpenWeeklyReport(_ user: [String: Any]) -> Bool {
+        callJSON("canOpenWeeklyReport", arguments: [user]) as? Bool ?? false
+    }
+}
+
+/// RULEBOOK 1.32.0 §8 `PayViewContext`: where pay is shown. `profile` is the people profile, Manage Users and rate
+/// history; `timesheetReview` is only the timesheets a line manager reviews.
+nonisolated enum RulebookPayViewContext: String, Sendable {
+    case profile
+    case timesheetReview
+}
+
+/// `reportPayForViewer` result: the rows (as sent, hidden ones with `PAY_HIDDEN_CELL_LABEL` cells), the grand total over
+/// the visible rows, and how many people were hidden (show `PAY_HIDDEN_NOTE` when above zero).
+nonisolated struct RulebookReportPayForViewer: @unchecked Sendable {
+    let rows: [[String: Any]]
+    let grandTotal: Double
+    let hiddenPeople: Int
+}
+
+extension AppUser {
+    /// RULEBOOK 1.32.0 §7, §11 `CanonicalBusinessEngine.canOpenWeeklyReport`: this person may open the Weekly report
+    /// (their stored permission fields with `isActive`).
+    var canOpenWeeklyReport: Bool {
+        var row = permissionSubject
+        row["isActive"] = isActive
+        return CanonicalBusinessEngine.canOpenWeeklyReport(row)
     }
 }
 
@@ -77,16 +152,25 @@ extension AppUser {
 
 extension UserStore {
     /// RULEBOOK 1.13.0 §8 `canViewPersonPay`: whether the signed-in person may see `subject`'s pay, pay basis and
-    /// employment type. The platform owner (`isPlatformOwnerEmail`) always may.
-    func canViewPay(of subject: AppUser) -> Bool {
-        guard let viewer = currentUser else { return false }
-        var viewerRow = viewer.payAccessSubject
-        viewerRow["isPlatformOwner"] = CanonicalBusinessEngine.isPlatformOwnerEmail(viewer.email)
+    /// employment type. The platform owner (`isPlatformOwnerEmail`) always may. RULEBOOK 1.32.0: `context` says where
+    /// the pay is shown — `.profile` for Manage Users and profiles (a plain line manager never), `.timesheetReview` only
+    /// on the timesheets a line manager reviews.
+    func canViewPay(of subject: AppUser, context: RulebookPayViewContext) -> Bool {
+        guard let viewerRow = payViewerRow else { return false }
         return CanonicalBusinessEngine.canViewPersonPay(
             viewer: viewerRow,
             subject: subject.payAccessSubject,
-            roster: organizationUsers.map { $0.payAccessSubject }
+            roster: organizationUsers.map { $0.payAccessSubject },
+            context: context
         )
+    }
+
+    /// The signed-in person as `canViewPersonPay` / `reportPayForViewer` read a viewer (with the platform owner flag).
+    var payViewerRow: [String: Any]? {
+        guard let viewer = currentUser else { return nil }
+        var viewerRow = viewer.payAccessSubject
+        viewerRow["isPlatformOwner"] = CanonicalBusinessEngine.isPlatformOwnerEmail(viewer.email)
+        return viewerRow
     }
 }
 

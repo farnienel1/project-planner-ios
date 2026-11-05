@@ -1090,6 +1090,9 @@ struct HomeView: View {
         case HomeQuickActionID.opSettings.rawValue, HomeQuickActionID.staffSettings.rawValue:
             NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 5])
         case HomeQuickActionID.staffWeeklyReport.rawValue:
+            // RULEBOOK 1.32.0 §7, §11: `canOpenWeeklyReport` (admins only) — a tile shown while the profile loaded
+            // never opens the report for anyone else.
+            guard userStore.canOpenWeeklyReport() else { return }
             weeklyReportLaunch = WeeklyReportLaunchToken(
                 bookingStore: bookingStore,
                 managerScheduleStore: managerScheduleStore,

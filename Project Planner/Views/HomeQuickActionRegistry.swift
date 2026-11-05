@@ -251,6 +251,7 @@ enum HomeQuickActionRegistry {
             return userStore.isOperativeMode() && (userStore.canViewSiteAudit() || userStore.isHomeProfileLoading)
 
         case HomeQuickActionID.staffWeeklyReport.rawValue:
+            // RULEBOOK 1.32.0 §7, §11: `canOpenWeeklyReport` (admins and super admins only), through the Home tile gate.
             return !userStore.isOperativeMode() && userStore.canViewWeeklyReports()
         case HomeQuickActionID.staffDailyOverview.rawValue:
             return !userStore.isOperativeMode() && userStore.canViewDailyOverview()

@@ -2595,15 +2595,19 @@ struct EditUserView: View {
                                 description: "Can book their own annual leave. If off, this manager requests leave for approval.",
                                 isOn: $managerSelfBookDraft
                             )
-                            ManageUserCardDivider()
-                            ManageUserExpandablePermissionToggleRow(
-                                iconName: "doc.text.fill",
-                                iconBackground: ManageUserProfilePalette.chipTealBg,
-                                iconForeground: ManageUserProfilePalette.chipTealFg,
-                                title: "Weekly Report",
-                                description: "Can open Weekly Report from Home. If off, that tile is hidden.",
-                                isOn: $managerTransitionWeeklyReports
-                            )
+                            // RULEBOOK 1.32.0 §11: `weeklyReports` is admin-only — the row shows only while the
+                            // rulebook's manager rows (`permissionToggleRows`) still list it.
+                            if editPermissionRows(level: .manager).contains(where: { $0.field == "weeklyReports" }) {
+                                ManageUserCardDivider()
+                                ManageUserExpandablePermissionToggleRow(
+                                    iconName: "doc.text.fill",
+                                    iconBackground: ManageUserProfilePalette.chipTealBg,
+                                    iconForeground: ManageUserProfilePalette.chipTealFg,
+                                    title: "Weekly Report",
+                                    description: "Can open Weekly Report from Home. If off, that tile is hidden.",
+                                    isOn: $managerTransitionWeeklyReports
+                                )
+                            }
                             ManageUserCardDivider()
                             ManageUserExpandablePermissionToggleRow(
                                 iconName: "calendar.badge.clock",
@@ -3151,7 +3155,7 @@ struct EditUserView: View {
                     ManageUserCardDivider()
                     // RULEBOOK §8: employment type is pay (`canChangePersonPay`); 1.13.0 `canViewPersonPay` decides
                     // whether it is shown at all.
-                    if !userStore.canViewPay(of: displayedUser) {
+                    if !userStore.canViewPay(of: displayedUser, context: .profile) {
                         EmptyView()
                     } else if canEditPermissionsMatrix && userStore.canChangePay(of: displayedUser) {
                         Menu {
@@ -3204,7 +3208,7 @@ struct EditUserView: View {
                     lineManagerPickRow
                     ManageUserCardDivider()
                 }
-                if userStore.canViewPay(of: displayedUser) {
+                if userStore.canViewPay(of: displayedUser, context: .profile) {
                 ManageUserDayRateEditRow(dayRateText: $dayRateText, currencySymbol: localeCurrencySymbol())
                     .onChange(of: dayRateText) { _, newValue in
                         payRateFieldError = nil
@@ -3229,7 +3233,7 @@ struct EditUserView: View {
                 ManageUserCardDivider()
                 }
                 tradeTypePickSection
-                if userStore.canViewPay(of: displayedUser), (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {
+                if userStore.canViewPay(of: displayedUser, context: .profile), (permissions.operativeMode || permissions.manager || permissions.adminAccess) && !dayRateHistory.isEmpty {
                     ManageUserCardDivider()
                     dayRateHistoryChromeBlock
                 }
@@ -3503,7 +3507,7 @@ struct EditUserView: View {
     private var payRateRequiredMessageForSave: String? {
         let subject = payBaselineUser
         // The rate field is on the setup card; without it the person could not be given a rate here.
-        guard showOperativeSetupCard, userStore.canViewPay(of: subject), userStore.canChangePay(of: subject) else { return nil }
+        guard showOperativeSetupCard, userStore.canViewPay(of: subject, context: .profile), userStore.canChangePay(of: subject) else { return nil }
         let stored = UserStore.storedPay(of: subject)
         let amount = isPayrollRateDirty(versus: subject) ? parseDayRate(dayRateText) : stored.amount
         return PayRateRequiredRulebook.error(employmentType: employmentTypeDraft, payBasis: stored.basis, amount: amount)
