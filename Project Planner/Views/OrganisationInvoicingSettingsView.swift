@@ -263,9 +263,12 @@ struct OrganisationInvoicingSettingsView: View {
             }
             Picker(
                 CanonicalBusinessEngine.overtimeText("PAYE_PAYDAY_CONTROL_LABEL", fallback: "Set PAYE payday"),
-                selection: Binding(
+                selection: Binding<Int>(
                     get: { shown ?? 0 },
-                    set: { day in paydayPick = (day == 0 || day == saved) ? nil : day }
+                    set: { (day: Int) in
+                        let isSaved: Bool = saved.map { $0 == day } ?? false
+                        paydayPick = (day == 0 || isSaved) ? nil : day
+                    }
                 )
             ) {
                 if saved == nil {
