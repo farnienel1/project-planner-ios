@@ -3377,6 +3377,9 @@ private struct OperativeTimesheetsView: View {
     @State private var didAutoOpenReview = false
     /// Scope the list was last built and fetched for. Nil until the first appear.
     @State private var listScopeIds: [String]?
+    /// RULEBOOK 1.32.0 §8 `timesheetExportOwnSheetNotice`: shown on Signed off while the viewer's own sheet for this
+    /// period is signed and not exported (the export never includes it).
+    @State private var ownSheetExportNotice: String?
 
     private var isAdminViewer: Bool {
         guard let u = userStore.displayUser else { return false }
@@ -3667,6 +3670,15 @@ private struct OperativeTimesheetsView: View {
                     // RULEBOOK §2: timesheet sign-off and export are online only.
                     .onlineOnly(isOnline: smartCache.isOnline)
                 }
+                if selectedTab == .signedOff, let ownSheetExportNotice {
+                    Label(ownSheetExportNotice, systemImage: "info.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(Color.primary)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                        .accessibilityIdentifier("timesheets.ownSheetExportNotice")
+                }
             }
             .padding(.top, 20)
             .padding(.bottom, 28)
@@ -3729,6 +3741,35 @@ private struct OperativeTimesheetsView: View {
                 Task { await loadExportedHistory() }
             }
         }
+        .task(id: selectedTab) {
+            await refreshOwnSheetExportNotice()
+        }
+    }
+
+    /// RULEBOOK 1.32.0 §8: reads the viewer's own sheet for this period (server copy, this organisation) while Signed off
+    /// is open and asks `timesheetExportOwnSheetNotice` whether to say the export leaves it out. No notice when it
+    /// cannot be read, as web.
+    private func refreshOwnSheetExportNotice() async {
+        guard selectedTab == .signedOff,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+              let viewerId = userStore.currentUser?.id, !viewerId.isEmpty else {
+            ownSheetExportNotice = nil
+            return
+        }
+        let ownSheet = await TimesheetDraftStore.refreshFromCloud(
+            userId: viewerId,
+            weekStart: week.start,
+            firebaseBackend: firebaseBackend,
+            organizationId: orgId
+        )
+        guard selectedTab == .signedOff, let ownSheet else {
+            ownSheetExportNotice = nil
+            return
+        }
+        ownSheetExportNotice = CanonicalBusinessEngine.timesheetExportOwnSheetNotice(
+            ownSheetSigned: ownSheet.operativeSignedAt != nil,
+            ownSheetExported: ownSheet.exportedAt != nil
+        )
     }
 
     private var filteredExportedHistory: [ExportedTimesheetHistoryRow] {

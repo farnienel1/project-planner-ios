@@ -5,7 +5,8 @@
 //  RULEBOOK 1.29.0 §25: Timesheets → "Overtime, Expenses & Price Work" — the same screens and flow as web
 //  `components/overtime/OvertimeScreen.tsx`: the hub (My… / Users'…), Users' list with search and filter, the person's
 //  Overtime / Expenses / Price work tiles (Expenses and Price work: `PayeClaimsViews.swift`, 1.30.0), Current PAYE payrun / Past PAYE payruns / Custom date range, the lines with
-//  tick / X / cog, Send for approval, Approve Overtime Request, Generate overtime report. Every figure, state,
+//  tick / X / cog, Send for approval, Approve (1.32.0: one button, partial approval with per-line outcomes), Generate
+//  overtime report. Every figure, state,
 //  permission and write shape comes from `CanonicalBusinessEngine` (`Rulebook+PayeOvertime.swift`); these views only pass
 //  inputs and show results. Online only.
 //
@@ -54,19 +55,17 @@ enum OvertimeScreenSupport {
         return full.isEmpty ? (user.email.isEmpty ? "Unknown person" : user.email) : full
     }
 
-    /// Every id the person's labour bookings may be filed under: `personIdSet` and `bookingIdsForAccount` (former,
-    /// same-email and catalogue rows), as web passes `personIdSet` plus the linked operatives row.
+    /// RULEBOOK 1.32.0 `overtimePersonIds({ person, roster, operatives })`: all records for this person (every id they
+    /// go by plus every operatives row on their email), for overtime loading, sending and approving, as web.
+    /// Only the person's own id when the script did not answer.
     static func personIds(for user: AppUser, users: [AppUser], operatives: [Operative]) -> [String] {
-        var ids = RulebookPeople.ownerIds(for: user, users: users)
-        let account = CanonicalBusinessEngine.CanonicalBookingPersonAccount(
-            id: user.id, email: user.email, formerIds: user.formerUserIds, aliasIds: user.sameEmailUserIds
+        let rows: [[String: Any]] = operatives.map { ["id": $0.documentId, "email": $0.email] as [String: Any] }
+        let ids = CanonicalBusinessEngine.overtimePersonIds(
+            person: RulebookPeople.person(user),
+            roster: RulebookPeople.roster(users),
+            operatives: rows
         )
-        ids += CanonicalBusinessEngine.bookingIdsForAccount(
-            account,
-            operatives: operatives.map { CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.documentId, email: $0.email) }
-        ) ?? []
-        var seen = Set<String>()
-        return ids.filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+        return ids.isEmpty ? [user.id] : ids
     }
 
     /// Manager site bookings belong to managers and admins; an operative has none (and may not query them).
@@ -136,6 +135,7 @@ struct OvertimeScreenScaffold<Content: View>: View {
 
 /// "Overtime, Expenses & Price Work" (`overtimeHubAccess`): My… for a PAYE person, Users'… for admins and line managers.
 struct OvertimeHubView: View {
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
 
     private var hubAccess: OvertimeHubAccess {
@@ -145,9 +145,23 @@ struct OvertimeHubView: View {
         )
     }
 
+    /// RULEBOOK 1.32.0 §4.5 `payePaydayBanner`, as web's Overtime hub: shown while no PAYE payday is set; the admin
+    /// wording for an admin outside operative mode (`isAdminOutsideOperativeMode`).
+    private var payePaydayBanner: String? {
+        CanonicalBusinessEngine.payePaydayBanner(
+            organization: OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization),
+            loaded: firebaseBackend.currentOrganization != nil,
+            viewerIsAdmin: userStore.displayUser.map { CanonicalBusinessEngine.overtimeDeciderIsAdmin(RulebookPeople.person($0)) } ?? false
+        )
+    }
+
     var body: some View {
         let access = hubAccess
         OvertimeScreenScaffold(title: CanonicalBusinessEngine.overtimeText("OVERTIME_HUB_LABEL", fallback: "Overtime, Expenses & Price Work")) {
+            if let banner = payePaydayBanner {
+                PayePaydayBannerText(text: banner)
+                    .accessibilityIdentifier("overtime.hub.payePaydayBanner")
+            }
             if !access.showButton {
                 Text("This section is for PAYE staff, admins and line managers.")
                     .foregroundStyle(.secondary)
@@ -567,7 +581,12 @@ struct OvertimeLinesView: View {
         let bookingById = Dictionary(bookings.map { ($0.id.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
         let pending = requests.filter { $0.isPending && $0.rangeStart <= range.end && $0.rangeEnd >= range.start }
         let today = OvertimeScreenSupport.todayKey()
-        let modes = Dictionary(lines.map { ($0.id, editMode($0, todayKey: today)) }, uniquingKeysWith: { first, _ in first })
+        // RULEBOOK 1.32.0 (option 2): tick, cross and cog up to the end of the current PAYE payrun.
+        let editableUntil = CanonicalBusinessEngine.overtimeEditableUntil(org, todayKey: today)
+        let modes = Dictionary(
+            lines.map { ($0.id, editMode($0, todayKey: today, editableUntilKey: editableUntil)) },
+            uniquingKeysWith: { first, _ in first }
+        )
 
         OvertimeScreenScaffold(title: "Overtime · \(OvertimeScreenSupport.rangeTitle(range))") {
             if let loadError {
@@ -780,10 +799,11 @@ struct OvertimeLinesView: View {
         requesterIds: [String]
     ) -> some View {
         let mayDecide = self.canDecide
-        let ready = CanonicalBusinessEngine.overtimeRequestFullyDecided(request, decisions: decisions)
+        // RULEBOOK 1.32.0: one Approve, enabled once any line is decided; it applies what this decider may.
+        let ready = CanonicalBusinessEngine.overtimeRequestAnyDecided(request, decisions: decisions)
         // The same rule the approval transaction (and the security rules) apply, run on what this screen can read, so
-        // the button is never offered for an approval that would be refused.
-        let blocked: String? = {
+        // the button is never offered for an approval that would apply nothing, and each line shows its outcome.
+        let dryRun: OvertimeApprovalPlan? = {
             guard ready else { return nil }
             var live: [String: OvertimeBookingInput] = [:]
             var unreadable: [String] = []
@@ -800,17 +820,32 @@ struct OvertimeLinesView: View {
                 deciderIsAdmin: deciderIsAdmin,
                 writableBookingIds: live.values.filter { deciderCanWrite($0) }.map(\.id),
                 unreadableBookingIds: unreadable
-            )?.refusalMessage
+            )
         }()
+        let blocked = dryRun?.refusalMessage
+        let outcomes = dryRun?.lineOutcomes ?? [:]
+        let applied = Set(request.appliedBookingIds.map { $0.lowercased() })
+        let openLines = request.lines.filter { !applied.contains($0.bookingId.lowercased()) }
         VStack(alignment: .leading, spacing: 10) {
             Text("Overtime request · \(OvertimeScreenSupport.rangeTitle(OvertimeDayRange(start: request.rangeStart, end: request.rangeEnd)))")
                 .font(.body.weight(.semibold))
-            ForEach(request.lines, id: \.bookingId) { line in
+            ForEach(openLines, id: \.bookingId) { line in
                 let booking = bookingById[line.bookingId.lowercased()]
+                let outcomeLabel = lineOutcomeLabel(line, booking: booking, outcomes: outcomes, requesterIds: requesterIds)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(describe(line) + decisionSuffix(line) + bookingNote(booking, requesterIds: requesterIds))
                         .font(.footnote)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let outcomeLabel {
+                        Text(outcomeLabel)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.orange.opacity(0.15), in: Capsule())
+                            .foregroundStyle(Color.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("overtime.lineOutcome")
+                    }
                     if mayDecide {
                         HStack(spacing: 8) {
                             if let booking {
@@ -843,7 +878,7 @@ struct OvertimeLinesView: View {
                     Task { await approve(request, organization: organization, requesterIds: requesterIds, bookingById: bookingById) }
                 } label: {
                     primaryLabel(
-                        CanonicalBusinessEngine.overtimeText("OVERTIME_APPROVE_REQUEST_LABEL", fallback: "Approve Overtime Request"),
+                        CanonicalBusinessEngine.overtimeText("OVERTIME_APPROVE_LABEL", fallback: "Approve"),
                         color: ready && blocked == nil ? .green : .gray
                     )
                 }
@@ -882,6 +917,19 @@ struct OvertimeLinesView: View {
         }
     }
 
+    /// `overtimeLineOutcomeLabel` ("Needs an admin", "Changed since the request — …") of the approval dry run, on a
+    /// decided line of the requester's (unreadable and not-theirs lines already say so in `bookingNote`), as web.
+    private func lineOutcomeLabel(
+        _ line: OvertimeRequestLine,
+        booking: OvertimeBookingInput?,
+        outcomes: [String: String],
+        requesterIds: [String]
+    ) -> String? {
+        guard decisions[line.bookingId] != nil, let booking,
+              CanonicalBusinessEngine.overtimeBookingIsTheirs(booking, personIds: requesterIds) else { return nil }
+        return CanonicalBusinessEngine.overtimeLineOutcomeLabel(outcomes[line.bookingId])
+    }
+
     private func bookingNote(_ booking: OvertimeBookingInput?, requesterIds: [String]) -> String {
         guard let booking else {
             return " · " + CanonicalBusinessEngine.overtimeText("OVERTIME_BOOKING_UNREADABLE_MESSAGE", fallback: "Can't read this booking — it is left out of this approval.")
@@ -894,8 +942,8 @@ struct OvertimeLinesView: View {
 
     // MARK: Who (rulebook answers)
 
-    private func editMode(_ line: OvertimeLine, todayKey: String) -> OvertimeEditMode {
-        guard scope == .mine, line.state != "cancelled", let viewer = viewerUser else { return .readOnly }
+    private func editMode(_ line: OvertimeLine, todayKey: String, editableUntilKey: String) -> OvertimeEditMode {
+        guard scope == .mine, line.state != "cancelled", let viewer = viewerUser, let subject else { return .readOnly }
         var booking: [String: Any] = ["collection": line.collection, "dayKey": line.dayKey]
         if line.collection == "managerSiteBookings" {
             booking["userId"] = subjectId
@@ -910,7 +958,11 @@ struct OvertimeLinesView: View {
             booking: booking,
             job: line.jobId.flatMap { JobAccessContext.jobFieldsById[$0.lowercased()] },
             managers: JobAccessContext.managers,
-            todayKey: todayKey
+            todayKey: todayKey,
+            editableUntilKey: editableUntilKey,
+            // 1.32.0: a request when the person has an active line manager; direct for the Super Admin or none.
+            person: RulebookPeople.person(subject),
+            roster: roster
         )
     }
 
@@ -1113,13 +1165,12 @@ struct OvertimeLinesView: View {
             decisions = [:]
             await notificationService.notifyOvertimeRequestReviewed(
                 requesterId: result.requesterUserId.isEmpty ? request.userId : result.requesterUserId,
-                requestId: request.id
+                requestId: request.id,
+                complete: result.complete,
+                summary: result.message
             )
-            var notes: [String] = []
-            if !result.deletedBookingIds.isEmpty { notes.append("\(result.deletedBookingIds.count) deleted booking(s) left out") }
-            if !result.unreadableBookingIds.isEmpty { notes.append("\(result.unreadableBookingIds.count) booking(s) you can't read left out") }
-            if !result.foreignBookingIds.isEmpty { notes.append("\(result.foreignBookingIds.count) booking(s) not theirs left out") }
-            message = notes.isEmpty ? "Approved. The bookings are updated." : "Approved. \(notes.joined(separator: "; "))."
+            // RULEBOOK 1.32.0 `reviewApprovalMessage`: "Approved 2 of 5. …".
+            message = result.message
         }
     }
 
@@ -1244,81 +1295,6 @@ struct OvertimeCogSheet: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - PAYE payday setting (§4.5)
-
-/// "Set PAYE payday" in Payment runs & timesheets: a day of the month 1–31, saved on its own (admins, online only).
-/// `payePaydayWriteFields` appends to the dated history, so a change applies from the next payrun.
-struct PayePaydayCard: View {
-    @EnvironmentObject var firebaseBackend: FirebaseBackend
-    let isOnline: Bool
-
-    @State private var picked: Int?
-    @State private var saving = false
-    @State private var message: String?
-
-    var body: some View {
-        let org = OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization)
-        let today = OvertimeScreenSupport.todayKey()
-        let saved = CanonicalBusinessEngine.payePayday(org)
-        let current = CanonicalBusinessEngine.payePayrunPeriod(org, dayKey: today)
-        let pending = CanonicalBusinessEngine.payePaydayHistory(org).filter { $0.effectiveFrom > today }.last
-        VStack(alignment: .leading, spacing: 10) {
-            Text(current.map { CanonicalBusinessEngine.payePayrunLabel($0) }
-                ?? "No PAYE payday set. PAYE overtime uses a custom date range until one is set.")
-                .font(.subheadline)
-            if let pending {
-                Text("Changes to day \(pending.day) from \(CanonicalBusinessEngine.formatPayePayrunDay(pending.effectiveFrom)).")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Picker(
-                CanonicalBusinessEngine.overtimeText("PAYE_PAYDAY_CONTROL_LABEL", fallback: "Set PAYE payday"),
-                selection: Binding(get: { picked ?? saved ?? 0 }, set: { picked = $0 == 0 ? nil : $0 })
-            ) {
-                Text("Not set").tag(0)
-                ForEach(1...31, id: \.self) { day in Text("Day \(day)").tag(day) }
-            }
-            .accessibilityIdentifier("payePayday.picker")
-            if let picked, picked >= 29 {
-                Text("In shorter months the payday is the last day of the month.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            if !isOnline {
-                Text(OfflinePolicy.onlineOnlyMessage).font(.footnote).foregroundStyle(.secondary)
-            }
-            Button(saving ? "Saving…" : "Save PAYE payday") {
-                Task { await save() }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(picked == nil || saving || !isOnline)
-            .accessibilityIdentifier("payePayday.save")
-            if let message {
-                Text(message).font(.footnote)
-            }
-        }
-        .padding(.vertical, 12)
-    }
-
-    private func save() async {
-        guard let day = picked else { return }
-        if let error = CanonicalBusinessEngine.payePaydayValidationError(day) {
-            message = error
-            return
-        }
-        saving = true
-        message = nil
-        do {
-            let wrote = try await firebaseBackend.savePayePayday(day: day)
-            message = wrote ? "PAYE payday saved. It applies from the next PAYE payrun." : "That is already the PAYE payday."
-            picked = nil
-        } catch {
-            message = error.localizedDescription
-        }
-        saving = false
     }
 }
 

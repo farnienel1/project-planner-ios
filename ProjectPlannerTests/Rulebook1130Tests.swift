@@ -178,12 +178,15 @@ final class Rulebook1130Tests: XCTestCase {
         let admin: [String: Any] = ["id": "a", "email": "a@x.com", "isActive": true, "role": "admin", "adminAccess": true,
                                     "permissions": ["adminAccess": true]]
         let roster = [op, lineManager, otherManager, operativesManager, admin]
-        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: op, subject: op, roster: roster))
-        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: lineManager, subject: op, roster: roster))
-        XCTAssertFalse(CanonicalBusinessEngine.canViewPersonPay(viewer: otherManager, subject: op, roster: roster))
-        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: operativesManager, subject: op, roster: roster))
-        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: admin, subject: op, roster: roster))
-        XCTAssertFalse(CanonicalBusinessEngine.canViewPersonPay(viewer: operativesManager, subject: lineManager, roster: roster))
+        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: op, subject: op, roster: roster, context: .profile))
+        // RULEBOOK 1.32.0 §8 (owner decisions 5 Nov): a plain line manager sees a report's pay only on the timesheets
+        // they review, never on the profile.
+        XCTAssertFalse(CanonicalBusinessEngine.canViewPersonPay(viewer: lineManager, subject: op, roster: roster, context: .profile))
+        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: lineManager, subject: op, roster: roster, context: .timesheetReview))
+        XCTAssertFalse(CanonicalBusinessEngine.canViewPersonPay(viewer: otherManager, subject: op, roster: roster, context: .profile))
+        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: operativesManager, subject: op, roster: roster, context: .profile))
+        XCTAssertTrue(CanonicalBusinessEngine.canViewPersonPay(viewer: admin, subject: op, roster: roster, context: .profile))
+        XCTAssertFalse(CanonicalBusinessEngine.canViewPersonPay(viewer: operativesManager, subject: lineManager, roster: roster, context: .profile))
     }
 
     // MARK: Carry-over and pro rata (1.13.0 Q4 §4.4)

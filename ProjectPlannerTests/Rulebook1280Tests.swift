@@ -92,7 +92,8 @@ final class Rulebook1280Tests: XCTestCase {
         XCTAssertTrue(UserPermissions.rulebookFields.contains("timesheetSelfSign"))
         let membershipKeys = CanonicalBusinessEngine.constant("ORG_MEMBERSHIP_PERMISSION_KEYS", as: [String].self) ?? []
         XCTAssertTrue(membershipKeys.contains("timesheetSelfSign"))
-        XCTAssertEqual(CanonicalBusinessEngine.adminOnlyPermissionFields, ["timesheetSelfSign"])
+        // 1.32.0 (§7, §11, owner decision 5 Nov) adds the Weekly report to the admin-only fields.
+        XCTAssertEqual(CanonicalBusinessEngine.adminOnlyPermissionFields, ["timesheetSelfSign", "weeklyReports"])
     }
 
     func testMembershipAndStoredToggleCarryTimesheetSelfSign() throws {

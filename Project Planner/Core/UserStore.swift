@@ -1496,11 +1496,12 @@ class UserStore: ObservableObject {
         }
     }
 
+    /// The Weekly report Home tile. RULEBOOK 1.32.0 §7, §11: `canOpenWeeklyReport` (admins and super admins only);
+    /// the tile placeholder stays while the profile loads, and opening asks `canOpenWeeklyReport()` again.
     func canViewWeeklyReports() -> Bool {
         if isOperativeMode() { return false }
         if isHomeProfileLoading { return true }
-        guard let u = displayUser else { return false }
-        return u.effectivePermissions.weeklyReports
+        return canOpenWeeklyReport()
     }
 
     func canViewDailyOverview() -> Bool {
@@ -2158,8 +2159,10 @@ class UserStore: ObservableObject {
                     }
                     // RULEBOOK 1.31.1 §16 (fourth review B-1): an operatives manager lists only the invitations they
                     // sent, so their query also names `invitedBy` (users id or sign-in email); an admin's names
-                    // `organizationId` + `email` only. A query the rules refuse is skipped; any other failure stops
-                    // the delete before anything is written. `userDeleteWrites` decides what is removed.
+                    // `organizationId` + `email` only (RULEBOOK 1.32.0 `invitationListConstraints`, the email as stored,
+                    // both forms). A query the rules refuse is skipped (`invitationReadErrorIsSkippable`, in
+                    // `InvitationDocument.fetch`); any other failure stops the delete before anything is written.
+                    // `userDeleteWrites` decides what is removed.
                     let invitationLookups = InvitationDocument.lookupsForSignedInUser(
                         organizationId: organizationId,
                         email: emailRaw,

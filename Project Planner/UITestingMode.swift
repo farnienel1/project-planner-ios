@@ -151,6 +151,7 @@ enum UITestingMode {
                     wholesalersOrderHistory: true
                 ),
                 policyAccepted: true,
+                legalPackVersion: CustomerLegalPack.version,
                 employmentType: .selfEmployed,
                 timesheetsEnabled: true
             )
@@ -169,6 +170,7 @@ enum UITestingMode {
                     siteAudit: true
                 ),
                 policyAccepted: true,
+                legalPackVersion: CustomerLegalPack.version,
                 assignedManagerUserId: "uitest-manager",
                 assignedManagerUserIds: ["uitest-manager"],
                 employmentType: .selfEmployed,
@@ -199,6 +201,7 @@ enum UITestingMode {
                 ),
                 isSuperAdmin: true,
                 policyAccepted: true,
+                legalPackVersion: CustomerLegalPack.version,
                 employmentType: .selfEmployed,
                 timesheetsEnabled: true
             )

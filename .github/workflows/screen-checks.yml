@@ -1,0 +1,98 @@
+name: Screen checks
+
+# Launches the app in an iPhone simulator on seeded TEST data (no Firebase) and runs the release screen checks
+# (ProjectPlannerUITests/Release1320ScreenChecksTests: test session Part A). Screenshots are uploaded as the
+# "screen-checks" artifact, so the screens can be reviewed without opening Xcode.
+
+on:
+  push:
+    branches: ['rulebook-*']
+    paths:
+      - 'Project Planner/**'
+      - 'ProjectPlannerUITests/**'
+      - '.github/workflows/screen-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: screen-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screen-checks:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$xcode" ]; then echo "::error::No Xcode 26 on this runner image"; ls -d /Applications/Xcode*.app; exit 1; fi
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+      - name: Run the screen checks
+        run: |
+          sim=$(xcrun simctl list devices available -j | node -e '
+            const d=JSON.parse(require("fs").readFileSync(0,"utf8")).devices;
+            const ios=Object.keys(d).filter(k=>k.includes("iOS")).sort().reverse();
+            for (const k of ios) { const p=d[k].find(x=>x.name==="iPhone 16e")||d[k].find(x=>x.name.startsWith("iPhone")); if (p) { console.log(p.udid); break; } }')
+          echo "Simulator: $sim"
+          set +e
+          xcodebuild test \
+            -project "Project Planner.xcodeproj" \
+            -scheme "Project Planner" \
+            -testPlan ProjectPlanner-Full \
+            -destination "platform=iOS Simulator,id=$sim" \
+            -only-testing:ProjectPlannerUITests/Release1320ScreenChecksTests \
+            -parallel-testing-enabled NO \
+            -resultBundlePath ScreenChecks.xcresult \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild.log
+          status=${PIPESTATUS[0]}
+          echo "::group::Compiler errors (file:line)"
+          grep -E "^/.*:[0-9]+:[0-9]+: error:" xcodebuild.log | sed 's#^/Users/runner/work/project-planner-ios/project-planner-ios/##' | sort -u | head -100 || true
+          echo "::endgroup::"
+          echo "::group::Check results"
+          grep -E "Test Case .*(passed|failed)|error: -\[" xcodebuild.log | sort -u | head -100 || true
+          echo "::endgroup::"
+          exit "$status"
+      - name: Export screenshots
+        if: always()
+        run: |
+          mkdir -p screenshots
+          if [ -d ScreenChecks.xcresult ]; then
+            xcrun xcresulttool export attachments --path ScreenChecks.xcresult --output-path screenshots > /dev/null || true
+          fi
+          echo "$(ls screenshots | wc -l) files exported"
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-checks
+          path: |
+            screenshots
+            xcodebuild.log
+          if-no-files-found: warn
+      - name: Results (pass / fail and why)
+        if: always()
+        run: |
+          [ -d ScreenChecks.xcresult ] || { echo "No result bundle (the build or launch failed; see the Run step)."; exit 0; }
+          xcrun xcresulttool get test-results tests --path ScreenChecks.xcresult > results.json || { echo "xcresulttool could not read the results"; exit 0; }
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("results.json", "utf8"));
+            const out = [];
+            const walk = (n) => {
+              if (n.nodeType === "Test Case") {
+                const msgs = [];
+                const grab = (c) => { if (c.nodeType === "Failure Message") msgs.push(c.name); (c.children || []).forEach(grab); };
+                (n.children || []).forEach(grab);
+                out.push(`${n.result === "Passed" ? "PASS" : "FAIL"}  ${n.name}${msgs.length ? "\n        " + msgs.join("\n        ") : ""}`);
+              }
+              (n.children || []).forEach(walk);
+            };
+            (r.testNodes || []).forEach(walk);
+            const text = out.join("\n");
+            console.log(text);
+            if (process.env.GITHUB_STEP_SUMMARY) require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## Screen checks\n```\n" + text + "\n```\n");
+          '

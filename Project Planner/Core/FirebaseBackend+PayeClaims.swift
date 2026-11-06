@@ -20,6 +20,28 @@ nonisolated struct PayeClaimRefused: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// Rows of several `userId ==` listeners merged in id order (plumbing only, no rule): the latest rows per id.
+@MainActor
+final class PayeClaimListenerMerge<Row> {
+    /// The ids, empty ones dropped and each listed once (as web's `Array.from(new Set(ids.filter(Boolean)))`).
+    let ids: [String]
+    private var byId: [String: [Row]] = [:]
+
+    init(ids: [String]) {
+        var seen = Set<String>()
+        self.ids = ids.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    func set(_ id: String, _ rows: [Row]) { byId[id] = rows }
+
+    func rows() -> [Row] { ids.flatMap { byId[$0] ?? [] } }
+
+    func rows(uniqueBy key: (Row) -> String) -> [Row] {
+        var seen = Set<String>()
+        return rows().filter { seen.insert(key($0)).inserted }
+    }
+}
+
 extension FirebaseBackend {
     private func payeClaimsOrganizationRef() throws -> DocumentReference {
         guard let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else {
@@ -59,6 +81,79 @@ extension FirebaseBackend {
             }
             Task { @MainActor in onChange(rows) }
         }
+    }
+
+    /// RULEBOOK 1.32.0 (`overtimePersonIds`): live items of one person under every id they go by, one `userId ==` query
+    /// per id, merged in id order (web `listenPersonPayeClaims`). The first id is the person's users id and its error is
+    /// reported; a refused read under another id (a line manager may read only the users id they manage — those items
+    /// need an admin, decision A) is left out silently.
+    func listenPersonPayeClaims(
+        userIds: [String],
+        kind: PayeClaimKind,
+        onChange: @escaping ([PayeClaimItem]) -> Void,
+        onError: @escaping (Error) -> Void
+    ) -> [ListenerRegistration] {
+        let merge = PayeClaimListenerMerge<PayeClaimItem>(ids: userIds)
+        var registrations: [ListenerRegistration] = []
+        for (index, id) in merge.ids.enumerated() {
+            let registration = listenPayeClaims(
+                userId: id,
+                kind: kind,
+                onChange: { rows in
+                    merge.set(id, rows)
+                    onChange(merge.rows(uniqueBy: \.id))
+                },
+                onError: { error in
+                    if index == 0 {
+                        onError(error)
+                    } else {
+                        merge.set(id, [])
+                        onChange(merge.rows(uniqueBy: \.id))
+                    }
+                }
+            )
+            if let registration { registrations.append(registration) }
+        }
+        return registrations
+    }
+
+    /// RULEBOOK 1.32.0 §26 (LIVE_COLLECTIONS `payeClaimReviews`: listen while the screen is open): live reviews of one
+    /// person's price work and expenses under every id they go by, read through `parsePayeClaimReviewDocument`
+    /// (web `listenPayeClaimReviews`). A refused read under an id is left out.
+    func listenPayeClaimReviews(
+        userIds: [String],
+        onChange: @escaping ([PayeClaimReviewRecord]) -> Void
+    ) -> [ListenerRegistration] {
+        guard let org = try? payeClaimsOrganizationRef() else { return [] }
+        let merge = PayeClaimListenerMerge<PayeClaimReviewRecord>(ids: userIds)
+        let collection = CanonicalBusinessEngine.payeClaimReviewsCollection
+        return merge.ids.map { id in
+            org.collection(collection).whereField("userId", isEqualTo: id).addSnapshotListener { snapshot, error in
+                let rows: [PayeClaimReviewRecord] = error != nil ? [] : (snapshot?.documents ?? []).compactMap { doc in
+                    CanonicalBusinessEngine.parsePayeClaimReviewDocument(docId: doc.documentID, data: doc.data())
+                }
+                Task { @MainActor in
+                    merge.set(id, rows)
+                    onChange(merge.rows())
+                }
+            }
+        }
+    }
+
+    /// RULEBOOK 1.32.0 §26 Approve: every review of `payeClaimReviewWrites` in one batch, each with `reviewedAt` (server
+    /// time) and the write metadata (web `savePayeClaimReviews`). Nothing is written when there are no writes.
+    func savePayeClaimReviews(_ writes: [PayeClaimReviewWrite]) async throws {
+        guard !writes.isEmpty else { return }
+        let org = try payeClaimsOrganizationRef()
+        guard let uid = payeClaimsUid else { throw PayeClaimRefused(message: "You must be signed in.") }
+        let collection = CanonicalBusinessEngine.payeClaimReviewsCollection
+        let batch = db.batch()
+        for write in writes {
+            var fields = write.fields
+            fields["reviewedAt"] = FieldValue.serverTimestamp()
+            batch.setData(WriteMetadata.stamped(fields, userId: uid), forDocument: org.collection(collection).document(write.docId))
+        }
+        try await batch.commit()
     }
 
     /// Saved report copies of one person (`parsePayeClaimReportDocument`). `listen: false`: read on open.

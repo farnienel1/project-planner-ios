@@ -1,5 +1,15 @@
 import SwiftUI
 
+extension UserStore {
+    /// RULEBOOK 1.32.0 §7, §11 (owner decision 5 Nov) `CanonicalBusinessEngine.canOpenWeeklyReport`: the signed-in
+    /// (display) person may open the Weekly report — admins and super admins only, never in operative mode. Every way in
+    /// (Home quick action, the launch shell) asks this; nothing is optimistic while the profile loads.
+    func canOpenWeeklyReport() -> Bool {
+        guard !isOperativeMode(), let user = displayUser else { return false }
+        return user.canOpenWeeklyReport
+    }
+}
+
 /// Stable sheet token — identity fixed at tap time so Home re-renders do not rebuild the sheet.
 struct WeeklyReportLaunchToken: Identifiable {
     let id: UUID
@@ -101,6 +111,12 @@ struct WeeklyReportOpenShell: View {
             WarningsRefreshHelper.cancelInFlightRefresh(replayIfBookingData: true)
             await WarningsRefreshHelper.prepareForHeavySheet()
             print("🔥🔥🔥 DEBUG: WEEKLY_REPORT_SETTLED")
+            // RULEBOOK 1.32.0 §7, §11: the page itself asks `canOpenWeeklyReport` (a launch begun while the profile
+            // was loading, or after a demotion, closes instead of opening).
+            guard token.userStore.canOpenWeeklyReport() else {
+                dismiss()
+                return
+            }
             phase = .report
         }
         .onDisappear {

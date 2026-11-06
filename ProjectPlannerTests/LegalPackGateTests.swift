@@ -60,14 +60,14 @@ final class LegalPackGateTests: XCTestCase {
 
     func testAcceptanceWriteStoresPolicyAcceptedAndTheWebShape() throws {
         let at = Date(timeIntervalSince1970: 1_793_000_000)
-        let write = FirebaseBackend.legalPackAcceptanceWrite(
+        let write = try XCTUnwrap(FirebaseBackend.legalPackAcceptanceWrite(
             userId: "TEST-uid",
             email: "test-gate@example.com",
             organizationName: "TEST Org",
             authorisedToBind: true,
             acceptedAt: at,
             signedInUserId: "TEST-uid"
-        )
+        ), "RULEBOOK 1.32.0 legalPackAcceptanceWriteFields answered")
         XCTAssertEqual(write["policyAccepted"] as? Bool, true, "legalPackNeedsAcceptance reads policyAccepted first")
         XCTAssertEqual((write["policyAcceptedAt"] as? Timestamp)?.dateValue(), at)
         XCTAssertEqual(write["legalPackVersion"] as? String, CustomerLegalPack.version)
@@ -91,11 +91,11 @@ final class LegalPackGateTests: XCTestCase {
         )
     }
 
-    func testAcceptanceWriteReadBackClosesTheGate() {
-        let write = FirebaseBackend.legalPackAcceptanceWrite(
+    func testAcceptanceWriteReadBackClosesTheGate() throws {
+        let write = try XCTUnwrap(FirebaseBackend.legalPackAcceptanceWrite(
             userId: "TEST-uid", email: "test-gate@example.com", organizationName: "TEST Org",
             authorisedToBind: false, acceptedAt: Date(), signedInUserId: "TEST-uid"
-        )
+        ))
         var stored: [String: Any] = ["email": "test-gate@example.com", "organizationId": "TEST-org", "role": "manager"]
         for (key, value) in write where !(value is FieldValue) { stored[key] = value }
         let parsed = FirebaseBackend.parseAppUserDocument(userId: "TEST-uid", data: stored, annualLeaveDefaults: nil)

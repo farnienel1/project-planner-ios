@@ -16,8 +16,10 @@ struct OrganisationInvoicingSettingsView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var didLoad = false
+    /// RULEBOOK 1.32.0 §4.5: the unsaved PAYE payday pick (nil: unchanged), saved by this screen's main Save.
+    @State private var paydayPick: Int?
 
-    private var isDirty: Bool { draft != baseline }
+    private var isDirty: Bool { draft != baseline || paydayPick != nil }
 
     /// `validateInvoicingSettings` on the draft, shown inline (e.g. run 1 must end by the 27th).
     private var inlineValidationError: String? {
@@ -143,7 +145,7 @@ struct OrganisationInvoicingSettingsView: View {
                         .padding(.vertical, 8)
                 }
 
-                // RULEBOOK 1.29.0 §4.5: the PAYE payday, saved on its own (not part of the payment-run draft).
+                // RULEBOOK 1.32.0 §4.5: the PAYE payday is part of this screen's draft and saved by its main Save.
                 numberedStep(
                     6,
                     title: "PAYE payday",
@@ -153,7 +155,7 @@ struct OrganisationInvoicingSettingsView: View {
                     )
                 )
                 SettingsHubChrome.card {
-                    PayePaydayCard(isOnline: smartCache.isOnline)
+                    payePaydaySection
                 }
 
                 if errorMessage == nil, let inlineValidationError {
@@ -193,6 +195,7 @@ struct OrganisationInvoicingSettingsView: View {
         }
         .settingsUnsavedLeave(isDirty: isDirty) {
             draft = baseline
+            paydayPick = nil
             dismiss()
         }
         .onAppear {
@@ -229,6 +232,63 @@ struct OrganisationInvoicingSettingsView: View {
         .onChange(of: draft.recurringRunEndDay) { _, _ in
             draft.refreshRecurringSummaryFromDays()
         }
+    }
+
+    /// RULEBOOK 1.32.0 §4.5: the PAYE payday — the current payrun (`payePayrunPeriod`), any dated change
+    /// (`payePaydayHistory`), the banner while none is set (`payePaydayBanner`) and the pick, saved by the main Save.
+    /// This screen is reached from the admin-only Organisation Settings Hub, so the viewer is an admin.
+    @ViewBuilder
+    private var payePaydaySection: some View {
+        let org = OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization)
+        let today = OrganizationRulebookContext.dayKey(Date())
+        let saved = CanonicalBusinessEngine.payePayday(org)
+        let current = CanonicalBusinessEngine.payePayrunPeriod(org, dayKey: today)
+        let pending = CanonicalBusinessEngine.payePaydayHistory(org).filter { $0.effectiveFrom > today }.last
+        let banner = CanonicalBusinessEngine.payePaydayBanner(
+            organization: org,
+            loaded: firebaseBackend.currentOrganization != nil,
+            viewerIsAdmin: true
+        )
+        let shown = paydayPick ?? saved
+        VStack(alignment: .leading, spacing: 10) {
+            if let banner {
+                PayePaydayBannerText(text: banner)
+            }
+            Text(current.map { CanonicalBusinessEngine.payePayrunLabel($0) } ?? "No PAYE payday set.")
+                .font(.subheadline)
+            if let pending {
+                Text("Changes to day \(pending.day) from \(CanonicalBusinessEngine.formatPayePayrunDay(pending.effectiveFrom)).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Picker(
+                CanonicalBusinessEngine.overtimeText("PAYE_PAYDAY_CONTROL_LABEL", fallback: "Set PAYE payday"),
+                selection: Binding<Int>(
+                    get: { shown ?? 0 },
+                    set: { (day: Int) in
+                        let isSaved: Bool = saved.map { $0 == day } ?? false
+                        paydayPick = (day == 0 || isSaved) ? nil : day
+                    }
+                )
+            ) {
+                if saved == nil {
+                    Text("Not set").tag(0)
+                }
+                ForEach(1...31, id: \.self) { day in Text("Day \(day)").tag(day) }
+            }
+            .accessibilityIdentifier("payePayday.picker")
+            if let shown, shown >= 29 {
+                Text("In shorter months the payday is the last day of the month.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            if paydayPick != nil {
+                Text("Press Save to apply it from the next PAYE payrun.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 12)
     }
 
     @ViewBuilder
@@ -893,14 +953,41 @@ struct OrganisationInvoicingSettingsView: View {
             errorMessage = message
             return
         }
+        if let paydayPick, let message = CanonicalBusinessEngine.payePaydayValidationError(paydayPick) {
+            errorMessage = message
+            return
+        }
 
         do {
-            try await firebaseBackend.updateOrganizationInvoicingSettings(draft)
+            try await firebaseBackend.updateOrganizationInvoicingSettings(draft, payePayday: paydayPick)
             await notificationService.refreshTimesheetSubmissionReminders()
             baseline = draft
+            paydayPick = nil
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+/// The PAYE payday banner (`payePaydayBanner`'s text), shown on Payment runs & timesheets and the Settings hub.
+struct PayePaydayBannerText: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(PPColor.warningAmber)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(Color.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(PPColor.well)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("payePayday.banner")
     }
 }
 

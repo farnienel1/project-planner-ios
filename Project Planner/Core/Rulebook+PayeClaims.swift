@@ -7,6 +7,8 @@
 //  called through `CanonicalBusinessEngine.callJSON`. Every validation message, write shape, reader, range, total,
 //  permission, report row and evidence rule comes from the packed script; Swift only builds the inputs and reads the
 //  answers. Nothing is decided here.
+//  RULEBOOK 1.32.0 §26 (`payeClaimReviews.ts`): the review — `canReviewPayeClaims`, `payeClaimFingerprint`,
+//  `parsePayeClaimReviewDocument`, `payeClaimReviewState`, `payeClaimReviewWrites`, `payeClaimReviewOutcomeLabel`.
 //
 
 import Foundation
@@ -187,6 +189,43 @@ nonisolated struct PersonalSiteAuditPdfRows: Codable, Hashable, Sendable {
     var title: String
     var lines: [String]
     var items: [Item]
+}
+
+/// `parsePayeClaimReviewDocument` (1.32.0): one review per item, `payeClaimReviews/{kind}_{itemId}`.
+nonisolated struct PayeClaimReviewRecord: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var userId: String
+    var itemId: String
+    /// `priceWork` | `expense`.
+    var kind: String
+    /// `approved` | `rejected`.
+    var decision: String
+    var fingerprint: String
+    var reviewedBy: String?
+    var reviewedAtMs: Double?
+}
+
+/// `payeClaimReviewState(item, reviews)`: `needsReview` | `approved` | `rejected`, its label, and the review it came from.
+nonisolated struct PayeClaimReviewStateResult: Codable, Hashable, Sendable {
+    var state: String
+    var label: String
+    var review: PayeClaimReviewRecord?
+}
+
+/// One `payeClaimReviewWrites` write: the document id and the rulebook's fields (the app adds `reviewedAt` and metadata).
+nonisolated struct PayeClaimReviewWrite: @unchecked Sendable {
+    var docId: String
+    var fields: [String: Any]
+}
+
+/// `payeClaimReviewWrites(...)`: the writes, the per-item outcome (`applied` | `undecided` | `needsAdmin` | `foreign` |
+/// `unchanged`), the counts and the `reviewApprovalMessage`.
+nonisolated struct PayeClaimReviewPlan: @unchecked Sendable {
+    var writes: [PayeClaimReviewWrite]
+    var outcomes: [String: String]
+    var approved: Int
+    var rejected: Int
+    var message: String
 }
 
 /// The two claim kinds (`PAYE_CLAIM_KINDS`); the raw value is the script's.
@@ -436,6 +475,74 @@ extension CanonicalBusinessEngine {
     /// `canWritePayeClaim(viewerId, item)`: only the person writes their own items.
     nonisolated static func canWritePayeClaim(viewerId: String, itemUserId: String) -> Bool {
         callJSON("canWritePayeClaim", arguments: [viewerId, ["userId": itemUserId]]) as? Bool ?? false
+    }
+
+    // MARK: Review (1.32.0, `payeClaimReviews.ts`)
+
+    /// `PAYE_CLAIM_REVIEWS_COLLECTION`.
+    nonisolated static var payeClaimReviewsCollection: String {
+        payeClaimText("PAYE_CLAIM_REVIEWS_COLLECTION", fallback: "payeClaimReviews")
+    }
+
+    /// `canReviewPayeClaims(viewer, subject, roster)`: the person's active line managers and active admins outside
+    /// operative mode, never the person under any of their ids.
+    nonisolated static func canReviewPayeClaims(viewer: [String: Any], subject: [String: Any], roster: [[String: Any]]) -> Bool {
+        callJSON("canReviewPayeClaims", arguments: [viewer, subject, roster]) as? Bool ?? false
+    }
+
+    /// `payeClaimFingerprint(item)`: kind, name, job number, dates, figure, currency and evidence count. Empty when the
+    /// script did not answer.
+    nonisolated static func payeClaimFingerprint(_ item: PayeClaimItem) -> String {
+        guard let json = RulebookJSON.object(item) else { return "" }
+        return callJSON("payeClaimFingerprint", arguments: [json]) as? String ?? ""
+    }
+
+    /// `parsePayeClaimReviewDocument(docId, data)`: never refuses a document (an unknown decision reads as rejected).
+    nonisolated static func parsePayeClaimReviewDocument(docId: String, data: [String: Any]) -> PayeClaimReviewRecord? {
+        let json = FirebaseBackend.firestoreJSON(data) as? [String: Any] ?? [:]
+        return RulebookJSON.decode(PayeClaimReviewRecord.self, from: callJSON("parsePayeClaimReviewDocument", arguments: [docId, json]))
+    }
+
+    /// `payeClaimReviewState(item, reviews)`: the review at the item's current fingerprint, else Needs review.
+    nonisolated static func payeClaimReviewState(_ item: PayeClaimItem, reviews: [PayeClaimReviewRecord]) -> PayeClaimReviewStateResult? {
+        guard let json = RulebookJSON.object(item), let list = RulebookJSON.object(reviews) else { return nil }
+        return RulebookJSON.decode(PayeClaimReviewStateResult.self, from: callJSON("payeClaimReviewState", arguments: [json, list]))
+    }
+
+    /// `payeClaimReviewWrites({ items, decisions, reviews, subjectUserId, personIds, reviewerId, reviewerIsAdmin })`:
+    /// Approve's review writes (one per decided item the reviewer may write) and the "Approved X of Y" message.
+    /// `decisions` maps an item id to `approved` | `rejected`. Nil when the script did not answer.
+    nonisolated static func payeClaimReviewWrites(
+        items: [PayeClaimItem],
+        decisions: [String: String],
+        reviews: [PayeClaimReviewRecord],
+        subjectUserId: String,
+        personIds: [String],
+        reviewerId: String,
+        reviewerIsAdmin: Bool
+    ) -> PayeClaimReviewPlan? {
+        guard let itemList = RulebookJSON.object(items), let reviewList = RulebookJSON.object(reviews) else { return nil }
+        let input: [String: Any] = [
+            "items": itemList, "decisions": decisions, "reviews": reviewList, "subjectUserId": subjectUserId,
+            "personIds": personIds, "reviewerId": reviewerId, "reviewerIsAdmin": reviewerIsAdmin,
+        ]
+        guard let answer = callJSON("payeClaimReviewWrites", arguments: [input]) as? [String: Any] else { return nil }
+        let writes = (answer["writes"] as? [[String: Any]] ?? []).compactMap { row -> PayeClaimReviewWrite? in
+            guard let docId = row["docId"] as? String, let fields = row["fields"] as? [String: Any] else { return nil }
+            return PayeClaimReviewWrite(docId: docId, fields: fields)
+        }
+        return PayeClaimReviewPlan(
+            writes: writes,
+            outcomes: answer["outcomes"] as? [String: String] ?? [:],
+            approved: (answer["approved"] as? NSNumber)?.intValue ?? 0,
+            rejected: (answer["rejected"] as? NSNumber)?.intValue ?? 0,
+            message: answer["message"] as? String ?? ""
+        )
+    }
+
+    /// `payeClaimReviewOutcomeLabel(outcome)`: "Needs an admin" / "Not theirs — left out.", else nil.
+    nonisolated static func payeClaimReviewOutcomeLabel(_ outcome: String?) -> String? {
+        callJSON("payeClaimReviewOutcomeLabel", arguments: [RulebookJSON.orNull(outcome)]) as? String
     }
 
     /// `timesheetClaimRows(sheets, kind, range)`: `sheets` are `{ id, entries }` with `entries` from
