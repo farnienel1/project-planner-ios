@@ -4,7 +4,9 @@ import XCTest
 /// RULEBOOK 1.32.0 §26 on iOS through `CanonicalBusinessEngine` (`Rulebook+PayeClaims.swift`, web
 /// `lib/canonical/payeClaimReviews.ts`): who reviews price work and expenses (`canReviewPayeClaims`), the item fingerprint
 /// (`payeClaimFingerprint`), the review reader (`parsePayeClaimReviewDocument`), an item's state (`payeClaimReviewState`),
-/// Approve's writes and message (`payeClaimReviewWrites`) and the "Needs an admin" label (`payeClaimReviewOutcomeLabel`).
+/// Approve's writes and message (`payeClaimReviewWrites`) and the per-item label (`payeClaimReviewOutcomeLabel`).
+/// RULEBOOK 1.33.0 §26: a line manager can always review (no "Needs an admin", no `reviewerIsAdmin`); a review of an item
+/// filed under another of the person's ids carries `personUserId`, and new items carry `personUserId` (= the creator).
 /// Every answer comes from the packed script; these tests lock the Swift inputs and readings. `overtimePersonIds` is not
 /// called here (the person's ids are passed as the screen would receive them).
 @MainActor
@@ -119,7 +121,7 @@ final class Rulebook1320PayeClaimsTests: XCTestCase {
 
     // MARK: Approve
 
-    func testApproveWritesDecidedItemsAndLeavesOlderIdItemsToAnAdmin() throws {
+    func testALineManagerReviewsEveryIdAndAnOlderIdReviewCarriesPersonUserId() throws {
         let ticked = try expense("TEST-E1")
         let olderId = try expense("TEST-E2", userId: "TEST-sam-old")
         let undecided = try expense("TEST-E3")
@@ -130,10 +132,9 @@ final class Rulebook1320PayeClaimsTests: XCTestCase {
             reviews: [],
             subjectUserId: "TEST-sam",
             personIds: ["TEST-sam", "TEST-sam-old"],
-            reviewerId: "TEST-mia",
-            reviewerIsAdmin: false
+            reviewerId: "TEST-mia"
         ))
-        XCTAssertEqual(plan.writes.map(\.docId), ["expense_TEST-E1"])
+        XCTAssertEqual(plan.writes.map(\.docId), ["expense_TEST-E1", "expense_TEST-E2"], "the line manager reviews items under older ids too")
         let fields = try XCTUnwrap(plan.writes.first?.fields)
         XCTAssertEqual(fields["userId"] as? String, "TEST-sam")
         XCTAssertEqual(fields["itemId"] as? String, "TEST-E1")
@@ -142,28 +143,42 @@ final class Rulebook1320PayeClaimsTests: XCTestCase {
         XCTAssertEqual(fields["fingerprint"] as? String, CanonicalBusinessEngine.payeClaimFingerprint(ticked))
         XCTAssertEqual(fields["reviewedBy"] as? String, "TEST-mia")
         XCTAssertEqual(Set(fields.keys), ["userId", "itemId", "kind", "decision", "fingerprint", "reviewedBy"],
-                       "the app adds reviewedAt and metadata; the rules allow nothing else")
-        XCTAssertEqual(plan.outcomes, ["TEST-E1": "applied", "TEST-E2": "needsAdmin", "TEST-E3": "undecided", "TEST-E4": "foreign"])
+                       "an item under the person's own id carries no personUserId; the app adds reviewedAt and metadata")
+        let older = try XCTUnwrap(plan.writes.last?.fields)
+        XCTAssertEqual(older["userId"] as? String, "TEST-sam-old", "the review names the id the item is filed under")
+        XCTAssertEqual(older["personUserId"] as? String, "TEST-sam", "and the person's current users id, for the rules")
+        XCTAssertEqual(plan.outcomes, ["TEST-E1": "applied", "TEST-E2": "applied", "TEST-E3": "undecided", "TEST-E4": "foreign"])
+        XCTAssertFalse(plan.outcomes.values.contains("needsAdmin"))
         XCTAssertEqual(plan.approved, 1)
-        XCTAssertEqual(plan.rejected, 0)
-        XCTAssertEqual(plan.message, "Approved 1 of 3. 1 needs an admin; 1 not decided yet.")
+        XCTAssertEqual(plan.rejected, 1)
+        XCTAssertEqual(plan.message, "Approved 1 of 3. 1 rejected; 1 not decided yet.")
 
-        XCTAssertEqual(CanonicalBusinessEngine.payeClaimReviewOutcomeLabel(plan.outcomes["TEST-E2"]), "Needs an admin")
+        XCTAssertEqual(CanonicalBusinessEngine.payeClaimReviewOutcomeLabel(plan.outcomes["TEST-E4"]), "Not theirs — left out.")
+        XCTAssertNil(CanonicalBusinessEngine.payeClaimReviewOutcomeLabel(plan.outcomes["TEST-E2"]))
         XCTAssertNil(CanonicalBusinessEngine.payeClaimReviewOutcomeLabel(plan.outcomes["TEST-E1"]))
         XCTAssertNil(CanonicalBusinessEngine.payeClaimReviewOutcomeLabel(nil))
 
-        let byAdmin = try XCTUnwrap(CanonicalBusinessEngine.payeClaimReviewWrites(
-            items: [ticked, olderId],
-            decisions: ["TEST-E1": "approved", "TEST-E2": "rejected"],
-            reviews: [],
-            subjectUserId: "TEST-sam",
-            personIds: ["TEST-sam", "TEST-sam-old"],
-            reviewerId: "TEST-ada",
-            reviewerIsAdmin: true
+        // The reader keeps personUserId (null when not stored).
+        let review = try XCTUnwrap(CanonicalBusinessEngine.parsePayeClaimReviewDocument(docId: "expense_TEST-E2", data: older))
+        XCTAssertEqual(review.personUserId, "TEST-sam")
+        XCTAssertNil(ticked.personUserId, "an item stored before 1.33.0 has none")
+    }
+
+    func testNewItemsCarryTheCreatorAsPersonUserId() throws {
+        let path = try XCTUnwrap(CanonicalBusinessEngine.payeClaimEvidencePath(organizationId: org, userId: "TEST-sam", unixMs: 1_762_250_000_000, fileExtension: "pdf"))
+        let expense = try XCTUnwrap(CanonicalBusinessEngine.expenseWriteFields(
+            userId: "TEST-sam",
+            draft: [
+                "title": "TEST-Fuel", "details": "", "jobNumber": "J-1", "date": "2026-11-04", "amount": "20",
+                "evidence": [["path": path, "name": "a.pdf", "kind": "file", "contentType": "application/pdf", "auditId": NSNull()]],
+            ],
+            currency: "GBP",
+            organizationId: org
         ))
-        XCTAssertEqual(byAdmin.writes.map(\.docId), ["expense_TEST-E1", "expense_TEST-E2"], "an admin applies items under older ids")
-        XCTAssertEqual(byAdmin.writes.last?.fields["userId"] as? String, "TEST-sam-old", "the review names the id the item is filed under")
-        XCTAssertEqual(byAdmin.rejected, 1)
+        XCTAssertEqual(expense["personUserId"] as? String, "TEST-sam", "payeClaimPersonFields: the creator's own uid")
+        XCTAssertEqual(expense["userId"] as? String, "TEST-sam")
+        let stored = try XCTUnwrap(CanonicalBusinessEngine.parsePayeClaimDocument(kind: .expense, docId: "TEST-E9", data: expense, organizationId: org))
+        XCTAssertEqual(stored.personUserId, "TEST-sam")
     }
 
     func testAnUnchangedDecisionIsNotWrittenAgainAndNothingDecidedSavesNothing() throws {
@@ -174,14 +189,14 @@ final class Rulebook1320PayeClaimsTests: XCTestCase {
         ]))
         let same = try XCTUnwrap(CanonicalBusinessEngine.payeClaimReviewWrites(
             items: [item], decisions: ["TEST-E1": "approved"], reviews: [review],
-            subjectUserId: "TEST-sam", personIds: ["TEST-sam"], reviewerId: "TEST-mia", reviewerIsAdmin: false
+            subjectUserId: "TEST-sam", personIds: ["TEST-sam"], reviewerId: "TEST-mia"
         ))
         XCTAssertTrue(same.writes.isEmpty)
         XCTAssertEqual(same.outcomes["TEST-E1"], "unchanged")
 
         let nothing = try XCTUnwrap(CanonicalBusinessEngine.payeClaimReviewWrites(
             items: [], decisions: [:], reviews: [],
-            subjectUserId: "TEST-sam", personIds: [], reviewerId: "TEST-mia", reviewerIsAdmin: true
+            subjectUserId: "TEST-sam", personIds: [], reviewerId: "TEST-mia"
         ))
         XCTAssertTrue(nothing.writes.isEmpty)
         XCTAssertEqual(nothing.message, "Nothing was approved.")
@@ -196,5 +211,11 @@ final class Rulebook1320PayeClaimsTests: XCTestCase {
         merge.set("TEST-a", ["z", "x"])
         XCTAssertEqual(merge.rows(), ["z", "x", "x", "y"])
         XCTAssertEqual(merge.rows(uniqueBy: { $0 }), ["z", "x", "y"])
+        // 1.33.0: the `personUserId ==` query is one more key, merged after the ids.
+        merge.add("personUserId:TEST-a")
+        merge.add("personUserId:TEST-a")
+        XCTAssertEqual(merge.ids, ["TEST-a", "TEST-b", "personUserId:TEST-a"])
+        merge.set("personUserId:TEST-a", ["w", "y"])
+        XCTAssertEqual(merge.rows(uniqueBy: { $0 }), ["z", "x", "y", "w"])
     }
 }

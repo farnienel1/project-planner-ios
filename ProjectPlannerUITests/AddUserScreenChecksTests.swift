@@ -48,7 +48,11 @@ final class AddUserScreenChecksTests: PPUITestCase {
         guard row.exists else { return }
         waitUntilSettled(row)
         row.tap()
-        assertExists("addUser.cancel", timeout: 8)
+        // A slow simulator can swallow the first tap while the More list settles (Pro Max, AU02 on #202):
+        // wait longer, and tap the row once more if Add User has not opened.
+        if element("addUser.cancel").waitForExistence(timeout: 12) { return }
+        if row.exists, row.isHittable { row.tap() }
+        assertExists("addUser.cancel", timeout: 12)
     }
 
     /// Manager with the Operatives permission: Operatives → + (AddUserView `.managerAddingOperative`).
@@ -70,8 +74,11 @@ final class AddUserScreenChecksTests: PPUITestCase {
         assertExists("addUser.cancel", timeout: 8)
     }
 
+    /// A cold CI simulator can take 30s+ to settle (first test of a run on the SE), so Next waits for the
+    /// button to stop moving before it taps.
     private func next() {
-        let button = waitFor("addUser.creating")
+        let button = waitFor("addUser.creating", timeout: 10)
+        waitUntilSettled(button)
         XCTAssertTrue(button.isEnabled, "Next is disabled where it should be enabled")
         button.tap()
     }
@@ -117,6 +124,10 @@ final class AddUserScreenChecksTests: PPUITestCase {
                 XCTFail("\(tag): the Line managers sheet listed nobody")
             }
             tap("lineManagersMultiSelect.done")
+            // Wait for the sheet to finish closing, so the next tap reaches the form, not the sheet.
+            let done = element("lineManagersMultiSelect.done")
+            let closeBy = Date().addingTimeInterval(10)
+            while done.exists && Date() < closeBy { Thread.sleep(forTimeInterval: 0.25) }
             assertExists("addUser.chevronRight", timeout: 5)
             assertNotExists("addUser.blockingMessage")
         }
@@ -124,12 +135,12 @@ final class AddUserScreenChecksTests: PPUITestCase {
         next()
 
         // Step 3: Access
-        assertExists("permissionToggle.chevronDown", timeout: 5)
+        assertExists("permissionToggle.chevronDown", timeout: 15)
         if expectsIncluded {
-            assertExists("permissionToggle.included")
+            assertExists("permissionToggle.included", timeout: 10)
         }
         shot("\(tag) 3 Access modules")
-        scrollTo("addUser.annualLeaveAllowance", timeout: 8)
+        scrollTo("addUser.annualLeaveAllowance", timeout: 15)
         shot("\(tag) 3 Access annual leave")
         next()
 

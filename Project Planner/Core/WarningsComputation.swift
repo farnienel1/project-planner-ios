@@ -1037,6 +1037,13 @@ enum WarningsComputation {
     /// Marks a people row that is a folded same-email id, only while ordering; never sent to the script.
     nonisolated static let rosterFoldedIdMarker = "__rosterFoldedId"
 
+    /// Whose scope `unbookedLabourRowsOnDay` applies: the viewer's warnings (Book labour, Warnings) or their Daily
+    /// Overview team (RULEBOOK 1.33.0 §6).
+    enum UnbookedRowsScope {
+        case warnings
+        case dailyOverview
+    }
+
     /// Daily Overview and Book labour for one London day. Same people, bookings, and stored exclusion ids as the warning scan.
     @MainActor
     static func unbookedLabourRowsOnDay(
@@ -1050,7 +1057,8 @@ enum WarningsComputation {
         includeWeekends: Bool,
         excludedUserIds: [String],
         weekendCoverage: OrgWeekendCoverage? = nil,
-        policyState: [String: Any]? = CanonicalBusinessEngine.openOrganizationPayrollPolicyState
+        policyState: [String: Any]? = CanonicalBusinessEngine.openOrganizationPayrollPolicyState,
+        scope: UnbookedRowsScope = .warnings
     ) -> [CanonicalUnbookedLabourRow] {
         let calendar = CanonicalBusinessEngine.businessCalendar
         let dayStart = calendar.startOfDay(for: day)
@@ -1151,17 +1159,25 @@ enum WarningsComputation {
             bookings: shared.bookings.compactMap(unbookedBooking),
             holidays: shared.holidays.compactMap(unbookedHoliday)
         )
-        // RULEBOOK 1.10.0 §17: a restricted viewer's Daily Overview covers only their jobs (`warningScopeFor`, passed
-        // as `scope`). RULEBOOK 1.19.0 §5/§6: the day is read under its own working hours (`payrollPolicy`: the
-        // organisation's policy state) and a Saturday / Sunday against its "Hours to cover" (`weekendCoverage`).
+        // RULEBOOK 1.10.0 §17: a manager's rows are scoped (passed as `scope`): Book labour uses their warning scope
+        // (`warningScopeFor`), Daily Overview their team (`dailyOverviewScopeFor`, 1.33.0 §6) — the same people, so
+        // the two lists match. RULEBOOK 1.19.0 §5/§6: the day is read under its own working hours (`payrollPolicy`:
+        // the organisation's policy state) and a Saturday / Sunday against its "Hours to cover" (`weekendCoverage`).
         guard let encoded = try? JSONEncoder().encode(input),
               var payload = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any] else {
             return CanonicalBusinessEngine.unbookedLabourRowsOnDay(input) ?? []
         }
-        if let scope = WarningScopeSupport.scope(
-            bookings: operativeBookings, managerBookings: managerBookings, users: users, operatives: operatives
-        ) {
-            payload["scope"] = scope
+        let rowScope: [String: Any]?
+        switch scope {
+        case .warnings:
+            rowScope = WarningScopeSupport.scope(
+                bookings: operativeBookings, managerBookings: managerBookings, users: users, operatives: operatives
+            )
+        case .dailyOverview:
+            rowScope = DailyOverviewScopeSupport.scope(users: users, operatives: operatives)
+        }
+        if let rowScope {
+            payload["scope"] = rowScope
         }
         if let policyState { payload["payrollPolicy"] = policyState }
         if let weekendCoverage { payload["weekendCoverage"] = weekendCoverage.asFirestoreDictionary() }

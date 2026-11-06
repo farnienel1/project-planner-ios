@@ -59,7 +59,6 @@ extension Project {
         row["isLive"] = isLive
         row["startDayKey"] = OrganizationRulebookContext.dayKey(startDate)
         row["endDayKey"] = OrganizationRulebookContext.dayKey(endDate)
-        row["hiddenManagerUserIds"] = hiddenManagerUserIds.sorted()
         row["hiddenOperativeUserIds"] = hiddenOperativeUserIds.sorted()
         row["_i"] = index
         return row
@@ -237,5 +236,116 @@ enum WorksListContextBuilder {
             deadlineJobIds: deadlineJobIds,
             bookingCollection: bookingCollection
         )
+    }
+}
+
+// MARK: - My Projects / My Small works (RULEBOOK 1.33.0 §21)
+
+/// `MyWorksPicks`: the person's own pick list per kind. `nil` means never saved (the list is pre-filled with the jobs
+/// they manage, `myWorksDefaultIds`); an empty array is a saved, empty list.
+nonisolated struct MyWorksPicks: Equatable, Sendable {
+    var projects: [String]?
+    var smallWorks: [String]?
+
+    static let neverSaved = MyWorksPicks(projects: nil, smallWorks: nil)
+
+    var json: [String: Any] {
+        ["projects": projects.map { $0 as Any } ?? NSNull(), "smallWorks": smallWorks.map { $0 as Any } ?? NSNull()]
+    }
+}
+
+extension CanonicalBusinessEngine {
+    /// `myWorksPicksPath(organizationId, uid)`: `organizations/{orgId}/worksListPicks/{uid}`. Nil when either id is blank
+    /// or the script did not answer.
+    nonisolated static func myWorksPicksPath(organizationId: String, uid: String) -> String? {
+        let org = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let user = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !org.isEmpty, !user.isEmpty else { return nil }
+        return callJSON("myWorksPicksPath", arguments: [org, user]) as? String
+    }
+
+    /// `parseMyWorksPicks(data)`: a missing document or field is never saved (`nil`). Only the two lists are passed (the
+    /// stored `updatedAt` is a Firestore timestamp). Never saved when the script did not answer.
+    nonisolated static func parseMyWorksPicks(_ data: [String: Any]?) -> MyWorksPicks {
+        var row: [String: Any] = [:]
+        for key in ["projects", "smallWorks"] {
+            if let list = data?[key] as? [Any] { row[key] = list.compactMap { $0 as? String } }
+        }
+        guard let answer = callJSON("parseMyWorksPicks", arguments: [row]) as? [String: Any] else { return .neverSaved }
+        return MyWorksPicks(projects: answer["projects"] as? [String], smallWorks: answer["smallWorks"] as? [String])
+    }
+
+    /// `myWorksPicksWriteFields(kind, ids, updatedAt)`: that kind's list (de-duplicated, capped) and `updatedAt`. The
+    /// caller replaces `updatedAt` with the server timestamp and merges. Nil when the script did not answer.
+    nonisolated static func myWorksPicksWriteFields(kind: JobKind, ids: [String]) -> [String: Any]? {
+        callJSON("myWorksPicksWriteFields", arguments: [kind.rawValue, ids, "updatedAt"]) as? [String: Any]
+    }
+
+    /// `hasMyWorksList(viewer)`: admins, super admins and managers outside operative mode; never operatives.
+    nonisolated static func hasMyWorksList(_ viewer: JobAccessViewer?) -> Bool {
+        guard let viewer else { return false }
+        return callJSON("hasMyWorksList", arguments: [viewer.json]) as? Bool ?? false
+    }
+
+    /// `defaultWorksListTab(viewer)`: `mine` for people with the My list, else `active`.
+    nonisolated static func defaultWorksListTab(_ viewer: JobAccessViewer?) -> String {
+        callJSON("defaultWorksListTab", arguments: [viewer?.json ?? NSNull()]) as? String ?? "active"
+    }
+
+    /// `myWorksTabLabel(kind)`: "My Projects" / "My Small works".
+    nonisolated static func myWorksTabLabel(_ kind: JobKind) -> String {
+        callJSON("myWorksTabLabel", arguments: [kind.rawValue]) as? String ?? (kind == .smallWorks ? "My Small works" : "My Projects")
+    }
+
+    /// `myWorksEmptyTitle(kind)`: "No projects in your list yet" / "No small works in your list yet".
+    nonisolated static func myWorksEmptyTitle(_ kind: JobKind) -> String {
+        callJSON("myWorksEmptyTitle", arguments: [kind.rawValue]) as? String ?? ""
+    }
+
+    /// `myWorksEmptyActionLabel(kind)`: the empty state's button, which opens the ⚙ picker.
+    nonisolated static func myWorksEmptyActionLabel(_ kind: JobKind) -> String {
+        callJSON("myWorksEmptyActionLabel", arguments: [kind.rawValue]) as? String ?? ""
+    }
+
+    /// `myWorksList(jobs, picks, viewer, context, kind)`: the jobs of `kind` the viewer sees whose id is on their list
+    /// (saved picks, else the jobs they manage), every status, in list order. Empty with no viewer or no answer.
+    @MainActor static func myWorksList(
+        _ jobs: [Project],
+        picks: MyWorksPicks,
+        viewer: JobAccessViewer?,
+        context: RulebookWorksListContext,
+        kind: JobKind
+    ) -> [Project] {
+        guard let viewer else { return [] }
+        return worksJobs("myWorksList", jobs: jobs, extra: [picks.json, viewer.json, context.json, kind.rawValue]) ?? []
+    }
+
+    /// `myWorksPickerRows(jobs, picks, viewer, context, kind)`: every job of `kind` the viewer sees, in list order, with
+    /// whether it is on their list. Empty with no viewer or no answer.
+    @MainActor static func myWorksPickerRows(
+        _ jobs: [Project],
+        picks: MyWorksPicks,
+        viewer: JobAccessViewer?,
+        context: RulebookWorksListContext,
+        kind: JobKind
+    ) -> [(job: Project, picked: Bool)] {
+        guard let viewer else { return [] }
+        let rows = jobs.enumerated().map { $0.element.worksListJSON(index: $0.offset) }
+        guard let answer = callJSON(
+            "myWorksPickerRows",
+            arguments: [rows, picks.json, viewer.json, context.json, kind.rawValue]
+        ) as? [[String: Any]] else { return [] }
+        return answer.compactMap { row in
+            guard let job = row["job"] as? [String: Any],
+                  let index = (job["_i"] as? NSNumber)?.intValue,
+                  index >= 0, index < jobs.count else { return nil }
+            return (jobs[index], row["picked"] as? Bool ?? false)
+        }
+    }
+
+    /// `myWorksPicksAfterToggle(current, jobId, picked)`: the list after ticking or unticking one job. `current` when
+    /// the script did not answer.
+    nonisolated static func myWorksPicksAfterToggle(_ current: [String], jobId: String, picked: Bool) -> [String] {
+        callJSON("myWorksPicksAfterToggle", arguments: [current, jobId, picked]) as? [String] ?? current
     }
 }

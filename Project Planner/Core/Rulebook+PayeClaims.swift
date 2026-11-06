@@ -58,6 +58,8 @@ nonisolated struct PayeClaimItem: Codable, Hashable, Sendable, Identifiable {
     // Expense
     var jobNumber: String?
     var date: String?
+    /// 1.33.0 (`payeClaimPersonFields`): the person's current users id, written on create; nil when not stored.
+    var personUserId: String?
 }
 
 /// `TimesheetClaimRow`: a self-employed person's price work or expense entry from their timesheets, read-only.
@@ -111,12 +113,27 @@ nonisolated struct PayeClaimReportRecord: Codable, Hashable, Sendable, Identifia
     var generatedAtMs: Double?
 }
 
-/// `payeClaimReportRows`: the summary page text.
+/// `payeClaimReportRows`: the summary page. 1.33.0 (laid out like the invoice report): the header (`documentTitle`,
+/// `companyName`, `personName`, `period`, `generated` from `reportGeneratedText`), `columns`, each row's columns,
+/// `totalLabel` / `totalAmount`, `itemCount` / `evidenceCount` and `footer`.
 nonisolated struct PayeClaimReportRows: Codable, Hashable, Sendable {
     nonisolated struct Row: Codable, Hashable, Sendable {
         var heading: String
         var figure: String
         var lines: [String]
+        var itemId: String
+        /// `formatPaymentRunDay` of the day, or "from – to" for price work over several days.
+        var date: String
+        /// Price work: `priceWorkJobNumberText` ("—" before 1.30.1). Expense: as stored.
+        var jobNumber: String
+        var name: String
+        /// Price work only.
+        var approvedBy: String
+        /// `formatMoney` in the report's currency.
+        var amount: String
+        var description: String
+        /// "Evidence: 2 (a.jpg, b.pdf)", or "".
+        var evidenceNote: String
     }
 
     var title: String
@@ -124,9 +141,22 @@ nonisolated struct PayeClaimReportRows: Codable, Hashable, Sendable {
     var rows: [Row]
     var total: String
     var empty: String
+    var documentTitle: String
+    var companyName: String
+    var personName: String
+    var period: String
+    var generatedAt: String
+    var generatedBy: String
+    var generated: String
+    var columns: [String]
+    var totalLabel: String
+    var totalAmount: String
+    var itemCount: Int
+    var evidenceCount: Int
+    var footer: String
 }
 
-/// One `payeClaimEvidencePages` entry: an evidence page after the summary.
+/// One `payeClaimEvidencePages` entry: an evidence page after the summary, headed by its item (1.33.0 fields).
 nonisolated struct PayeClaimEvidencePage: Codable, Hashable, Sendable {
     var itemId: String
     var heading: String
@@ -136,6 +166,16 @@ nonisolated struct PayeClaimEvidencePage: Codable, Hashable, Sendable {
     var contentType: String
     /// `image` | `pdf` | `listed`.
     var drawAs: String
+    var itemName: String
+    var date: String
+    var jobNumber: String
+    /// Price work only.
+    var approvedBy: String
+    var amount: String
+    /// "Evidence 2 of 3: receipt.jpg".
+    var evidenceTitle: String
+    /// The item's description, when it has one.
+    var notes: [String]
 }
 
 /// `payeClaimListRow`.
@@ -203,6 +243,8 @@ nonisolated struct PayeClaimReviewRecord: Codable, Hashable, Sendable, Identifia
     var fingerprint: String
     var reviewedBy: String?
     var reviewedAtMs: Double?
+    /// 1.33.0: the person's current users id, stored only when the item is filed under another of their ids.
+    var personUserId: String?
 }
 
 /// `payeClaimReviewState(item, reviews)`: `needsReview` | `approved` | `rejected`, its label, and the review it came from.
@@ -218,8 +260,8 @@ nonisolated struct PayeClaimReviewWrite: @unchecked Sendable {
     var fields: [String: Any]
 }
 
-/// `payeClaimReviewWrites(...)`: the writes, the per-item outcome (`applied` | `undecided` | `needsAdmin` | `foreign` |
-/// `unchanged`), the counts and the `reviewApprovalMessage`.
+/// `payeClaimReviewWrites(...)`: the writes, the per-item outcome (`applied` | `undecided` | `foreign` | `unchanged`;
+/// 1.33.0 no `needsAdmin`), the counts and the `reviewApprovalMessage`.
 nonisolated struct PayeClaimReviewPlan: @unchecked Sendable {
     var writes: [PayeClaimReviewWrite]
     var outcomes: [String: String]
@@ -509,22 +551,23 @@ extension CanonicalBusinessEngine {
         return RulebookJSON.decode(PayeClaimReviewStateResult.self, from: callJSON("payeClaimReviewState", arguments: [json, list]))
     }
 
-    /// `payeClaimReviewWrites({ items, decisions, reviews, subjectUserId, personIds, reviewerId, reviewerIsAdmin })`:
-    /// Approve's review writes (one per decided item the reviewer may write) and the "Approved X of Y" message.
-    /// `decisions` maps an item id to `approved` | `rejected`. Nil when the script did not answer.
+    /// `payeClaimReviewWrites({ items, decisions, reviews, subjectUserId, personIds, reviewerId })`: Approve's review
+    /// writes (one per decided item) and the "Approved X of Y" message. 1.33.0: a line manager and an admin write the
+    /// same reviews (no `reviewerIsAdmin`, no "Needs an admin"); an item filed under another of the person's ids gets
+    /// `personUserId: subjectUserId` in its review fields. `decisions` maps an item id to `approved` | `rejected`. Nil
+    /// when the script did not answer.
     nonisolated static func payeClaimReviewWrites(
         items: [PayeClaimItem],
         decisions: [String: String],
         reviews: [PayeClaimReviewRecord],
         subjectUserId: String,
         personIds: [String],
-        reviewerId: String,
-        reviewerIsAdmin: Bool
+        reviewerId: String
     ) -> PayeClaimReviewPlan? {
         guard let itemList = RulebookJSON.object(items), let reviewList = RulebookJSON.object(reviews) else { return nil }
         let input: [String: Any] = [
             "items": itemList, "decisions": decisions, "reviews": reviewList, "subjectUserId": subjectUserId,
-            "personIds": personIds, "reviewerId": reviewerId, "reviewerIsAdmin": reviewerIsAdmin,
+            "personIds": personIds, "reviewerId": reviewerId,
         ]
         guard let answer = callJSON("payeClaimReviewWrites", arguments: [input]) as? [String: Any] else { return nil }
         let writes = (answer["writes"] as? [[String: Any]] ?? []).compactMap { row -> PayeClaimReviewWrite? in
@@ -540,7 +583,7 @@ extension CanonicalBusinessEngine {
         )
     }
 
-    /// `payeClaimReviewOutcomeLabel(outcome)`: "Needs an admin" / "Not theirs — left out.", else nil.
+    /// `payeClaimReviewOutcomeLabel(outcome)`: "Not theirs — left out.", else nil (1.33.0: no "Needs an admin").
     nonisolated static func payeClaimReviewOutcomeLabel(_ outcome: String?) -> String? {
         callJSON("payeClaimReviewOutcomeLabel", arguments: [RulebookJSON.orNull(outcome)]) as? String
     }
@@ -577,10 +620,20 @@ extension CanonicalBusinessEngine {
         return callJSON("payeClaimReportSnapshot", arguments: [input]) as? [String: Any]
     }
 
-    /// `payeClaimReportRows(snapshot)`.
-    nonisolated static func payeClaimReportRows(_ report: PayeClaimReportRecord) -> PayeClaimReportRows? {
+    /// `payeClaimReportRows(snapshot, { timeZone, generatedByName, nowMs })` (1.33.0: header, columns, rows, totals,
+    /// footer; generated by / at in the organisation zone).
+    nonisolated static func payeClaimReportRows(
+        _ report: PayeClaimReportRecord,
+        generatedByName: String? = nil,
+        now: Date = Date()
+    ) -> PayeClaimReportRows? {
         guard let json = RulebookJSON.object(report) else { return nil }
-        return RulebookJSON.decode(PayeClaimReportRows.self, from: callJSON("payeClaimReportRows", arguments: [json]))
+        let options: [String: Any] = [
+            "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
+            "generatedByName": RulebookJSON.orNull(generatedByName),
+            "nowMs": now.timeIntervalSince1970 * 1000,
+        ]
+        return RulebookJSON.decode(PayeClaimReportRows.self, from: callJSON("payeClaimReportRows", arguments: [json, options]))
     }
 
     /// `payeClaimEvidencePages(snapshot)`: one page per piece of evidence, in item order.

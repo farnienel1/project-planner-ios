@@ -174,9 +174,14 @@ class PPUITestCase: XCTestCase {
         assertExists(PPID.mainMenu)
     }
 
+    /// A slow CI simulator can take over 30s to settle after the More tap (seen on #202, A04), so the
+    /// More screen gets a longer wait and one more tap before the check fails.
     func openMore() {
         tap(PPID.tabMore)
-        assertExists(PPID.more)
+        if element(PPID.more).waitForExistence(timeout: 15) { return }
+        let tab = element(PPID.tabMore)
+        if tab.exists, tab.isHittable { tab.tap() }
+        assertExists(PPID.more, timeout: 10)
     }
 
     func assertSignedInHome(role: String) {

@@ -3,65 +3,34 @@
 //  Project Planner
 //
 //  The ✕ / ✓ / ⚙ buttons on an overtime line (the person's own lines and the line manager's review lines). Look only:
-//  which choice is shown as picked comes from what the screen already holds (the unsent proposal, the sent request
-//  line, the decider's decision, or the rulebook's line state). The taps, what they write and when the buttons are
-//  enabled stay with `OvertimeLinesView`, unchanged.
+//  RULEBOOK 1.33.0 — how each button draws (`filled` / `grey` / `idle`) is `overtimeChoiceView` (`OvertimeChoiceLook`);
+//  the taps go through `overtimeChoiceAfter` in `OvertimeLinesView`. Nothing is decided here.
 //
 
 import SwiftUI
 
-/// The choice a line shows as picked: ✓ tick, ✕ cross, ⚙ cog (changed hours or rate).
-enum OvertimeLineChoice: Hashable, Sendable {
-    case tick
-    case cross
-    case cog
+/// How one circle draws for the rulebook's look (`overtimeChoiceView` → `filled` | `grey` | `idle`).
+enum OvertimeButtonLook: Hashable, Sendable {
+    /// Nothing chosen on this button: an outlined circle in the button's colour.
+    case outlined
+    /// The chosen button: a filled circle with a white symbol.
+    case filled
+    /// Another choice is set: a grey outlined circle. Still tappable, so the choice can be changed.
+    case greyed
 
-    /// How one button draws for the picked choice.
-    enum Look: Hashable, Sendable {
-        /// Nothing decided, or ✓ / ✕ after a ⚙ change: an outlined circle in the button's colour.
-        case outlined
-        /// The picked choice: a filled circle with a white symbol.
-        case filled
-        /// Another choice is picked: a grey outlined circle. Still tappable, so the choice can be changed.
-        case greyed
-    }
-
-    /// The choice an action stands for (`.keep` and `.approve` are both a tick).
-    init(_ action: OvertimeAction) {
-        switch action {
-        case .keep, .approve: self = .tick
-        case .strike: self = .cross
-        case .edit: self = .cog
+    /// The rulebook's word for the look.
+    init(rulebook value: String) {
+        switch value {
+        case "filled": self = .filled
+        case "grey": self = .greyed
+        default: self = .outlined
         }
-    }
-
-    /// The choice of a sent request line's `action` (`keep` | `strike` | `edit`), nil for anything else.
-    init?(requestAction: String) {
-        switch requestAction {
-        case "keep": self = .tick
-        case "strike": self = .cross
-        case "edit": self = .cog
-        default: return nil
-        }
-    }
-
-    /// How `button` draws when `chosen` is picked. A ⚙ change leaves ✓ and ✕ outlined (still to be decided); a ✓ or
-    /// ✕ greys the other two.
-    static func look(of button: OvertimeLineChoice, chosen: OvertimeLineChoice?) -> Look {
-        guard let chosen else { return .outlined }
-        if button == chosen { return .filled }
-        return chosen == .cog ? .outlined : .greyed
-    }
-
-    /// Whether the line's overtime figure is struck through: ✕ (crossed) and ⚙ (the new figure goes under it).
-    static func strikesFigure(_ chosen: OvertimeLineChoice?) -> Bool {
-        chosen == .cross || chosen == .cog
     }
 }
 
-/// ✕ ✓ ⚙ as circles. The caller sets `.disabled(...)` exactly as before; greyed buttons stay tappable.
+/// ✕ ✓ ⚙ as circles drawn from `overtimeChoiceView`. The caller sets `.disabled(...)`; greyed buttons stay tappable.
 struct OvertimeLineDecisionButtons: View {
-    let chosen: OvertimeLineChoice?
+    let look: OvertimeChoiceLook
     let crossLabel: String
     let tickLabel: String
     let cogLabel: String
@@ -74,7 +43,7 @@ struct OvertimeLineDecisionButtons: View {
     @ScaledMetric(relativeTo: .body) private var diameter: CGFloat = 34
 
     init(
-        chosen: OvertimeLineChoice?,
+        look: OvertimeChoiceLook,
         crossLabel: String,
         tickLabel: String,
         cogLabel: String,
@@ -83,7 +52,7 @@ struct OvertimeLineDecisionButtons: View {
         onTick: @escaping () -> Void,
         onCog: @escaping () -> Void
     ) {
-        self.chosen = chosen
+        self.look = look
         self.crossLabel = crossLabel
         self.tickLabel = tickLabel
         self.cogLabel = cogLabel
@@ -95,21 +64,20 @@ struct OvertimeLineDecisionButtons: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            circle(.cross, symbol: "xmark", tint: PPColor.danger, label: crossLabel, id: "cross", action: onCross)
-            circle(.tick, symbol: "checkmark", tint: OvertimeLineDecisionStyle.tickGreen, label: tickLabel, id: "tick", action: onTick)
-            circle(.cog, symbol: "gearshape.fill", tint: PPColor.brand, label: cogLabel, id: "cog", action: onCog)
+            circle(OvertimeButtonLook(rulebook: look.cross), symbol: "xmark", tint: PPColor.danger, label: crossLabel, id: "cross", action: onCross)
+            circle(OvertimeButtonLook(rulebook: look.tick), symbol: "checkmark", tint: OvertimeLineDecisionStyle.tickGreen, label: tickLabel, id: "tick", action: onTick)
+            circle(OvertimeButtonLook(rulebook: look.cog), symbol: "gearshape.fill", tint: PPColor.brand, label: cogLabel, id: "cog", action: onCog)
         }
     }
 
     private func circle(
-        _ kind: OvertimeLineChoice,
+        _ look: OvertimeButtonLook,
         symbol: String,
         tint: Color,
         label: String,
         id: String,
         action: @escaping () -> Void
     ) -> some View {
-        let look = OvertimeLineChoice.look(of: kind, chosen: chosen)
         let stroke: Color
         let symbolColor: Color
         let fill: Color
@@ -152,8 +120,8 @@ enum OvertimeLineDecisionStyle {
     static let tickGreen = PPFamily.sites.bottom
 }
 
-/// A line's overtime figure: the current figure, struck through when crossed or changed, and the new one on its own
-/// line under it (never side by side, so nothing overlaps on a phone).
+/// A line's overtime figure: the current figure, struck through when crossed or changed (`figureStruck`), and the new
+/// one (`newFigure`) on its own line under it (never side by side, so nothing overlaps on a phone).
 struct OvertimeLineFigureStack: View {
     let current: String?
     let struck: Bool

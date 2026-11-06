@@ -511,8 +511,8 @@ final class WarningScanCanonicalTests: XCTestCase {
             isOperativeMode: false
         )
         XCTAssertTrue(CanonicalBusinessEngine.canViewStaffWarnings(manager))
-        // RULEBOOK 1.10.0 §16: a manager sees every job only with that kind's toggle (`seesEveryJob(role, kind, toggles)`).
-        XCTAssertFalse(CanonicalBusinessEngine.seesEveryJob(manager))
+        // RULEBOOK 1.33.0 §17 (owner decision 6 Nov): every manager sees every job, whatever their toggles.
+        XCTAssertTrue(CanonicalBusinessEngine.seesEveryJob(manager))
 
         let admin = CanonicalBusinessEngine.CanonicalStaffAccountRole(
             isSuperAdmin: false,

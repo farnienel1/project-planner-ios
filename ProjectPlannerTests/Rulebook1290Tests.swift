@@ -83,11 +83,11 @@ final class Rulebook1290Tests: XCTestCase {
             "overtimeLineIsStale", "overtimeStrikeOutcome", "overtimeCogPreview", "overtimeRateControl",
             "overtimeMultiplierWriteFields", "canEditOwnBookingOvertime", "canDecideOvertimeRequest", "overtimeUserSubjects",
             "overtimeHubAccess", "overtimeRequestLineFields", "overtimeRequestWriteFields", "overtimeRequestsToReplace",
-            "overtimeRequestWithdrawWriteFields", "overtimeApprovalWrites", "overtimeDirectWrites",
+            "overtimeRequestWithdrawWriteFields", "overtimeReturnWrites", "overtimeDirectWrites",
             "overtimeBookingIsTheirs", "overtimeDeciderMayWriteBooking", "parseOvertimeRequestDocument",
             "parseOvertimeReviewDocument", "parseOvertimeReportDocument", "overtimeReportSnapshot", "overtimeReportRows",
-            "weeklyReportPayeOvertime", "weeklyReportPayeDay", "overtimeRequestRecipients", "overtimeReviewedRecipients",
-            "bookingHoursChangedRecipients", "OVERTIME_CANCEL_WARNING", "PAYE_PAYDAY_NOT_SET_MESSAGE",
+            "weeklyReportPayeOvertime", "weeklyReportPayeDay", "overtimeRequestRecipients", "overtimeReturnedRecipients",
+            "bookingHoursChangedRecipients", "OVERTIME_DELETE_WARNING", "PAYE_PAYDAY_NOT_SET_MESSAGE",
         ] {
             XCTAssertTrue(exports.contains(name), "\(name) is not exported")
         }
@@ -184,12 +184,13 @@ final class Rulebook1290Tests: XCTestCase {
                 personIds: ["sam"], bookings: [booking], organization: org, range: range, reviews: reviews, requests: requests
             ).first?.state
         }
-        XCTAssertEqual(state(b1, reviews: [review]), "approved")
+        // 1.33.0: a line confirmed without a line manager reads `confirmed` (was `approved`).
+        XCTAssertEqual(state(b1, reviews: [review]), "confirmed")
         var moved = b1
         moved.workEndTime = "15:00"
         XCTAssertTrue(CanonicalBusinessEngine.overtimeLineIsStale(storedFingerprint: fingerprint, booking: moved))
         XCTAssertTrue(CanonicalBusinessEngine.overtimeLineIsStale(storedFingerprint: fingerprint, booking: nil))
-        XCTAssertEqual(state(moved, reviews: [review]), "needsReview", "a change after a decision goes back to Needs review")
+        XCTAssertEqual(state(moved, reviews: [review]), "reopened", "1.33.0: a change after a decision reopens the line")
         let line = try XCTUnwrap(CanonicalBusinessEngine.overtimeRequestLineFields(b1, organization: org, proposal: .keep, personIds: nil))
         let pending = try request("R1", ["userId": "sam", "rangeStart": range.start, "rangeEnd": range.end, "status": "pending", "lines": [line.raw]])
         XCTAssertEqual(state(b1, requests: [pending]), "waiting")
@@ -203,22 +204,23 @@ final class Rulebook1290Tests: XCTestCase {
 
     // MARK: The red X and the cog
 
-    func testStrikeTrimsOrCancelsWithTheSharedWarning() throws {
+    /// RULEBOOK 1.33.0 (item f): an all-overtime day is deleted, not cancelled, after `OVERTIME_DELETE_WARNING`.
+    func testStrikeTrimsOrDeletesWithTheSharedWarning() throws {
         let trim = try XCTUnwrap(CanonicalBusinessEngine.overtimeStrikeOutcome(booking("B1", "2026-11-04", "06:30", "14:00"), organization: org))
         XCTAssertEqual([trim.kind, trim.start, trim.end], ["trim", "07:30", "14:00"])
         let window = try XCTUnwrap(CanonicalBusinessEngine.overtimeStrikeOutcome(booking("B3", "2026-11-07", "07:30", "15:00"), organization: org))
         XCTAssertEqual([window.kind, window.end], ["trim", "14:00"], "a weekend set window is trimmed to the window")
         XCTAssertEqual(CanonicalBusinessEngine.overtimeStrikeOutcome(booking("B5", "2026-11-03", "07:30", "16:00"), organization: org)?.kind, "none")
         let sunday = try XCTUnwrap(CanonicalBusinessEngine.overtimeStrikeOutcome(booking("B4", "2026-11-08", "07:30", "14:00"), organization: org))
-        XCTAssertEqual(sunday.kind, "cancel", "a weekend paid at a multiplier only is cancelled")
+        XCTAssertEqual(sunday.kind, "delete", "a weekend paid at a multiplier only is deleted (1.33.0)")
         XCTAssertEqual(sunday.warning?.summary, "Sun 8 Nov · J-1042 Riverside Flats · 07:30–14:00")
         XCTAssertEqual(sunday.warning?.title, "Remove this booking?")
         XCTAssertEqual(sunday.warning?.confirm, "Remove booking")
         XCTAssertEqual(sunday.warning?.back, "Go back")
-        XCTAssertEqual(sunday.warning?.footnote, "A manager can restore it if this was a mistake.")
-        XCTAssertEqual(CanonicalBusinessEngine.overtimeCancelWarning?.body, sunday.warning?.body)
+        XCTAssertEqual(sunday.warning?.footnote, "This cannot be undone. A manager can book it again.")
+        XCTAssertEqual(CanonicalBusinessEngine.overtimeDeleteWarning?.body, sunday.warning?.body)
         XCTAssertEqual(CanonicalBusinessEngine.overtimeStrikeOutcome(booking("B7", "2026-11-02", "18:00", "21:00"), organization: org)?.kind,
-                       "cancel", "a weekday booking all outside the day is cancelled")
+                       "delete", "a weekday booking all outside the day is deleted")
         XCTAssertEqual(CanonicalBusinessEngine.overtimeStrikeOutcome(
             booking("M", "2026-11-02", "18:00", "21:00", collection: "managerSiteBookings"), organization: org
         )?.kind, "notAllowed")
@@ -257,7 +259,10 @@ final class Rulebook1290Tests: XCTestCase {
 
     // MARK: Requests and approval
 
-    func testApprovalWritesEverythingOnceAndRefusesStaleOrForeignLines() throws {
+    /// RULEBOOK 1.33.0: Return writes everything once — the decider's counter-change, the delete of an all-overtime
+    /// booking with its tombstone naming the request, one review per line — and skips (names) stale, deleted and foreign
+    /// lines. Replaces the 1.32.0 `overtimeApprovalWrites` checks.
+    func testReturnWritesEverythingOnceAndSkipsStaleDeletedOrForeignLines() throws {
         let b1 = booking("B1", "2026-11-04", "06:30", "14:00")
         let b2 = booking("B2", "2026-11-05", "07:30", "18:00")
         let b4 = booking("B4", "2026-11-08", "07:30", "14:00")
@@ -269,7 +274,7 @@ final class Rulebook1290Tests: XCTestCase {
             XCTUnwrap(CanonicalBusinessEngine.overtimeRequestLineFields(gone, organization: org, proposal: .keep, personIds: ["sam"])),
         ]
         XCTAssertEqual([lines[1].line.overtimeHoursBefore, lines[1].line.overtimeHoursAfter], [3, 6])
-        XCTAssertTrue(lines[2].line.cancel, "the red X on a multiplier-only Sunday asks to cancel")
+        XCTAssertTrue(lines[2].line.cancel, "the red X on a multiplier-only Sunday asks to remove the booking")
         XCTAssertNil(CanonicalBusinessEngine.overtimeRequestLineFields(
             booking("X1", "2026-11-04", "06:30", "14:00", person: "someone-else"), organization: org, proposal: .strike, personIds: ["sam"]
         ), "a request never names someone else's booking")
@@ -287,63 +292,60 @@ final class Rulebook1290Tests: XCTestCase {
             "B4": .approve,
             "GONE": .approve,
         ]
-        // RULEBOOK 1.32.0: one Approve, enabled once any line is decided (`overtimeRequestAnyDecided`).
-        XCTAssertFalse(CanonicalBusinessEngine.overtimeRequestAnyDecided(pending, decisions: [:]))
-        XCTAssertTrue(CanonicalBusinessEngine.overtimeRequestAnyDecided(pending, decisions: ["B1": .approve]))
-        func approve(_ live: [String: OvertimeBookingInput], requesterIds: [String] = ["sam"]) -> OvertimeApprovalPlan? {
-            CanonicalBusinessEngine.overtimeApprovalWrites(
+        XCTAssertFalse(CanonicalBusinessEngine.overtimeReturnReady(pending, decisions: [:], skipBookingIds: []).ready)
+        XCTAssertTrue(CanonicalBusinessEngine.overtimeReturnReady(pending, decisions: decisions, skipBookingIds: []).ready)
+        func returned(_ live: [String: OvertimeBookingInput], requesterIds: [String] = ["sam"]) -> OvertimeReturnPlan? {
+            CanonicalBusinessEngine.overtimeReturnWrites(
                 request: pending, decisions: decisions, bookings: live, organization: org, deciderId: "lm",
-                requesterIds: requesterIds, deciderIsAdmin: true, writableBookingIds: [], unreadableBookingIds: []
+                requesterIds: requesterIds, unreadableBookingIds: []
             )
         }
-        let plan = try XCTUnwrap(approve(["B1": b1, "B2": b2, "B4": b4]))
-        XCTAssertTrue(plan.ok, "the approval is refused")
-        XCTAssertEqual(plan.bookingWrites.map(\.bookingId), ["B2", "B4"])
+        let plan = try XCTUnwrap(returned(["B1": b1, "B2": b2, "B4": b4]))
+        XCTAssertTrue(plan.ok, "the Return is refused")
+        XCTAssertEqual(plan.bookingWrites.map(\.bookingId), ["B2"])
         XCTAssertEqual(plan.bookingWrites.first?.set["workEndTime"] as? String, "18:30")
         XCTAssertEqual(plan.bookingWrites.first?.set["otMultiplierOverride"] as? Double, 1.5)
-        XCTAssertEqual(plan.bookingWrites.last?.set["status"] as? String, "Cancelled", "cancelled, never deleted")
+        XCTAssertEqual(plan.bookingDeletes.map(\.bookingId), ["B4"], "deleted, never cancelled (1.33.0)")
+        XCTAssertEqual(plan.bookingDeletes.first?.tombstone["overtimeRequestId"] as? String, "R1", "the tombstone names the request")
+        XCTAssertEqual(plan.bookingDeletes.first?.tombstone["deletedFrom"] as? String, "ios")
         XCTAssertEqual(plan.reviewWrites.map(\.docId), ["sam_B1", "sam_B2", "sam_B4"])
-        XCTAssertEqual(plan.reviewWrites.map { $0.fields["decision"] as? String ?? "" }, ["approved", "edited", "cancelled"])
-        XCTAssertEqual(plan.deletedBookingIds, ["GONE"])
-        XCTAssertTrue(plan.complete)
+        XCTAssertEqual(plan.reviewWrites.map { $0.fields["decision"] as? String ?? "" }, ["approved", "changed", "deleted"])
+        XCTAssertEqual(plan.deletedBookingIds, ["B4"])
+        XCTAssertEqual(plan.droppedBookingIds, ["GONE"])
+        XCTAssertEqual(plan.message, "Returned 3 lines. 1 deleted booking left out.")
         XCTAssertEqual(plan.requestFields["status"] as? String, "approved")
         XCTAssertEqual(plan.requestFields["decidedBy"] as? String, "lm")
-        // 1.32.0: a booking changed after sending stays waiting on its own; the other lines are applied.
+        XCTAssertEqual(plan.requestFields["deletedBookingIds"] as? [String], ["B4"])
+        // A booking changed after sending goes back to the person (skip-and-name); the rest is returned.
         var changed = b1
         changed.workStartTime = "06:00"
-        let stale = try XCTUnwrap(approve(["B1": changed, "B2": b2, "B4": b4]))
-        XCTAssertTrue(stale.ok, "a changed booking no longer refuses the whole approval")
+        let stale = try XCTUnwrap(returned(["B1": changed, "B2": b2, "B4": b4]))
+        XCTAssertTrue(stale.ok)
         XCTAssertEqual(stale.lineOutcomes["B1"], "stale")
-        XCTAssertEqual(stale.waitingBookingIds, ["B1"])
+        XCTAssertEqual(stale.staleBookingIds, ["B1"])
         XCTAssertEqual(stale.appliedBookingIds, ["B2", "B4"])
-        XCTAssertFalse(stale.complete)
-        XCTAssertEqual(stale.requestFields["status"] as? String, "pending", "the request stays pending until complete")
-        // A booking that is not the requester's is left out, never written; with nothing applied, nothing is approved.
-        let foreign = try XCTUnwrap(approve(["B1": b1, "B2": b2, "B4": b4], requesterIds: ["sam-other-id"]))
-        XCTAssertFalse(foreign.ok)
-        XCTAssertEqual(foreign.reason, "nothingApproved")
+        XCTAssertEqual(stale.requestFields["status"] as? String, "approved")
+        // A booking that is not the requester's is left out and never written.
+        let foreign = try XCTUnwrap(returned(["B1": b1, "B2": b2, "B4": b4], requesterIds: ["sam-other-id"]))
         XCTAssertTrue(foreign.bookingWrites.isEmpty)
+        XCTAssertTrue(foreign.bookingDeletes.isEmpty)
         XCTAssertEqual(foreign.lineOutcomes["B1"], "foreign")
-        XCTAssertEqual(foreign.lineOutcomes["B2"], "foreign")
-        XCTAssertEqual(foreign.lineOutcomes["B4"], "foreign")
-        // A line manager who is not an admin may not decide a booking filed under an operatives row id (§16, owner
-        // decision A): that line waits as "Needs an admin"; the rest is applied.
+        XCTAssertEqual(CanonicalBusinessEngine.overtimeLineOutcomeLabel("foreign"), "This booking is not theirs — it is left out.")
+        // 1.33.0 (a line manager can always approve): a booking under an operatives row of the person is returned.
         var underRow = b2
         underRow.personId = "OP-ROW"
-        let notAdmin = try XCTUnwrap(CanonicalBusinessEngine.overtimeApprovalWrites(
+        let row = try XCTUnwrap(CanonicalBusinessEngine.overtimeReturnWrites(
             request: pending, decisions: decisions, bookings: ["B1": b1, "B2": underRow, "B4": b4], organization: org, deciderId: "lm",
-            requesterIds: ["sam", "OP-ROW"], deciderIsAdmin: false, writableBookingIds: [], unreadableBookingIds: []
+            requesterIds: ["sam", "OP-ROW"], unreadableBookingIds: []
         ))
-        XCTAssertTrue(notAdmin.ok)
-        XCTAssertEqual(notAdmin.lineOutcomes["B2"], "needsAdmin")
-        XCTAssertEqual(notAdmin.waitingBookingIds, ["B2"])
-        XCTAssertEqual(CanonicalBusinessEngine.overtimeLineOutcomeLabel(notAdmin.lineOutcomes["B2"]), "Needs an admin")
-        XCTAssertTrue(CanonicalBusinessEngine.overtimeDeciderMayWriteBooking(b2, requesterUserId: "sam", deciderIsAdmin: false, writableBookingIds: []))
+        XCTAssertEqual(row.lineOutcomes["B2"], "applied")
+        XCTAssertTrue(CanonicalBusinessEngine.overtimeDeciderMayWriteBooking(underRow, requesterUserId: "sam", requesterIds: ["sam", "OP-ROW"]))
         XCTAssertFalse(CanonicalBusinessEngine.overtimeDeciderMayWriteBooking(
-            booking("B9", "2026-11-05", "07:30", "18:00", person: "OP-ROW"), requesterUserId: "sam", deciderIsAdmin: false, writableBookingIds: []
+            booking("B9", "2026-11-05", "07:30", "18:00", person: "someone-else"), requesterUserId: "sam", requesterIds: ["sam", "OP-ROW"]
         ))
-        // Sending again withdraws the pending request for the same range.
-        XCTAssertEqual(CanonicalBusinessEngine.overtimeRequestsToReplace([pending], userId: "SAM", rangeStart: range.start, rangeEnd: range.end), ["R1"])
+        // Sending again withdraws the pending request whose every waiting line is sent again (1.33.0).
+        XCTAssertEqual(CanonicalBusinessEngine.overtimeRequestsSuperseded([pending], userId: "SAM", bookingIds: ["B1", "B2", "B4", "GONE"]), ["R1"])
+        XCTAssertEqual(CanonicalBusinessEngine.overtimeRequestsSuperseded([pending], userId: "sam", bookingIds: ["B1"]), [])
         XCTAssertEqual(CanonicalBusinessEngine.overtimeRequestWithdrawWriteFields(pending)?["status"] as? String, "withdrawn")
     }
 
@@ -365,7 +367,7 @@ final class Rulebook1290Tests: XCTestCase {
         XCTAssertEqual(CanonicalBusinessEngine.overtimeHubAccess(viewer: sam, roster: roster), OvertimeHubAccess(showButton: true, mine: true, users: false))
         XCTAssertEqual(CanonicalBusinessEngine.overtimeHubAccess(viewer: roster[4], roster: roster), .hidden)
         XCTAssertEqual(CanonicalBusinessEngine.overtimeRequestRecipients(requester: "sam", roster: roster), ["lm", "admin", "admin2"])
-        XCTAssertEqual(CanonicalBusinessEngine.overtimeReviewedRecipients(requester: "sam", decider: "sam", roster: roster), [])
+        XCTAssertEqual(CanonicalBusinessEngine.overtimeReturnedRecipients(requester: "sam", decider: "sam", roster: roster), [])
         XCTAssertEqual(CanonicalBusinessEngine.bookingHoursChangedRecipients(owner: "lm", jobManagerIds: ["lm", "admin2"], roster: roster), ["admin2", "admin"])
         let viewer = JobAccessViewer(
             role: CanonicalBusinessEngine.CanonicalStaffAccountRole(isSuperAdmin: false, isAdmin: false, isManager: false, isOperativeMode: true),

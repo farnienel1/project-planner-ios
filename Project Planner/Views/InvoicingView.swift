@@ -636,9 +636,11 @@ struct InvoicingView: View {
             teamListSurface = "signed"
             pushTeamTimesheets = true
         case "overtimeMine":
-            overtimeDeepLink = .mine
+            let notice = OvertimeDeepLinkContext.take()
+            overtimeDeepLink = .mine(requestId: notice.requestId, dayKey: notice.dayKey)
         case "overtimeUser":
-            overtimeDeepLink = rawId.isEmpty ? nil : .user(rawId)
+            let notice = OvertimeDeepLinkContext.take()
+            overtimeDeepLink = rawId.isEmpty ? nil : .user(rawId, requestId: notice.requestId, dayKey: notice.dayKey)
         default:
             break
         }
@@ -3350,7 +3352,8 @@ private struct PreviousTimesheetRun: Identifiable {
     }
 }
 
-private struct OperativeTimesheetsView: View {
+/// Internal (1.33.0) so the Payrun Snapshot can open a person's timesheet for a pay run.
+struct OperativeTimesheetsView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject private var smartCache: SmartCacheService
     @EnvironmentObject var userStore: UserStore

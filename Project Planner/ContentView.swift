@@ -430,28 +430,17 @@ struct ContentView: View {
                 Task { await refreshNotificationDelivery() }
                 Task {
                     await userStore.recordCurrentUserLastSeenIfDue()
-                    // Refresh the signed-in account when returning to the app so permission
-                    // toggles (e.g. Annual Leave Management) applied by an admin take effect
-                    // without requiring sign-out.
-                    await userStore.loadCurrentUser()
-                    if firebaseBackend.hasBootstrappedOrgDataLoad {
-                        bookingStore.loadData()
-                        managerScheduleStore.loadData(force: true)
-                        // Re-attach any organisation listener that dropped (attached ones are kept).
-                        PlannerStoreWiring.startOrgLiveListeners(
-                            firebaseBackend: firebaseBackend,
-                            projectStore: projectStore,
-                            operativeStore: operativeStore,
-                            subcontractorStore: subcontractorStore,
-                            taskStore: taskStore,
-                            holidayStore: holidayStore
-                        )
-                    }
+                    await reloadOpenOrganizationData()
                     notificationService.promoteScheduledDeadlineNotifications()
                     // Do not reload the full notifications inbox on every foreground —
                     // that alone can jetsam Simulator orgs with 100+ notification docs.
                 }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .authClaimsDidRefresh)) { _ in
+            // RULEBOOK 1.32.4 §16: the ID token now carries new claims (role, toggle, membership or active state
+            // changed). Screens may have been refused or may show access that changed: reload as on returning to the app.
+            Task { await reloadOpenOrganizationData() }
         }
         .onChange(of: appSettings.settings.notifications.materialOrderCutOff) { _, _ in
             Task { await notificationService.refreshDailyMaterialCutOffReminder() }
@@ -481,6 +470,26 @@ struct ContentView: View {
     }
     
     /// Prompts for notification permission if it was never requested, and keeps the inbox listener attached.
+    /// Reloads the open organisation's data and re-attaches any organisation listener that dropped (attached ones are
+    /// kept). Returning to the app and a refreshed auth-claims token (`.authClaimsDidRefresh`) both run it.
+    @MainActor
+    private func reloadOpenOrganizationData() async {
+        // Refresh the signed-in account so permission toggles (e.g. Annual Leave Management) applied by an admin
+        // take effect without requiring sign-out.
+        await userStore.loadCurrentUser()
+        guard firebaseBackend.hasBootstrappedOrgDataLoad else { return }
+        bookingStore.loadData()
+        managerScheduleStore.loadData(force: true)
+        PlannerStoreWiring.startOrgLiveListeners(
+            firebaseBackend: firebaseBackend,
+            projectStore: projectStore,
+            operativeStore: operativeStore,
+            subcontractorStore: subcontractorStore,
+            taskStore: taskStore,
+            holidayStore: holidayStore
+        )
+    }
+
     private func refreshNotificationDelivery() async {
         guard firebaseBackend.isAuthenticated, userStore.currentUser != nil else { return }
         await notificationService.ensureSystemNotificationAuthorizationIfNeeded()

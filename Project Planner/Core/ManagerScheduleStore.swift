@@ -63,6 +63,45 @@ class ManagerScheduleStore: ObservableObject {
                 self.dropLocalBooking(id: id)
             }
         }
+
+        // RULEBOOK 1.33.0: a queued delete was undone from the sync list or refused on replay — the booking comes back.
+        NotificationCenter.default.addObserver(
+            forName: .offlineBookingDeleteRestored,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard note.userInfo?["collection"] as? String == "managerSiteBookings",
+                  let booking = note.userInfo?["managerBooking"] as? ManagerSiteBooking else { return }
+            let noteOrganizationId = normalizedOrganizationId(note.userInfo?["organizationId"] as? String ?? "")
+            Task { @MainActor [weak self] in
+                guard let self, let orgId = self.firebaseBackend?.resolvedOrganizationIdForOfflineWrites() else { return }
+                // Only into the open organisation: a queued delete of another company's booking never shows here.
+                guard noteOrganizationId.isEmpty || noteOrganizationId == normalizedOrganizationId(orgId) else { return }
+                guard !self.managerSiteBookings.contains(where: { $0.id == booking.id }) else { return }
+                self.applyLocalSave(booking, organizationId: orgId)
+                ScheduleChangeNotifier.postBookingStoreDidChange()
+            }
+        }
+    }
+
+    /// RULEBOOK 1.33.0 §2 `bookingRemoveAction` for this manager schedule booking: Delete for exactly the people who
+    /// may delete it (admins; a manager their own non-job bookings and bookings on jobs they manage), else nothing.
+    func canDeleteBooking(_ booking: ManagerSiteBooking) -> Bool {
+        let jobLocation = booking.locationType == .project || booking.locationType == .smallWork
+        return JobAccessContext.bookingRemoveAction(
+            collection: "managerSiteBookings",
+            userId: booking.userId,
+            locationType: booking.locationType.rawValue,
+            locationId: jobLocation ? (booking.locationKey ?? booking.locationId.map { WorkDocumentKeys.storedId(for: $0) }) : nil
+        ) == "delete"
+    }
+
+    /// The manager schedule bookings this device has queued to delete in `organizationId` stay gone until the
+    /// outbox replays (a cache or server snapshot never brings them back first).
+    private func withoutQueuedDeletes(_ list: [ManagerSiteBooking], organizationId: String) -> [ManagerSiteBooking] {
+        let deleted = OfflineOutboxStore.shared.pendingDeletedBookingIds(collection: "managerSiteBookings", organizationId: organizationId)
+        guard !deleted.isEmpty else { return list }
+        return list.filter { !deleted.contains($0.id) }
     }
 
     /// RULEBOOK §2 "Pending sync" for a manager schedule booking row.
@@ -122,7 +161,7 @@ class ManagerScheduleStore: ObservableObject {
         }
 
         if smartCache?.isOnline == false {
-            managerSiteBookings = deduplicated(OfflineManagerScheduleLocalStore.load(organizationId: orgId))
+            managerSiteBookings = deduplicated(withoutQueuedDeletes(OfflineManagerScheduleLocalStore.load(organizationId: orgId), organizationId: orgId))
             finishedLoadOrganizationId = orgId
             return
         }
@@ -136,7 +175,7 @@ class ManagerScheduleStore: ObservableObject {
                 let queryStart = fb.scheduleBookingQueryStart()
                 let list = try await fb.loadManagerSiteBookings(organizationId: orgId, startingOn: queryStart)
                 let duplicates = self.duplicatesToDelete(from: list)
-                self.managerSiteBookings = self.deduplicated(list)
+                self.managerSiteBookings = self.deduplicated(self.withoutQueuedDeletes(list, organizationId: orgId))
                 OfflineManagerScheduleLocalStore.save(self.managerSiteBookings, organizationId: orgId)
                 self.lastLoadAt = Date()
                 self.lastLoadFailed = false
@@ -228,23 +267,31 @@ class ManagerScheduleStore: ObservableObject {
 
         // RULEBOOK §1 partial writes: an edit writes only what changed against this device's copy;
         // a new booking writes every field.
-        let changedFields: Set<String>? = managerSiteBookings.first(where: { $0.id == normalizedBooking.id })
-            .map { BookingWritePatch.changedManagerFields(from: $0, to: normalizedBooking) }
+        let previous = managerSiteBookings.first(where: { $0.id == normalizedBooking.id })
+        let changedFields: Set<String>? = previous.map { BookingWritePatch.changedManagerFields(from: $0, to: normalizedBooking) }
         if let changedFields, changedFields.isEmpty { return }
+        // RULEBOOK 1.33.0: the copy before this edit, kept with a queued edit for a later offline delete.
+        let baseline = previous.map { BookingWritePatch.deleteFingerprint($0) }
 
         applyLocalSave(normalizedBooking, organizationId: orgId)
 
         if smartCache?.isOnline == false {
-            OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(normalizedBooking, changedFields: changedFields, organizationId: orgId)
+            OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(
+                normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline
+            )
             return
         }
 
         do {
             try await fb.saveManagerSiteBooking(normalizedBooking, organizationId: orgId, changedFields: changedFields)
+            // RULEBOOK 1.33.0 §25 reopen: an edit may reopen the PAYE overtime line (best effort, after the write).
+            if let previous { OvertimeReopenNotice.managerSite(before: previous, after: normalizedBooking) }
             loadData(force: true)
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
-                OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(normalizedBooking, changedFields: changedFields, organizationId: orgId)
+                OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(
+                    normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline
+                )
                 errorMessage = "Saved locally. Will sync when you're back online."
             } else if BookingWritePatch.isRefusedFinal(error) {
                 // Tombstoned: deleted on another device. It cannot come back.
@@ -256,10 +303,12 @@ class ManagerScheduleStore: ObservableObject {
         }
     }
 
+    /// RULEBOOK 1.33.0 §2 (owner decision 4 Nov "Offline delete on iOS"): deletes a manager schedule booking with its
+    /// tombstone; offline it is queued with `bookingDeleteFingerprint` (under the stored document id, so a lower-case id
+    /// web wrote is deleted under its own spelling) and shows "Pending sync". Created and deleted offline sends nothing.
     func deleteBooking(_ booking: ManagerSiteBooking) async {
-        // RULEBOOK §2 (`offlineAvailability("booking.delete")`): deleting a booking is online only; the
-        // delete and its tombstone are never queued.
-        guard OfflinePolicy.isEnabled(.deleteBooking, isOnline: smartCache?.isOnline ?? true) else {
+        let action = OfflinePolicy.deleteAction(collection: "managerSiteBookings")
+        guard OfflinePolicy.isEnabled(action, isOnline: smartCache?.isOnline ?? true) else {
             errorMessage = OfflinePolicy.onlineOnlyMessage
             return
         }
@@ -269,23 +318,49 @@ class ManagerScheduleStore: ObservableObject {
             errorMessage = refusal
             return
         }
+        let fingerprint = BookingWritePatch.deleteFingerprint(booking)
 
         managerSiteBookings.removeAll { $0.id == booking.id }
         OfflineManagerScheduleLocalStore.remove(bookingId: booking.id, organizationId: orgId)
         NotificationCenter.default.post(name: didChangeNotificationName, object: nil)
         ScheduleChangeNotifier.postBookingStoreDidChange()
+        warnIfOnSignedTimesheet(booking, organizationId: orgId)
+
+        if OfflinePolicy.queuesWhileOffline(action, isOnline: smartCache?.isOnline ?? true) {
+            OfflineOutboxStore.shared.enqueueDeleteManagerSiteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
+            return
+        }
 
         do {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
+            // RULEBOOK 1.33.0 §25 reopen (best effort, after the delete).
+            OvertimeReopenNotice.managerSite(before: booking, after: nil)
             loadData(force: true)
         } catch {
-            // Not queued (online only): the server still has it, so put it back on screen.
-            errorMessage = OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true)
-                ? OfflinePolicy.onlineOnlyMessage
-                : error.localizedDescription
+            if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
+               OfflinePolicy.availability(action) == .allowedOffline {
+                // The connection dropped: the delete waits in the outbox with its tombstone (§2).
+                OfflineOutboxStore.shared.enqueueDeleteManagerSiteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
+                return
+            }
+            // Refused: the server still has it, so put it back on screen.
+            errorMessage = error.localizedDescription
             applyLocalSave(booking, organizationId: orgId)
             ScheduleChangeNotifier.postBookingStoreDidChange()
+        }
+    }
+
+    /// `bookingDeleteSignedTimesheetWarning` for the person's timesheets: shown once, the delete still goes ahead.
+    private func warnIfOnSignedTimesheet(_ booking: ManagerSiteBooking, organizationId: String) {
+        guard let fb = firebaseBackend else { return }
+        let userId = booking.userId
+        let dayKey = OrganizationRulebookContext.dayKey(booking.date)
+        Task { @MainActor in
+            let sheets = await fb.signedTimesheetCandidates(organizationId: organizationId, userId: userId)
+            if let warning = CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning(dayKey: dayKey, sheets: sheets) {
+                OfflineOutboxStore.shared.lastNoticeMessage = warning
+            }
         }
     }
 
@@ -301,6 +376,8 @@ class ManagerScheduleStore: ObservableObject {
     }
 
     private func applyRemoteManagerBookings(_ remote: [ManagerSiteBooking], organizationId: String) {
+        // RULEBOOK 1.33.0 §2: a queued delete stays gone until the outbox replays it.
+        let remote = withoutQueuedDeletes(remote, organizationId: organizationId)
         if remote.isEmpty && !managerSiteBookings.isEmpty {
             let lowerBound = firebaseBackend?.scheduleBookingQueryStart()
             managerSiteBookings = managerSiteBookings.filter {

@@ -2,90 +2,38 @@ import XCTest
 import UIKit
 @testable import Project_Planner
 
-/// The overtime screens' look helpers (no rule): which of ✕ ✓ ⚙ shows as picked, and the overtime report PDF layout
-/// (table rows from the saved copy, page breaks, the total box text). The figures and labels themselves come from the
-/// rulebook and are covered by `Rulebook1320OvertimeTests`.
+/// The overtime screens' look helpers (no rule): how ✕ ✓ ⚙ draw the rulebook's looks (RULEBOOK 1.33.0
+/// `overtimeChoiceView`), and the overtime report PDF layout (page breaks, the builder). The figures, labels and the
+/// report's rows come from the rulebook (`Rulebook1330OvertimeTests`).
 @MainActor
 final class OvertimeScreenLookTests: XCTestCase {
     // MARK: ✕ ✓ ⚙
 
-    func testNothingDecidedShowsThreeOutlinedCircles() {
-        for button in [OvertimeLineChoice.tick, .cross, .cog] {
-            XCTAssertEqual(OvertimeLineChoice.look(of: button, chosen: nil), .outlined)
-        }
-        XCTAssertFalse(OvertimeLineChoice.strikesFigure(nil))
+    func testTheRulebookLooksMapToTheCircles() {
+        XCTAssertEqual(OvertimeButtonLook(rulebook: "filled"), .filled)
+        XCTAssertEqual(OvertimeButtonLook(rulebook: "grey"), .greyed)
+        XCTAssertEqual(OvertimeButtonLook(rulebook: "idle"), .outlined)
+        XCTAssertEqual(OvertimeButtonLook(rulebook: "anything else"), .outlined)
     }
 
-    func testTickFillsTickAndGreysTheOthers() {
-        XCTAssertEqual(OvertimeLineChoice.look(of: .tick, chosen: .tick), .filled)
-        XCTAssertEqual(OvertimeLineChoice.look(of: .cross, chosen: .tick), .greyed)
-        XCTAssertEqual(OvertimeLineChoice.look(of: .cog, chosen: .tick), .greyed)
-        XCTAssertFalse(OvertimeLineChoice.strikesFigure(.tick))
-    }
-
-    func testCrossFillsCrossGreysTheOthersAndStrikesTheFigure() {
-        XCTAssertEqual(OvertimeLineChoice.look(of: .cross, chosen: .cross), .filled)
-        XCTAssertEqual(OvertimeLineChoice.look(of: .tick, chosen: .cross), .greyed)
-        XCTAssertEqual(OvertimeLineChoice.look(of: .cog, chosen: .cross), .greyed)
-        XCTAssertTrue(OvertimeLineChoice.strikesFigure(.cross))
-    }
-
-    func testCogLeavesTickAndCrossAvailable() {
-        XCTAssertEqual(OvertimeLineChoice.look(of: .cog, chosen: .cog), .filled)
-        XCTAssertEqual(OvertimeLineChoice.look(of: .tick, chosen: .cog), .outlined)
-        XCTAssertEqual(OvertimeLineChoice.look(of: .cross, chosen: .cog), .outlined)
-        XCTAssertTrue(OvertimeLineChoice.strikesFigure(.cog))
-    }
-
-    func testChoiceFromActionsAndSentLines() {
-        XCTAssertEqual(OvertimeLineChoice(.keep), .tick)
-        XCTAssertEqual(OvertimeLineChoice(.approve), .tick)
-        XCTAssertEqual(OvertimeLineChoice(.strike), .cross)
-        XCTAssertEqual(OvertimeLineChoice(.edit(start: "07:00", end: "17:00", multiplier: nil)), .cog)
-        XCTAssertEqual(OvertimeLineChoice(requestAction: "keep"), .tick)
-        XCTAssertEqual(OvertimeLineChoice(requestAction: "strike"), .cross)
-        XCTAssertEqual(OvertimeLineChoice(requestAction: "edit"), .cog)
-        XCTAssertNil(OvertimeLineChoice(requestAction: "other"))
-
-        let sent = OvertimeRequestLine(
-            bookingId: "TEST-b1", collection: "bookings", dayKey: "2026-11-02", jobId: nil, fingerprint: "f",
-            action: "strike", proposedStart: "07:30", proposedEnd: "16:00", proposedMultiplier: nil, cancel: false,
-            overtimeHoursBefore: 1.5, overtimeHoursAfter: 0
-        )
-        // The unsent proposal wins over the sent line, the sent line over the line state.
-        XCTAssertEqual(OvertimeLinesView.choice(proposal: .keep, sentLine: sent, state: "waiting"), .tick)
-        XCTAssertEqual(OvertimeLinesView.choice(proposal: nil, sentLine: sent, state: "waiting"), .cross)
-        XCTAssertEqual(OvertimeLinesView.choice(proposal: nil, sentLine: nil, state: "approved"), .tick)
-        XCTAssertNil(OvertimeLinesView.choice(proposal: nil, sentLine: nil, state: "needsReview"))
+    func testNothingChosenIsIdleEverywhere() {
+        XCTAssertEqual(OvertimeChoiceLook.idle.tick, "idle")
+        XCTAssertEqual(OvertimeChoiceLook.idle.cross, "idle")
+        XCTAssertEqual(OvertimeChoiceLook.idle.cog, "idle")
+        XCTAssertFalse(OvertimeChoiceLook.idle.figureStruck)
+        XCTAssertFalse(OvertimeChoiceLook.idle.complete)
     }
 
     // MARK: Report PDF layout
 
-    func testTableRowsReadTheSavedFieldsOneForOne() {
-        let saved: [[String: Any]] = [
-            ["dayLabel": "Mon 2 Nov", "jobNumber": "TEST-J1", "jobName": "Kitchen refit", "start": "06:00", "end": "18:00", "text": "3h × 1.5 = 4.5h"],
-            ["dayLabel": "Tue 3 Nov", "jobNumber": "", "jobName": "Office", "start": "", "end": "", "text": "1h × 1.5 = 1.5h"],
-        ]
-        let rows = OvertimeReportPDFLayout.tableRows(savedLines: saved, rulebookRows: ["a", "b"])
-        XCTAssertEqual(rows, [
-            OvertimeReportTableRow(day: "Mon 2 Nov", job: "TEST-J1 Kitchen refit", time: "06:00–18:00", overtime: "3h × 1.5 = 4.5h"),
-            OvertimeReportTableRow(day: "Tue 3 Nov", job: "Office", time: "", overtime: "1h × 1.5 = 1.5h"),
-        ])
-    }
-
-    func testTableRowsFallBackToTheRulebookRowsWhenTheCountsDiffer() {
-        let rows = OvertimeReportPDFLayout.tableRows(savedLines: nil, rulebookRows: ["Mon 2 Nov · TEST-J1 · 3h × 1.5 = 4.5h"])
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows.first?.fullText, "Mon 2 Nov · TEST-J1 · 3h × 1.5 = 4.5h")
-    }
-
-    func testTotalAndTitleSplitTheRulebookText() {
-        let total = OvertimeReportPDFLayout.splitTotal("Total overtime: 12.5h")
-        XCTAssertEqual(total.label, "Total overtime")
-        XCTAssertEqual(total.value, "12.5h")
-        XCTAssertEqual(OvertimeReportPDFLayout.splitTotal("Total").label, "Total")
-        XCTAssertEqual(OvertimeReportPDFLayout.documentTitle("Overtime report · TEST-Sam"), "Overtime report")
-        XCTAssertEqual(OvertimeReportPDFLayout.documentTitle(""), "Overtime report")
+    func testAReportTableRowIsTheRulebookRow() {
+        let row = OvertimeReportTableRow(OvertimeReportRows.TableRow(
+            bookingId: "TEST-B1", day: "Wed 4 Nov", job: "J-1 TEST Site", time: "06:30–14:00", overtime: "0h",
+            note: "Declined by TEST-Lee", declined: true
+        ))
+        XCTAssertEqual(row, OvertimeReportTableRow(
+            day: "Wed 4 Nov", job: "J-1 TEST Site", time: "06:30–14:00", overtime: "0h", note: "Declined by TEST-Lee", declined: true
+        ))
         XCTAssertEqual(OvertimeReportPDFLayout.pageLabel(1, of: 3), "Page 2 of 3")
     }
 
@@ -130,8 +78,9 @@ final class OvertimeScreenLookTests: XCTestCase {
         }
         let data = OvertimeReportPDFBuilder.makeData(OvertimeReportPDFBuilder.Content(
             title: "Overtime report", companyName: "TEST-Company", personName: "TEST-Sam", period: "26 Oct – 25 Nov",
-            generated: "6 Nov 2026, 14:05", rows: rows, totalLabel: "Total overtime", totalValue: "270h",
-            emptyMessage: "There is no overtime in this range.", logo: nil
+            generated: "6 Nov 2026, 14:05", columns: ["Day", "Job", "Start–Finish", "Overtime"], rows: rows,
+            totalLabel: "Total overtime", totalValue: "270h", emptyMessage: "There is no overtime in this range.",
+            footer: "TEST-Company · Overtime report · TEST-Sam", outOfDateNote: "Out of date: TEST", logo: nil
         ))
         let document = CGPDFDocument(CGDataProvider(data: data as CFData)!)
         XCTAssertNotNil(document)

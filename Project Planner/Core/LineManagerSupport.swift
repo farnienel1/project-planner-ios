@@ -40,6 +40,25 @@ extension AppUser {
         }
     }
 
+    /// A stable order for a line-manager save: the stored ids still selected, in their stored order, then the newly
+    /// selected ids sorted. The security rules compare `assignedManagerUserIds` element by element
+    /// (`lineManagersUnchanged`), so a picker `Set` must never reorder unchanged ids.
+    static func stableLineManagerOrder(stored: [String], selected: [String]) -> [String] {
+        let clean: ([String]) -> [String] = { ids in
+            ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }
+        let wanted = Set(clean(selected))
+        var seen = Set<String>()
+        let kept = clean(stored).filter { wanted.contains($0) && seen.insert($0).inserted }
+        let added = wanted.subtracting(seen).sorted()
+        return kept + added
+    }
+
+    /// `stableLineManagerOrder` against this person's stored line managers.
+    func stableLineManagerOrder(selected: [String]) -> [String] {
+        Self.stableLineManagerOrder(stored: lineManagerUserIds, selected: selected)
+    }
+
     mutating func setNoLineManager(_ enabled: Bool) {
         hasNoLineManager = enabled
         if enabled {

@@ -34,9 +34,8 @@ struct Project: Identifiable, Codable, Hashable {
     var notes: String?
     var createdAt: Date
     var updatedAt: Date
-    /// Managers hidden from this project/small works by admin.
-    var hiddenManagerUserIds: Set<String>
-    /// Operatives hidden from this project/small works by admin.
+    /// Operatives hidden from this project/small works (`visibleJobs`; RULEBOOK 1.33.0 keeps only the operatives' hide
+    /// list — the managers' `hiddenManagerUserIds` is never read or written, stored values are left in place).
     var hiddenOperativeUserIds: Set<String>
     /// When true, primary site location is the map pin; address lines are optional (e.g. from "Set address").
     var usesMapPinForLocation: Bool
@@ -112,7 +111,6 @@ struct Project: Identifiable, Codable, Hashable {
         isLive: Bool = true,
         description: String? = nil,
         notes: String? = nil,
-        hiddenManagerUserIds: Set<String> = [],
         hiddenOperativeUserIds: Set<String> = [],
         usesMapPinForLocation: Bool = false,
         latitude: Double? = nil,
@@ -138,7 +136,6 @@ struct Project: Identifiable, Codable, Hashable {
         self.notes = notes
         self.createdAt = Date()
         self.updatedAt = Date()
-        self.hiddenManagerUserIds = hiddenManagerUserIds
         self.hiddenOperativeUserIds = hiddenOperativeUserIds
         self.usesMapPinForLocation = usesMapPinForLocation
         self.latitude = latitude
@@ -159,7 +156,6 @@ struct Project: Identifiable, Codable, Hashable {
         isLive: Bool = true,
         description: String? = nil,
         notes: String? = nil,
-        hiddenManagerUserIds: Set<String> = [],
         hiddenOperativeUserIds: Set<String> = []
     ) {
         self.id = id
@@ -207,7 +203,6 @@ struct Project: Identifiable, Codable, Hashable {
         self.notes = notes
         self.createdAt = Date()
         self.updatedAt = Date()
-        self.hiddenManagerUserIds = hiddenManagerUserIds
         self.hiddenOperativeUserIds = hiddenOperativeUserIds
         self.usesMapPinForLocation = false
         self.latitude = nil
@@ -239,7 +234,7 @@ struct Project: Identifiable, Codable, Hashable {
         case client, startDate, endDate, jobType, customJobType, manager, managerId
         case managerIds
         case isLive, description, notes, createdAt, updatedAt
-        case hiddenManagerUserIds, hiddenOperativeUserIds
+        case hiddenOperativeUserIds
         case usesMapPinForLocation, latitude, longitude
         case firestoreDocumentId, storedManagerIds, storedManagerUserIds
     }
@@ -266,7 +261,6 @@ struct Project: Identifiable, Codable, Hashable {
         notes = try c.decodeIfPresent(String.self, forKey: .notes)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
-        hiddenManagerUserIds = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenManagerUserIds) ?? []
         hiddenOperativeUserIds = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenOperativeUserIds) ?? []
         usesMapPinForLocation = try c.decodeIfPresent(Bool.self, forKey: .usesMapPinForLocation) ?? false
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
@@ -301,7 +295,6 @@ struct Project: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(notes, forKey: .notes)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
-        try c.encode(hiddenManagerUserIds, forKey: .hiddenManagerUserIds)
         try c.encode(hiddenOperativeUserIds, forKey: .hiddenOperativeUserIds)
         try c.encode(usesMapPinForLocation, forKey: .usesMapPinForLocation)
         try c.encodeIfPresent(latitude, forKey: .latitude)

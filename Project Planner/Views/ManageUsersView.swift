@@ -1540,6 +1540,8 @@ struct EditUserView: View {
     @State private var selectedLineManagerUserIds: Set<String> = []
     @State private var hasNoLineManagerDraft = false
     @State private var showingLineManagerPicker = false
+    /// RULEBOOK 1.33.0 §11: the unaccepted invitation the signed-in manager sent this person, if any.
+    @State private var sentInvitation: (accepted: Bool, invitedBy: String)?
     @State private var showingSelfBookOffConfirmation = false
     @State private var selfBookOffConfirmationAccepted = false
     @State private var dayRateText: String
@@ -2255,6 +2257,43 @@ struct EditUserView: View {
             .task {
                 await loadDayRateHistory()
             }
+            .task {
+                await loadSentInvitationForLineManagerLock()
+            }
+    }
+
+    // MARK: Line manager set once, then locked (RULEBOOK 1.33.0 §11)
+
+    /// `canChangeLineManager(actor, target, { invitation })`: admins change anyone's line manager; an Operatives-toggle
+    /// manager only on an operative's invitation they sent that is not accepted yet (adding is Add User). Otherwise
+    /// the line manager is shown read-only (`LINE_MANAGER_LOCKED_MESSAGE`).
+    private var mayChangeLineManager: Bool {
+        guard let actor = userStore.currentUser else { return false }
+        return CanonicalBusinessEngine.canChangeLineManager(
+            actor: actor.lineManagerAccessRow,
+            target: user.lineManagerAccessRow,
+            invitation: sentInvitation
+        )
+    }
+
+    /// The person's line manager as this editor opened it — the stored ids mapped to the roster ids the picker shows
+    /// (`lineManagerSelectedIds`), as the draft starts — so an untouched picker never counts as a change.
+    private var lineManagerBaselineRow: [String: Any] {
+        var baseline = displayedUser
+        let ids = LineManagerRulebook.selectedIds(for: userStore.rosterRow(for: user.id) ?? user, roster: userStore.organizationUsers)
+        baseline.setLineManagerUserIds(Array(ids).sorted())
+        if !ids.isEmpty { baseline.hasNoLineManager = false }
+        return baseline.lineManagerAccessRow
+    }
+
+    private func loadSentInvitationForLineManagerLock() async {
+        // Only someone who is not an admin, editing a person who has not signed up yet, can be helped by an invitation.
+        guard !user.passwordSet, !userStore.hasAdminAccess(),
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+              let uid = firebaseBackend.currentUser?.uid else { return }
+        sentInvitation = await firebaseBackend.loadSentInvitation(
+            organizationId: orgId, uid: uid, email: user.email, profileEmail: userStore.currentUser?.email
+        )
     }
 
     private var editUserNavigationStack: some View {
@@ -3321,19 +3360,32 @@ struct EditUserView: View {
     }
 
     private var lineManagerPickRow: some View {
-        Button {
-            showingLineManagerPicker = true
-        } label: {
-            ManageUserChevronRow(
-                iconName: "person.badge.plus",
-                iconBackground: ManageUserProfilePalette.chipPurpleBg,
-                iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                label: "Line manager(s)",
-                value: lineManagerSummary
-            )
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                showingLineManagerPicker = true
+            } label: {
+                ManageUserChevronRow(
+                    iconName: "person.badge.plus",
+                    iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                    iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                    label: "Line manager(s)",
+                    value: lineManagerSummary
+                )
+            }
+            .accessibilityIdentifier("editUser.personBadgePlus")
+            .buttonStyle(.plain)
+            // RULEBOOK 1.33.0 §11: read-only once the person has been added, unless an admin is editing.
+            .disabled(!mayChangeLineManager)
+            if !mayChangeLineManager {
+                Text(CanonicalBusinessEngine.lineManagerLockedMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+                    .accessibilityIdentifier("editUser.lineManagerLocked")
+            }
         }
-        .accessibilityIdentifier("editUser.personBadgePlus")
-        .buttonStyle(.plain)
         .sheet(isPresented: $showingLineManagerPicker) {
             LineManagersMultiSelectSheet(
                 candidates: lineManagerCandidates.filter { $0.id != user.id },
@@ -4010,6 +4062,19 @@ struct EditUserView: View {
     private func saveChanges() {
         isUpdating = true
         Task {
+            // RULEBOOK 1.33.0 §11: a line manager once set is changed only by an admin (`canChangeLineManager`,
+            // `lineManagerChanged`); the rules refuse the write otherwise.
+            if !mayChangeLineManager,
+               CanonicalBusinessEngine.lineManagerChanged(
+                before: lineManagerBaselineRow,
+                after: draftUserForAnnualLeaveValidation.lineManagerAccessRow
+               ) {
+                await MainActor.run {
+                    isUpdating = false
+                    saveErrorMessage = CanonicalBusinessEngine.lineManagerLockedMessage
+                }
+                return
+            }
             if lineManagerRoutingBlocked {
                 await MainActor.run {
                     isUpdating = false
@@ -4212,7 +4277,8 @@ struct EditUserView: View {
             let parsedDayRate = parseDayRate(dayRateText)
             let effectiveForHistory: Date? = operativeDayRateChanged ? (dayRateEffectiveAt ?? calendarStartOfDay(Date())) : nil
             let rateToPersist = operativeDayRateChanged ? parsedDayRate : subjectUser.dayRate
-            let managerIds = hasNoLineManagerDraft ? [] : Array(selectedLineManagerUserIds)
+            // Sorted for a deterministic first id; the store keeps the stored order (`stableLineManagerOrder`).
+            let managerIds = hasNoLineManagerDraft ? [] : Array(selectedLineManagerUserIds).sorted()
             operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
                 for: subjectUser,
                 assignedManagerUserId: managerIds.first,
@@ -4222,7 +4288,9 @@ struct EditUserView: View {
                 operativeStore: operativeStore,
                 dayRateEffectiveAt: effectiveForHistory,
                 // Only an operative's rate is saved here; staff rates go through `updateManagerDayRate`.
-                updateDayRate: permissions.operativeMode && operativeDayRateChanged
+                updateDayRate: permissions.operativeMode && operativeDayRateChanged,
+                // RULEBOOK 1.33.0 §11: an actor who may not change the line manager writes no line-manager keys.
+                mayChangeLineManager: mayChangeLineManager && (managerAssignmentChanged || hasNoLineManagerChanged)
             )
         }
 

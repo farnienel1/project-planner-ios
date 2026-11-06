@@ -1,11 +1,11 @@
 import XCTest
 @testable import Project_Planner
 
-/// RULEBOOK 1.32.0 iOS follow-on, PAYE overtime (§25, web hand-off v1.32.0): partial approval (`overtimeApprovalWrites`
-/// → `lineOutcomes`, `waitingBookingIds`, `appliedBookingIds`, `complete`, `message`), one Approve
-/// (`OVERTIME_APPROVE_LABEL`, `overtimeRequestAnyDecided`), per-line labels (`overtimeLineOutcomeLabel`,
-/// `OVERTIME_NEEDS_ADMIN_LABEL`), all records for this person (`overtimePersonIds`), future days of the current payrun
-/// (`overtimeEditableUntil`) and own edits as requests with a line manager (`canEditOwnBookingOvertime({ person, roster })`).
+/// RULEBOOK 1.32.0 iOS follow-on, PAYE overtime (§25, web hand-off v1.32.0): all records for this person
+/// (`overtimePersonIds`), future days of the current payrun (`overtimeEditableUntil`) and own edits as requests with a
+/// line manager (`canEditOwnBookingOvertime({ person, roster })`). RULEBOOK 1.33.0 replaced the 1.32.0 partial approval
+/// (`overtimeApprovalWrites`, `overtimeRequestAnyDecided`, "Needs an admin") with Return (`overtimeReturnReady`,
+/// `overtimeReturnWrites`): the approval tests below now lock the Return the same lines get.
 /// Every answer comes from the packed script through `CanonicalBusinessEngine`; these tests lock the Swift readings.
 @MainActor
 final class Rulebook1320OvertimeTests: XCTestCase {
@@ -65,14 +65,13 @@ final class Rulebook1320OvertimeTests: XCTestCase {
         let version = try XCTUnwrap(CanonicalBusinessEngine.rulebookStamp()?.version)
         XCTAssertNotEqual(version.compare("1.32.0", options: .numeric), .orderedAscending, "rulebook \(version) is older than 1.32.0")
         let exports = Set(CanonicalBusinessEngine.exportNames())
-        for name in [
-            "overtimePersonIds", "overtimeEditableUntil", "overtimeRequestAnyDecided", "overtimeLineOutcomeLabel",
-            "reviewApprovalMessage", "OVERTIME_APPROVE_LABEL", "OVERTIME_NEEDS_ADMIN_LABEL",
-        ] {
+        for name in ["overtimePersonIds", "overtimeEditableUntil", "overtimeLineOutcomeLabel", "reviewApprovalMessage"] {
             XCTAssertTrue(exports.contains(name), "\(name) is not exported")
         }
-        XCTAssertEqual(CanonicalBusinessEngine.overtimeText("OVERTIME_APPROVE_LABEL", fallback: ""), "Approve")
-        XCTAssertEqual(CanonicalBusinessEngine.overtimeText("OVERTIME_NEEDS_ADMIN_LABEL", fallback: ""), "Needs an admin")
+        // 1.33.0: the partial approval and "Needs an admin" are gone.
+        for name in ["overtimeApprovalWrites", "overtimeRequestAnyDecided", "OVERTIME_NEEDS_ADMIN_LABEL", "OVERTIME_NEEDS_ADMIN_MESSAGE"] {
+            XCTAssertFalse(exports.contains(name), "\(name) should no longer be exported")
+        }
     }
 
     // MARK: All records for this person
@@ -131,9 +130,9 @@ final class Rulebook1320OvertimeTests: XCTestCase {
         ), .request, "anyone with an active line manager sends a request")
     }
 
-    // MARK: Partial approval
+    // MARK: Return (1.33.0 replaces the partial approval)
 
-    func testApprovalAppliesWhatTheDeciderMayAndLeavesTheRestWaiting() throws {
+    func testReturnNeedsEveryLineDecidedAndAppliesEveryIdOfThePerson() throws {
         let b1 = booking("TEST-B1", "2026-11-04", "06:30", "14:00")
         let b2 = booking("TEST-B2", "2026-11-05", "07:30", "18:00")
         let b3 = booking("TEST-B3", "2026-11-03", "07:30", "17:30", person: "TEST-op1")
@@ -146,88 +145,70 @@ final class Rulebook1320OvertimeTests: XCTestCase {
         ))
         stored["createdAt"] = 1
         let request = try XCTUnwrap(CanonicalBusinessEngine.parseOvertimeRequestDocument(docId: "TEST-R1", data: stored))
-        XCTAssertEqual(request.appliedBookingIds, [])
 
-        // One Approve, enabled once any line is decided.
-        XCTAssertFalse(CanonicalBusinessEngine.overtimeRequestAnyDecided(request, decisions: [:]))
-        XCTAssertTrue(CanonicalBusinessEngine.overtimeRequestAnyDecided(request, decisions: ["TEST-B1": .approve]))
+        // Return overtime is green only once every waiting line is decided.
+        let notYet = CanonicalBusinessEngine.overtimeReturnReady(request, decisions: ["TEST-B1": .approve], skipBookingIds: [])
+        XCTAssertFalse(notYet.ready)
+        XCTAssertEqual(notYet.undecidedCount, 2)
+        XCTAssertEqual(notYet.message, CanonicalBusinessEngine.overtimeText("OVERTIME_REQUEST_UNDECIDED_MESSAGE", fallback: ""))
+        XCTAssertTrue(CanonicalBusinessEngine.overtimeReturnReady(
+            request, decisions: ["TEST-B1": .approve, "TEST-B3": .strike], skipBookingIds: ["TEST-B2"]
+        ).ready, "a line the decider cannot read never blocks the Return")
 
-        // A line manager (not an admin): B1 applied, B2 changed since the request (waits), B3 under an operatives row
-        // (owner decision A: needs an admin).
+        // B1 ✓, B2 changed since it was sent (skip-and-name), B3 under an operatives row on the person's email (1.33.0:
+        // the line manager decides it; ✕ leaves the booking as it was).
         var changed = b2
         changed.workEndTime = "19:00"
-        let decisions: [String: OvertimeAction] = ["TEST-B1": .approve, "TEST-B2": .approve, "TEST-B3": .approve]
-        let plan = try XCTUnwrap(CanonicalBusinessEngine.overtimeApprovalWrites(
-            request: request, decisions: decisions, bookings: ["TEST-B1": b1, "TEST-B2": changed, "TEST-B3": b3], organization: org,
-            deciderId: "TEST-lm", requesterIds: ids, deciderIsAdmin: false, writableBookingIds: [], unreadableBookingIds: []
+        let plan = try XCTUnwrap(CanonicalBusinessEngine.overtimeReturnWrites(
+            request: request, decisions: ["TEST-B1": .approve, "TEST-B2": .approve, "TEST-B3": .strike],
+            bookings: ["TEST-B1": b1, "TEST-B2": changed, "TEST-B3": b3], organization: org,
+            deciderId: "TEST-lm", requesterIds: ids, unreadableBookingIds: []
         ))
         XCTAssertTrue(plan.ok)
-        XCTAssertNil(plan.refusalMessage)
-        XCTAssertEqual(plan.appliedBookingIds, ["TEST-B1"])
-        XCTAssertEqual(plan.waitingBookingIds, ["TEST-B2", "TEST-B3"])
-        XCTAssertEqual(plan.lineOutcomes, ["TEST-B1": "applied", "TEST-B2": "stale", "TEST-B3": "needsAdmin"])
-        XCTAssertFalse(plan.complete)
-        XCTAssertEqual(plan.message, "Approved 1 of 3. 1 needs an admin; 1 changed since the request.")
-        XCTAssertEqual(plan.reviewWrites.map(\.docId), ["TEST-sam_TEST-B1"])
-        XCTAssertEqual(plan.requestFields["status"] as? String, "pending", "the request stays pending until complete")
-        XCTAssertEqual(plan.requestFields["appliedBookingIds"] as? [String], ["TEST-B1"])
-        XCTAssertEqual(CanonicalBusinessEngine.overtimeLineOutcomeLabel(plan.lineOutcomes["TEST-B3"]), "Needs an admin")
+        XCTAssertEqual(plan.appliedBookingIds, ["TEST-B1", "TEST-B3"])
+        XCTAssertEqual(plan.staleBookingIds, ["TEST-B2"])
+        XCTAssertEqual(plan.lineOutcomes, ["TEST-B1": "applied", "TEST-B2": "stale", "TEST-B3": "declined"])
+        XCTAssertFalse(plan.lineOutcomes.values.contains("needsAdmin"))
+        XCTAssertEqual(plan.message, "Returned 2 lines. 1 changed since they sent it — they need to send it again.")
+        XCTAssertEqual(plan.reviewWrites.map(\.docId), ["TEST-sam_TEST-B1", "TEST-sam_TEST-B3"])
+        XCTAssertEqual(plan.reviewWrites.map { $0.fields["decision"] as? String }, ["approved", "declined"])
+        XCTAssertTrue(plan.bookingWrites.isEmpty, "✓ on a kept line and ✕ write no booking change")
+        XCTAssertEqual(plan.requestFields["status"] as? String, "approved")
+        XCTAssertEqual(plan.requestFields["staleBookingIds"] as? [String], ["TEST-B2"])
         XCTAssertEqual(
-            CanonicalBusinessEngine.overtimeLineOutcomeLabel(plan.lineOutcomes["TEST-B2"]),
+            CanonicalBusinessEngine.overtimeLineOutcomeLabel("stale"),
             CanonicalBusinessEngine.overtimeText("OVERTIME_CHANGED_SINCE_REQUEST_LINE_MESSAGE", fallback: "")
         )
-        XCTAssertNil(CanonicalBusinessEngine.overtimeLineOutcomeLabel(plan.lineOutcomes["TEST-B1"]))
-
-        // The stored request after that approval: B1 is done; deciding only B1 again enables nothing.
-        var after = stored
-        for (key, value) in plan.requestFields { after[key] = value }
-        let partial = try XCTUnwrap(CanonicalBusinessEngine.parseOvertimeRequestDocument(docId: "TEST-R1", data: after))
-        XCTAssertTrue(partial.isPending)
-        XCTAssertEqual(partial.appliedBookingIds, ["TEST-B1"])
-        XCTAssertFalse(CanonicalBusinessEngine.overtimeRequestAnyDecided(partial, decisions: ["TEST-B1": .approve]))
-        XCTAssertTrue(CanonicalBusinessEngine.overtimeRequestAnyDecided(partial, decisions: ["TEST-B3": .approve]))
-
-        // An admin finishes it: the request is approved.
-        let finish = try XCTUnwrap(CanonicalBusinessEngine.overtimeApprovalWrites(
-            request: partial, decisions: ["TEST-B2": .approve, "TEST-B3": .approve], bookings: ["TEST-B1": b1, "TEST-B2": b2, "TEST-B3": b3],
-            organization: org, deciderId: "TEST-adm", requesterIds: ids, deciderIsAdmin: true, writableBookingIds: [], unreadableBookingIds: []
-        ))
-        XCTAssertTrue(finish.ok)
-        XCTAssertTrue(finish.complete)
-        XCTAssertEqual(finish.lineOutcomes["TEST-B1"], "alreadyApplied")
-        XCTAssertEqual(finish.appliedBookingIds, ["TEST-B2", "TEST-B3"])
-        XCTAssertEqual(finish.requestFields["status"] as? String, "approved")
-        XCTAssertEqual(finish.message, "Approved 2 of 2.")
+        XCTAssertNil(CanonicalBusinessEngine.overtimeLineOutcomeLabel("applied"))
     }
 
-    func testNothingApprovedWritesNothingAndNamesWhy() throws {
+    func testAnUndecidedOrClosedRequestWritesNothing() throws {
+        let b1 = booking("TEST-B1", "2026-11-04", "06:30", "14:00")
         let b3 = booking("TEST-B3", "2026-11-03", "07:30", "17:30", person: "TEST-op1")
         let ids = ["TEST-sam", "TEST-op1"]
-        let line = try XCTUnwrap(CanonicalBusinessEngine.overtimeRequestLineFields(b3, organization: org, proposal: .keep, personIds: ids)).raw
+        let lines = try [b1, b3].map {
+            try XCTUnwrap(CanonicalBusinessEngine.overtimeRequestLineFields($0, organization: org, proposal: .keep, personIds: ids)).raw
+        }
         let request = try XCTUnwrap(CanonicalBusinessEngine.parseOvertimeRequestDocument(docId: "TEST-R2", data: [
-            "userId": "TEST-sam", "rangeStart": "2026-10-26", "rangeEnd": "2026-11-25", "status": "pending", "lines": [line],
+            "userId": "TEST-sam", "rangeStart": "2026-10-26", "rangeEnd": "2026-11-25", "status": "pending", "lines": lines,
         ]))
-        let plan = try XCTUnwrap(CanonicalBusinessEngine.overtimeApprovalWrites(
-            request: request, decisions: ["TEST-B3": .approve], bookings: ["TEST-B3": b3], organization: org,
-            deciderId: "TEST-lm", requesterIds: ids, deciderIsAdmin: false, writableBookingIds: [], unreadableBookingIds: []
+        let plan = try XCTUnwrap(CanonicalBusinessEngine.overtimeReturnWrites(
+            request: request, decisions: ["TEST-B1": .approve], bookings: ["TEST-B1": b1, "TEST-B3": b3], organization: org,
+            deciderId: "TEST-lm", requesterIds: ids, unreadableBookingIds: []
         ))
         XCTAssertFalse(plan.ok)
-        XCTAssertEqual(plan.reason, "nothingApproved")
+        XCTAssertEqual(plan.reason, "undecided")
+        XCTAssertEqual(plan.bookingIds, ["TEST-B3"])
         XCTAssertTrue(plan.bookingWrites.isEmpty)
         XCTAssertTrue(plan.reviewWrites.isEmpty)
-        XCTAssertEqual(plan.lineOutcomes, ["TEST-B3": "needsAdmin"])
-        XCTAssertEqual(plan.refusalMessage, "Nothing was approved: 1 needs an admin.")
 
         var closed = request.raw
         closed["status"] = "approved"
-        let notPending = try XCTUnwrap(CanonicalBusinessEngine.overtimeApprovalWrites(
-            request: try XCTUnwrap(OvertimeRequestRecord(raw: closed)), decisions: ["TEST-B3": .approve], bookings: ["TEST-B3": b3],
-            organization: org, deciderId: "TEST-adm", requesterIds: ids, deciderIsAdmin: true, writableBookingIds: [], unreadableBookingIds: []
+        let notPending = try XCTUnwrap(CanonicalBusinessEngine.overtimeReturnWrites(
+            request: try XCTUnwrap(OvertimeRequestRecord(raw: closed)), decisions: ["TEST-B1": .approve, "TEST-B3": .approve],
+            bookings: ["TEST-B1": b1, "TEST-B3": b3], organization: org, deciderId: "TEST-adm", requesterIds: ids, unreadableBookingIds: []
         ))
         XCTAssertEqual(notPending.reason, "notPending")
-        XCTAssertEqual(
-            notPending.message,
-            CanonicalBusinessEngine.overtimeText("OVERTIME_REQUEST_NOT_PENDING_MESSAGE", fallback: "")
-        )
+        XCTAssertEqual(notPending.message, CanonicalBusinessEngine.overtimeText("OVERTIME_REQUEST_NOT_PENDING_MESSAGE", fallback: ""))
     }
 }

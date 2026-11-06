@@ -109,6 +109,8 @@ final class Rulebook1210Tests: XCTestCase {
         XCTAssertTrue(CanonicalBusinessEngine.bookableJobs(jobs, viewer: operativeViewer, context: operativeContext).isEmpty, "operatives book onto no job")
     }
 
+    /// RULEBOOK 1.33.0 §17, §21 (owner decisions 6 Nov): every manager sees every job, toggle or not, and the managers'
+    /// hide list (`hiddenManagerUserIds`) is no longer read — a stored value is ignored.
     func testAManagerWithAndWithoutTheProjectsToggle() throws {
         let jobs = [
             try job("MINE", ["managerUserIds": ["U-M"]]),
@@ -119,13 +121,13 @@ final class Rulebook1210Tests: XCTestCase {
         let context = RulebookWorksListContext()
         XCTAssertEqual(
             CanonicalBusinessEngine.visibleJobs(jobs, viewer: managerViewer(projectsToggle: false), context: context).map(\.documentId),
-            ["MINE"],
-            "without the toggle: only the jobs they manage, less hidden ones"
+            ["MINE", "NOT-MINE", "HIDDEN", "SW-OTHER"],
+            "without the toggle: every job, the stored managers' hide list ignored"
         )
         XCTAssertEqual(
             CanonicalBusinessEngine.visibleJobs(jobs, viewer: managerViewer(projectsToggle: true), context: context).map(\.documentId),
-            ["MINE", "NOT-MINE"],
-            "with the Projects toggle: every project (less hidden), and still only their own small works"
+            ["MINE", "NOT-MINE", "HIDDEN", "SW-OTHER"],
+            "with the Projects toggle: the same list"
         )
     }
 
@@ -145,6 +147,9 @@ final class Rulebook1210Tests: XCTestCase {
         )
     }
 
+    /// RULEBOOK 1.33.0 §17, §21 (owner decisions 6 Nov): every manager sees every job, so a job they do not manage
+    /// (NOT-MINE) is on their lists and counts when active today. LIVE, NOT-MINE and SW-A are active on 3 Nov; INACTIVE
+    /// and ENDED are not. Before 1.33.0 the count was 2 (a manager without the toggle saw only their own jobs).
     func testHomeActiveCountIsTheActiveTabOfTheViewersLists() throws {
         let jobs = [
             try job("LIVE", ["managerUserIds": ["U-M"], "startDate": "2026-11-01", "endDate": "2026-11-30"]),
@@ -158,7 +163,7 @@ final class Rulebook1210Tests: XCTestCase {
             CanonicalBusinessEngine.activeJobsCount(
                 jobs, viewer: managerViewer(projectsToggle: false), context: RulebookWorksListContext(), now: now, timeZone: london
             ),
-            2
+            3
         )
     }
 

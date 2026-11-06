@@ -13,6 +13,14 @@
 //  of the current payrun (`overtimeEditableUntil`) and own edits as requests with a line manager
 //  (`canEditOwnBookingOvertime({ person, roster })`).
 //
+//  RULEBOOK 1.33.0 (§25, §13, owner decisions 6 Nov): Send → Return. One ✓ ✕ ⚙ state machine (`overtimeChoiceAfter`,
+//  drawn with `overtimeChoiceView`), one readiness rule per button (`overtimeSubmitReady` / `overtimeSubmitLines`,
+//  `overtimeReturnReady`, `overtimeGenerateReady`), Return as one transaction (`overtimeReturnWrites`: booking writes,
+//  booking deletes with their tombstone, reviews and the request fields), the new line states, reports marked out of
+//  date (`overtimeReportOutOfDate`), the notices (`overtimeRequestSubmittedMessage`, `overtimeReturnedMessage`,
+//  `overtimeReopenedMessage`) and where they open (`overtimeNotificationRange`). `overtimeApprovalWrites`,
+//  `overtimeRequestAnyDecided` and "Needs an admin" are gone from the rulebook and from here.
+//
 
 import Foundation
 
@@ -105,12 +113,19 @@ nonisolated struct OvertimeLine: Codable, Hashable, Sendable, Identifiable {
     var end: String
     var timeSlot: String
     var fingerprint: String
-    /// `needsReview` | `waiting` | `approved` | `changedSinceRequest` | `cancelled`.
+    /// 1.33.0: `needsReview` | `waiting` | `changedSinceRequest` | `confirmed` | `returnedApproved` | `returnedChanged` |
+    /// `returnedDeclined` | `reopened` | `deleted` | `cancelled` (`OVERTIME_LINE_STATES`).
     var state: String
     var stateLabel: String
+    /// Nil for a cancelled or deleted line.
     var figures: OvertimeFigures?
     var requestId: String?
     var requestLine: OvertimeRequestLine?
+    /// 1.33.0: who returned the line and their name (nil when not returned).
+    var decidedBy: String?
+    var deciderName: String?
+    /// 1.33.0: the request line the person last sent for this booking (`overtimeLineBaselineChoice` starts from it).
+    var sentLine: OvertimeRequestLine?
 
     var id: String { "\(collection)/\(bookingId)" }
 }
@@ -205,7 +220,7 @@ nonisolated struct OvertimeStrikeOutcome: Codable, Hashable, Sendable {
         var confirm: String
         var footnote: String
     }
-    /// `none` | `trim` | `cancel` | `notAllowed`.
+    /// `none` | `trim` | `delete` (1.33.0: was `cancel`) | `notAllowed`.
     var kind: String
     var start: String?
     var end: String?
@@ -239,7 +254,7 @@ nonisolated struct OvertimeHubAccess: Codable, Hashable, Sendable {
     static let hidden = OvertimeHubAccess(showButton: false, mine: false, users: false)
 }
 
-/// A booking write of `overtimeApprovalWrites` / `overtimeDirectWrites`: `set` keys and `remove` keys.
+/// A booking write of `overtimeReturnWrites` / `overtimeDirectWrites`: `set` keys and `remove` keys.
 nonisolated struct OvertimeBookingWrite: @unchecked Sendable {
     var collection: String
     var bookingId: String
@@ -257,6 +272,24 @@ nonisolated struct OvertimeBookingWrite: @unchecked Sendable {
     }
 }
 
+/// 1.33.0 `OvertimeBookingDelete` (item f): a labour booking an approved red X removes, and its tombstone
+/// (`bookingTombstoneWriteFields`, with `overtimeRequestId` on a Return). The app adds the tombstone's `deletedAt`.
+nonisolated struct OvertimeBookingDelete: @unchecked Sendable {
+    var collection: String
+    var bookingId: String
+    var tombstone: [String: Any]
+
+    init?(_ raw: Any?) {
+        guard let row = raw as? [String: Any],
+              let collection = row["collection"] as? String,
+              let bookingId = row["bookingId"] as? String,
+              let tombstone = row["tombstone"] as? [String: Any] else { return nil }
+        self.collection = collection
+        self.bookingId = bookingId
+        self.tombstone = tombstone
+    }
+}
+
 /// A review write: `overtimeReviews/{docId}` fields.
 nonisolated struct OvertimeReviewWrite: @unchecked Sendable {
     var docId: String
@@ -271,28 +304,26 @@ nonisolated struct OvertimeReviewWrite: @unchecked Sendable {
     }
 }
 
-/// `overtimeApprovalWrites` answer (1.32.0, partial approval). `ok` false (`notPending` | `nothingApproved`) writes
-/// nothing; `ok` true applies `bookingWrites`, `reviewWrites` and `requestFields` (still `pending` until `complete`).
-/// `lineOutcomes` maps a request line's booking id to `applied` | `alreadyApplied` | `undecided` | `stale` |
-/// `needsAdmin` | `refused` | `deleted` | `unreadable` | `foreign` (labels: `overtimeLineOutcomeLabel`). `message` is
-/// the script's `reviewApprovalMessage` ("Approved 2 of 5. …" / "Nothing was approved: …").
-nonisolated struct OvertimeApprovalPlan: @unchecked Sendable {
+/// `overtimeReturnWrites` answer (1.33.0 Return, one transaction). `ok` false (`notPending` | `undecided`) writes
+/// nothing; `ok` true applies `bookingWrites`, `bookingDeletes` (each with its tombstone), `reviewWrites` and
+/// `requestFields` (`approved`, with `staleBookingIds` / `deletedBookingIds`). `lineOutcomes` maps a request line's
+/// booking id to `applied` | `declined` | `removed` | `alreadyApplied` | `stale` | `refused` | `deleted` | `unreadable` |
+/// `foreign` (labels: `overtimeLineOutcomeLabel`). `message` is `overtimeReturnMessage` ("Returned 5 lines. …").
+nonisolated struct OvertimeReturnPlan: @unchecked Sendable {
     var ok: Bool
-    /// `notPending` | `nothingApproved` when `ok` is false; nil when `ok`.
+    /// `notPending` | `undecided` when `ok` is false; nil when `ok`.
     var reason: String?
-    /// When refused: the lines left waiting or out.
+    /// When refused: the lines still undecided.
     var bookingIds: [String]
     var bookingWrites: [OvertimeBookingWrite]
+    var bookingDeletes: [OvertimeBookingDelete]
     var reviewWrites: [OvertimeReviewWrite]
     var requestFields: [String: Any]
     var appliedBookingIds: [String]
-    var droppedBookingIds: [String]
+    var staleBookingIds: [String]
     var deletedBookingIds: [String]
-    var unreadableBookingIds: [String]
-    var foreignBookingIds: [String]
-    var waitingBookingIds: [String]
+    var droppedBookingIds: [String]
     var lineOutcomes: [String: String]
-    var complete: Bool
     var message: String
 
     init?(_ raw: Any?) {
@@ -301,32 +332,30 @@ nonisolated struct OvertimeApprovalPlan: @unchecked Sendable {
         reason = ok ? nil : row["reason"] as? String
         bookingIds = row["bookingIds"] as? [String] ?? []
         bookingWrites = (row["bookingWrites"] as? [Any] ?? []).compactMap { OvertimeBookingWrite($0) }
+        bookingDeletes = (row["bookingDeletes"] as? [Any] ?? []).compactMap { OvertimeBookingDelete($0) }
         reviewWrites = (row["reviewWrites"] as? [Any] ?? []).compactMap { OvertimeReviewWrite($0) }
         requestFields = row["requestFields"] as? [String: Any] ?? [:]
         appliedBookingIds = row["appliedBookingIds"] as? [String] ?? []
-        droppedBookingIds = row["droppedBookingIds"] as? [String] ?? []
+        staleBookingIds = row["staleBookingIds"] as? [String] ?? []
         deletedBookingIds = row["deletedBookingIds"] as? [String] ?? []
-        unreadableBookingIds = row["unreadableBookingIds"] as? [String] ?? []
-        foreignBookingIds = row["foreignBookingIds"] as? [String] ?? []
-        waitingBookingIds = row["waitingBookingIds"] as? [String] ?? []
+        droppedBookingIds = row["droppedBookingIds"] as? [String] ?? []
         lineOutcomes = row["lineOutcomes"] as? [String: String] ?? [:]
-        complete = row["complete"] as? Bool ?? false
         message = row["message"] as? String ?? ""
     }
-
-    /// The script's message when nothing would be applied; nil when the approval applies something.
-    var refusalMessage: String? { ok ? nil : message }
 }
 
 /// `overtimeDirectWrites` answer.
 nonisolated struct OvertimeDirectPlan: @unchecked Sendable {
     var bookingWrite: OvertimeBookingWrite?
+    /// 1.33.0: the delete (with its tombstone) of an all-overtime booking the red X removes.
+    var bookingDelete: OvertimeBookingDelete?
     var reviewWrite: OvertimeReviewWrite
     var hoursChanged: Bool
 
     init?(_ raw: Any?) {
         guard let row = raw as? [String: Any], let review = OvertimeReviewWrite(row["reviewWrite"]) else { return nil }
         bookingWrite = OvertimeBookingWrite(row["bookingWrite"])
+        bookingDelete = OvertimeBookingDelete(row["bookingDelete"])
         reviewWrite = review
         hoursChanged = row["hoursChanged"] as? Bool ?? false
     }
@@ -343,6 +372,7 @@ nonisolated struct OvertimeRequestRecord: Identifiable, @unchecked Sendable {
         var lines: [OvertimeRequestLine]
         var createdAtMs: Double?
         var appliedBookingIds: [String]?
+        var droppedBookingIds: [String]?
     }
 
     let raw: [String: Any]
@@ -354,8 +384,10 @@ nonisolated struct OvertimeRequestRecord: Identifiable, @unchecked Sendable {
     let status: String
     let lines: [OvertimeRequestLine]
     let createdAtMs: Double?
-    /// 1.32.0: lines applied by an earlier partial approval (the request stays `pending` until every line is done).
+    /// 1.32.0: lines applied by an earlier partial approval; 1.33.0: lines returned by a Return.
     let appliedBookingIds: [String]
+    /// Lines left out (deleted, unreadable, refused, not theirs).
+    let droppedBookingIds: [String]
 
     init?(raw: Any?) {
         guard let row = raw as? [String: Any], let view = RulebookJSON.decode(Fields.self, from: row) else { return nil }
@@ -368,6 +400,7 @@ nonisolated struct OvertimeRequestRecord: Identifiable, @unchecked Sendable {
         lines = view.lines
         createdAtMs = view.createdAtMs
         appliedBookingIds = view.appliedBookingIds ?? []
+        droppedBookingIds = view.droppedBookingIds ?? []
     }
 
     var isPending: Bool { status == "pending" }
@@ -398,6 +431,7 @@ nonisolated struct OvertimeReportRecord: Identifiable, @unchecked Sendable {
         var rangeEnd: String
         var totals: Totals
         var generatedAtMs: Double?
+        var outOfDate: Bool?
     }
 
     let raw: [String: Any]
@@ -408,6 +442,8 @@ nonisolated struct OvertimeReportRecord: Identifiable, @unchecked Sendable {
     let rangeEnd: String
     let overtimeHours: Double
     let generatedAtMs: Double?
+    /// 1.33.0: a stored out-of-date mark (the screens work it out with `overtimeReportOutOfDate`).
+    let storedOutOfDate: Bool
 
     init?(raw: Any?) {
         guard let row = raw as? [String: Any], let view = RulebookJSON.decode(Fields.self, from: row) else { return nil }
@@ -419,15 +455,146 @@ nonisolated struct OvertimeReportRecord: Identifiable, @unchecked Sendable {
         rangeEnd = view.rangeEnd
         overtimeHours = view.totals.overtimeHours
         generatedAtMs = view.generatedAtMs
+        storedOutOfDate = view.outOfDate ?? false
     }
 }
 
-/// `overtimeReportRows`: the PDF's text rows.
+/// `overtimeReportRows`: the PDF's content. 1.33.0 (owner 6 Nov, laid out like the invoice report): the header
+/// (`documentTitle`, `companyName`, `personName`, `period`, `generated` from `reportGeneratedText`), the table
+/// (`columns`, `table`), the total (`totalLabel` / `totalValue`), `emptyMessage`, `footer` and the out-of-date mark.
 nonisolated struct OvertimeReportRows: Codable, Hashable, Sendable {
+    /// One table row: day, job, start–finish, overtime; a declined line reads "0h" with "Declined by {name}".
+    nonisolated struct TableRow: Codable, Hashable, Sendable {
+        var bookingId: String
+        var day: String
+        var job: String
+        var time: String
+        var overtime: String
+        var note: String
+        var declined: Bool
+    }
+
     var title: String
     var subtitle: String
     var rows: [String]
     var total: String
+    var documentTitle: String
+    var companyName: String
+    var personName: String
+    var period: String
+    var generatedAt: String
+    var generatedBy: String
+    var generated: String
+    var columns: [String]
+    var table: [TableRow]
+    var totalLabel: String
+    var totalValue: String
+    var emptyMessage: String
+    var footer: String
+    var outOfDate: Bool
+    var outOfDateNote: String
+}
+
+/// 1.33.0 `OvertimeChoice`: the person's or the decider's ✓ ✕ ⚙ on one line (`overtimeChoiceAfter`). `mark` is
+/// `none` | `tick` | `cross`; `edit` holds the cog's start, finish and rate (nil rate = the organisation's).
+nonisolated struct OvertimeChoice: Codable, Hashable, Sendable {
+    nonisolated struct Edit: Codable, Hashable, Sendable {
+        var start: String
+        var end: String
+        var multiplier: Double?
+    }
+
+    var mark: String
+    var edit: Edit?
+
+    /// `OVERTIME_EMPTY_CHOICE`.
+    static let empty = OvertimeChoice(mark: "none", edit: nil)
+
+    /// The script argument (`edit` and its rate as JSON null when absent).
+    var json: [String: Any] {
+        [
+            "mark": mark,
+            "edit": edit.map { ["start": $0.start, "end": $0.end, "multiplier": RulebookJSON.orNull($0.multiplier)] as [String: Any] as Any }
+                ?? NSNull(),
+        ]
+    }
+
+    init(mark: String, edit: Edit?) {
+        self.mark = mark
+        self.edit = edit
+    }
+
+    init?(json: Any?) {
+        guard let row = json as? [String: Any], let mark = row["mark"] as? String else { return nil }
+        self.mark = mark
+        if let edit = row["edit"] as? [String: Any], let start = edit["start"] as? String, let end = edit["end"] as? String {
+            self.edit = Edit(start: start, end: end, multiplier: (edit["multiplier"] as? NSNumber)?.doubleValue)
+        } else {
+            self.edit = nil
+        }
+    }
+}
+
+/// 1.33.0 `OvertimeChoiceEvent`: a tap on ✓, ✕, a saved cog, or a reset.
+nonisolated enum OvertimeChoiceEvent: Hashable, Sendable {
+    case tick
+    case cross
+    case cog(start: String, end: String, multiplier: Double?)
+    case reset
+
+    var json: [String: Any] {
+        switch self {
+        case .tick: return ["kind": "tick"]
+        case .cross: return ["kind": "cross"]
+        case .reset: return ["kind": "reset"]
+        case .cog(let start, let end, let multiplier):
+            return ["kind": "cog", "start": start, "end": end, "multiplier": RulebookJSON.orNull(multiplier)]
+        }
+    }
+}
+
+/// 1.33.0 `overtimeChoiceView`: what both apps draw for one line's choice. `tick` / `cross` / `cog` are `filled` |
+/// `grey` | `idle`; `figureStruck` strikes the booking's figure; `newFigure` goes under it; `label` is the person's or
+/// the decider's word; `complete` once ✓ or ✕ is set.
+nonisolated struct OvertimeChoiceLook: Codable, Hashable, Sendable {
+    var tick: String
+    var cross: String
+    var cog: String
+    var figureStruck: Bool
+    var oldFigure: String
+    var newFigure: String?
+    var label: String
+    var complete: Bool
+
+    /// Nothing chosen, nothing drawn (the script did not answer).
+    static let idle = OvertimeChoiceLook(
+        tick: "idle", cross: "idle", cog: "idle", figureStruck: false, oldFigure: "", newFigure: nil, label: "", complete: false
+    )
+}
+
+/// A button-readiness answer (`overtimeSubmitReady`, `overtimeReturnReady`, `overtimeGenerateReady`).
+nonisolated struct OvertimeButtonReadiness: Codable, Hashable, Sendable {
+    var ready: Bool
+    var undecidedCount: Int?
+    /// `overtimeSubmitReady`: the lines Send for approval would send.
+    var bookingIds: [String]?
+    var message: String?
+
+    static let notReady = OvertimeButtonReadiness(ready: false, undecidedCount: nil, bookingIds: nil, message: nil)
+}
+
+/// 1.33.0 `overtimeNotificationRange`: the payrun an overtime notice opens.
+nonisolated struct OvertimeNotificationRange: Codable, Hashable, Sendable {
+    /// `current` | `past` | `custom`.
+    var range: String
+    var start: String
+    var end: String
+}
+
+/// A notice's title and text (`overtimeRequestSubmittedMessage`, `overtimeReturnedMessage`, `overtimeReopenedMessage`).
+nonisolated struct OvertimeNotice: Codable, Hashable, Sendable {
+    var title: String
+    var message: String
 }
 
 /// One `weeklyReportPayeOvertime` row. RULEBOOK 1.32.0 §7: one row per PAYE person, job and multiplier, with the
@@ -503,9 +670,14 @@ extension CanonicalBusinessEngine {
         constant(name, as: String.self) ?? fallback
     }
 
-    /// `OVERTIME_CANCEL_WARNING`: the red X cancel warning, the same on every platform.
-    nonisolated static var overtimeCancelWarning: OvertimeStrikeOutcome.Warning? {
-        guard let row = constant("OVERTIME_CANCEL_WARNING", as: [String: String].self) else { return nil }
+    /// `BOOKING_TOMBSTONE_COLLECTION`: where a deleted booking's tombstone is written.
+    nonisolated static var bookingTombstoneCollection: String {
+        constant("BOOKING_TOMBSTONE_COLLECTION", as: String.self) ?? "deletedBookings"
+    }
+
+    /// `OVERTIME_DELETE_WARNING` (1.33.0): the red X delete warning on an all-overtime day, the same on every platform.
+    nonisolated static var overtimeDeleteWarning: OvertimeStrikeOutcome.Warning? {
+        guard let row = constant("OVERTIME_DELETE_WARNING", as: [String: String].self) else { return nil }
         return OvertimeStrikeOutcome.Warning(
             title: row["title"] ?? "",
             summary: "",
@@ -575,7 +747,9 @@ extension CanonicalBusinessEngine {
         organization: [String: Any],
         range: (start: String, end: String),
         reviews: [OvertimeReviewRecord],
-        requests: [OvertimeRequestRecord]
+        requests: [OvertimeRequestRecord],
+        names: [String: String] = [:],
+        jobs: [[String: Any]] = []
     ) -> [OvertimeLine] {
         let input: [String: Any] = [
             "personIds": personIds,
@@ -585,6 +759,9 @@ extension CanonicalBusinessEngine {
             "range": ["start": range.start, "end": range.end],
             "reviews": reviews.map(\.raw),
             "requests": requests.map(\.raw),
+            // 1.33.0: the decider's name on returned lines ("Changed by {name}") and the job of a deleted line.
+            "names": names,
+            "jobs": jobs,
         ]
         return RulebookJSON.decode([OvertimeLine].self, from: callJSON("payeOvertimeLines", arguments: [input])) ?? []
     }
@@ -595,10 +772,127 @@ extension CanonicalBusinessEngine {
         return (callJSON("overtimeLinesTotal", arguments: [payload]) as? NSNumber)?.doubleValue ?? 0
     }
 
-    /// `canGenerateOvertimeReport(lines)`.
+    /// `canGenerateOvertimeReport(lines)` (1.29–1.32 callers: every line finished in any way).
     nonisolated static func canGenerateOvertimeReport(_ lines: [OvertimeLine]) -> Bool {
         guard let payload = RulebookJSON.object(lines) else { return false }
         return callJSON("canGenerateOvertimeReport", arguments: [payload]) as? Bool ?? false
+    }
+
+    // MARK: ✓ ✕ ⚙ and the three buttons (1.33.0, `overtimeChoices.ts`)
+
+    nonisolated static func choicesJSON(_ choices: [String: OvertimeChoice]) -> [String: Any] {
+        var out: [String: Any] = [:]
+        for (key, value) in choices { out[key] = value.json }
+        return out
+    }
+
+    /// `overtimeChoiceAfter(choice, event)`: the one ✓ ✕ ⚙ state machine (person and decider). Nil when the script did
+    /// not answer.
+    nonisolated static func overtimeChoiceAfter(_ choice: OvertimeChoice?, event: OvertimeChoiceEvent) -> OvertimeChoice? {
+        OvertimeChoice(json: callJSON("overtimeChoiceAfter", arguments: [RulebookJSON.orNull(choice?.json), event.json]))
+    }
+
+    /// `overtimeLineChoice(line, choices)`: the person's current choice for a line (what they marked here, else the
+    /// line's baseline). Nil for a line that cannot be marked (deleted, cancelled).
+    nonisolated static func overtimeLineChoice(_ line: OvertimeLine, choices: [String: OvertimeChoice]) -> OvertimeChoice? {
+        guard let payload = RulebookJSON.object(line) else { return nil }
+        return OvertimeChoice(json: callJSON("overtimeLineChoice", arguments: [payload, choicesJSON(choices)]))
+    }
+
+    /// `overtimeChoiceDecision(choice)`: ✓ → approve, ⚙ + ✓ → edit, ✕ → strike; nil while unmarked.
+    nonisolated static func overtimeChoiceDecision(_ choice: OvertimeChoice?) -> OvertimeAction? {
+        guard let row = callJSON("overtimeChoiceDecision", arguments: [RulebookJSON.orNull(choice?.json)]) as? [String: Any],
+              let action = row["action"] as? String else { return nil }
+        switch action {
+        case "approve": return .approve
+        case "strike": return .strike
+        case "edit":
+            guard let start = row["start"] as? String, let end = row["end"] as? String else { return nil }
+            return .edit(start: start, end: end, multiplier: (row["multiplier"] as? NSNumber)?.doubleValue)
+        default: return nil
+        }
+    }
+
+    /// `overtimeChoiceView({ choice, booking, organization, timeZone, role })`: what one line's ✓ ✕ ⚙ and figure look
+    /// like. `role` is `person` | `decider`.
+    nonisolated static func overtimeChoiceView(
+        _ choice: OvertimeChoice?,
+        booking: OvertimeBookingInput?,
+        organization: [String: Any],
+        role: String
+    ) -> OvertimeChoiceLook {
+        let input: [String: Any] = [
+            "choice": RulebookJSON.orNull(choice?.json),
+            "booking": RulebookJSON.orNull(booking?.json),
+            "organization": organization,
+            "timeZone": overtimeTimeZone,
+            "role": role,
+        ]
+        return RulebookJSON.decode(OvertimeChoiceLook.self, from: callJSON("overtimeChoiceView", arguments: [input])) ?? .idle
+    }
+
+    /// `OVERTIME_PERSON_CHOICE_LABELS` / `OVERTIME_DECIDER_LABELS` (`tick`, `cross`, `changed`, `needsMark`).
+    nonisolated static func overtimeChoiceLabels(role: String) -> [String: String] {
+        constant(role == "decider" ? "OVERTIME_DECIDER_LABELS" : "OVERTIME_PERSON_CHOICE_LABELS", as: [String: String].self) ?? [:]
+    }
+
+    /// `overtimeSubmitReady({ lines, choices })`: Send for approval is green (every line marked, something to send).
+    nonisolated static func overtimeSubmitReady(lines: [OvertimeLine], choices: [String: OvertimeChoice]) -> OvertimeButtonReadiness {
+        guard let payload = RulebookJSON.object(lines) else { return .notReady }
+        let input: [String: Any] = ["lines": payload, "choices": choicesJSON(choices)]
+        return RulebookJSON.decode(OvertimeButtonReadiness.self, from: callJSON("overtimeSubmitReady", arguments: [input])) ?? .notReady
+    }
+
+    /// `overtimeSubmitLines({ lines, choices, bookings, organization, timeZone, personIds })`: the request lines Send for
+    /// approval writes (raw, as stored) and the lines refused. Empty when not ready.
+    nonisolated static func overtimeSubmitLines(
+        lines: [OvertimeLine],
+        choices: [String: OvertimeChoice],
+        bookings: [OvertimeBookingInput],
+        organization: [String: Any],
+        personIds: [String]
+    ) -> (lines: [[String: Any]], refused: [String]) {
+        guard let payload = RulebookJSON.object(lines) else { return ([], []) }
+        let input: [String: Any] = [
+            "lines": payload,
+            "choices": choicesJSON(choices),
+            "bookings": bookings.map(\.json),
+            "organization": organization,
+            "timeZone": overtimeTimeZone,
+            "personIds": personIds,
+        ]
+        guard let row = callJSON("overtimeSubmitLines", arguments: [input]) as? [String: Any] else { return ([], []) }
+        return (row["lines"] as? [[String: Any]] ?? [], row["refused"] as? [String] ?? [])
+    }
+
+    /// `overtimeGenerateReady({ lines, hasLineManager, choices, reports })`: Generate overtime report is green.
+    /// `reports` are the saved reports of exactly this range.
+    nonisolated static func overtimeGenerateReady(
+        lines: [OvertimeLine],
+        hasLineManager: Bool,
+        choices: [String: OvertimeChoice],
+        reports: [OvertimeReportRecord]
+    ) -> OvertimeButtonReadiness {
+        guard let payload = RulebookJSON.object(lines) else { return .notReady }
+        let input: [String: Any] = [
+            "lines": payload,
+            "hasLineManager": hasLineManager,
+            "choices": choicesJSON(choices),
+            "reports": reports.map(\.raw),
+        ]
+        return RulebookJSON.decode(OvertimeButtonReadiness.self, from: callJSON("overtimeGenerateReady", arguments: [input])) ?? .notReady
+    }
+
+    /// `overtimeReportOutOfDate({ report, lines })`: the saved report no longer matches the live lines of its range.
+    nonisolated static func overtimeReportOutOfDate(_ report: OvertimeReportRecord, lines: [OvertimeLine]) -> Bool {
+        guard let payload = RulebookJSON.object(lines) else { return report.storedOutOfDate }
+        let input: [String: Any] = ["report": report.raw, "lines": payload]
+        return callJSON("overtimeReportOutOfDate", arguments: [input]) as? Bool ?? report.storedOutOfDate
+    }
+
+    /// `hasActiveLineManager(person, roster)`.
+    nonisolated static func overtimeHasActiveLineManager(person: [String: Any], roster: [[String: Any]]) -> Bool {
+        callJSON("hasActiveLineManager", arguments: [person, roster]) as? Bool ?? false
     }
 
     /// `overtimeBookingFingerprint(booking)`.
@@ -795,14 +1089,14 @@ extension CanonicalBusinessEngine {
         callJSON("overtimeRequestWithdrawWriteFields", arguments: [request.raw]) as? [String: Any]
     }
 
-    /// `overtimeRequestAnyDecided(request, decisions)`: a line not yet applied has a decision, so the one Approve button
-    /// (`OVERTIME_APPROVE_LABEL`) is enabled.
-    nonisolated static func overtimeRequestAnyDecided(_ request: OvertimeRequestRecord, decisions: [String: OvertimeAction]) -> Bool {
-        callJSON("overtimeRequestAnyDecided", arguments: [request.raw, decisionsJSON(decisions)]) as? Bool ?? false
+    /// `overtimeRequestsSuperseded(requests, userId, bookingIds)` (1.33.0): the person's pending requests a new Send for
+    /// approval withdraws (every line still waiting is sent again).
+    nonisolated static func overtimeRequestsSuperseded(_ requests: [OvertimeRequestRecord], userId: String, bookingIds: [String]) -> [String] {
+        callJSON("overtimeRequestsSuperseded", arguments: [requests.map(\.raw), userId, bookingIds]) as? [String] ?? []
     }
 
-    /// `overtimeLineOutcomeLabel(outcome)`: "Needs an admin" (`OVERTIME_NEEDS_ADMIN_LABEL`), "Changed since the
-    /// request — …", …; nil for `applied` / `alreadyApplied` or no outcome.
+    /// `overtimeLineOutcomeLabel(outcome)`: "Changed since they sent it — …", "Can't read this booking — …", …; nil for a
+    /// returned line or no outcome. 1.33.0: no "Needs an admin".
     nonisolated static func overtimeLineOutcomeLabel(_ outcome: String?) -> String? {
         callJSON("overtimeLineOutcomeLabel", arguments: [RulebookJSON.orNull(outcome)]) as? String
     }
@@ -813,20 +1107,28 @@ extension CanonicalBusinessEngine {
         return out
     }
 
-    /// `overtimeApprovalWrites` (1.32.0 partial approval): what this decider may apply now, every other line's outcome
-    /// and the message; refused (`notPending` / `nothingApproved`) only when nothing applies. `bookings` maps a request
-    /// line's booking id to the live booking; a missing entry is a deleted booking.
-    nonisolated static func overtimeApprovalWrites(
+    /// `overtimeReturnReady({ request, decisions, skipBookingIds })` (1.33.0): Return overtime is green once every waiting
+    /// line is decided. `skipBookingIds`: lines the decider cannot read or that are not the requester's.
+    nonisolated static func overtimeReturnReady(
+        _ request: OvertimeRequestRecord,
+        decisions: [String: OvertimeAction],
+        skipBookingIds: [String]
+    ) -> OvertimeButtonReadiness {
+        let input: [String: Any] = ["request": request.raw, "decisions": decisionsJSON(decisions), "skipBookingIds": skipBookingIds]
+        return RulebookJSON.decode(OvertimeButtonReadiness.self, from: callJSON("overtimeReturnReady", arguments: [input])) ?? .notReady
+    }
+
+    /// `overtimeReturnWrites` (1.33.0 Return): everything one transaction writes. `bookings` maps a request line's booking
+    /// id to the live booking; a missing entry is a deleted booking. Tombstones say `deletedFrom: "ios"`.
+    nonisolated static func overtimeReturnWrites(
         request: OvertimeRequestRecord,
         decisions: [String: OvertimeAction],
         bookings: [String: OvertimeBookingInput],
         organization: [String: Any],
         deciderId: String,
         requesterIds: [String],
-        deciderIsAdmin: Bool,
-        writableBookingIds: [String],
         unreadableBookingIds: [String]
-    ) -> OvertimeApprovalPlan? {
+    ) -> OvertimeReturnPlan? {
         var live: [String: Any] = [:]
         for (key, value) in bookings { live[key] = value.json }
         let input: [String: Any] = [
@@ -837,11 +1139,10 @@ extension CanonicalBusinessEngine {
             "timeZone": overtimeTimeZone,
             "deciderId": deciderId,
             "requesterIds": requesterIds,
-            "deciderIsAdmin": deciderIsAdmin,
-            "writableBookingIds": writableBookingIds,
             "unreadableBookingIds": unreadableBookingIds,
+            "platform": "ios",
         ]
-        return OvertimeApprovalPlan(callJSON("overtimeApprovalWrites", arguments: [input]))
+        return OvertimeReturnPlan(callJSON("overtimeReturnWrites", arguments: [input]))
     }
 
     /// `overtimeDirectWrites`: a direct tick, cross or cog by a PAYE admin or a manager who may edit the booking.
@@ -859,22 +1160,22 @@ extension CanonicalBusinessEngine {
             "reviewerId": reviewerId,
             "organization": organization,
             "timeZone": overtimeTimeZone,
+            // 1.33.0: the tombstone of a red X delete says where it was made.
+            "platform": "ios",
         ]
         return OvertimeDirectPlan(callJSON("overtimeDirectWrites", arguments: [input]))
     }
 
-    /// `overtimeDeciderMayWriteBooking`.
+    /// `overtimeDeciderMayWriteBooking({ booking, requesterUserId, requesterIds })` (1.33.0: every id of the requester).
     nonisolated static func overtimeDeciderMayWriteBooking(
         _ booking: OvertimeBookingInput,
         requesterUserId: String,
-        deciderIsAdmin: Bool,
-        writableBookingIds: [String]
+        requesterIds: [String]
     ) -> Bool {
         let input: [String: Any] = [
             "booking": ["id": booking.id, "personId": booking.personId],
             "requesterUserId": requesterUserId,
-            "deciderIsAdmin": deciderIsAdmin,
-            "writableBookingIds": writableBookingIds,
+            "requesterIds": requesterIds,
         ]
         return callJSON("overtimeDeciderMayWriteBooking", arguments: [input]) as? Bool ?? false
     }
@@ -903,9 +1204,91 @@ extension CanonicalBusinessEngine {
         callJSON("overtimeRequestRecipients", arguments: [requester, roster]) as? [String]
     }
 
-    /// `overtimeReviewedRecipients(requester, decider, roster)`.
-    nonisolated static func overtimeReviewedRecipients(requester: Any, decider: Any, roster: [[String: Any]]) -> [String]? {
-        callJSON("overtimeReviewedRecipients", arguments: [requester, decider, roster]) as? [String]
+    /// `overtimeReturnedRecipients(requester, decider, roster)` (1.33.0): the requester, unless they decided.
+    nonisolated static func overtimeReturnedRecipients(requester: Any, decider: Any, roster: [[String: Any]]) -> [String]? {
+        callJSON("overtimeReturnedRecipients", arguments: [requester, decider, roster]) as? [String]
+    }
+
+    /// `overtimeDeciderIsLineManager(decider, requester, roster)`: the decider is one of the requester's line managers.
+    nonisolated static func overtimeDeciderIsLineManager(decider: Any, requester: [String: Any], roster: [[String: Any]]) -> Bool {
+        callJSON("overtimeDeciderIsLineManager", arguments: [decider, requester, roster]) as? Bool ?? false
+    }
+
+    /// `overtimeReturnedMessage({ deciderName, deciderIsLineManager })`: "Your line manager {name} has returned your
+    /// overtime request" (an admin: "{name} has returned your overtime request").
+    nonisolated static func overtimeReturnedMessage(deciderName: String?, deciderIsLineManager: Bool) -> OvertimeNotice? {
+        let input: [String: Any] = ["deciderName": RulebookJSON.orNull(deciderName), "deciderIsLineManager": deciderIsLineManager]
+        return RulebookJSON.decode(OvertimeNotice.self, from: callJSON("overtimeReturnedMessage", arguments: [input]))
+    }
+
+    /// `overtimeRequestSubmittedMessage({ requesterName, rangeStart, rangeEnd })`.
+    nonisolated static func overtimeRequestSubmittedMessage(requesterName: String?, rangeStart: String, rangeEnd: String) -> OvertimeNotice? {
+        let input: [String: Any] = ["requesterName": RulebookJSON.orNull(requesterName), "rangeStart": rangeStart, "rangeEnd": rangeEnd]
+        return RulebookJSON.decode(OvertimeNotice.self, from: callJSON("overtimeRequestSubmittedMessage", arguments: [input]))
+    }
+
+    /// `overtimeLineReopened({ before, after, organization, timeZone, reviews, requests })`: a booking change reopens an
+    /// overtime line; `returned` when a Return had decided it. `reviews` / `requests` nil when the editor cannot read them.
+    nonisolated static func overtimeLineReopened(
+        before: OvertimeBookingInput,
+        after: OvertimeBookingInput?,
+        organization: [String: Any],
+        reviews: [OvertimeReviewRecord]?,
+        requests: [OvertimeRequestRecord]?
+    ) -> (reopened: Bool, returned: Bool) {
+        let input: [String: Any] = [
+            "before": before.json,
+            "after": RulebookJSON.orNull(after?.json),
+            "organization": organization,
+            "timeZone": overtimeTimeZone,
+            "reviews": RulebookJSON.orNull(reviews?.map(\.raw)),
+            "requests": RulebookJSON.orNull(requests?.map(\.raw)),
+        ]
+        guard let row = callJSON("overtimeLineReopened", arguments: [input]) as? [String: Any] else { return (false, false) }
+        return (row["reopened"] as? Bool ?? false, row["returned"] as? Bool ?? false)
+    }
+
+    /// `overtimeReopenedRecipients({ bookedId, actor, roster, operatives, returned })`: the booked PAYE person (and their
+    /// line managers when the line had been returned), never the editor.
+    nonisolated static func overtimeReopenedRecipients(
+        bookedId: String,
+        actor: Any,
+        roster: [[String: Any]],
+        operatives: [[String: Any]],
+        returned: Bool
+    ) -> [String] {
+        let input: [String: Any] = ["bookedId": bookedId, "actor": actor, "roster": roster, "operatives": operatives, "returned": returned]
+        return callJSON("overtimeReopenedRecipients", arguments: [input]) as? [String] ?? []
+    }
+
+    /// `overtimeReopenedMessage({ dayKey, jobNumber, forLineManager, personName })`.
+    nonisolated static func overtimeReopenedMessage(dayKey: String, jobNumber: String?, forLineManager: Bool, personName: String?) -> OvertimeNotice? {
+        let input: [String: Any] = [
+            "dayKey": dayKey,
+            "jobNumber": RulebookJSON.orNull(jobNumber),
+            "forLineManager": forLineManager,
+            "personName": RulebookJSON.orNull(personName),
+        ]
+        return RulebookJSON.decode(OvertimeNotice.self, from: callJSON("overtimeReopenedMessage", arguments: [input]))
+    }
+
+    /// `overtimeNotificationRange({ organization, todayKey, rangeStart, rangeEnd, dayKey })`: the payrun an overtime
+    /// notice opens. Nil when nothing usable is given.
+    nonisolated static func overtimeNotificationRange(
+        organization: [String: Any],
+        todayKey: String,
+        rangeStart: String?,
+        rangeEnd: String?,
+        dayKey: String?
+    ) -> OvertimeNotificationRange? {
+        let input: [String: Any] = [
+            "organization": organization,
+            "todayKey": todayKey,
+            "rangeStart": RulebookJSON.orNull(rangeStart),
+            "rangeEnd": RulebookJSON.orNull(rangeEnd),
+            "dayKey": RulebookJSON.orNull(dayKey),
+        ]
+        return RulebookJSON.decode(OvertimeNotificationRange.self, from: callJSON("overtimeNotificationRange", arguments: [input]))
     }
 
     /// `bookingHoursChangedRecipients(owner, jobManagerIds, roster)`.
@@ -943,9 +1326,38 @@ extension CanonicalBusinessEngine {
         return callJSON("overtimeReportSnapshot", arguments: [input]) as? [String: Any]
     }
 
-    /// `overtimeReportRows(snapshot)`.
-    nonisolated static func overtimeReportRows(_ snapshot: [String: Any]) -> OvertimeReportRows? {
-        RulebookJSON.decode(OvertimeReportRows.self, from: callJSON("overtimeReportRows", arguments: [snapshot]))
+    /// `overtimeReportRows(snapshot, { timeZone, generatedByName, nowMs })` (1.33.0: header, table, total, footer and
+    /// the out-of-date mark). `generatedByName` names the generator when the roster knows them.
+    nonisolated static func overtimeReportRows(_ snapshot: [String: Any], generatedByName: String? = nil, now: Date = Date()) -> OvertimeReportRows? {
+        let options: [String: Any] = [
+            "timeZone": overtimeTimeZone,
+            "generatedByName": RulebookJSON.orNull(generatedByName),
+            "nowMs": now.timeIntervalSince1970 * 1000,
+        ]
+        return RulebookJSON.decode(OvertimeReportRows.self, from: callJSON("overtimeReportRows", arguments: [snapshot, options]))
+    }
+
+    /// `reportGeneratedText({ generatedAtMs, nowMs, timeZone, generatedBy, userId, userName, generatedByName })`:
+    /// "6 Nov 2026, 14:05 by Sam Smith" in the organisation zone (`generated`), and its parts.
+    nonisolated static func reportGeneratedText(
+        generatedAtMs: Double?,
+        generatedBy: String?,
+        userId: String?,
+        userName: String?,
+        generatedByName: String? = nil,
+        now: Date? = Date()
+    ) -> (generatedAt: String, generatedBy: String, generated: String) {
+        let input: [String: Any] = [
+            "generatedAtMs": RulebookJSON.orNull(generatedAtMs),
+            "nowMs": RulebookJSON.orNull(now.map { $0.timeIntervalSince1970 * 1000 }),
+            "timeZone": overtimeTimeZone,
+            "generatedBy": RulebookJSON.orNull(generatedBy),
+            "userId": RulebookJSON.orNull(userId),
+            "userName": RulebookJSON.orNull(userName),
+            "generatedByName": RulebookJSON.orNull(generatedByName),
+        ]
+        let row = callJSON("reportGeneratedText", arguments: [input]) as? [String: Any] ?? [:]
+        return (row["generatedAt"] as? String ?? "", row["generatedBy"] as? String ?? "", row["generated"] as? String ?? "")
     }
 
     // MARK: Weekly report (§7)

@@ -1057,10 +1057,11 @@ struct ManagerScheduleContentView: View {
                     }
                 },
                 onCancel: { managerBookingEditTarget = nil },
-                onDelete: {
+                // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete it.
+                onDelete: managerScheduleStore.canDeleteBooking(booking) ? {
                     managerBookingEditTarget = nil
                     Task { await managerScheduleStore.deleteBooking(booking) }
-                }
+                } : nil
             )
         }
         .sheet(item: $operativeBookingEditTarget) { booking in
@@ -1759,9 +1760,10 @@ struct ManagerScheduleContentView: View {
                                     onEdit: {
                                         operativeBookingEditTarget = b
                                     },
-                                    onDelete: {
+                                    // RULEBOOK 1.33.0 §2 `bookingRemoveAction`.
+                                    onDelete: bookingStore.canDeleteBooking(b) ? {
                                         Task { await bookingStore.deleteBooking(b) }
-                                    },
+                                    } : nil,
                                     pendingSyncEntityId: b.id.uuidString
                                 )
                             }
@@ -1793,9 +1795,10 @@ struct ManagerScheduleContentView: View {
             otChip: managerBookingOtChipText(b, policy: p),
             showActions: true,
             onEdit: { beginEditManagerBooking(b) },
-            onDelete: {
+            // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete it.
+            onDelete: managerScheduleStore.canDeleteBooking(b) ? {
                 Task { await managerScheduleStore.deleteBooking(b) }
-            },
+            } : nil,
             pendingSyncEntityId: b.id.uuidString
         )
     }

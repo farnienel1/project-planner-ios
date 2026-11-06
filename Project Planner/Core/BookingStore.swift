@@ -103,6 +103,34 @@ class BookingStore: ObservableObject {
                 self.dropRefusedBooking(bookingId: bookingId, operation: operation)
             }
         }
+
+        // RULEBOOK 1.33.0: a queued delete was undone from the sync list or refused on replay — the booking comes back.
+        NotificationCenter.default.addObserver(
+            forName: .offlineBookingDeleteRestored,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard note.userInfo?["collection"] as? String == "bookings",
+                  let booking = note.userInfo?["labourBooking"] as? Booking else { return }
+            let noteOrganizationId = normalizedOrganizationId(note.userInfo?["organizationId"] as? String ?? "")
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // Only into the open organisation: a queued delete of another company's booking never shows here.
+                let openOrganizationId = normalizedOrganizationId(self.firebaseBackend?.resolvedOrganizationIdForOfflineWrites() ?? "")
+                guard noteOrganizationId.isEmpty || noteOrganizationId == openOrganizationId else { return }
+                self.restoreDeletedBooking(booking)
+            }
+        }
+    }
+
+    /// Puts back a booking whose queued delete was undone or refused (it is still on the server).
+    private func restoreDeletedBooking(_ booking: Booking) {
+        guard !bookings.contains(where: { $0.id == booking.id }) else { return }
+        bookings.append(booking)
+        smartCache?.cacheBookings(bookings)
+        let snapshot = bookings
+        Task { try? await persistenceService.saveBookingData(bookings: snapshot) }
+        ScheduleChangeNotifier.postBookingStoreDidChange()
     }
     
     deinit {
@@ -306,8 +334,14 @@ class BookingStore: ObservableObject {
                 return
             }
             let changed = BookingWritePatch.changedLabourFields(from: bookings[index], to: booking)
+            // RULEBOOK 1.33.0: the copy before this edit, kept with a queued edit so a later offline delete stores the
+            // fingerprint of what the server has (`bookingDeleteFingerprint`).
+            let before = bookings[index]
+            let baseline = changed.isEmpty ? nil : BookingWritePatch.deleteFingerprint(before)
             bookings[index] = booking
-            await saveData(writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed)])
+            await saveData(writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline)])
+            // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the write).
+            if !changed.isEmpty { OvertimeReopenNotice.labour(before: before, after: booking) }
         }
     }
 
@@ -355,11 +389,12 @@ class BookingStore: ObservableObject {
     /// operative never. True before the profile loads; the security rules still decide. Screens offer Delete only when
     /// this is true.
     func canDeleteBooking(_ booking: Booking) -> Bool {
-        writeRefusal([booking], isDelete: true) == nil
+        // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: the one remove control is Delete; there is no cancel.
+        JobAccessContext.bookingRemoveAction(collection: "bookings", projectId: booking.storedProjectId) == "delete"
     }
 
     /// `deleteBooking`, then the message to show when the booking is still there afterwards (refused by the rulebook
-    /// or the server, or offline: deletes are online only), else nil. Lets Edit booking report a refused delete
+    /// or the server), else nil. Offline the delete is queued (1.33.0), so the booking is gone here. Lets Edit booking report a refused delete
     /// instead of closing as if it had worked.
     func deleteBookingReportingRefusal(_ booking: Booking) async -> String? {
         errorMessage = nil
@@ -368,10 +403,13 @@ class BookingStore: ObservableObject {
         return errorMessage ?? "This booking could not be deleted."
     }
 
+    /// RULEBOOK 1.33.0 §2 (owner decision 4 Nov "Offline delete on iOS"): deletes a labour booking with its tombstone.
+    /// Offline (or when the connection drops) the delete is queued with `bookingDeleteFingerprint` of this device's
+    /// copy and shows "Pending sync"; a booking created offline and deleted before it synced sends nothing. A day on a
+    /// signed timesheet warns but the delete goes ahead (`bookingDeleteSignedTimesheetWarning`).
     func deleteBooking(_ booking: Booking) async {
-        // RULEBOOK §2 (`offlineAvailability("booking.delete")`): deleting a booking is online only; the
-        // delete and its tombstone are never queued.
-        guard OfflinePolicy.isEnabled(.deleteBooking, isOnline: smartCache?.isOnline ?? true) else {
+        let action = OfflinePolicy.deleteAction(collection: "bookings")
+        guard OfflinePolicy.isEnabled(action, isOnline: smartCache?.isOnline ?? true) else {
             errorMessage = OfflinePolicy.onlineOnlyMessage
             return
         }
@@ -379,6 +417,8 @@ class BookingStore: ObservableObject {
             errorMessage = refusal
             return
         }
+        // The fingerprint of this device's copy before it goes (a queued edit keeps the synced copy's own).
+        let fingerprint = BookingWritePatch.deleteFingerprint(booking)
         bookings.removeAll { $0.id == booking.id }
         try? await persistenceService.saveBookingData(bookings: bookings)
         smartCache?.cacheBookings(bookings)
@@ -391,33 +431,41 @@ class BookingStore: ObservableObject {
         ) ?? fb.resolvedOrganizationIdForOfflineWrites()
         guard let orgId else { return }
 
+        warnIfOnSignedTimesheet(booking, organizationId: orgId)
+        if OfflinePolicy.queuesWhileOffline(action, isOnline: smartCache?.isOnline ?? true) {
+            OfflineOutboxStore.shared.enqueueDeleteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
+            return
+        }
+
         do {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             try await fb.deleteBooking(booking, organizationId: orgId)
+            // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the delete).
+            OvertimeReopenNotice.labour(before: booking, after: nil)
         } catch {
-            // Refused (for example: only an admin may delete a labour booking), or the connection dropped:
-            // deletes are online only, so nothing is queued. It still exists on the server; put it back.
-            if !bookings.contains(where: { $0.id == booking.id }) {
-                bookings.append(booking)
-                smartCache?.cacheBookings(bookings)
-                try? await persistenceService.saveBookingData(bookings: bookings)
-                ScheduleChangeNotifier.postBookingStoreDidChange()
+            if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
+               OfflinePolicy.availability(action) == .allowedOffline {
+                // The connection dropped: the delete waits in the outbox with its tombstone (§2).
+                OfflineOutboxStore.shared.enqueueDeleteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
+                return
             }
-            errorMessage = OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true)
-                ? OfflinePolicy.onlineOnlyMessage
-                : error.localizedDescription
+            // Refused (only an admin or the job's manager may delete it): it is still on the server; put it back.
+            restoreDeletedBooking(booking)
+            errorMessage = error.localizedDescription
             print("🔥🔥🔥 DEBUG: Error deleting booking from Firebase: \(error)")
         }
     }
-    
-    func cancelBooking(_ booking: Booking) async {
-        if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
-            if let refusal = writeRefusal([bookings[index]]) {
-                errorMessage = refusal
-                return
+
+    /// `bookingDeleteSignedTimesheetWarning` for the booked person's timesheets: shown once, the delete still goes ahead.
+    private func warnIfOnSignedTimesheet(_ booking: Booking, organizationId: String) {
+        guard let fb = firebaseBackend,
+              let account = accountForLabourBooking(operativeId: booking.operativeId, users: RulebookRosterSnapshot.users) else { return }
+        let dayKey = OrganizationRulebookContext.dayKey(booking.date)
+        Task { @MainActor in
+            let sheets = await fb.signedTimesheetCandidates(organizationId: organizationId, userId: account.id)
+            if let warning = CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning(dayKey: dayKey, sheets: sheets) {
+                OfflineOutboxStore.shared.lastNoticeMessage = warning
             }
-            bookings[index].status = .cancelled
-            await saveData(writes: [BookingWrite(booking: bookings[index], changedFields: ["status"])])
         }
     }
     
@@ -630,6 +678,8 @@ class BookingStore: ObservableObject {
     struct BookingWrite {
         let booking: Booking
         let changedFields: Set<String>?
+        /// RULEBOOK 1.33.0: `bookingDeleteFingerprint` of the copy before this edit (kept with a queued edit).
+        var baselineFingerprint: String? = nil
     }
 
     /// Saves the list on this device, then writes only `writes` to Firestore (RULEBOOK §1 partial writes).
@@ -656,7 +706,8 @@ class BookingStore: ObservableObject {
                         OfflineOutboxStore.shared.enqueueSaveBooking(
                             write.booking,
                             changedFields: write.changedFields,
-                            organizationId: organizationId
+                            organizationId: organizationId,
+                            baselineFingerprint: write.baselineFingerprint
                         )
                     }
                     print("🔥🔥🔥 DEBUG: Queued \(writes.count) bookings for offline sync")
@@ -688,7 +739,8 @@ class BookingStore: ObservableObject {
                             OfflineOutboxStore.shared.enqueueSaveBooking(
                                 write.booking,
                                 changedFields: write.changedFields,
-                                organizationId: orgId
+                                organizationId: orgId,
+                                baselineFingerprint: write.baselineFingerprint
                             )
                         } else if BookingWritePatch.isRefusedFinal(error, isCreate: write.changedFields == nil) {
                             // Tombstoned (deleted elsewhere) or cancelled by someone who may reinstate it.
@@ -726,7 +778,8 @@ class BookingStore: ObservableObject {
                         OfflineOutboxStore.shared.enqueueSaveBooking(
                             write.booking,
                             changedFields: write.changedFields,
-                            organizationId: organizationId
+                            organizationId: organizationId,
+                            baselineFingerprint: write.baselineFingerprint
                         )
                     }
                 }

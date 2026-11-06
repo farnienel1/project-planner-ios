@@ -3,8 +3,8 @@ import XCTest
 
 /// Fix B: Edit booking offers Delete on a labour booking only when RULEBOOK 1.10.0 §2, §16 `canDeleteBooking` allows
 /// it — an admin on any job, a manager on a job they manage (the same test as `canWriteBooking`), an operative never —
-/// and a refused delete is reported instead of the sheet closing as if it had worked. Offline the bin is disabled with
-/// `OfflinePolicy.onlineOnlyMessage` (§2, deletes are online only).
+/// and a refused delete is reported instead of the sheet closing as if it had worked. RULEBOOK 1.33.0: the offer is
+/// `bookingRemoveAction`, and offline a labour delete is queued (subcontractor deletes stay online only).
 @MainActor
 final class LabourBookingDeleteGateTests: XCTestCase {
     private typealias Role = CanonicalBusinessEngine.CanonicalStaffAccountRole
@@ -104,9 +104,12 @@ final class LabourBookingDeleteGateTests: XCTestCase {
         XCTAssertTrue(store.bookings.contains { $0.id == booking.id })
     }
 
-    func testDeletingABookingIsOnlineOnly() {
-        XCTAssertFalse(OfflinePolicy.isEnabled(.deleteBooking, isOnline: false))
+    /// RULEBOOK 1.33.0 (owner decision 4 Nov "Offline delete on iOS"): labour deletes are usable offline (queued);
+    /// subcontractor deletes stay online only.
+    func testDeletingABookingWorksOfflineExceptSubcontractors() {
+        XCTAssertTrue(OfflinePolicy.isEnabled(.deleteBooking, isOnline: false))
         XCTAssertTrue(OfflinePolicy.isEnabled(.deleteBooking, isOnline: true))
+        XCTAssertFalse(OfflinePolicy.isEnabled(.deleteSubcontractorBooking, isOnline: false))
         XCTAssertFalse(OfflinePolicy.onlineOnlyMessage.isEmpty)
     }
 }

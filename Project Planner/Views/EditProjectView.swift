@@ -736,7 +736,6 @@ struct EditProjectView: View {
             isLive: project.isLive,
             description: form.description.isEmpty ? nil : form.description,
             notes: project.notes,
-            hiddenManagerUserIds: project.hiddenManagerUserIds,
             hiddenOperativeUserIds: project.hiddenOperativeUserIds,
             usesMapPinForLocation: usesPin,
             latitude: usesPin ? form.pinLatitude : nil,
