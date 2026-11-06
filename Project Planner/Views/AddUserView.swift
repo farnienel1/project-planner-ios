@@ -728,19 +728,6 @@ struct AddUserView: View {
         LineManagerRulebook.candidates(for: inviteDraftUserForValidation, roster: userStore.organizationUsers)
     }
     
-    private var invitePermissionDivider: some View {
-        Rectangle()
-            .fill(Color(.separator).opacity(0.35))
-            .frame(height: 0.5)
-            .padding(.leading, 16)
-    }
-
-    private func permissionInviteCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
     private func resetAnnualLeaveInviteDefaults() {
         let defaults = userStore.organizationAnnualLeaveDefaults()
         annualLeaveDaysText = defaults.daysPerYear.truncatingRemainder(dividingBy: 1) == 0
@@ -793,90 +780,125 @@ struct AddUserView: View {
     }
 
     private var annualLeaveInvitationSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(annualLeaveAllowanceCopy.toggleTitle)
-                .font(.headline)
-            Toggle(annualLeaveAllowanceCopy.toggleTitle, isOn: $annualLeaveEnabledInvite)
-            Text(annualLeaveAllowanceCopy.toggleDescription)
+        VStack(alignment: .leading, spacing: 0) {
+            PPFormSectionLabel(text: "Annual leave allowance")
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    PPIconTile(symbol: "sun.max.fill", family: .trade, size: 30)
+                    Toggle(isOn: $annualLeaveEnabledInvite) {
+                        Text(annualLeaveAllowanceCopy.toggleTitle)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .tint(PPAddUserColor.selected)
+                    .accessibilityIdentifier("addUser.annualLeaveAllowance")
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(annualLeaveAllowanceCopy.toggleDescription)
+                    Text(annualLeaveAllowanceCopy.toggleNote)
+                }
                 .font(.caption)
-                .foregroundColor(.secondary)
-            Text(annualLeaveAllowanceCopy.toggleNote)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            if annualLeaveEnabledInvite {
-                permissionInviteCard {
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(PPColor.well, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                if annualLeaveEnabledInvite {
                     AnnualLeaveEntitlementEditor(
                         daysText: $annualLeaveDaysText,
                         startMonth: $annualLeaveStartMonth,
                         endMonth: $annualLeaveEndMonth,
                         carriesOver: $annualLeaveCarriesOver,
-                        isEnabled: true
+                        isEnabled: true,
+                        style: .card
                     )
-                    .padding(12)
+                    Divider()
                     VStack(alignment: .leading, spacing: 6) {
                         Text(annualLeaveAllowanceCopy.remainingTitle)
                             .font(.subheadline.weight(.semibold))
-                        TextField("Remaining", text: $remainingLeaveText)
-                            .keyboardType(.decimalPad)
-                            .textFieldStyle(.roundedBorder)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 6) {
+                            TextField("Remaining", text: $remainingLeaveText)
+                                .keyboardType(.decimalPad)
+                                .monospacedDigit()
+                                .accessibilityIdentifier("addUser.remainingLeave")
+                            Text("days left")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                        .ppFormField()
                         Text(annualLeaveAllowanceCopy.remainingNote)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(12)
                 }
             }
+            .ppFormCard()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var stepPermissionsControlled: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text(permissionsDescriptionHeader)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            
-            VStack(spacing: 16) {
-                if invitedAccountType == .operative {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Operative mode provides very limited access to the platform. It allows access to their schedule, request annual leave and maintain their qualifications.")
-                            .font(.subheadline)
-                            .foregroundColor(.primary)
-                        Text("The below features are additional options, which need to be selected to provide access.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                // RULEBOOK 1.11.0 §11: `permissionToggleRows({ level, user: draft, mode: 'add' })` — the same rows as
-                // the summary and Edit User. Admins: every toggle on and greyed out except Annual Leave Management;
-                // managers: Materials and Site audit on and greyed out; operatives: Materials and Site audit.
-                permissionInviteCard {
-                    VStack(spacing: 0) {
-                        let rows = invitePermissionRows(mode: .add).filter(\.visible)
-                        ForEach(Array(rows.enumerated()), id: \.element.field) { index, row in
-                            if index > 0 { invitePermissionDivider }
-                            PermissionToggle(
-                                title: row.label,
-                                description: row.help,
-                                isOn: invitePermissionBinding(row),
-                                isDisabled: !row.editable,
-                                style: .plainInset
-                            )
-                            // RULEBOOK 1.28.0 `permissionToggleRows` `note` (a PAYE admin's Timesheet self-sign).
-                            if let note = row.note, !note.isEmpty {
-                                Text(note)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.bottom, 6)
-                                    .accessibilityIdentifier("addUser.permissionNote.\(row.field)")
-                            }
-                        }
-                    }
-                }
-                annualLeaveInvitationSection
+        VStack(alignment: .leading, spacing: 0) {
+            if !permissionsDescriptionHeader.isEmpty {
+                Text(permissionsDescriptionHeader)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 8)
             }
+            if invitedAccountType == .operative {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Operative mode provides very limited access to the platform. It allows access to their schedule, request annual leave and maintain their qualifications.")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    Text("The below features are additional options, which need to be selected to provide access.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(PPAddUserColor.infoBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(.bottom, 4)
+            }
+            // RULEBOOK 1.11.0 §11: `permissionToggleRows({ level, user: draft, mode: 'add' })` — the same rows as
+            // the summary and Edit User. Admins: every toggle on and greyed out except Annual Leave Management;
+            // managers: Materials and Site audit on and greyed out; operatives: Materials and Site audit.
+            // A row locked on shows "Included"; a row locked off keeps a disabled switch (owner decision 2).
+            PPFormSectionLabel(text: "Modules")
+            VStack(spacing: 0) {
+                let rows = invitePermissionRows(mode: .add).filter(\.visible)
+                ForEach(Array(rows.enumerated()), id: \.element.field) { index, row in
+                    if index > 0 {
+                        Divider().padding(.leading, 42)
+                    }
+                    PPToggleRow(
+                        title: row.label,
+                        description: row.help,
+                        symbol: PPToggleRow.symbol(for: row.field),
+                        isOn: invitePermissionBinding(row),
+                        isLocked: !row.editable
+                    )
+                    // RULEBOOK 1.28.0 `permissionToggleRows` `note` (a PAYE admin's Timesheet self-sign).
+                    if let note = row.note, !note.isEmpty {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 42)
+                            .padding(.bottom, 6)
+                            .accessibilityIdentifier("addUser.permissionNote.\(row.field)")
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 2)
+            .ppFormCard(padding: 0)
+
+            annualLeaveInvitationSection
         }
     }
     
@@ -1375,73 +1397,6 @@ struct AddUserView: View {
         guard !trimmed.isEmpty else { return nil }
         let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
         return Double(normalized)
-    }
-}
-
-// MARK: - Permission Toggle Component
-
-struct PermissionToggle: View {
-    let title: String
-    let description: String
-    @Binding var isOn: Bool
-    var isDisabled: Bool = false
-    var style: Style = .filledRow
-
-    enum Style {
-        case filledRow
-        case plainInset
-    }
-
-    @State private var expanded = false
-
-    var body: some View {
-        let row = HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-                } label: {
-                    HStack(alignment: .center, spacing: 6) {
-                        Text(title)
-                            .font(.headline)
-                            .foregroundColor(isDisabled ? .secondary : .primary)
-                            .multilineTextAlignment(.leading)
-                        Image(systemName: "chevron.down")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(.secondary)
-                            .rotationEffect(.degrees(expanded ? 0 : -90))
-                    }
-                }
-                .accessibilityIdentifier("permissionToggle.chevronDown")
-                .buttonStyle(.plain)
-                if expanded {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Toggle("", isOn: $isOn)
-                .accessibilityIdentifier("permissionToggle.toggle")
-                .tint(.indigo)
-                .disabled(isDisabled)
-        }
-
-        Group {
-            switch style {
-            case .filledRow:
-                row
-                    .padding()
-                    .background(isDisabled ? Color(.systemGray5) : Color(.systemGray6))
-                    .cornerRadius(12)
-            case .plainInset:
-                row
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-            }
-        }
-        .opacity(isDisabled ? 0.6 : 1.0)
     }
 }
 
