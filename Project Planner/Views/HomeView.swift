@@ -267,7 +267,8 @@ struct HomeView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
-        .sheet(isPresented: $showingInvoicing, onDismiss: {
+        // Timesheets opens as a full page (owner, 6 Nov): a sheet left Home showing behind it. Closed with its Done button.
+        .fullScreenCover(isPresented: $showingInvoicing, onDismiss: {
             timesheetReviewDeepLinkUserId = nil
             timesheetReviewDeepLinkWeekStart = nil
             timesheetDeepLinkSurface = nil
