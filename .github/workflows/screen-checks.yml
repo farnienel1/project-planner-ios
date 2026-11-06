@@ -6,7 +6,7 @@ name: Screen checks
 
 on:
   push:
-    branches: ['rulebook-*']
+    branches: ['rulebook-*', 'ios-*']
     paths:
       - 'Project Planner/**'
       - 'ProjectPlannerUITests/**'

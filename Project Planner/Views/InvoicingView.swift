@@ -18,6 +18,7 @@ struct InvoicingView: View {
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var notificationService: NotificationService
+    @Environment(\.dismiss) private var dismiss
     @State private var landingVersion = 0
     @State private var pendingReviewUserId: String?
     @State private var pendingReviewWeek: WeekRange?
@@ -89,6 +90,14 @@ struct InvoicingView: View {
             .navigationTitle("Timesheets")
             .navigationBarTitleDisplayMode(.inline)
             .ppNavyNavigationBar()
+            .toolbar {
+                // Home presents Timesheets full screen; Done closes it.
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                        .accessibilityIdentifier("invoicing.done")
+                }
+            }
             .navigationDestination(isPresented: $pushMyTimesheets) {
                 MyTimesheetsHubView(settings: settings)
                     .environmentObject(firebaseBackend)

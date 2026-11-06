@@ -131,6 +131,16 @@ final class Release1320ScreenChecksTests: PPUITestCase {
         shot("A15 admin Settings bottom dark")
     }
 
+    /// Owner, 6 Nov: Timesheets is a full page with Done at the top left, which goes back to Home.
+    func test_A16_adminTimesheetsFullScreenWithDone() {
+        start("admin")
+        openMenuRow(title: "Timesheets")
+        assertExists("invoicing.done", timeout: 8)
+        shot("A16 admin Timesheets full screen")
+        element("invoicing.done").tap()
+        assertExists(PPID.home, timeout: 8)
+    }
+
     // MARK: Manager
 
     func test_A07_managerHomeHasNoWeeklyReport() {
