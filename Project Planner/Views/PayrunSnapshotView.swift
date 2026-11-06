@@ -33,6 +33,24 @@ struct PayrunSnapshotView: View {
     @State private var opened: PayrunSnapshotLink?
     @State private var didPickDefault = false
 
+    init(
+        firebaseBackend: FirebaseBackend,
+        userStore: UserStore,
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        projectStore: ProjectStore,
+        operativeStore: OperativeStore,
+        notificationService: NotificationService
+    ) {
+        self.firebaseBackend = firebaseBackend
+        self.userStore = userStore
+        self.bookingStore = bookingStore
+        self.managerScheduleStore = managerScheduleStore
+        self.projectStore = projectStore
+        self.operativeStore = operativeStore
+        self.notificationService = notificationService
+    }
+
     private var organization: [String: Any] { PayrunSnapshotPeople.organization(firebaseBackend.currentOrganization) }
     private var todayKey: String { OrganizationRulebookContext.dayKey(Date()) }
     private var periods: PayrunSnapshotPeriods {

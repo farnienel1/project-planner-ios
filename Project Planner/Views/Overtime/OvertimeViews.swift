@@ -243,6 +243,11 @@ struct OvertimeDeepLinkView: View {
     @State private var requests: [OvertimeRequestRecord]?
     @State private var listener = OvertimeListeners()
 
+    /// Explicit, so other files (`InvoicingView`) can open it while the screen's state stays private.
+    init(link: OvertimeDeepLink) {
+        self.link = link
+    }
+
     private var target: (subjectId: String?, scope: OvertimeScope, requestId: String?, dayKey: String?) {
         switch link {
         case .mine(let requestId, let dayKey): return (userStore.displayUser?.id, .mine, requestId, dayKey)
@@ -626,6 +631,13 @@ struct OvertimeLinesView: View {
     @State private var confirmDelete: OvertimeDeletePrompt?
     @State private var shareURL: URL?
     @State private var listeners = OvertimeListeners()
+
+    /// Explicit, so other files (`PayrunSnapshotView`) can open it while the screen's state stays private.
+    init(subjectId: String, scope: OvertimeScope, range: OvertimeDayRange) {
+        self.subjectId = subjectId
+        self.scope = scope
+        self.range = range
+    }
 
     private var subject: AppUser? {
         userStore.organizationUsers.first { $0.id == subjectId } ?? (userStore.displayUser?.id == subjectId ? userStore.displayUser : nil)

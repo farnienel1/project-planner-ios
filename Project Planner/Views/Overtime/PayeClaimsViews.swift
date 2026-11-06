@@ -313,6 +313,15 @@ struct PayeClaimsRangeView: View {
     @State private var decisions: [String: String] = [:]
     @State private var listenedIds: [String] = []
 
+    /// Explicit, so other files (`PayrunSnapshotView`, 1.33.0) can open it while the screen's state stays private.
+    init(kind: PayeClaimKind, subjectId: String, scope: OvertimeScope, range: OvertimeDayRange, openAdd: Bool = false) {
+        self.kind = kind
+        self.subjectId = subjectId
+        self.scope = scope
+        self.range = range
+        self.openAdd = openAdd
+    }
+
     private var subject: AppUser? { PayeClaimPeople.subject(subjectId, userStore: userStore) }
     private var selfEmployed: Bool { !(subject?.isPayeEmployment ?? true) }
     private var writable: Bool {
