@@ -694,6 +694,8 @@ struct PPStepTrackerItem: Identifiable {
 /// Dates · Hours · Operatives tracker: done steps get a check, the current step an amber striped bar.
 struct PPStepTracker: View {
     let steps: [PPStepTrackerItem]
+    /// Done-step tick and bar. Booking keeps green; Add User passes `PPAddUserColor.stepDone` (add-user-ui-spec §3).
+    var doneColor: Color = PPFamily.sites.top
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -702,7 +704,7 @@ struct PPStepTracker: View {
                     HStack(spacing: 5) {
                         Image(systemName: step.isDone ? "checkmark.circle.fill" : "\(step.id).circle")
                             .font(.footnote.weight(.semibold))
-                            .foregroundStyle(step.isDone ? PPFamily.sites.top : (step.isCurrent ? Color.white : PPColor.onNavySecondary))
+                            .foregroundStyle(step.isDone ? doneColor : (step.isCurrent ? Color.white : PPColor.onNavySecondary))
                         Text(step.title)
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(step.isDone || step.isCurrent ? Color.white : PPColor.onNavySecondary)
@@ -713,7 +715,7 @@ struct PPStepTracker: View {
                         if step.isCurrent {
                             PPOvertimeFill()
                         } else if step.isDone {
-                            PPFamily.sites.top
+                            doneColor
                         } else {
                             PPColor.onNavyFill
                         }

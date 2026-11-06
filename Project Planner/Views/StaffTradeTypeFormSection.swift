@@ -11,6 +11,14 @@ struct StaffTradeTypeFormSection: View {
     @Binding var customText: String
     var title: String = "Trade type"
     var footnote: String? = nil
+    /// Look only. `.form` is the original look (every existing screen); `.card` is the Add User picker row with an
+    /// amber tile (add-user-ui-spec §4). Same picker, same values, same validation.
+    var style: Style = .form
+
+    enum Style {
+        case form
+        case card
+    }
 
     /// `nil` when `presetRaw` is empty (e.g. legacy user — prompts “Select trade”).
     private var selectedPreset: StaffTradeType? {
@@ -25,31 +33,67 @@ struct StaffTradeTypeFormSection: View {
             .map { $0 }
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-            Picker(title, selection: Binding(
-                get: { selectedPreset },
-                set: { newValue in
-                    if let newValue {
-                        presetRaw = newValue.rawValue
-                        if newValue != .other {
-                            customText = ""
-                        }
-                    } else {
-                        presetRaw = ""
+    /// The picker's selection (unchanged logic, shared by both looks).
+    private var selection: Binding<StaffTradeType?> {
+        Binding(
+            get: { selectedPreset },
+            set: { newValue in
+                if let newValue {
+                    presetRaw = newValue.rawValue
+                    if newValue != .other {
                         customText = ""
                     }
-                }
-            )) {
-                Text("Select trade").tag(Optional<StaffTradeType>.none)
-                ForEach(StaffTradeType.pickerCases) { t in
-                    Text(t.rawValue).tag(Optional(t))
+                } else {
+                    presetRaw = ""
+                    customText = ""
                 }
             }
-            .accessibilityIdentifier("staffTradeTypeFormSection.\(AccessibilityID.token(title))")
-            .pickerStyle(.menu)
+        )
+    }
+
+    private var picker: some View {
+        Picker(title, selection: selection) {
+            Text("Select trade").tag(Optional<StaffTradeType>.none)
+            ForEach(StaffTradeType.pickerCases) { t in
+                Text(t.rawValue).tag(Optional(t))
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch style {
+            case .form:
+                Text(title)
+                    .font(.headline)
+                picker
+                    .accessibilityIdentifier("staffTradeTypeFormSection.\(AccessibilityID.token(title))")
+                    .pickerStyle(.menu)
+            case .card:
+                // The same Picker inside a Menu, so the row can carry the tile and the current value.
+                Menu {
+                    picker
+                } label: {
+                    HStack(spacing: 12) {
+                        PPIconTile(symbol: "wrench.and.screwdriver.fill", family: .trade, size: 32)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(title)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(selectedPreset?.rawValue ?? "Select trade")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .ppFormField(minHeight: 52)
+                    .contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("staffTradeTypeFormSection.\(AccessibilityID.token(title))")
+            }
 
             if presetRaw == StaffTradeType.other.rawValue {
                 TextField("Enter trade type here", text: $customText)
