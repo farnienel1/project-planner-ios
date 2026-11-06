@@ -766,7 +766,9 @@ struct PendingPayeClaimEvidence: Identifiable {
     let source: Source
 }
 
-/// Add Price Work / Add Expense: Cancel at the top, the add button at the bottom (web `AddClaimSheet`).
+/// Add Price Work / Add Expense: Cancel at the top, the add button at the bottom (web `AddClaimSheet`). Laid out as
+/// labelled cards (PayeClaimFormComponents.swift); each rulebook validation message is shown on the card it is about
+/// (`PayeClaimFormSection`). What is validated, saved and when Add is enabled are unchanged.
 struct AddPayeClaimSheet: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
@@ -784,6 +786,8 @@ struct AddPayeClaimSheet: View {
     @State private var amount = ""
     @State private var evidence: [PendingPayeClaimEvidence] = []
     @State private var error: String?
+    /// A photo or file that could not be added (shown on the Evidence card).
+    @State private var evidenceError: String?
     @State private var saving: String?
     @State private var pickingPhoto: UIImagePickerController.SourceType?
     @State private var pickingFile = false
@@ -819,97 +823,59 @@ struct AddPayeClaimSheet: View {
 
     var body: some View {
         let currentError = draftError
+        // The rulebook's message once the person has started (as before), shown next to the card it is about.
+        let shownError = (title.isEmpty && amount.isEmpty) ? nil : currentError
+        let errorSection = shownError.map { PayeClaimFormSection.section(for: $0) }
+        let canAdd = currentError == nil && saving == nil
         NavigationStack {
-            Form {
-                Section {
-                    TextField(priceWork ? "Price work name" : "Expense name", text: $title)
-                        .accessibilityIdentifier("payeClaims.add.title")
-                    TextField("Description", text: $details, axis: .vertical)
-                        .lineLimit(3...6)
-                    // RULEBOOK 1.30.1: price work needs a job number (`priceWorkJobNumberError` inside the validator).
-                    TextField(priceWork ? "Job number (required)" : "Job number", text: $jobNumber)
-                        .accessibilityIdentifier("payeClaims.add.jobNumber")
-                        .onChange(of: jobNumber) { _, value in
-                            let max = CanonicalBusinessEngine.priceWorkJobNumberMax
-                            if value.count > max { jobNumber = String(value.prefix(max)) }
-                        }
-                }
-                Section {
-                    DatePicker(priceWork ? "From" : "Date", selection: $from, displayedComponents: .date)
-                        .environment(\.timeZone, OrganizationRulebookContext.timeZone)
-                        .onChange(of: from) { _, value in
-                            if to < value { to = value }
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    detailsCard(message: errorSection == .details ? shownError : nil)
+                    datesCard(message: errorSection == .dates ? shownError : nil)
                     if priceWork {
-                        DatePicker("To", selection: $to, in: from..., displayedComponents: .date)
-                            .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                        approverCard(message: errorSection == .approver ? shownError : nil)
+                    }
+                    amountCard(message: errorSection == .amount ? shownError : nil)
+                    evidenceCard(message: evidenceError ?? (errorSection == .evidence ? shownError : nil))
+                    if let general = error ?? (errorSection == .other ? shownError : nil) {
+                        PayeClaimFieldMessage(text: general)
+                            .padding(.horizontal, 4)
+                            .accessibilityIdentifier("payeClaims.add.error")
                     }
                 }
-                if priceWork {
-                    Section {
-                        Picker("Approved by (required)", selection: $approver) {
-                            Text("Choose an admin or manager").tag("")
-                            ForEach(approvers) { row in
-                                Text("\(row.name) (\(row.level == "admin" ? "Admin" : "Manager"))").tag(row.id)
-                            }
-                        }
-                        .accessibilityIdentifier("payeClaims.add.approver")
-                    } footer: {
-                        Text(CanonicalBusinessEngine.payeClaimText("PAYE_CLAIM_APPROVER_NOT_NOTIFIED_NOTE", fallback: "They are not notified; the report names them."))
-                    }
-                }
-                Section {
-                    TextField("Amount (\(OrganizationRulebookContext.currencyCode))", text: $amount)
-                        .keyboardType(.decimalPad)
-                        .accessibilityIdentifier("payeClaims.add.amount")
-                }
-                Section {
-                    ForEach(evidence) { entry in
-                        HStack {
-                            Text(entry.label).font(.subheadline)
-                            Spacer()
-                            Button("Remove", role: .destructive) {
-                                evidence.removeAll { $0.id == entry.id }
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                    }
-                    if evidence.count < CanonicalBusinessEngine.payeClaimEvidenceMax {
-                        Button("File (PDF or image)") { pickingFile = true }
-                        Button("Take photo") { pickingPhoto = .camera }
-                            .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-                        Button("Photo library") { pickingPhoto = .photoLibrary }
-                        Button("Personal site audit") { pickingAudit = true }
-                    } else {
-                        Text(CanonicalBusinessEngine.payeClaimText("PAYE_CLAIM_EVIDENCE_LIMIT_MESSAGE", fallback: "Up to 20 pieces of evidence."))
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text(priceWork ? "Evidence (optional)" : "Evidence (at least one)")
-                }
-                if let message = error ?? ((title.isEmpty && amount.isEmpty) ? nil : currentError) {
-                    Section {
-                        Text(message).foregroundStyle(.red).font(.footnote)
-                    }
-                }
-                Section {
-                    Button {
-                        Task { await submit() }
-                    } label: {
-                        Text(saving ?? kind.addLabel)
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .disabled(currentError != nil || saving != nil)
-                    .accessibilityIdentifier("payeClaims.add.submit")
-                }
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.top, 14)
+                .padding(.bottom, 24)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .background(PPColor.page.ignoresSafeArea())
+            .safeAreaInset(edge: .bottom) {
+                PPBottomActionBar(
+                    title: saving ?? kind.addLabel,
+                    isEnabled: canAdd,
+                    isBusy: saving != nil,
+                    accessibilityIdentifier: "payeClaims.add.submit",
+                    action: { Task { await submit() } }
+                )
             }
             .navigationTitle(kind.addLabel)
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .buttonStyle(PPOnNavyPillButtonStyle())
                         .disabled(saving != nil)
+                        .opacity(saving != nil ? 0.5 : 1)
+                        .accessibilityIdentifier("payeClaims.add.cancel")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    // The same Add as the bottom button, enabled exactly when it is.
+                    Button("Add") { Task { await submit() } }
+                        .buttonStyle(PPOnNavyPillButtonStyle())
+                        .disabled(!canAdd)
+                        .opacity(canAdd ? 1 : 0.5)
+                        .accessibilityIdentifier("payeClaims.add.submitTop")
                 }
             }
             .onAppear(perform: setInitialDates)
@@ -932,11 +898,158 @@ struct AddPayeClaimSheet: View {
                         label: CanonicalBusinessEngine.personalSiteAuditTitle(audit),
                         source: .audit(audit)
                     ))
+                    evidenceError = nil
                 }
                 .environmentObject(firebaseBackend)
             }
         }
         .interactiveDismissDisabled(saving != nil)
+    }
+
+    // MARK: Cards
+
+    private func detailsCard(message: String?) -> some View {
+        PayeClaimFormCard(title: "Details", symbol: "text.alignleft", family: .plan, message: message, identifier: "payeClaims.add.details") {
+            PayeClaimLabeledField(priceWork ? "Price work name" : "Expense name") {
+                TextField("Name", text: $title)
+                    .accessibilityIdentifier("payeClaims.add.title")
+            }
+            PayeClaimLabeledField("Description") {
+                TextField("Optional", text: $details, axis: .vertical)
+                    .lineLimit(3...6)
+                    .accessibilityIdentifier("payeClaims.add.description")
+            }
+            // RULEBOOK 1.30.1: price work needs a job number (`priceWorkJobNumberError` inside the validator).
+            PayeClaimLabeledField(priceWork ? "Job number (required)" : "Job number") {
+                TextField(priceWork ? "Required" : "Optional", text: $jobNumber)
+                    .accessibilityIdentifier("payeClaims.add.jobNumber")
+                    .onChange(of: jobNumber) { _, value in
+                        let max = CanonicalBusinessEngine.priceWorkJobNumberMax
+                        if value.count > max { jobNumber = String(value.prefix(max)) }
+                    }
+            }
+        }
+    }
+
+    private func datesCard(message: String?) -> some View {
+        PayeClaimFormCard(title: priceWork ? "Dates" : "Date", symbol: "calendar", family: .plan, message: message, identifier: "payeClaims.add.dates") {
+            PayeClaimLabeledField(priceWork ? "From" : "Date") {
+                DatePicker(priceWork ? "From" : "Date", selection: $from, displayedComponents: .date)
+                    .labelsHidden()
+                    .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                    .onChange(of: from) { _, value in
+                        if to < value { to = value }
+                    }
+                    .accessibilityIdentifier("payeClaims.add.from")
+            }
+            if priceWork {
+                PayeClaimLabeledField("To") {
+                    DatePicker("To", selection: $to, in: from..., displayedComponents: .date)
+                        .labelsHidden()
+                        .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                        .accessibilityIdentifier("payeClaims.add.to")
+                }
+            }
+        }
+    }
+
+    private func approverCard(message: String?) -> some View {
+        PayeClaimFormCard(
+            title: "Approved by",
+            symbol: "person.crop.circle.badge.checkmark",
+            family: .people,
+            note: CanonicalBusinessEngine.payeClaimText("PAYE_CLAIM_APPROVER_NOT_NOTIFIED_NOTE", fallback: "They are not notified; the report names them."),
+            message: message,
+            identifier: "payeClaims.add.approvedBy"
+        ) {
+            PayeClaimLabeledField("Approved by (required)") {
+                Picker("Approved by (required)", selection: $approver) {
+                    Text("Choose an admin or manager").tag("")
+                    ForEach(approvers) { row in
+                        Text("\(row.name) (\(row.level == "admin" ? "Admin" : "Manager"))").tag(row.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .tint(PPColor.brand)
+                .accessibilityIdentifier("payeClaims.add.approver")
+            }
+        }
+    }
+
+    private func amountCard(message: String?) -> some View {
+        PayeClaimFormCard(title: "Amount", symbol: "banknote", family: .sites, message: message, identifier: "payeClaims.add.amountCard") {
+            PayeClaimLabeledField("Amount (\(OrganizationRulebookContext.currencyCode))") {
+                HStack(spacing: 6) {
+                    Text(OrgMoney.symbol())
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    TextField("0.00", text: $amount)
+                        .keyboardType(.decimalPad)
+                        .font(.title3.weight(.semibold))
+                        .monospacedDigit()
+                        .accessibilityIdentifier("payeClaims.add.amount")
+                }
+            }
+        }
+    }
+
+    private func evidenceCard(message: String?) -> some View {
+        let canPickMore = evidence.count < CanonicalBusinessEngine.payeClaimEvidenceMax
+        let well = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        return PayeClaimFormCard(
+            title: priceWork ? "Evidence (optional)" : "Evidence (at least one)",
+            symbol: "paperclip",
+            family: .trade,
+            message: message,
+            identifier: "payeClaims.add.evidence"
+        ) {
+            if !evidence.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(evidence.enumerated()), id: \.element.id) { index, entry in
+                        if index > 0 {
+                            Divider().padding(.leading, 58)
+                        }
+                        PayeClaimAttachedEvidenceRow(entry: entry) {
+                            evidence.removeAll { $0.id == entry.id }
+                        }
+                    }
+                }
+                .background(PPColor.well, in: well)
+            }
+            if canPickMore {
+                VStack(spacing: 0) {
+                    PayeClaimEvidenceSourceButton(title: "File (PDF or image)", symbol: "doc", family: .plan, identifier: "payeClaims.add.evidence.file") {
+                        pickingFile = true
+                    }
+                    PPRowDivider()
+                    PayeClaimEvidenceSourceButton(
+                        title: "Take photo",
+                        symbol: "camera",
+                        family: .sites,
+                        isEnabled: UIImagePickerController.isSourceTypeAvailable(.camera),
+                        identifier: "payeClaims.add.evidence.camera"
+                    ) {
+                        pickingPhoto = .camera
+                    }
+                    PPRowDivider()
+                    PayeClaimEvidenceSourceButton(title: "Photo library", symbol: "photo.on.rectangle", family: .people, identifier: "payeClaims.add.evidence.library") {
+                        pickingPhoto = .photoLibrary
+                    }
+                    PPRowDivider()
+                    PayeClaimEvidenceSourceButton(title: "Personal site audit", symbol: "checklist", family: .trade, identifier: "payeClaims.add.evidence.audit") {
+                        pickingAudit = true
+                    }
+                }
+                .background(PPColor.well, in: well)
+                .clipShape(well)
+            } else {
+                Text(CanonicalBusinessEngine.payeClaimText("PAYE_CLAIM_EVIDENCE_LIMIT_MESSAGE", fallback: "Up to 20 pieces of evidence."))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func setInitialDates() {
@@ -965,8 +1078,9 @@ struct AddPayeClaimSheet: View {
                 source: .file(data: data, contentType: "image/jpeg", kind: "photo")
             ))
             error = nil
+            evidenceError = nil
         } catch {
-            self.error = error.localizedDescription
+            evidenceError = error.localizedDescription
         }
     }
 
@@ -975,13 +1089,13 @@ struct AddPayeClaimSheet: View {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else {
-            error = "This file could not be read."
+            evidenceError = "This file could not be read."
             return
         }
         let type = UTType(filenameExtension: url.pathExtension.lowercased())
         if type?.conforms(to: .pdf) == true {
             guard data.count <= StorageUploadPolicy.standardMaxBytes else {
-                error = "This file is larger than 10 MB."
+                evidenceError = "This file is larger than 10 MB."
                 return
             }
             evidence.append(PendingPayeClaimEvidence(
@@ -989,10 +1103,11 @@ struct AddPayeClaimSheet: View {
                 source: .file(data: data, contentType: "application/pdf", kind: "file")
             ))
             error = nil
+            evidenceError = nil
         } else if type?.conforms(to: .image) == true, type?.conforms(to: .svg) != true, let image = UIImage(data: data) {
             addPhoto(image)
         } else {
-            error = "Evidence must be a photo or a PDF."
+            evidenceError = "Evidence must be a photo or a PDF."
         }
     }
 
@@ -1185,7 +1300,8 @@ struct PayeClaimDocumentPicker: UIViewControllerRepresentable {
 
 // MARK: - PDFs
 
-/// Draws text, images and appended PDF pages on A4 pages (the layout of web `payeClaimReportPdf.ts`). No rule here.
+/// Draws text, images and appended PDF pages on A4 pages (the personal site audit copy). No rule here. The claim
+/// report itself is drawn by `PayeClaimReportPDF` (PayeClaimReportPDF.swift).
 @MainActor
 final class PayeClaimPDFWriter {
     static let page = CGRect(x: 0, y: 0, width: 595.28, height: 841.89)
@@ -1249,121 +1365,23 @@ final class PayeClaimPDFWriter {
               document.numberOfPages > 0 else { return false }
         for index in 1...document.numberOfPages {
             guard let pdfPage = document.page(at: index) else { continue }
-            let box = pdfPage.getBoxRect(.mediaBox)
-            context.beginPage(withBounds: CGRect(origin: .zero, size: box.size), pageInfo: [:])
-            let cg = context.cgContext
-            cg.saveGState()
-            cg.translateBy(x: 0, y: box.height)
-            cg.scaleBy(x: 1, y: -1)
-            cg.translateBy(x: -box.origin.x, y: -box.origin.y)
-            cg.drawPDFPage(pdfPage)
-            cg.restoreGState()
+            Self.draw(pdfPage, in: context)
         }
         y = Self.page.height
         return true
     }
-}
 
-/// The price work / expenses report PDF, built from the saved copy: a summary page (`payeClaimReportRows`), then one
-/// page per piece of evidence (`payeClaimEvidencePages`): an image full size, a PDF's pages appended after its heading
-/// page, anything else listed with `PAYE_CLAIM_EVIDENCE_NOT_DRAWN_NOTE`.
-@MainActor
-enum PayeClaimReportPDF {
-    struct Made {
-        var url: URL?
-        var notDrawn: Int
-    }
-
-    static func notice(_ made: Made) -> String {
-        guard made.url != nil else { return "The report was saved but the PDF could not be made." }
-        return made.notDrawn > 0
-            ? "Report ready. \(made.notDrawn) piece(s) of evidence could not be shown in the PDF and are listed instead."
-            : "Report ready. Send it to payroll yourself."
-    }
-
-    static func makeFile(
-        report: PayeClaimReportRecord,
-        logo: UIImage?,
-        readFile: (String) async throws -> Data
-    ) async -> Made {
-        guard let rows = CanonicalBusinessEngine.payeClaimReportRows(report) else { return Made(url: nil, notDrawn: 0) }
-        let pages = CanonicalBusinessEngine.payeClaimEvidencePages(report)
-        var files: [String: Data] = [:]
-        var unreadable = Set<String>()
-        for page in pages where page.drawAs != "listed" && files[page.path] == nil && !unreadable.contains(page.path) {
-            do {
-                files[page.path] = try await readFile(page.path)
-            } catch {
-                unreadable.insert(page.path)
-            }
-        }
-        let notDrawnNote = CanonicalBusinessEngine.payeClaimText(
-            "PAYE_CLAIM_EVIDENCE_NOT_DRAWN_NOTE", fallback: "This file type cannot be shown in the PDF. Open it in the app."
-        )
-        let unreadableNote = CanonicalBusinessEngine.payeClaimText(
-            "PAYE_CLAIM_EVIDENCE_UNREADABLE_NOTE", fallback: "This file could not be read when the report was made. Open it in the app."
-        )
-        let warn = UIColor(red: 0.6, green: 0.3, blue: 0, alpha: 1)
-        var notDrawn = 0
-        let renderer = UIGraphicsPDFRenderer(bounds: PayeClaimPDFWriter.page)
-        let data = renderer.pdfData { context in
-            let writer = PayeClaimPDFWriter(context: context)
-            if let logo, logo.size.height > 0 {
-                let height: CGFloat = 48
-                let logoWidth = min(120, logo.size.width * height / logo.size.height)
-                logo.draw(in: CGRect(x: PayeClaimPDFWriter.page.width - writer.margin - logoWidth, y: writer.margin, width: logoWidth, height: height))
-            }
-            writer.text(report.companyName, size: 12, bold: true, color: .darkGray, gap: 10)
-            writer.text(rows.title, size: 18, bold: true)
-            writer.text(rows.subtitle, size: 11, color: .darkGray, gap: 14)
-            if rows.rows.isEmpty { writer.text(rows.empty) }
-            for row in rows.rows {
-                writer.text("\(row.heading)   \(row.figure)", bold: true)
-                for line in row.lines { writer.text(line, size: 9.5, color: .darkGray) }
-                writer.y += 6
-            }
-            writer.y += 6
-            writer.text(rows.total, size: 12, bold: true)
-            for page in pages {
-                writer.newPage()
-                writer.text(page.heading, size: 13, bold: true)
-                for line in page.details { writer.text(line, size: 10, color: .darkGray) }
-                writer.y += 8
-                if page.drawAs == "listed" {
-                    notDrawn += 1
-                    writer.text(notDrawnNote, color: warn)
-                    continue
-                }
-                guard let bytes = files[page.path] else {
-                    notDrawn += 1
-                    writer.text(unreadableNote, color: warn)
-                    continue
-                }
-                if page.drawAs == "image" {
-                    if let image = UIImage(data: bytes) {
-                        writer.image(image)
-                    } else {
-                        notDrawn += 1
-                        writer.text(notDrawnNote, color: warn)
-                    }
-                    continue
-                }
-                if !writer.appendPDF(bytes) {
-                    notDrawn += 1
-                    writer.text(unreadableNote, color: warn)
-                }
-            }
-        }
-        let label = report.kind == PayeClaimKind.priceWork.rawValue ? "price-work" : "expenses"
-        let safeName = report.userName.replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "/", with: "-")
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(label)-\(safeName.isEmpty ? "report" : safeName)-\(report.rangeStart)-\(report.rangeEnd).pdf")
-        do {
-            try data.write(to: url, options: .atomic)
-            return Made(url: url, notDrawn: notDrawn)
-        } catch {
-            return Made(url: nil, notDrawn: notDrawn)
-        }
+    /// One page of another PDF on a new page of its own size (also used by `PayeClaimReportCanvas`).
+    static func draw(_ pdfPage: CGPDFPage, in context: UIGraphicsPDFRendererContext) {
+        let box = pdfPage.getBoxRect(.mediaBox)
+        context.beginPage(withBounds: CGRect(origin: .zero, size: box.size), pageInfo: [:])
+        let cg = context.cgContext
+        cg.saveGState()
+        cg.translateBy(x: 0, y: box.height)
+        cg.scaleBy(x: 1, y: -1)
+        cg.translateBy(x: -box.origin.x, y: -box.origin.y)
+        cg.drawPDFPage(pdfPage)
+        cg.restoreGState()
     }
 }
 
