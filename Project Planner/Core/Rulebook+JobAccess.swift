@@ -178,6 +178,40 @@ extension CanonicalBusinessEngine {
         return callJSON("warningScopeFor", arguments: [input]) as? [String: Any] ?? ["kind": "all"]
     }
 
+    /// RULEBOOK 1.33.0 §6 `dailyOverviewScopeFor({ viewer, roster, people, operatives })`: admins everything
+    /// (`{ kind: 'all' }`); a manager only themselves and their reports, with no job part. `{ kind: 'all' }` when the
+    /// script did not answer.
+    nonisolated static func dailyOverviewScopeFor(
+        viewer: JobAccessViewer,
+        roster: [[String: Any]],
+        people: [[String: Any]],
+        operatives: [[String: Any]],
+        enforced: Bool? = nil
+    ) -> [String: Any] {
+        var input: [String: Any] = [
+            "viewer": viewer.json,
+            "roster": roster,
+            "people": people,
+            "operatives": operatives,
+        ]
+        if let enforced { input["enforced"] = enforced }
+        return callJSON("dailyOverviewScopeFor", arguments: [input]) as? [String: Any] ?? ["kind": "all"]
+    }
+
+    /// RULEBOOK 1.33.0 §6 `isDailyOverviewRowInScope(scope, { personIds, email, subcontractor })`: a booked person, a
+    /// person on leave, an unbooked person or their hours; a subcontractor booking only for `all`. No scope (nil) keeps
+    /// every row; true when the script did not answer.
+    nonisolated static func isDailyOverviewRowInScope(
+        _ scope: [String: Any]?,
+        personIds: [String],
+        email: String?,
+        subcontractor: Bool = false
+    ) -> Bool {
+        var row: [String: Any] = ["personIds": personIds, "email": email ?? NSNull()]
+        if subcontractor { row["subcontractor"] = true }
+        return callJSON("isDailyOverviewRowInScope", arguments: [scope ?? NSNull(), row]) as? Bool ?? true
+    }
+
     /// `isJobInWarningScope(scope, jobId)`.
     nonisolated static func isJobInWarningScope(_ scope: [String: Any], jobId: String) -> Bool {
         callJSON("isJobInWarningScope", arguments: [scope, jobId]) as? Bool ?? true
@@ -499,5 +533,65 @@ enum WarningScopeSupport {
     ) -> Data? {
         scope(bookings: bookings, managerBookings: managerBookings, users: users, operatives: operatives)
             .flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+    }
+}
+
+/// RULEBOOK 1.33.0 §6 (owner decision 5 Nov, Q-D1 6 Nov): Daily Overview and the Home on-site / on-leave figures cover
+/// the viewer's `dailyOverviewScopeFor` — admins everyone and every subcontractor booking; a manager only themselves
+/// and their reports. The inputs are the ones `WarningScopeSupport` passes (web `orgDailyOverviewScope` uses the same
+/// roster rows as `orgWarningScope`). The answer is kept per input (roster, operatives, viewer) and each row's answer
+/// per scope, so a screen can ask for every row on every render. Nil scope means everything. No rule is decided here.
+@MainActor
+enum DailyOverviewScopeSupport {
+    private static var cached: (key: Int, scope: [String: Any]?)?
+    private static var rowAnswers: [String: Bool] = [:]
+
+    /// The signed-in viewer's scope; nil when it is everything (`{ kind: 'all' }`) or the profile is not loaded.
+    static func scope(users: [AppUser], operatives: [Operative]) -> [String: Any]? {
+        guard let viewer = JobAccessContext.readViewer else { return nil }
+        var hasher = Hasher()
+        hasher.combine(viewer.uid)
+        hasher.combine(viewer.ids)
+        hasher.combine(viewer.email)
+        hasher.combine(viewer.role.isSuperAdmin)
+        hasher.combine(viewer.role.isAdmin)
+        hasher.combine(viewer.role.isManager)
+        hasher.combine(viewer.role.isOperativeMode)
+        hasher.combine(users)
+        for operative in operatives {
+            hasher.combine(operative.documentId)
+            hasher.combine(operative.email)
+        }
+        let key = hasher.finalize()
+        if let cached, cached.key == key { return cached.scope }
+        let scope = CanonicalBusinessEngine.dailyOverviewScopeFor(
+            viewer: viewer,
+            roster: RulebookPeople.roster(users),
+            people: users.map { ["id": $0.id, "email": $0.email, "formerIds": $0.formerUserIds + $0.sameEmailUserIds] },
+            operatives: operatives.map { ["id": $0.documentId, "email": $0.email] },
+            enforced: SecuritySwitchContext.enforcedReads
+        )
+        let result = (scope["kind"] as? String) == "all" ? nil : scope
+        cached = (key, result)
+        rowAnswers.removeAll(keepingCapacity: true)
+        return result
+    }
+
+    /// The scope as JSON (for work that leaves the main actor). Nil is everything.
+    static func scopeJSON(users: [AppUser], operatives: [Operative]) -> Data? {
+        scope(users: users, operatives: operatives).flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+    }
+
+    /// `isDailyOverviewRowInScope(scope, row)`, remembered per scope and row.
+    static func isRowInScope(_ scope: [String: Any]?, personIds: [String], email: String?, subcontractor: Bool = false) -> Bool {
+        guard let scope else { return true }
+        let rowKey = personIds.joined(separator: "\u{1F}") + "|" + (email ?? "") + "|" + (subcontractor ? "s" : "p")
+        if let hit = rowAnswers[rowKey] { return hit }
+        let answer = CanonicalBusinessEngine.isDailyOverviewRowInScope(
+            scope, personIds: personIds, email: email, subcontractor: subcontractor
+        )
+        if rowAnswers.count > 4096 { rowAnswers.removeAll(keepingCapacity: true) }
+        rowAnswers[rowKey] = answer
+        return answer
     }
 }

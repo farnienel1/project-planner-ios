@@ -1428,6 +1428,10 @@ struct HomeView: View {
             payrollTimePolicy: policy
         )
 
+        // RULEBOOK 1.33.0 §6, §23: the on-site and on-leave figures count the viewer's Daily Overview team
+        // (`dailyOverviewScopeFor`): a manager's own team, everyone for admins.
+        let overviewScopeJSON = DailyOverviewScopeSupport.scopeJSON(users: users, operatives: operatives)
+
         async let metricsTask = HomeOverviewMetrics.compute(
             tasks: tasks,
             viewerId: signedIn?.id ?? authUserId,
@@ -1438,7 +1442,8 @@ struct HomeView: View {
             managerBookings: managerBookings,
             holidays: holidays,
             organizationUsers: users,
-            liveProjectCount: activeProjectCount
+            liveProjectCount: activeProjectCount,
+            scopeJSON: overviewScopeJSON
         )
 
         // Paint Home first. Warnings are heavy (main-actor snapshot + scan) — never block first frame on them.
@@ -2133,10 +2138,11 @@ private struct HomeOverviewMetrics: Equatable {
         holidays: [HolidayBooking],
         organizationUsers: [AppUser],
         liveProjectCount: Int,
+        scopeJSON: Data? = nil,
         now: Date = Date()
     ) -> HomeOverviewMetrics {
         func optional(_ value: String?) -> Any { value.map { $0 as Any } ?? NSNull() }
-        let input: [String: Any] = [
+        var input: [String: Any] = [
             "nowMs": (now.timeIntervalSince1970 * 1000).rounded(),
             "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
             "viewer": ["id": optional(viewerId), "email": optional(userEmail)],
@@ -2172,6 +2178,10 @@ private struct HomeOverviewMetrics: Equatable {
             "holidays": holidays.map(\.rulebookLeaveRecord.json),
             "nonWorkingDayKeys": OrganizationBankHolidays.dayKeys,
         ]
+        // RULEBOOK 1.33.0 §6, §23 `scope` (`dailyOverviewScopeFor`): missing counts everyone.
+        if let scopeJSON, let scope = try? JSONSerialization.jsonObject(with: scopeJSON) {
+            input["scope"] = scope
+        }
         guard let figures = CanonicalBusinessEngine.homeOverviewMetrics(input) else {
             return HomeOverviewMetrics(liveProjectCount: liveProjectCount)
         }
