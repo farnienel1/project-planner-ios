@@ -473,11 +473,7 @@ struct OvertimePastPayrunsView: View {
 
     private func generatedText(_ report: OvertimeReportRecord) -> String {
         guard let ms = report.generatedAtMs else { return "saving…" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_GB")
-        formatter.timeZone = OrganizationRulebookContext.timeZone
-        formatter.dateFormat = "d MMM yyyy, HH:mm"
-        return formatter.string(from: Date(timeIntervalSince1970: ms / 1000))
+        return OvertimeReportPDFLayout.generatedText(ms: ms)
     }
 
     private func share(_ report: OvertimeReportRecord) async {
@@ -690,7 +686,13 @@ struct OvertimeLinesView: View {
             return CanonicalBusinessEngine.overtimeRequestLineFields(booking, organization: organization, proposal: proposal, personIds: nil)?.line
         }()
         let cancelled = line.state == "cancelled"
-        VStack(alignment: .leading, spacing: 8) {
+        // Look only: the picked choice is the unsent proposal, else the sent request line while it is still waiting,
+        // else a tick for a line the rulebook already reads as approved.
+        let sentLine: OvertimeRequestLine? = line.state == "waiting" ? line.requestLine : nil
+        let chosen = OvertimeLinesView.choice(proposal: proposal, sentLine: sentLine, state: line.state)
+        let afterLine: OvertimeRequestLine? = preview ?? ((proposal == nil && sentLine?.action != "keep") ? sentLine : nil)
+        let struck = afterLine != nil || chosen == .cross
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(line.title)
@@ -703,62 +705,56 @@ struct OvertimeLinesView: View {
                 }
                 Spacer(minLength: 8)
                 // The old figure struck through on its own line, the new one under it (never overlapping on a phone).
-                VStack(alignment: .trailing, spacing: 2) {
-                    if let figures = line.figures {
-                        Text(figures.text)
-                            .font(.subheadline.monospacedDigit())
-                            .strikethrough(preview != nil)
-                            .foregroundStyle(preview != nil ? Color.secondary : Color.primary)
-                    }
-                    if let preview {
-                        Text(preview.cancel ? "Booking cancelled" : OvertimeScreenSupport.hours(preview.overtimeHoursAfter))
-                            .font(.subheadline.weight(.bold).monospacedDigit())
-                    }
-                }
+                OvertimeLineFigureStack(
+                    current: line.figures?.text,
+                    struck: struck,
+                    replacement: afterLine.map { $0.cancel ? "Booking cancelled" : OvertimeScreenSupport.hours($0.overtimeHoursAfter) }
+                )
+                .accessibilityIdentifier("overtime.line.figure")
             }
-            HStack(spacing: 8) {
-                Text(line.stateLabel)
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(stateColor(line.state).opacity(0.15), in: Capsule())
-                    .foregroundStyle(stateColor(line.state))
-                if let proposal {
-                    Text("\(proposal.shortLabel) (not sent)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(line.stateLabel)
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(stateColor(line.state).opacity(0.15), in: Capsule())
+                        .foregroundStyle(stateColor(line.state))
+                    if let proposal {
+                        Text("\(proposal.shortLabel) (not sent)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 0)
                 if let booking, mode != .readOnly {
-                    Button {
-                        onCross(line, booking: booking, mode: mode, organization: organization)
-                    } label: {
-                        Image(systemName: "xmark").foregroundStyle(PPColor.danger)
-                    }
-                    .accessibilityLabel("I didn't work these overtime hours")
-                    .disabled(busy || !isOnline)
-                    Button {
-                        onTick(line, booking: booking, mode: mode, organization: organization)
-                    } label: {
-                        Image(systemName: "checkmark").foregroundStyle(Color.green)
-                    }
-                    .accessibilityLabel("Approve this line")
-                    .disabled(busy || !isOnline)
-                    Button {
-                        cog = OvertimeCogTarget(booking: booking, kind: mode == .direct ? .direct : .draft)
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Change start, finish or rate")
+                    OvertimeLineDecisionButtons(
+                        chosen: chosen,
+                        crossLabel: "I didn't work these overtime hours",
+                        tickLabel: "Approve this line",
+                        cogLabel: "Change start, finish or rate",
+                        identifierPrefix: "overtime.line",
+                        onCross: { onCross(line, booking: booking, mode: mode, organization: organization) },
+                        onTick: { onTick(line, booking: booking, mode: mode, organization: organization) },
+                        onCog: { cog = OvertimeCogTarget(booking: booking, kind: mode == .direct ? .direct : .draft) }
+                    )
                     .disabled(busy || !isOnline)
                 }
             }
-            .buttonStyle(.bordered)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
         .opacity(cancelled ? 0.6 : 1)
+    }
+
+    /// The choice a line shows as picked (look only): the unsent proposal, else the sent request line while it is
+    /// still waiting, else a tick when the rulebook reads the line as approved.
+    static func choice(proposal: OvertimeAction?, sentLine: OvertimeRequestLine?, state: String) -> OvertimeLineChoice? {
+        if let proposal { return OvertimeLineChoice(proposal) }
+        if let sentLine, let sent = OvertimeLineChoice(requestAction: sentLine.action) { return sent }
+        return state == "approved" ? .tick : nil
     }
 
     private func lineDetail(_ line: OvertimeLine) -> String {
@@ -832,10 +828,27 @@ struct OvertimeLinesView: View {
             ForEach(openLines, id: \.bookingId) { line in
                 let booking = bookingById[line.bookingId.lowercased()]
                 let outcomeLabel = lineOutcomeLabel(line, booking: booking, outcomes: outcomes, requesterIds: requesterIds)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(describe(line) + decisionSuffix(line) + bookingNote(booking, requesterIds: requesterIds))
-                        .font(.footnote)
-                        .fixedSize(horizontal: false, vertical: true)
+                let decision = decisions[line.bookingId]
+                let chosen = decision.map { OvertimeLineChoice($0) }
+                // The decider's ✕ or ⚙ as the hours it leaves (the same `overtimeRequestLineFields` the person's own
+                // lines preview with), under the asked figure struck through.
+                let decided: OvertimeRequestLine? = {
+                    guard let booking, let decision, decision != .keep, decision != .approve else { return nil }
+                    return CanonicalBusinessEngine.overtimeRequestLineFields(booking, organization: organization, proposal: decision, personIds: nil)?.line
+                }()
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 12) {
+                        Text(describe(line) + decisionSuffix(line) + bookingNote(booking, requesterIds: requesterIds))
+                            .font(.footnote)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        OvertimeLineFigureStack(
+                            current: line.cancel ? nil : OvertimeScreenSupport.hours(line.overtimeHoursAfter),
+                            struck: decided != nil || chosen == .cross,
+                            replacement: decided.map { $0.cancel ? "Booking cancelled" : OvertimeScreenSupport.hours($0.overtimeHoursAfter) }
+                        )
+                        .accessibilityIdentifier("overtime.review.figure")
+                    }
                     if let outcomeLabel {
                         Text(outcomeLabel)
                             .font(.caption.weight(.semibold))
@@ -848,24 +861,23 @@ struct OvertimeLinesView: View {
                     }
                     if mayDecide {
                         HStack(spacing: 8) {
+                            Spacer(minLength: 0)
                             if let booking {
-                                Button {
-                                    strike(booking, organization: organization) { decisions[line.bookingId] = .strike }
-                                } label: { Image(systemName: "xmark").foregroundStyle(PPColor.danger) }
-                                .accessibilityLabel("Remove the overtime")
-                                Button {
-                                    decisions[line.bookingId] = .approve
-                                } label: { Image(systemName: "checkmark").foregroundStyle(Color.green) }
-                                .accessibilityLabel("Approve as asked")
-                                Button {
-                                    cog = OvertimeCogTarget(booking: booking, kind: .decision)
-                                } label: { Image(systemName: "gearshape") }
-                                .accessibilityLabel("Counter-change")
+                                OvertimeLineDecisionButtons(
+                                    chosen: chosen,
+                                    crossLabel: "Remove the overtime",
+                                    tickLabel: "Approve as asked",
+                                    cogLabel: "Counter-change",
+                                    identifierPrefix: "overtime.review",
+                                    onCross: { strike(booking, organization: organization) { decisions[line.bookingId] = .strike } },
+                                    onTick: { decisions[line.bookingId] = .approve },
+                                    onCog: { cog = OvertimeCogTarget(booking: booking, kind: .decision) }
+                                )
                             } else {
                                 Button("OK") { decisions[line.bookingId] = .approve }
+                                    .buttonStyle(.bordered)
                             }
                         }
-                        .buttonStyle(.bordered)
                         .disabled(busy || !isOnline)
                     }
                 }
@@ -1250,58 +1262,165 @@ struct OvertimeCogSheet: View {
     var body: some View {
         let preview = CanonicalBusinessEngine.overtimeCogPreview(booking, organization: organization, start: start, end: end, multiplier: multiplier)
         let orgRate = CanonicalBusinessEngine.organizationOvertimeMultiplier(organization, dayKey: booking.dayKey) ?? 1.5
+        let saveDisabled = preview == nil || preview?.error != nil || preview?.changed != true
+        let changed = preview?.changed == true
         NavigationStack {
-            Form {
-                Section {
-                    Text("\(CanonicalBusinessEngine.formatPayePayrunDay(booking.dayKey)) · \([booking.jobNumber, booking.jobName].filter { !$0.isEmpty }.joined(separator: " "))")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Picker("Start", selection: $start) {
-                        ForEach(clockChoices(including: start), id: \.self) { Text($0).tag($0) }
-                    }
-                    Picker("Finish", selection: $end) {
-                        ForEach(clockChoices(including: end), id: \.self) { Text($0).tag($0) }
-                    }
-                    Picker("Overtime rate", selection: $multiplier) {
-                        Text("Organisation (×\(ScheduleCoverageFormat.hours(orgRate)))").tag(Double?.none)
-                        ForEach(rateChoices, id: \.self) { step in
-                            Text("Custom ×\(ScheduleCoverageFormat.hours(step))").tag(Double?.some(step))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    bookingCard
+                        .padding(.top, 4)
+
+                    PPGroupLabel(text: "Hours and rate")
+                    PPGroupedCard {
+                        pickerRow(title: "Start", symbol: "play.fill", family: .plan, identifier: "overtime.cog.start") {
+                            Picker("Start", selection: $start) {
+                                ForEach(clockChoices(including: start), id: \.self) { Text($0).tag($0) }
+                            }
+                        }
+                        PPRowDivider()
+                        pickerRow(title: "Finish", symbol: "stop.fill", family: .plan, identifier: "overtime.cog.finish") {
+                            Picker("Finish", selection: $end) {
+                                ForEach(clockChoices(including: end), id: \.self) { Text($0).tag($0) }
+                            }
+                        }
+                        PPRowDivider()
+                        pickerRow(title: "Overtime rate", symbol: "bolt.fill", family: .trade, identifier: "overtime.cog.rate") {
+                            Picker("Overtime rate", selection: $multiplier) {
+                                Text("Organisation (×\(ScheduleCoverageFormat.hours(orgRate)))").tag(Double?.none)
+                                ForEach(rateChoices, id: \.self) { step in
+                                    Text("Custom ×\(ScheduleCoverageFormat.hours(step))").tag(Double?.some(step))
+                                }
+                            }
                         }
                     }
+
+                    PPGroupLabel(text: "Overtime hours")
+                    hoursBlock(preview: preview, changed: changed)
                 }
-                Section {
-                    if let error = preview?.error {
-                        Text(error).foregroundStyle(PPColor.danger)
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(preview?.beforeText ?? "")
-                            .strikethrough(preview?.changed == true)
-                            .foregroundStyle(preview?.changed == true ? Color.secondary : Color.primary)
-                        if preview?.changed == true {
-                            Text(preview?.afterText ?? "").font(.body.weight(.bold))
-                        }
-                    }
-                }
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.bottom, 24)
             }
+            .background(PPColor.page.ignoresSafeArea())
             .navigationTitle("Change hours or overtime rate")
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
+                        .buttonStyle(PPOnNavyPillButtonStyle())
+                        .accessibilityIdentifier("overtime.cog.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { onSave(start, end, multiplier) }
-                        .disabled(preview == nil || preview?.error != nil || preview?.changed != true)
+                        .buttonStyle(PPOnNavyPillButtonStyle())
+                        .disabled(saveDisabled)
+                        .opacity(saveDisabled ? 0.5 : 1)
+                        .accessibilityIdentifier("overtime.cog.save")
                 }
             }
         }
+    }
+
+    /// The booking as a heading card: the day, then the job.
+    private var bookingCard: some View {
+        let job = [booking.jobNumber, booking.jobName].filter { !$0.isEmpty }.joined(separator: " ")
+        return HStack(alignment: .top, spacing: 12) {
+            PPIconTile(symbol: "clock.fill", family: .trade, size: 40)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(CanonicalBusinessEngine.formatPayePayrunDay(booking.dayKey))
+                    .font(.system(.title3, design: .rounded))
+                    .fontWeight(.bold)
+                    .foregroundStyle(.primary)
+                if !job.isEmpty {
+                    Text(job)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("overtime.cog.booking")
+    }
+
+    /// One labelled row of the grouped card: icon, label, and the menu picker on the right.
+    private func pickerRow<Control: View>(
+        title: String,
+        symbol: String,
+        family: PPFamily,
+        identifier: String,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        HStack(spacing: 13) {
+            PPIconTile(symbol: symbol, family: family, size: PPMetrics.menuIcon)
+            Text(title)
+                .font(.body)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 8)
+            control()
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .tint(PPColor.brand)
+                .accessibilityIdentifier(identifier)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(minHeight: 52)
+    }
+
+    /// The hours before and after: old struck through, new in bold. Unchanged shows the current figure only.
+    private func hoursBlock(preview: OvertimeCogPreview?, changed: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let error = preview?.error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(PPColor.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("overtime.cog.error")
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(changed ? "Before" : "Now")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(preview?.beforeText ?? "")
+                    .font(.body.monospacedDigit())
+                    .strikethrough(changed)
+                    .foregroundStyle(changed ? Color.secondary : Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("overtime.cog.before")
+            }
+            if changed {
+                Rectangle()
+                    .fill(Color(.separator))
+                    .frame(height: 0.5)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("After")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(PPColor.brand)
+                    Text(preview?.afterText ?? "")
+                        .font(.body.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("overtime.cog.after")
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 }
 
 // MARK: - Report PDF
 
 /// The overtime report PDF, rebuilt from the saved copy (`overtimeReportRows`): company name and logo, the person, the
-/// range, one row per day and job (final figures, hours only) and the total.
+/// range, one row per day and job (final figures, hours only) and the total. Drawn by `OvertimeReportPDFBuilder` in the
+/// invoice / timesheet PDF style.
 enum OvertimeReportPDF {
     static func loadLogo(_ urlString: String?) async -> UIImage? {
         guard let urlString, let url = URL(string: urlString), !urlString.isEmpty else { return nil }
@@ -1311,50 +1430,20 @@ enum OvertimeReportPDF {
 
     static func makeFile(report: OvertimeReportRecord, logo: UIImage?) -> URL? {
         guard let rows = CanonicalBusinessEngine.overtimeReportRows(report.raw) else { return nil }
-        let page = CGRect(x: 0, y: 0, width: 595, height: 842)
-        let margin: CGFloat = 40
-        let width = page.width - margin * 2
-        let renderer = UIGraphicsPDFRenderer(bounds: page)
-        let data = renderer.pdfData { context in
-            context.beginPage()
-            var y: CGFloat = margin
-            if let logo, logo.size.height > 0 {
-                let height: CGFloat = 48
-                let logoWidth = min(160, logo.size.width * height / logo.size.height)
-                logo.draw(in: CGRect(x: page.width - margin - logoWidth, y: y, width: logoWidth, height: height))
-            }
-            func draw(_ text: String, font: UIFont, color: UIColor = .black) {
-                let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
-                let size = (text as NSString).boundingRect(
-                    with: CGSize(width: width, height: .greatestFiniteMagnitude),
-                    options: [.usesLineFragmentOrigin],
-                    attributes: attributes,
-                    context: nil
-                ).size
-                if y + size.height > page.height - margin {
-                    context.beginPage()
-                    y = margin
-                }
-                (text as NSString).draw(
-                    with: CGRect(x: margin, y: y, width: width, height: ceil(size.height)),
-                    options: [.usesLineFragmentOrigin],
-                    attributes: attributes,
-                    context: nil
-                )
-                y += ceil(size.height) + 8
-            }
-            if !report.companyName.isEmpty {
-                draw(report.companyName, font: .boldSystemFont(ofSize: 14), color: .darkGray)
-            }
-            draw(rows.title, font: .boldSystemFont(ofSize: 20))
-            draw(rows.subtitle, font: .systemFont(ofSize: 13), color: .darkGray)
-            y += 8
-            for row in rows.rows {
-                draw(row, font: .systemFont(ofSize: 12))
-            }
-            y += 8
-            draw(rows.total, font: .boldSystemFont(ofSize: 14))
-        }
+        let savedLines = (report.raw["lines"] as? [Any])?.compactMap { $0 as? [String: Any] }
+        let total = OvertimeReportPDFLayout.splitTotal(rows.total)
+        let data = OvertimeReportPDFBuilder.makeData(OvertimeReportPDFBuilder.Content(
+            title: OvertimeReportPDFLayout.documentTitle(rows.title),
+            companyName: report.companyName,
+            personName: report.userName,
+            period: rows.subtitle,
+            generated: OvertimeReportPDFLayout.generatedText(ms: report.generatedAtMs),
+            rows: OvertimeReportPDFLayout.tableRows(savedLines: savedLines, rulebookRows: rows.rows),
+            totalLabel: total.label,
+            totalValue: total.value,
+            emptyMessage: CanonicalBusinessEngine.overtimeText("OVERTIME_NO_LINES_MESSAGE", fallback: "There is no overtime in this range."),
+            logo: logo
+        ))
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("overtime-\(report.rangeStart)-\(report.rangeEnd).pdf")
         do {
             try data.write(to: url, options: .atomic)
