@@ -166,7 +166,8 @@ struct SmallWorksView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         smallWorksNavyHeader
                         smallWorksSheetContent
-                            .padding(.top, 18)
+                            // Launch checklist 1.20: tighter gap under the header (web PR #286, 34px → 16px).
+                            .padding(.top, 10)
                             .padding(.bottom, 24)
                             .ppContentSheet()
                     }
@@ -215,9 +216,10 @@ struct SmallWorksView: View {
                 }
                     .accessibilityIdentifier("smallWorks.all")
             }
-            .padding(.top, 14)
+            // Launch checklist 1.20: tiles → search → chips gap tightened to match web (PR #286, 12px → 8px).
+            .padding(.top, 8)
             filterChipsRow
-                .padding(.top, 12)
+                .padding(.top, 8)
         }
         .padding(.horizontal, PPMetrics.screenGutter)
         .padding(.top, 8)
