@@ -284,8 +284,12 @@ enum GhostRulebook {
 
     /// `personDedupeKey`: the key pickers fold people on, so every person with no email (ghosts) stays one row each.
     /// Falls back to the same email-else-id key spelling when the script did not answer.
+    nonisolated private static let dedupeMemo = RulebookAnswerMemo<String, String>(limit: 4096)
+
     nonisolated static func dedupeKey(id: String, email: String) -> String {
-        if let key = CanonicalBusinessEngine.personDedupeKey(id: id, email: email) { return key }
+        if let key = dedupeMemo.value(for: "\(id)\u{1F}\(email)", compute: {
+            CanonicalBusinessEngine.personDedupeKey(id: id, email: email)
+        }) { return key }
         let mail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !mail.isEmpty { return mail }
         let trimmedId = id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
