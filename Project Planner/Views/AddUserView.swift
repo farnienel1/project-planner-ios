@@ -12,6 +12,7 @@ struct AddUserView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     enum AddUserMode {
         case admin
@@ -485,29 +486,27 @@ struct AddUserView: View {
 
     @ViewBuilder
     private var lineManagerPickerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Line manager(s)")
-                .font(.headline)
-            Text(lineManagerPickerFootnote)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            Button {
-                showingLineManagerPicker = true
-            } label: {
-                HStack {
-                    Text(lineManagerSummary)
-                        .foregroundStyle(selectedLineManagerUserIds.isEmpty && !hasNoLineManager ? .secondary : .primary)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            PPFormSectionLabel(text: "Line manager(s)")
+            VStack(alignment: .leading, spacing: 12) {
+                Text(lineManagerPickerFootnote)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    showingLineManagerPicker = true
+                } label: {
+                    lineManagerPickerLabel
                 }
-                .padding(12)
-                .background(Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityIdentifier("addUser.chevronRight")
+                .buttonStyle(.plain)
+                // The rulebook's line-manager message (`footerBlockingMessage`), shown inside this card (spec §4).
+                if let lineManagerInlineMessage {
+                    PPErrorCallout(message: lineManagerInlineMessage)
+                        .accessibilityIdentifier("addUser.blockingMessage")
+                }
             }
-            .accessibilityIdentifier("addUser.chevronRight")
-            .buttonStyle(.plain)
+            .ppFormCard(isError: lineManagerInlineMessage != nil)
         }
         .sheet(isPresented: $showingLineManagerPicker) {
             LineManagersMultiSelectSheet(
@@ -519,6 +518,35 @@ struct AddUserView: View {
         }
         .onChange(of: selectedLineManagerUserIds) { _, newIds in
             if !newIds.isEmpty { hasNoLineManager = false }
+        }
+    }
+
+    /// Display only (owner decision 4): the existing `lineManagerSummary` label as one chip, or a dashed
+    /// "Choose line manager" button while nothing is chosen. Both open the same Line managers sheet.
+    @ViewBuilder
+    private var lineManagerPickerLabel: some View {
+        if selectedLineManagerUserIds.isEmpty && !hasNoLineManager {
+            Label("Choose line manager", systemImage: "plus")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(PPColor.brand)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(PPColor.brand.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                )
+                .contentShape(Rectangle())
+                .accessibilityValue(lineManagerSummary)
+        } else {
+            HStack(spacing: 8) {
+                PPChip(text: lineManagerSummary, symbol: "person.fill", tone: .blue)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .ppFormField()
+            .contentShape(Rectangle())
         }
     }
 
@@ -536,7 +564,7 @@ struct AddUserView: View {
     }
 
     private var stepDetailsWithManager: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 0) {
             stepDetailsWithManagerWithoutManagerPicker
 
             if invitedAccountType == .operative || invitedAccountType == .manager || invitedAccountType == .admin {
@@ -544,85 +572,100 @@ struct AddUserView: View {
             }
         }
     }
+
+    /// One field of the grouped details card: label above value.
+    private func detailsField<Field: View>(_ label: String, @ViewBuilder field: () -> Field) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            PPFormFieldLabel(text: label)
+            field()
+                .frame(minHeight: 30)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
     
     private var stepDetailsWithManagerWithoutManagerPicker: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Enter the user's basic information")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
-            
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("First Name")
-                        .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 12)
+
+            VStack(alignment: .leading, spacing: 0) {
+                detailsField("First Name") {
                     TextField("Enter first name", text: $firstName)
                         .accessibilityIdentifier("addUser.enterFirstName")
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Surname")
-                        .font(.headline)
+                Divider().padding(.leading, 14)
+                detailsField("Surname") {
                     TextField("Enter surname", text: $surname)
                         .accessibilityIdentifier("addUser.enterSurname")
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Email Address")
-                        .font(.headline)
+                Divider().padding(.leading, 14)
+                detailsField("Email Address") {
                     TextField("Enter email address", text: $email)
                         .accessibilityIdentifier("addUser.enterEmailAddress")
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.emailAddress)
                         .autocapitalization(.none)
                 }
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Mobile Number")
-                        .font(.headline)
+                Divider().padding(.leading, 14)
+                detailsField("Mobile Number") {
                     TextField("Enter mobile number", text: $mobileNumber)
                         .accessibilityIdentifier("addUser.enterMobileNumber")
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.phonePad)
                 }
+            }
+            .ppFormCard(padding: 0)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Employment Type")
-                        .font(.headline)
-                    Picker("Employment Type", selection: $employmentType) {
-                        ForEach(EmploymentType.allCases) { type in
-                            Text(type.title).tag(type)
-                        }
-                    }
-                    .accessibilityIdentifier("addUser.employmentType")
-                    .pickerStyle(.segmented)
+            PPFormSectionLabel(text: "Employment")
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    PPFormFieldLabel(text: "Employment Type")
+                    // Same value as the old segmented Picker: a tap sets `employmentType`.
+                    PPSegmentedPills(
+                        items: EmploymentType.allCases.map { type in
+                            PPSegmentItem(id: type, title: type.title, accessibilityIdentifier: "addUser.employmentType.\(type.rawValue)")
+                        },
+                        isSelected: { $0 == employmentType },
+                        onSelect: { employmentType = $0 }
+                    )
                 }
-                
+
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
                     StaffTradeTypeFormSection(
                         presetRaw: $tradePresetRaw,
                         customText: $tradeCustomText,
                         title: "Trade type *",
-                        footnote: "Required for operatives and managers."
+                        footnote: "Required for operatives and managers.",
+                        style: .card
                     )
                 }
-                
+
                 // RULEBOOK 1.14.0 §8, §11: every level has a rate field, because a self-employed person of any level
                 // needs a rate (`payRateRequiredError`) when the adder may set pay.
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager
                     || invitedAccountType == .admin {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(inviteRateRequired ? "Day rate *" : "Day rate (optional)")
-                            .font(.headline)
-                        TextField("e.g. 250", text: dayRateBindingForSelectedType)
-                            .accessibilityIdentifier("addUser.eG250")
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .keyboardType(.decimalPad)
+                    VStack(alignment: .leading, spacing: 6) {
+                        PPFormFieldLabel(text: inviteRateRequired ? "Day rate *" : "Day rate (optional)")
+                        HStack(spacing: 6) {
+                            Text("£")
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                            TextField("e.g. 250", text: dayRateBindingForSelectedType)
+                                .accessibilityIdentifier("addUser.eG250")
+                                .keyboardType(.decimalPad)
+                                .monospacedDigit()
+                            Text("per day")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                        .ppFormField()
                         if let rateFieldError {
                             Text(rateFieldError)
                                 .font(.caption)
-                                .foregroundColor(.red)
+                                .foregroundStyle(PPColor.danger)
                                 .accessibilityIdentifier("addUser.payRateRequired")
                         }
                         Text(inviteRateRequired
@@ -630,49 +673,52 @@ struct AddUserView: View {
                              : (invitedAccountType == .operative || mode == .managerAddingOperative
                                 ? "Stored on their user account."
                                 : "Optional. Leave blank if not needed."))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .onChange(of: employmentType) { _, _ in rateFieldError = nil }
                 }
 
                 // Admins only (`canViewSensitiveProfile` for someone else). Saved to the placeholder's private/taxIds.
                 if canEnterTaxIds {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("VAT number (optional)")
-                            .font(.headline)
-                        TextField("If VAT registered", text: $vatNumber)
-                            .accessibilityIdentifier("addUser.ifVATRegistered")
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
-                            .onChange(of: vatNumber) { _, newValue in
-                                let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
-                                if newValue.count > limit { vatNumber = String(newValue.prefix(limit)) }
-                            }
-                    }
+                    let taxLayout = dynamicTypeSize.isAccessibilitySize
+                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+                        : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
+                    taxLayout {
+                        VStack(alignment: .leading, spacing: 6) {
+                            PPFormFieldLabel(text: "VAT number (optional)")
+                            TextField("If VAT registered", text: $vatNumber)
+                                .accessibilityIdentifier("addUser.ifVATRegistered")
+                                .textInputAutocapitalization(.characters)
+                                .autocorrectionDisabled()
+                                .onChange(of: vatNumber) { _, newValue in
+                                    let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
+                                    if newValue.count > limit { vatNumber = String(newValue.prefix(limit)) }
+                                }
+                                .ppFormField()
+                        }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("UTR number (optional)")
-                            .font(.headline)
-                        TextField("Unique Taxpayer Reference", text: $utrNumber)
-                            .accessibilityIdentifier("addUser.uniqueTaxpayerReference")
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
-                            .onChange(of: utrNumber) { _, newValue in
-                                let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
-                                if newValue.count > limit { utrNumber = String(newValue.prefix(limit)) }
-                            }
+                        VStack(alignment: .leading, spacing: 6) {
+                            PPFormFieldLabel(text: "UTR number (optional)")
+                            TextField("Unique Taxpayer Reference", text: $utrNumber)
+                                .accessibilityIdentifier("addUser.uniqueTaxpayerReference")
+                                .textInputAutocapitalization(.characters)
+                                .autocorrectionDisabled()
+                                .onChange(of: utrNumber) { _, newValue in
+                                    let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
+                                    if newValue.count > limit { utrNumber = String(newValue.prefix(limit)) }
+                                }
+                                .ppFormField()
+                        }
                     }
                 }
 
                 if mode == .admin {
-                    Text("Timesheets follow employment type. Self-employed users get My Timesheets; PAYE users keep the current pay run until it is paid, then schedule no longer fills timesheets.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    PPInfoBox(text: "Timesheets follow employment type. Self-employed users get My Timesheets; PAYE users keep the current pay run until it is paid, then schedule no longer fills timesheets.")
                 }
             }
+            .ppFormCard()
         }
     }
     
