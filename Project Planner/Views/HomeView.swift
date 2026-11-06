@@ -145,8 +145,15 @@ struct HomeView: View {
                 .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingCreateOperative) {
-            CreateOperativeView()
-                .environmentObject(operativeStore)
+            // RULEBOOK 1.34.0 §11: a new operative with no login is a ghost (a users document), never an `operatives`
+            // row — Add user opens with the Ghost account toggle on (shown only when `canCreateGhost` allows it).
+            AddUserView(
+                mode: userStore.currentUser?.isRosterAdmin == true ? .admin : .managerAddingOperative,
+                startAsGhost: true
+            )
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(smartCache)
         }
         .sheet(isPresented: $showingCreateManager) {
             CreateManagerView()
