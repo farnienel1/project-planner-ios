@@ -260,15 +260,16 @@ enum ScheduleWeekGrid {
         let accounts = accounts(for: bucket, operatives: operatives, users: users)
         let leading = leadingAccount(accounts)
         let role = leading?.role ?? .operative
+        let isOperative = role == .operative
         let operativeIds = linkedOperativeIds(accounts: accounts, bucket: bucket, operatives: operatives)
         let userIds = linkedUserIds(accounts: accounts, bucket: bucket, users: users)
         let saveOperativeId: UUID? = {
-            guard role == .operative else { return nil }
+            guard isOperative else { return nil }
             let matches = operativeIds.compactMap { id in operatives.first { $0.id == id } }
             if let preferred = StaffEmailIdentity.preferredOperative(matches) { _ in 0 }?.id { return preferred }
             // An operative-level account with a login but no Operatives-list row is booked under its users id, as web
-            // Book labour does (#262; counted by `bookingIdsForAccount`) — never as a manager site booking.
-            return leading.map { AccountLabourBooking.operativeId(for: $0.user) }
+            // Book labour does (#262), only when `bookingIdsForAccount` counts it — never as a manager site booking.
+            return leading.flatMap { AccountLabourBooking.bookingOperativeId(for: $0.user, operatives: operatives) }
         }()
         return ScheduleWeekPerson(
             id: leading?.user.id
@@ -279,9 +280,11 @@ enum ScheduleWeekGrid {
             operativeIds: operativeIds,
             userIds: userIds,
             subcontractorId: nil,
-            savesAsOperativeBooking: role == .operative && saveOperativeId != nil,
+            savesAsOperativeBooking: isOperative && saveOperativeId != nil,
             saveOperativeId: saveOperativeId,
-            saveUserId: leading?.user.id
+            // An operative with no id to book under has no manager-site save either (`saveTarget` then has only a
+            // catalogue id, or nothing), so a script that did not answer never files them as a manager site booking.
+            saveUserId: isOperative && saveOperativeId == nil ? nil : leading?.user.id
         )
     }
 
@@ -371,9 +374,39 @@ enum ScheduleWeekGrid {
 /// Labour bookings for an operative-level account that has no Operatives-list row (owner decision 4 Nov, "Judgement
 /// call in #262", owner to confirm): the booking's `operativeId` is the users id, mapped in-app by
 /// `Booking.internalOperativeId(for:)`. The in-memory row is never written to `operatives`.
+/// Owner kept it on 6 Nov (checklist 1.42): iOS books such an account under its users id only when the rulebook's
+/// `bookingIdsForAccount` counts a booking under that id as this account's — the same function every reader (My
+/// Schedule, timesheets, payroll, job access) uses to find the booking again.
 enum AccountLabourBooking {
     static func operativeId(for user: AppUser) -> UUID {
         Booking.internalOperativeId(for: user.id)
+    }
+
+    /// The in-app id a labour booking for `user` is written under when they have no Operatives-list row: their users
+    /// id (stored exactly as web stores it), but only when `bookingIdsForAccount(account, operatives)` lists it. Nil
+    /// when the id is blank, the rulebook does not count it, or the script did not answer (fail closed: no Swift
+    /// copy of the rule, AGENTS.md Rule 0). Callers pick a catalogue row first.
+    static func bookingOperativeId(for user: AppUser, operatives: [Operative]) -> UUID? {
+        let stored = user.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stored.isEmpty else { return nil }
+        let account = CanonicalBusinessEngine.CanonicalBookingPersonAccount(
+            id: user.id, email: user.email, formerIds: user.formerUserIds, aliasIds: user.sameEmailUserIds
+        )
+        let counted = CanonicalBusinessEngine.bookingIdsForAccount(
+            account,
+            operatives: operatives.map {
+                CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: $0.documentId, email: $0.email)
+            }
+        ) ?? []
+        guard counted.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(stored) == .orderedSame }) else {
+            return nil
+        }
+        return operativeId(for: user)
+    }
+
+    /// The in-memory labour row for `user` under `bookingOperativeId(for:operatives:)`, else nil.
+    static func bookingOperative(for user: AppUser, operatives: [Operative]) -> Operative? {
+        bookingOperativeId(for: user, operatives: operatives).map { _ in operative(for: user) }
     }
 
     static func operative(for user: AppUser) -> Operative {

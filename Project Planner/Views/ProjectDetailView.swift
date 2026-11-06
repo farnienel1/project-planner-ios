@@ -1407,10 +1407,12 @@ struct ProjectDetailView: View {
         }
         switch target {
         case .operativeBookings(let operativeId):
-            // A catalogue row, else the operative-level account itself (booked under its users id, web #262).
+            // A catalogue row, else the operative-level account itself (booked under its users id, web #262), when
+            // the rulebook counts that id as the account's (`bookingIdsForAccount`).
             let accountRow = request.person.saveUserId
                 .flatMap { id in userStore.organizationUsers.first { $0.id == id } }
-                .flatMap { user in AccountLabourBooking.operativeId(for: user) == operativeId ? AccountLabourBooking.operative(for: user) : nil }
+                .flatMap { user in AccountLabourBooking.bookingOperative(for: user, operatives: operativeStore.allOperatives) }
+                .flatMap { row in row.id == operativeId ? row : nil }
             guard let operative = operativeStore.allOperatives.first(where: { $0.id == operativeId }) ?? accountRow else {
                 return "No operative profile is linked to this person."
             }
