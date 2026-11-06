@@ -59,7 +59,11 @@ final class Release1320ScreenChecksTests: PPUITestCase {
         openSettings(role: role)
         scrollTo("settings.rulesVersion", timeout: 15)
         let label = element("settings.rulesVersion")
-        XCTAssertTrue(label.label.contains("1.32.1"), "A1/A2: Settings shows '\(label.label)', expected 'Rules 1.32.1'")
+        // The exact version is RulebookParityTests' job (stamp == docs/RULEBOOK.md); here: the line shows "Rules x.y.z".
+        XCTAssertNotNil(
+            label.label.range(of: #"^Rules \d+\.\d+\.\d+"#, options: .regularExpression),
+            "A1/A2: Settings shows '\(label.label)', expected 'Rules <version>'"
+        )
         shot("A\(role == "operative" ? 2 : 1) \(role) Settings rules version")
     }
 
