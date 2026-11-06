@@ -1860,6 +1860,9 @@ struct OperativeQualificationsReadOnlyView: View {
         guard userStore.isOperativeMode() else { return }
         guard !isRepairingLink else { return }
         guard let u = userStore.currentUser else { return }
+        // RULEBOOK 1.34.0 §11: a ghost is a users document only; never create an `operatives` row for one (an invited
+        // ghost signs in only after accepting, which drops the ghost flag).
+        guard !u.isGhost else { return }
         
         let email = u.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !email.isEmpty else { return }

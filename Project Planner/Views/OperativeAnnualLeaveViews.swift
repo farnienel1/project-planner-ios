@@ -1367,6 +1367,19 @@ struct OperativeAnnualLeaveCalendarView: View {
             return
         }
 
+        // RULEBOOK 1.34.0 §9, §11 `ghostLeaveBooking`: a ghost's leave is booked by its line manager or an admin
+        // (`canBookLeaveFor`), saved approved, and nobody is notified (a ghost has no inbox).
+        let ghostBooking: (allowed: Bool, status: String, notify: Bool)? = {
+            guard let ghost = leaveProfileUser, ghost.isGhost, let viewer = userStore.currentUser else { return nil }
+            return GhostRulebook.leaveBooking(viewer: viewer, ghost: ghost, roster: userStore.organizationUsers)
+                ?? (allowed: false, status: "approved", notify: false)
+        }()
+        if let ghostBooking, !ghostBooking.allowed {
+            errorMessage = "Only this person's line manager or an admin can book their annual leave."
+            showError = true
+            return
+        }
+
         isSaving = true
         defer { isSaving = false }
 
@@ -1386,7 +1399,7 @@ struct OperativeAnnualLeaveCalendarView: View {
                 return
             }
 
-            if let notifyUserId = resolvedNotificationUserId() {
+            if ghostBooking?.notify ?? true, let notifyUserId = resolvedNotificationUserId() {
                 let bookedBy = userStore.currentUser?.fullName
                     ?? userStore.currentUser?.email
                     ?? "Your manager"
@@ -1418,7 +1431,8 @@ struct OperativeAnnualLeaveCalendarView: View {
             booking.timeSlot = changeSlot
             try await holidayStore.saveBooking(booking)
             let managerName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
-            if let ownerId = booking.userId ?? person.userId {
+            // RULEBOOK 1.34.0 §11: a ghost has no inbox (`ghostLeaveBooking.notify` is false).
+            if leaveProfileUser?.isGhost != true, let ownerId = booking.userId ?? person.userId {
                 await notificationService.notifyAnnualLeaveBookingConfirmation(
                     userId: ownerId,
                     bookingId: booking.id,
@@ -1596,7 +1610,10 @@ enum AnnualLeavePersonBuilder {
                 AnnualLeavePerson(
                     id: "user-\(user.id)",
                     displayName: user.fullName.isEmpty ? user.email : user.fullName,
-                    subtitle: "\(roleHint) · \(user.email)",
+                    // A ghost has no email: its subtitle carries the "No app login" badge instead (`ghostBadgeLabel`).
+                    subtitle: user.email.isEmpty
+                        ? [roleHint, GhostRulebook.badge(user)].filter { !$0.isEmpty }.joined(separator: " · ")
+                        : "\(roleHint) · \(user.email)",
                     tradeLabel: trade,
                     firstNameSort: first,
                     surnameSort: last,
