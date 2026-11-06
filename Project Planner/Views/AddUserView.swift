@@ -913,112 +913,102 @@ struct AddUserView: View {
         }
     }
     
+    /// One Account row on Review: label left, value right.
+    private func reviewRow<Value: View>(_ label: String, @ViewBuilder value: () -> Value) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            value()
+                .font(.subheadline.weight(.semibold))
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+    }
+
     private var stepReview: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Review before sending the invitation")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
-            
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Account")
-                        .font(.headline)
-                    if mode == .admin {
-                        HStack {
-                            Text("Type:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(invitedAccountType.title)
-                                .fontWeight(.medium)
-                        }
-                    } else {
-                        Text("Operative (invited by manager)")
-                            .fontWeight(.medium)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 12)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Account")
+                    .font(.headline)
+                    .padding(.bottom, 2)
+                if mode == .admin {
+                    reviewRow("Type") {
+                        Text(invitedAccountType.title)
                     }
-                    
-                    HStack {
-                        Text("Name:")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text("\(firstName) \(surname)")
-                            .fontWeight(.medium)
-                    }
-                    
-                    HStack {
-                        Text("Email:")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(email)
-                            .fontWeight(.medium)
-                    }
-                HStack {
-                    Text("Employment type:")
-                        .foregroundColor(.secondary)
-                    Spacer()
+                } else {
+                    Text("Operative (invited by manager)")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.vertical, 10)
+                }
+
+                Divider()
+                reviewRow("Name") {
+                    Text("\(firstName) \(surname)")
+                }
+
+                Divider()
+                reviewRow("Email") {
+                    Text(email)
+                }
+
+                Divider()
+                reviewRow("Employment type") {
                     Text(employmentType.title)
-                        .fontWeight(.medium)
                 }
-                    
-                    if !mobileNumber.isEmpty {
-                        HStack {
-                            Text("Mobile:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(mobileNumber)
-                                .fontWeight(.medium)
-                        }
-                    }
-                    
-                    if permissions.operativeMode || permissions.manager || permissions.adminAccess {
-                        HStack(alignment: .top) {
-                            Text("Line manager:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(lineManagerSummary)
-                                .fontWeight(.medium)
-                                .multilineTextAlignment(.trailing)
-                        }
-                    }
-                    
-                    let reviewDayRate = selectedDayRateTextForReview
-                    if !reviewDayRate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        HStack {
-                            Text("Day rate:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(reviewDayRate)
-                                .fontWeight(.medium)
-                        }
-                    }
-                    
-                    if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
-                        HStack {
-                            Text("Trade:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText))
-                                .fontWeight(.medium)
-                        }
-                    }
 
-                    if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
-                        annualLeaveReviewRow
+                if !mobileNumber.isEmpty {
+                    Divider()
+                    reviewRow("Mobile") {
+                        Text(mobileNumber)
                     }
                 }
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(12)
-                
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Permissions summary")
-                        .font(.headline)
 
-                    permissionsAccessColumns
+                if permissions.operativeMode || permissions.manager || permissions.adminAccess {
+                    Divider()
+                    reviewRow("Line manager") {
+                        Text(lineManagerSummary)
+                    }
                 }
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(12)
+
+                let reviewDayRate = selectedDayRateTextForReview
+                if !reviewDayRate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Divider()
+                    reviewRow("Day rate") {
+                        Text(reviewDayRate)
+                            .monospacedDigit()
+                    }
+                }
+
+                if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                    Divider()
+                    reviewRow("Trade") {
+                        Text(StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText))
+                    }
+                }
+
+                if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                    Divider()
+                    annualLeaveReviewRow
+                }
             }
+            .ppFormCard()
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Permissions summary")
+                    .font(.headline)
+
+                permissionsAccessColumns
+            }
+            .ppFormCard()
+            .padding(.top, 12)
         }
     }
     
@@ -1030,27 +1020,34 @@ struct AddUserView: View {
             
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 80))
-                .foregroundColor(.green)
+                .foregroundStyle(PPFamily.sites.top)
+                .accessibilityHidden(true)
             
             VStack(spacing: 8) {
                 Text("User Created Successfully!")
-                    .font(.title2)
+                    .font(.system(.title2, design: .rounded))
                     .fontWeight(.bold)
+                    .multilineTextAlignment(.center)
                 
                 Text("An invitation email has been sent to \(email)")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
             
             Spacer()
             
-            Button("Done") {
+            Button {
                 dismiss()
+            } label: {
+                Text("Done")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(PPBookingColor.primaryGradient, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             }
             .accessibilityIdentifier("addUser.done")
-            .buttonStyle(.borderedProminent)
-            .tint(.indigo)
+            .buttonStyle(PPPressableButtonStyle())
         }
         .padding(20)
     }
@@ -1128,27 +1125,31 @@ struct AddUserView: View {
     /// Review reads the allowance toggle. The days field stays at the company default when the toggle is off, so this must not call `parseAnnualLeaveDaysForInvite()` in that case.
     @ViewBuilder
     private var annualLeaveReviewRow: some View {
-        HStack(alignment: .top) {
-            Text("Annual leave:")
-                .foregroundColor(.secondary)
-            Spacer()
+        HStack(alignment: .top, spacing: 12) {
+            Text("Annual leave")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 12)
             if annualLeaveEnabledInvite {
                 let months = AnnualLeavePolicy.shortMonthSymbols()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(verbatim: "\(AnnualLeaveUsageHeroView.formatLeaveDays(parseAnnualLeaveDaysForInvite())) days / year")
-                        .fontWeight(.medium)
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
                     Text("\(months[annualLeaveStartMonth - 1]) → \(months[annualLeaveEndMonth - 1])")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                     Text(annualLeaveCarriesOver ? "Carries over" : "No carry over")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
             } else {
                 Text("Off")
-                    .fontWeight(.medium)
+                    .font(.subheadline.weight(.semibold))
             }
         }
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
     }
 
     /// RULEBOOK 1.11.0 §11: the summary rows are `permissionToggleRows(..., mode: 'summary')`, the same set Add User
@@ -1163,47 +1164,32 @@ struct AddUserView: View {
     private var permissionsAccessColumns: some View {
         let allowed = permissionItems.filter(\.isEnabled)
         let denied = permissionItems.filter { !$0.isEnabled }
-        return HStack(alignment: .top, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Can Access")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                ForEach(allowed, id: \.title) { item in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .accessibilityHidden(true)
-                        Text(item.title)
-                            .font(.caption)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
+                Text("Can access · \(allowed.count)".uppercased())
+                    .font(.caption.weight(.semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(PPAddUserColor.includedInk)
+                PPWrapLayout {
+                    ForEach(allowed, id: \.title) { item in
+                        PPAccessChip(title: item.title, allowed: true)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityLabel("Can access \(item.title)")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .trailing, spacing: 8) {
-                Text("Can't Access")
-                    .font(.subheadline.weight(.semibold))
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                ForEach(denied, id: \.title) { item in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(item.title)
-                            .font(.caption)
-                            .multilineTextAlignment(.trailing)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.red)
-                            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Can't access · \(denied.count)".uppercased())
+                    .font(.caption.weight(.semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(PPAddUserColor.errorInk)
+                PPWrapLayout {
+                    ForEach(denied, id: \.title) { item in
+                        PPAccessChip(title: item.title, allowed: false)
                     }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .accessibilityLabel("Cannot access \(item.title)")
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
     
