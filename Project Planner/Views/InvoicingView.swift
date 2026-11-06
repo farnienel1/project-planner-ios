@@ -3352,7 +3352,8 @@ private struct PreviousTimesheetRun: Identifiable {
     }
 }
 
-private struct OperativeTimesheetsView: View {
+/// Internal (1.33.0) so the Payrun Snapshot can open a person's timesheet for a pay run.
+struct OperativeTimesheetsView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject private var smartCache: SmartCacheService
     @EnvironmentObject var userStore: UserStore
