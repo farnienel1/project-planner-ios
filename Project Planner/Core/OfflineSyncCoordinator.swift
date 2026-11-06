@@ -276,7 +276,16 @@ enum OfflineSyncCoordinator {
             guard let code = BookingWritePatch.firestoreErrorCode(error) else { throw error }
             switch CanonicalBusinessEngine.offlineDeleteRefusalDecision(code: code) {
             case "alreadyGone": throw OfflineDeleteOutcome.resolved
-            case "refusePermission": throw OfflineDeleteOutcome.refused(message: CanonicalBusinessEngine.offlineDeleteRefusedMessage)
+            case "refusePermission":
+                // RULEBOOK 1.33.0 §2: refused only after a fresh read shows the booking still there; gone or
+                // tombstoned means the delete already happened.
+                let stillLive = await firebaseBackend.offlineDeletedBookingStillLive(
+                    collection: collection,
+                    documentId: documentId,
+                    organizationId: entry.organizationId
+                )
+                if stillLive == false { throw OfflineDeleteOutcome.resolved }
+                throw OfflineDeleteOutcome.refused(message: CanonicalBusinessEngine.offlineDeleteRefusedMessage)
             default: throw error
             }
         }

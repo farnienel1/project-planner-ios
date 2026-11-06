@@ -49,8 +49,16 @@ extension FirebaseBackend {
         let liveSnapshot = try await ref.getDocument(source: .server)
         let tombstoned = (try? await tombstoneRef.getDocument(source: .server))?.exists ?? false
         let live = liveSnapshot.exists ? liveSnapshot.data() : nil
-        // `canDeleteBooking` for the signed-in user on the live booking and its job (missing: allowed, the rules check).
-        let mayDelete = live.map { Self.offlineDeleteAllowed(collection: collection, data: $0) }
+        // `canDeleteBooking` for the signed-in user on the live booking and its job. Nil (the security rules decide)
+        // when this device cannot judge it: another organisation's queued item, no viewer yet, or the job not loaded.
+        let openOrgId = normalizedOrganizationId(currentOrganization?.firestoreDocumentId ?? "")
+        let mayDelete: Bool? = live.flatMap {
+            Self.offlineDeleteAllowed(
+                collection: collection,
+                data: $0,
+                sameOrganization: !openOrgId.isEmpty && openOrgId == orgId
+            )
+        }
         let timeZone = OrganizationRulebookContext.timeZoneIdentifier
         let first = Self.offlineDeleteDecision(
             documentId: documentId, collection: collection, fingerprint: fingerprint,
@@ -68,6 +76,23 @@ extension FirebaseBackend {
             mayDelete: mayDelete,
             timeZone: timeZone
         )
+    }
+
+    /// After a permission-denied refusal (RULEBOOK 1.33.0 §2 `offlineDeleteRefusalDecision`): a fresh server read of
+    /// the booking and its tombstone. False when the booking is gone or tombstoned (the delete already happened), true
+    /// when it is still there, nil when it could not be read.
+    func offlineDeletedBookingStillLive(collection: String, documentId: String, organizationId: String) async -> Bool? {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty, !documentId.isEmpty else { return nil }
+        let ref = db.collection("organizations").document(orgId).collection(collection).document(documentId)
+        guard let live = try? await ref.getDocument(source: .server) else { return nil }
+        guard live.exists else { return false }
+        if let tombstonePath = CanonicalBusinessEngine.bookingTombstonePath(organizationId: orgId, bookingId: documentId),
+           let tombstone = try? await db.document(tombstonePath).getDocument(source: .server),
+           tombstone.exists {
+            return false
+        }
+        return true
     }
 
     /// `offlineDeleteReplayDecision` for a live document read from Firestore.
@@ -95,10 +120,18 @@ extension FirebaseBackend {
     }
 
     /// `bookingRemoveAction` is `delete` for the live booking (labour: its job; manager schedule: person and place).
-    static func offlineDeleteAllowed(collection: String, data: [String: Any]) -> Bool {
-        if collection == "managerSiteBookings" {
-            let type = data["locationType"] as? String
-            let jobLocation = type == "project" || type == "small_work"
+    /// Nil when this device cannot judge it — the queued item is for another organisation than the open one, the
+    /// profile has not loaded, or the booking's job is not among the loaded jobs (e.g. a cold launch before jobs load)
+    /// — so the replay goes ahead and the security rules decide (`offlineDeleteRefusalDecision` reads a refusal).
+    static func offlineDeleteAllowed(collection: String, data: [String: Any], sameOrganization: Bool) -> Bool? {
+        guard sameOrganization, JobAccessContext.readViewer != nil else { return nil }
+        let isManagerSchedule = collection == "managerSiteBookings"
+        let type = data["locationType"] as? String
+        let jobLocation = type == "project" || type == "small_work"
+        let rawJobId = isManagerSchedule ? (jobLocation ? data["locationId"] as? String : nil) : data["projectId"] as? String
+        let jobKey = (rawJobId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !jobKey.isEmpty && JobAccessContext.jobFieldsById[jobKey] == nil { return nil }
+        if isManagerSchedule {
             return JobAccessContext.bookingRemoveAction(
                 collection: collection,
                 userId: data["userId"] as? String,

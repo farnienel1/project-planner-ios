@@ -4277,7 +4277,8 @@ struct EditUserView: View {
             let parsedDayRate = parseDayRate(dayRateText)
             let effectiveForHistory: Date? = operativeDayRateChanged ? (dayRateEffectiveAt ?? calendarStartOfDay(Date())) : nil
             let rateToPersist = operativeDayRateChanged ? parsedDayRate : subjectUser.dayRate
-            let managerIds = hasNoLineManagerDraft ? [] : Array(selectedLineManagerUserIds)
+            // Sorted for a deterministic first id; the store keeps the stored order (`stableLineManagerOrder`).
+            let managerIds = hasNoLineManagerDraft ? [] : Array(selectedLineManagerUserIds).sorted()
             operativeDetailsSuccess = await userStore.updateOperativeProfileFields(
                 for: subjectUser,
                 assignedManagerUserId: managerIds.first,
@@ -4287,7 +4288,9 @@ struct EditUserView: View {
                 operativeStore: operativeStore,
                 dayRateEffectiveAt: effectiveForHistory,
                 // Only an operative's rate is saved here; staff rates go through `updateManagerDayRate`.
-                updateDayRate: permissions.operativeMode && operativeDayRateChanged
+                updateDayRate: permissions.operativeMode && operativeDayRateChanged,
+                // RULEBOOK 1.33.0 §11: an actor who may not change the line manager writes no line-manager keys.
+                mayChangeLineManager: mayChangeLineManager && (managerAssignmentChanged || hasNoLineManagerChanged)
             )
         }
 

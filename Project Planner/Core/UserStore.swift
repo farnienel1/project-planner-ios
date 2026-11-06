@@ -2959,7 +2959,8 @@ class UserStore: ObservableObject {
                 dayRate: Double?,
                 operativeStore: OperativeStore?,
                 dayRateEffectiveAt: Date? = nil,
-                updateDayRate: Bool = true
+                updateDayRate: Bool = true,
+                mayChangeLineManager: Bool = true
              ) async -> Bool {
                 guard let firebaseBackend = firebaseBackend else { return false }
                 guard organizationUsers.contains(where: { $0.id == user.id }) else { return false }
@@ -2969,23 +2970,32 @@ class UserStore: ObservableObject {
                 guard let index = organizationUsers.firstIndex(where: { $0.id == user.id }) else { return false }
                 var updatedUser = original
                 guard updatedUser.permissions.operativeMode || updatedUser.role == .operative || updatedUser.permissions.manager || updatedUser.role == .manager || updatedUser.permissions.adminAccess || updatedUser.role == .admin else { return false }
-                if let hasNoLineManager {
-                    updatedUser.setNoLineManager(hasNoLineManager)
-                }
-                let managerIds = (assignedManagerUserIds ?? assignedManagerUserId.map { [$0] } ?? [])
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                if !updatedUser.hasNoLineManager {
-                    if managerIds.contains(updatedUser.id) {
-                        errorMessage = "A user cannot be their own line manager."
-                        return false
+                // RULEBOOK 1.33.0 §11 `canChangeLineManager`: someone who may not change the line manager (an
+                // Operatives manager on a signed-up operative) never touches the line-manager fields, so a pay-only save
+                // is not refused by the rules' `lineManagersUnchanged` check.
+                if mayChangeLineManager {
+                    if let hasNoLineManager {
+                        updatedUser.setNoLineManager(hasNoLineManager)
                     }
-                    updatedUser.setLineManagerUserIds(managerIds)
+                    let managerIds = (assignedManagerUserIds ?? assignedManagerUserId.map { [$0] } ?? [])
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                    if !updatedUser.hasNoLineManager {
+                        if managerIds.contains(updatedUser.id) {
+                            errorMessage = "A user cannot be their own line manager."
+                            return false
+                        }
+                        // Stored order first, new ids sorted: the rules compare the list element by element.
+                        updatedUser.setLineManagerUserIds(
+                            AppUser.stableLineManagerOrder(stored: original.lineManagerUserIds, selected: managerIds)
+                        )
+                    }
                 }
                 let previousPay = Self.storedPay(of: original)
                 let dayRateChanged = updateDayRate && previousPay.amount != dayRate
-                let lineManagerChanged = Set(updatedUser.lineManagerUserIds) != Set(original.lineManagerUserIds)
-                    || updatedUser.hasNoLineManager != original.hasNoLineManager
+                let lineManagerChanged = mayChangeLineManager
+                    && (Set(updatedUser.lineManagerUserIds) != Set(original.lineManagerUserIds)
+                        || updatedUser.hasNoLineManager != original.hasNoLineManager)
                 guard dayRateChanged || lineManagerChanged else { return true }
                 guard canChangePay(of: original) else {
                     errorMessage = Self.payChangeRefusedMessage
@@ -3025,6 +3035,8 @@ class UserStore: ObservableObject {
                         hasNoLineManager: hasNoLineManager ?? updatedUser.hasNoLineManager,
                         dayRate: dayRate,
                         updateDayRate: dayRateChanged,
+                        // Unchanged (or not ours to change): leave the line-manager keys out of the write entirely.
+                        writeLineManager: lineManagerChanged,
                         payBasis: previousPay.basis,
                         historyRows: historyRows
                     )

@@ -112,8 +112,13 @@ class BookingStore: ObservableObject {
         ) { [weak self] note in
             guard note.userInfo?["collection"] as? String == "bookings",
                   let booking = note.userInfo?["labourBooking"] as? Booking else { return }
+            let noteOrganizationId = normalizedOrganizationId(note.userInfo?["organizationId"] as? String ?? "")
             Task { @MainActor [weak self] in
-                self?.restoreDeletedBooking(booking)
+                guard let self else { return }
+                // Only into the open organisation: a queued delete of another company's booking never shows here.
+                let openOrganizationId = normalizedOrganizationId(self.firebaseBackend?.resolvedOrganizationIdForOfflineWrites() ?? "")
+                guard noteOrganizationId.isEmpty || noteOrganizationId == openOrganizationId else { return }
+                self.restoreDeletedBooking(booking)
             }
         }
     }

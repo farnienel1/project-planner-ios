@@ -232,4 +232,24 @@ final class Rulebook1330AccessTests: XCTestCase {
         )
         XCTAssertEqual(writes.map(\.path), ["users/op2", "users/OP/orgMemberships/ORG"])
     }
+
+    // MARK: Pre-merge review fixes (PR #202)
+
+    /// The rules compare `assignedManagerUserIds` element by element (`lineManagersUnchanged`), so a save keeps the
+    /// stored order and appends new ids sorted; the picker's `Set` order never reaches Firestore.
+    func testLineManagerSaveKeepsTheStoredOrder() {
+        XCTAssertEqual(AppUser.stableLineManagerOrder(stored: ["B", "A"], selected: ["A", "B"]), ["B", "A"])
+        XCTAssertEqual(AppUser.stableLineManagerOrder(stored: ["B", "A"], selected: ["D", "A", "C", "B"]), ["B", "A", "C", "D"])
+        XCTAssertEqual(AppUser.stableLineManagerOrder(stored: ["B", "A"], selected: ["A"]), ["A"])
+        XCTAssertEqual(AppUser.stableLineManagerOrder(stored: [], selected: [" Z ", "Y", ""]), ["Y", "Z"])
+    }
+
+    /// A queued delete for another organisation than the open one is judged by the security rules, not this device.
+    func testOfflineDeleteOfAnotherOrganisationLetsTheServerDecide() {
+        XCTAssertNil(FirebaseBackend.offlineDeleteAllowed(
+            collection: "bookings",
+            data: ["projectId": "JOB-1"],
+            sameOrganization: false
+        ))
+    }
 }

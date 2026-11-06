@@ -6385,28 +6385,31 @@ class FirebaseBackend: ObservableObject {
         hasNoLineManager: Bool? = nil,
         dayRate: Double?,
         updateDayRate: Bool = true,
+        writeLineManager: Bool = true,
         payBasis: String? = nil,
         historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = []
     ) async throws {
         var payload: [String: Any] = [:]
-        let ids: [String] = {
-            if hasNoLineManager == true { return [] }
-            if let assignedManagerUserIds {
-                return assignedManagerUserIds
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
+        if writeLineManager {
+            let ids: [String] = {
+                if hasNoLineManager == true { return [] }
+                if let assignedManagerUserIds {
+                    return assignedManagerUserIds
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                }
+                if let managerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !managerId.isEmpty {
+                    return [managerId]
+                }
+                return []
+            }()
+            if ids.isEmpty {
+                payload["assignedManagerUserId"] = FieldValue.delete()
+                payload["assignedManagerUserIds"] = FieldValue.delete()
+            } else {
+                payload["assignedManagerUserId"] = ids[0]
+                payload["assignedManagerUserIds"] = ids
             }
-            if let managerId = assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !managerId.isEmpty {
-                return [managerId]
-            }
-            return []
-        }()
-        if ids.isEmpty {
-            payload["assignedManagerUserId"] = FieldValue.delete()
-            payload["assignedManagerUserIds"] = FieldValue.delete()
-        } else {
-            payload["assignedManagerUserId"] = ids[0]
-            payload["assignedManagerUserIds"] = ids
         }
         if updateDayRate {
             for (key, value) in Self.exclusivePayFields(payBasis: payBasis, amount: dayRate) {
@@ -9331,7 +9334,12 @@ extension FirebaseBackend {
             try await docRef.setData(WriteMetadata.stamped(createPayload, userId: uid))
         }
 
-        if material.catalogueItemId == nil {
+        // RULEBOOK 1.33.0 §16 `canManageMaterialCatalogue`: only admins and super admins add catalogue items (the
+        // rules refuse anyone else), so a manager's or operative's material line never tries to.
+        let mayAddToCatalogue = JobAccessContext.readViewer.map {
+            CanonicalBusinessEngine.canManageMaterialCatalogue($0.role)
+        } ?? false
+        if material.catalogueItemId == nil && mayAddToCatalogue {
             // Reads the whole catalogue first. The material line is already saved, so this must not hold the sheet open.
             Task {
                 do {

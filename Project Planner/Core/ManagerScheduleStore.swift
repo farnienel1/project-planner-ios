@@ -72,8 +72,11 @@ class ManagerScheduleStore: ObservableObject {
         ) { [weak self] note in
             guard note.userInfo?["collection"] as? String == "managerSiteBookings",
                   let booking = note.userInfo?["managerBooking"] as? ManagerSiteBooking else { return }
+            let noteOrganizationId = normalizedOrganizationId(note.userInfo?["organizationId"] as? String ?? "")
             Task { @MainActor [weak self] in
                 guard let self, let orgId = self.firebaseBackend?.resolvedOrganizationIdForOfflineWrites() else { return }
+                // Only into the open organisation: a queued delete of another company's booking never shows here.
+                guard noteOrganizationId.isEmpty || noteOrganizationId == normalizedOrganizationId(orgId) else { return }
                 guard !self.managerSiteBookings.contains(where: { $0.id == booking.id }) else { return }
                 self.applyLocalSave(booking, organizationId: orgId)
                 ScheduleChangeNotifier.postBookingStoreDidChange()

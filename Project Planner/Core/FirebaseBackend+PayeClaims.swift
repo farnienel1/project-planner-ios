@@ -121,7 +121,9 @@ extension FirebaseBackend {
             )
             if let registration { registrations.append(registration) }
         }
-        if let personUserId = merge.ids.first, let org = try? payeClaimsOrganizationRef() {
+        // On the person's own screen the `personUserId ==` query is not needed (their `userId ==` queries cover it)
+        // and the read rules refuse it, so it is added only when the viewer is someone else.
+        if let personUserId = merge.ids.first, personUserId != payeClaimsUid, let org = try? payeClaimsOrganizationRef() {
             let key = "personUserId:\(personUserId)"
             merge.add(key)
             let orgId = org.documentID
@@ -152,7 +154,8 @@ extension FirebaseBackend {
         let merge = PayeClaimListenerMerge<PayeClaimReviewRecord>(ids: userIds)
         let collection = CanonicalBusinessEngine.payeClaimReviewsCollection
         var queries: [(key: String, field: String, value: String)] = merge.ids.map { ($0, "userId", $0) }
-        if let personUserId = merge.ids.first {
+        // Not on the person's own screen: the read rules refuse the `personUserId ==` query for the person themself.
+        if let personUserId = merge.ids.first, personUserId != payeClaimsUid {
             let key = "personUserId:\(personUserId)"
             merge.add(key)
             queries.append((key, "personUserId", personUserId))
