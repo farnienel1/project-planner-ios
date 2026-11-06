@@ -2291,7 +2291,9 @@ struct EditUserView: View {
         guard !user.passwordSet, !userStore.hasAdminAccess(),
               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
               let uid = firebaseBackend.currentUser?.uid else { return }
-        sentInvitation = await firebaseBackend.loadSentInvitation(organizationId: orgId, uid: uid, email: user.email)
+        sentInvitation = await firebaseBackend.loadSentInvitation(
+            organizationId: orgId, uid: uid, email: user.email, profileEmail: userStore.currentUser?.email
+        )
     }
 
     private var editUserNavigationStack: some View {

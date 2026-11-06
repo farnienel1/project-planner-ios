@@ -147,6 +147,9 @@ final class Rulebook1210Tests: XCTestCase {
         )
     }
 
+    /// RULEBOOK 1.33.0 §17, §21 (owner decisions 6 Nov): every manager sees every job, so a job they do not manage
+    /// (NOT-MINE) is on their lists and counts when active today. LIVE, NOT-MINE and SW-A are active on 3 Nov; INACTIVE
+    /// and ENDED are not. Before 1.33.0 the count was 2 (a manager without the toggle saw only their own jobs).
     func testHomeActiveCountIsTheActiveTabOfTheViewersLists() throws {
         let jobs = [
             try job("LIVE", ["managerUserIds": ["U-M"], "startDate": "2026-11-01", "endDate": "2026-11-30"]),
@@ -160,7 +163,7 @@ final class Rulebook1210Tests: XCTestCase {
             CanonicalBusinessEngine.activeJobsCount(
                 jobs, viewer: managerViewer(projectsToggle: false), context: RulebookWorksListContext(), now: now, timeZone: london
             ),
-            2
+            3
         )
     }
 
