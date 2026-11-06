@@ -54,6 +54,11 @@ extension AppUser {
         return kept + added
     }
 
+    /// `stableLineManagerOrder` against this person's stored line managers.
+    func stableLineManagerOrder(selected: [String]) -> [String] {
+        Self.stableLineManagerOrder(stored: lineManagerUserIds, selected: selected)
+    }
+
     mutating func setNoLineManager(_ enabled: Bool) {
         hasNoLineManager = enabled
         if enabled {

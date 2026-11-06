@@ -2987,7 +2987,7 @@ class UserStore: ObservableObject {
                         }
                         // Stored order first, new ids sorted: the rules compare the list element by element.
                         updatedUser.setLineManagerUserIds(
-                            AppUser.stableLineManagerOrder(stored: original.lineManagerUserIds, selected: managerIds)
+                            original.stableLineManagerOrder(selected: managerIds)
                         )
                     }
                 }
