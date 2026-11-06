@@ -127,7 +127,7 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Core/NotificationService.swift": 7,
             "Core/QualificationsAccessPolicy.swift": 1,
             "Core/ScheduleBookingConflictSupport.swift": 8,
-            "Core/ScheduleWeekGrid.swift": 2,
+            "Core/ScheduleWeekGrid.swift": 1,
             "Core/TimesheetPayrollPolicy.swift": 2,
             "Core/UserStore.swift": 63,
             "Core/WarningOperativeAccess.swift": 4,

@@ -47,8 +47,9 @@ enum ScheduleBookablePersonBuilder {
         for user in users where labourKind(user) == "operative" {
             let email = emailKey(user.email)
             if !email.isEmpty, seenEmails.contains(email) { continue }
-            let id = Booking.internalOperativeId(for: user.id)
-            guard seenIds.insert(id).inserted else { continue }
+            // Booked under the users id only when the rulebook counts it as this account's (`bookingIdsForAccount`).
+            guard let id = AccountLabourBooking.bookingOperativeId(for: user, operatives: sourceOperatives),
+                  seenIds.insert(id).inserted else { continue }
             rows.append(operativeRecord(from: user, id: id))
             if !email.isEmpty { seenEmails.insert(email) }
         }
@@ -109,9 +110,10 @@ enum ScheduleBookablePersonBuilder {
             let email = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             guard seenEmails.contains(email) == false else { continue }
             // A manager with no catalogue row is booked under their user id, like an operative.
-            let op = operatives.first(where: {
+            guard let op = operatives.first(where: {
                 $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
-            }) ?? operativeRecord(from: user, id: Booking.internalOperativeId(for: user.id))
+            }) ?? AccountLabourBooking.bookingOperativeId(for: user, operatives: sourceOperatives)
+                .map({ operativeRecord(from: user, id: $0) }) else { continue }
             let role = user.permissions.adminAccess || user.isSuperAdmin ? "Admin" : "Manager"
             append(operative: op, user: user, role: role)
         }

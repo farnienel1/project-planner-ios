@@ -14,6 +14,9 @@ struct BookLabourCandidate: Identifiable {
     let linkedOperative: Operative?
     /// When true, project bookings use `Booking` + operative id; when false, use `ManagerSiteBooking`.
     let usesOperativeProjectBookings: Bool
+    /// With no catalogue row: the account itself under its users id, when the rulebook counts it
+    /// (`AccountLabourBooking.bookingOperative`, `bookingIdsForAccount`). Nil otherwise.
+    var accountBookingOperative: Operative? = nil
 
     var displayName: String {
         user.fullName.isEmpty ? user.email : user.fullName
@@ -43,15 +46,23 @@ struct BookLabourCandidate: Identifiable {
 
     /// The labour-booking person: the catalogue row the rulebook row names, else (an operative-level account with a
     /// login but no Operatives-list row) the account itself, booked under its users id as web Book labour does (#262;
-    /// the rulebook counts it, `bookingIdsForAccount`). Owner decision 4 Nov "Judgement call in #262" — owner to confirm.
+    /// the rulebook counts it, `bookingIdsForAccount`). Owner decision 4 Nov "Judgement call in #262", kept 6 Nov.
     var bookingOperative: Operative? {
         if let linkedOperative { return linkedOperative }
         guard usesOperativeProjectBookings else { return nil }
-        return Self.accountOperative(user)
+        return accountBookingOperative
     }
 
-    static func accountOperative(_ user: AppUser) -> Operative {
-        AccountLabourBooking.operative(for: user)
+    /// The catalogue row an `unbookedLabourRowsOnDay` row's `operativeId` names (stored id, compared without case, as
+    /// web's `linkedOperativeFor`). A users id names no row. A non-UUID document id is matched too, so a person with a
+    /// catalogue row is never booked under their users id instead.
+    static func catalogueRow(forRowOperativeId rowOperativeId: String, in operatives: [Operative]) -> Operative? {
+        let stored = rowOperativeId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stored.isEmpty else { return nil }
+        return operatives.first {
+            Booking.storedOperativeId(for: $0.id).caseInsensitiveCompare(stored) == .orderedSame
+                || $0.documentId.caseInsensitiveCompare(stored) == .orderedSame
+        }
     }
 
 }
@@ -2082,9 +2093,7 @@ struct BookLabourFlowView: View {
             let personKey = row.personKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let user = user(forUnbookedRowUserId: userId, personKey: personKey) else { continue }
             guard seen.insert(user.id).inserted else { continue }
-            let linked = UUID(uuidString: row.operativeId).flatMap { id in
-                operativeStore.allOperatives.first { $0.id == id }
-            }
+            let linked = BookLabourCandidate.catalogueRow(forRowOperativeId: row.operativeId, in: operativeStore.allOperatives)
             let operativeOnly = user.permissions.operativeMode
                 && !user.permissions.manager
                 && !user.permissions.adminAccess
@@ -2093,7 +2102,10 @@ struct BookLabourFlowView: View {
             let candidate = BookLabourCandidate(
                 user: user,
                 linkedOperative: linked,
-                usesOperativeProjectBookings: operativeOnly
+                usesOperativeProjectBookings: operativeOnly,
+                accountBookingOperative: linked == nil && operativeOnly
+                    ? AccountLabourBooking.bookingOperative(for: user, operatives: operativeStore.allOperatives)
+                    : nil
             )
             listed.append((candidate, isFocused(user, operative: linked, personKey: personKey, userId: userId, focused: focused)))
         }
