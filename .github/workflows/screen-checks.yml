@@ -1,8 +1,11 @@
 name: Screen checks
 
 # Launches the app in an iPhone simulator on seeded TEST data (no Firebase) and runs the release screen checks
-# (ProjectPlannerUITests/Release1320ScreenChecksTests: test session Part A). Screenshots are uploaded as the
-# "screen-checks" artifact, so the screens can be reviewed without opening Xcode.
+# (ProjectPlannerUITests/Release1320ScreenChecksTests: test session Part A) and the Add New User screen checks
+# (AddUserScreenChecksTests, docs/design/add-user-ui). iPhone 16e runs both; iPhone SE (3rd generation) and the newest
+# Pro Max run the Add User checks only. A missing SE or Pro Max simulator is created with simctl when the runner has
+# the device type; otherwise that leg says so and stops. Screenshots are uploaded as one "screen-checks-<device>"
+# artifact per device, so the screens can be reviewed without opening Xcode.
 
 on:
   push:
@@ -23,7 +26,20 @@ concurrency:
 jobs:
   screen-checks:
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: iphone-16e
+            device: iPhone 16e
+            only: -only-testing:ProjectPlannerUITests/Release1320ScreenChecksTests -only-testing:ProjectPlannerUITests/AddUserScreenChecksTests
+          - slug: iphone-se
+            device: iPhone SE (3rd generation)
+            only: -only-testing:ProjectPlannerUITests/AddUserScreenChecksTests
+          - slug: iphone-pro-max
+            device: Pro Max
+            only: -only-testing:ProjectPlannerUITests/AddUserScreenChecksTests
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode 26
@@ -33,19 +49,49 @@ jobs:
           sudo xcode-select -s "$xcode/Contents/Developer"
           xcodebuild -version
       - name: Run the screen checks
+        env:
+          DEVICE: ${{ matrix.device }}
+          ONLY: ${{ matrix.only }}
         run: |
-          sim=$(xcrun simctl list devices available -j | node -e '
-            const d=JSON.parse(require("fs").readFileSync(0,"utf8")).devices;
+          # Pick the simulator for this leg: an exact name, or (for "Pro Max") the newest iPhone whose name ends so.
+          sim=$(xcrun simctl list devices available -j | WANT="$DEVICE" node -e '
+            const d=JSON.parse(require("fs").readFileSync(0,"utf8")).devices; const want=process.env.WANT;
             const ios=Object.keys(d).filter(k=>k.includes("iOS")).sort().reverse();
-            for (const k of ios) { const p=d[k].find(x=>x.name==="iPhone 16e")||d[k].find(x=>x.name.startsWith("iPhone")); if (p) { console.log(p.udid); break; } }')
-          echo "Simulator: $sim"
+            const match=(x)=> want==="Pro Max" ? /^iPhone \d+ Pro Max$/.test(x.name) : x.name===want;
+            let found=null;
+            for (const k of ios) { const p=d[k].filter(match).sort((a,b)=>b.name.localeCompare(a.name,undefined,{numeric:true}))[0]; if (p) { found=p; break; } }
+            // iPhone 16e keeps the old fallback (any iPhone), as before this matrix.
+            if (!found && want==="iPhone 16e") for (const k of ios) { const p=d[k].find(x=>x.name.startsWith("iPhone")); if (p) { found=p; break; } }
+            if (found) console.log(found.udid);')
+          if [ -z "$sim" ] && [ "$DEVICE" != "Pro Max" ]; then
+            # Not preinstalled: create it on the newest iOS runtime that offers this device type.
+            type_id=$(xcrun simctl list devicetypes -j | WANT="$DEVICE" node -e '
+              const t=JSON.parse(require("fs").readFileSync(0,"utf8")).devicetypes.find(x=>x.name===process.env.WANT);
+              if (t) console.log(t.identifier)')
+            runtime=$(xcrun simctl list runtimes -j | TYPE="$type_id" node -e '
+              const r=JSON.parse(require("fs").readFileSync(0,"utf8")).runtimes
+                .filter(x=>x.isAvailable && x.platform==="iOS" && (x.supportedDeviceTypes||[]).some(t=>t.identifier===process.env.TYPE))
+                .sort((a,b)=>b.version.localeCompare(a.version,undefined,{numeric:true}));
+              if (r[0]) console.log(r[0].identifier)')
+            if [ -n "$type_id" ] && [ -n "$runtime" ]; then
+              sim=$(xcrun simctl create "$DEVICE" "$type_id" "$runtime")
+              echo "Created $DEVICE ($runtime)"
+            fi
+          fi
+          if [ -z "$sim" ]; then
+            echo "::warning::No '$DEVICE' simulator on this runner and none could be created; this leg did not run."
+            echo "## Screen checks ($DEVICE)" >> "$GITHUB_STEP_SUMMARY"
+            echo "Not run: no '$DEVICE' simulator on this runner image." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "Simulator: $sim ($DEVICE)"
           set +e
           xcodebuild test \
             -project "Project Planner.xcodeproj" \
             -scheme "Project Planner" \
             -testPlan ProjectPlanner-Full \
             -destination "platform=iOS Simulator,id=$sim" \
-            -only-testing:ProjectPlannerUITests/Release1320ScreenChecksTests \
+            $ONLY \
             -parallel-testing-enabled NO \
             -resultBundlePath ScreenChecks.xcresult \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild.log
@@ -69,13 +115,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: screen-checks
+          name: screen-checks-${{ matrix.slug }}
           path: |
             screenshots
             xcodebuild.log
           if-no-files-found: warn
       - name: Results (pass / fail and why)
         if: always()
+        env:
+          DEVICE: ${{ matrix.device }}
         run: |
           [ -d ScreenChecks.xcresult ] || { echo "No result bundle (the build or launch failed; see the Run step)."; exit 0; }
           xcrun xcresulttool get test-results tests --path ScreenChecks.xcresult > results.json || { echo "xcresulttool could not read the results"; exit 0; }
@@ -94,5 +142,5 @@ jobs:
             (r.testNodes || []).forEach(walk);
             const text = out.join("\n");
             console.log(text);
-            if (process.env.GITHUB_STEP_SUMMARY) require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## Screen checks\n```\n" + text + "\n```\n");
+            if (process.env.GITHUB_STEP_SUMMARY) require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## Screen checks (" + process.env.DEVICE + ")\n```\n" + text + "\n```\n");
           '

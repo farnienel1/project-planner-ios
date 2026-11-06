@@ -12,6 +12,7 @@ struct AddUserView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     enum AddUserMode {
         case admin
@@ -85,32 +86,31 @@ struct AddUserView: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                ManageUserProfilePalette.pageBackground.ignoresSafeArea()
-                VStack(spacing: 0) {
-                    wizardHeader
-                    if showSuccess {
-                        successView
-                    } else {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 0) {
-                                wizardProgressDots
-                                    .padding(.horizontal, 16)
-                                    .padding(.bottom, 8)
-                                Text(stepTitle)
-                                    .font(.system(size: 15, weight: .bold))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.bottom, 12)
-                                stepContentInner
-                                    .padding(.horizontal, 16)
-                                    .padding(.bottom, 24)
-                            }
-                            .padding(.top, 8)
+            VStack(spacing: 0) {
+                wizardHeader
+                if showSuccess {
+                    successView
+                        .ppAddUserSheet()
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(stepTitle)
+                                .font(.system(.title2, design: .rounded))
+                                .fontWeight(.bold)
+                                .accessibilityAddTraits(.isHeader)
+                                .padding(.bottom, 4)
+                            stepContentInner
                         }
-                        wizardFooter
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, PPMetrics.screenGutter)
+                        .padding(.top, 20)
+                        .padding(.bottom, 24)
                     }
+                    .ppAddUserSheet()
+                    wizardFooter
                 }
             }
+            .background(PPNavyBackdrop().ignoresSafeArea())
             .navigationBarHidden(true)
             .onAppear {
                 resetAnnualLeaveInviteDefaults()
@@ -127,53 +127,126 @@ struct AddUserView: View {
         }
     }
 
+    // MARK: - Header (navy, display only)
+
+    /// Tracker labels (spec §3): "Permissions" reads "Access" in the tracker and the step heading only.
+    private static let trackerTitles = ["Type", "Details", "Access", "Review"]
+
     private var wizardHeader: some View {
-        VStack(spacing: 0) {
-            HStack {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
                 Button("Cancel") { dismiss() }
                     .accessibilityIdentifier("addUser.cancel")
-                    .font(.system(size: 17))
-                    .foregroundStyle(ManageUserProfilePalette.listBlue)
-                Spacer()
-                Text("Add New User")
-                    .font(.system(size: 17, weight: .bold))
-                Spacer()
-                Text("Step \(currentStep)/\(totalSteps)")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .buttonStyle(PPOnNavyPillButtonStyle())
+                Spacer(minLength: 4)
+                Text("Add new user")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 4)
+                Text("Step \(currentStep) of \(totalSteps)")
+                    .font(.footnote.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(PPAddUserColor.headerMuted)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            Divider()
+            headerUserCard
+            if currentStep == finalReviewStep && !showSuccess {
+                PPStatRow(items: reviewHeaderStats)
+            }
+            PPStepTracker(steps: trackerSteps, doneColor: PPAddUserColor.stepDone)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Step \(currentStep) of \(totalSteps)")
+                .accessibilityValue(Self.trackerTitles[min(max(currentStep, 1), Self.trackerTitles.count) - 1])
+                .accessibilityIdentifier("addUser.stepTracker")
         }
-        .background(ManageUserProfilePalette.pageBackground.opacity(0.95))
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 8)
+        .padding(.bottom, 18)
+        .environment(\.colorScheme, .dark)
     }
 
-    private var wizardProgressDots: some View {
-        HStack(spacing: 0) {
-            ForEach(1...totalSteps, id: \.self) { step in
-                ZStack {
-                    Circle()
-                        .fill(step < currentStep ? ManageUserProfilePalette.avatarGradientTop : (step == currentStep ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder))
-                        .frame(width: 26, height: 26)
-                    if step < currentStep {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.white)
-                    } else {
-                        Text("\(step)")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(step == currentStep ? .white : ManageUserProfilePalette.textSecondary)
-                    }
-                }
-                if step < totalSteps {
-                    Rectangle()
-                        .fill(step < currentStep ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder)
-                        .frame(height: 2.5)
-                        .padding(.horizontal, 5)
-                }
-            }
+    /// Display only: done steps get a tick and a blue bar, the current step the amber stripes. Not tappable (as before).
+    private var trackerSteps: [PPStepTrackerItem] {
+        Self.trackerTitles.enumerated().map { index, title in
+            let step = index + 1
+            return PPStepTrackerItem(
+                id: step,
+                title: title,
+                isDone: step < currentStep || showSuccess,
+                isCurrent: step == currentStep && !showSuccess
+            )
         }
+    }
+
+    /// Spec §1 "Header extras": the placeholder shows until a first name or surname is typed (owner decision 6).
+    private var headerHasName: Bool {
+        !(firstName + surname).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var headerInitials: String {
+        let letters = [firstName, surname].compactMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).first }
+        return String(letters).uppercased()
+    }
+
+    private var headerFamily: PPFamily {
+        switch invitedAccountType {
+        case .admin: return .plan
+        case .manager: return .people
+        case .operative: return .trade
+        }
+    }
+
+    /// Chips for the values already entered: account type, employment type, trade and line manager.
+    private var headerChips: [String] {
+        var chips = [invitedAccountType.title, employmentType.title]
+        if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager,
+           !tradePresetRaw.isEmpty {
+            chips.append(StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText))
+        }
+        if !selectedLineManagerUserIds.isEmpty || hasNoLineManager {
+            chips.append("Line manager: \(lineManagerSummary)")
+        }
+        return chips
+    }
+
+    /// The live user card. It reads the fields of this flow and writes nothing.
+    @ViewBuilder
+    private var headerUserCard: some View {
+        if headerHasName {
+            PPUserPreviewCard(
+                name: "\(firstName) \(surname)".trimmingCharacters(in: .whitespacesAndNewlines),
+                subtitle: currentStep == finalReviewStep ? email : nil,
+                initials: headerInitials,
+                family: headerFamily,
+                chips: currentStep == finalReviewStep ? [] : headerChips
+            )
+        } else {
+            PPUserPreviewCard(
+                name: "New user",
+                subtitle: "Choose an account type to start",
+                initials: nil,
+                family: headerFamily
+            )
+        }
+    }
+
+    /// Review header figures: account type, modules on (of the rows shown) and annual leave days. Display only.
+    private var reviewHeaderStats: [PPStatItem] {
+        let rows = permissionItems
+        let enabled = rows.filter(\.isEnabled).count
+        let leave = annualLeaveEnabledInvite
+            ? "\(AnnualLeaveUsageHeroView.formatLeaveDays(parseAnnualLeaveDaysForInvite())) days"
+            : "Off"
+        return [
+            PPStatItem(id: "type", value: invitedAccountType.title, label: "Account type"),
+            PPStatItem(id: "modules", value: "\(enabled) of \(rows.count)", label: "Modules"),
+            PPStatItem(id: "leave", value: leave, label: "Annual leave"),
+        ]
     }
 
     @ViewBuilder
@@ -187,33 +260,49 @@ struct AddUserView: View {
         }
     }
 
+    // MARK: - Bottom bar
+
     /// RULEBOOK §2: creating the user sends the invite, so the last step is online only.
     private var wizardFooter: some View {
-        VStack(spacing: 0) {
+        PPWizardBottomBar(
+            backEnabled: currentStep > 1,
+            backAction: {
+                withAnimation { currentStep -= 1 }
+            },
+            primaryTitle: primaryButtonTitle,
+            primarySymbol: currentStep == finalReviewStep ? "envelope.fill" : "arrow.right",
+            primarySymbolLeading: currentStep == finalReviewStep,
+            primaryEnabled: !(!canProceed || isCreating || (currentStep == finalReviewStep && !smartCache.isOnline)),
+            disabledTitle: nextDisabledTitle,
+            isBusy: isCreating,
+            primaryAction: {
+                if currentStep == finalReviewStep {
+                    createUser()
+                } else {
+                    withAnimation {
+                        if mode == .admin && currentStep == 1 {
+                            // Seeds only a new level; the line-manager picks were already reset by the account-type
+                            // card when the type changed (`AddUserLineManagerSelection`), so Next keeps them.
+                            applyPermissionsForInvitedType()
+                        }
+                        currentStep += 1
+                    }
+                }
+            }
+        ) {
             if currentStep == finalReviewStep && !smartCache.isOnline {
                 Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
                     .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
             }
-            // Why the button will not go on, directly above it (red): the refused save's message, else the
-            // rule refusing this step (`lineManagerRequiredError`, LINE_MANAGER_REQUIRED_MESSAGE).
-            if let blockingMessage = footerBlockingMessage {
-                Text(blockingMessage)
-                    .foregroundStyle(.red)
-                    .font(.footnote)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
+            // A refused save's message, directly above the buttons (as before).
+            if let refusal = refusedCreateMessage {
+                PPErrorCallout(message: refusal)
                     .accessibilityIdentifier("addUser.blockingMessage")
             }
-            wizardFooterButtons
         }
-        .background(ProjectWorksRevampColors.surface)
     }
 
     /// The message shown above Next / Create User: a refused create first, else the line-manager rule on the
@@ -228,70 +317,37 @@ struct AddUserView: View {
         return AnnualLeaveApproval.lineManagerRequiredError(for: draft, users: userStore.organizationUsers)
     }
 
-    private var wizardFooterButtons: some View {
-        HStack(spacing: 11) {
-            Button {
-                withAnimation { currentStep -= 1 }
-            } label: {
-                Text("Back")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 14)
-                    .background(ManageUserProfilePalette.pageBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
-            .accessibilityIdentifier("addUser.back")
-            .buttonStyle(.plain)
-            .disabled(currentStep <= 1)
-            .opacity(currentStep <= 1 ? 0.35 : 1)
-
-            Button {
-                if currentStep == finalReviewStep {
-                    createUser()
-                } else {
-                    withAnimation {
-                        if mode == .admin && currentStep == 1 {
-                            // Seeds only a new level; the line-manager picks were already reset by the account-type
-                            // card when the type changed (`AddUserLineManagerSelection`), so Next keeps them.
-                            applyPermissionsForInvitedType()
-                        }
-                        currentStep += 1
-                    }
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Text(currentStep == finalReviewStep ? (isCreating ? "Creating…" : "Create User") : "Next")
-                        .font(.system(size: 16, weight: .bold))
-                    if currentStep != finalReviewStep {
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 15, weight: .bold))
-                    }
-                }
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(
-                    LinearGradient(
-                        colors: [Color(red: 0x4F / 255, green: 0x46 / 255, blue: 0xE5 / 255), ManageUserProfilePalette.listBlue],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: Color(red: 0x4F / 255, green: 0x46 / 255, blue: 0xE5 / 255).opacity(0.28), radius: 6, y: 3)
-            }
-            .accessibilityIdentifier("addUser.creating")
-            .buttonStyle(.plain)
-            .disabled(!canProceed || isCreating || (currentStep == finalReviewStep && !smartCache.isOnline))
-            .opacity((canProceed && !isCreating) ? 1 : 0.55)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(ProjectWorksRevampColors.surface)
-        .overlay(alignment: .top) { Divider() }
+    /// Display only: `footerBlockingMessage` when it is a refused save's message.
+    private var refusedCreateMessage: String? {
+        guard let errorMessage, !errorMessage.isEmpty else { return nil }
+        return footerBlockingMessage
     }
-    
+
+    /// Display only: `footerBlockingMessage` when it is the line-manager rule on the details step. Shown in the
+    /// Line manager card and on the disabled Next button.
+    private var lineManagerInlineMessage: String? {
+        guard refusedCreateMessage == nil else { return nil }
+        return footerBlockingMessage
+    }
+
+    /// Cosmetic label for the same Next / Create User action (spec §3).
+    private var primaryButtonTitle: String {
+        switch currentStep {
+        case 1: return "Next: details"
+        case 2: return "Next: access"
+        case 3: return "Next: review"
+        default: return isCreating ? "Creating…" : "Create User"
+        }
+    }
+
+    /// What the disabled button says (owner decision 5): the rulebook's line-manager message when that blocks the
+    /// step, otherwise a generic line. Read from the same `canProceed` / `footerBlockingMessage`; no new rule.
+    private var nextDisabledTitle: String {
+        if currentStep == finalReviewStep { return primaryButtonTitle }
+        if let lineManagerInlineMessage { return lineManagerInlineMessage }
+        return "Fill in the required fields to continue"
+    }
+
     // MARK: - Progress (legacy name kept for references)
     
     private var progressSlider: some View {
@@ -302,7 +358,7 @@ struct AddUserView: View {
         switch currentStep {
         case 1: return "Account Type"
         case 2: return "User Details"
-        case 3: return "Permissions"
+        case 3: return "Access"
         case 4: return "Review"
         default: return ""
         }
@@ -315,22 +371,23 @@ struct AddUserView: View {
             Text(mode == .managerAddingOperative
                 ? "This account is an operative. Super admin is never assigned from here."
                 : "Choose what kind of account this will be. Super admin is never assigned from here.")
-                .font(.system(size: 14))
-                .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                .lineSpacing(3)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             VStack(spacing: 11) {
                 if mode != .managerAddingOperative {
-                    accountTypeCard(.admin, icon: "🛡️", description: "Full organisation access except operative mode.")
-                    accountTypeCard(.manager, icon: "👔", description: "Manage teams, schedules and optional modules.")
+                    accountTypeCard(.admin, symbol: "shield.fill", family: .plan, description: "Full organisation access except operative mode.")
+                    accountTypeCard(.manager, symbol: "briefcase.fill", family: .people, description: "Manage teams, schedules and optional modules.")
                 }
-                accountTypeCard(.operative, icon: "👷", description: "Schedule, annual leave and qualifications.")
+                accountTypeCard(.operative, symbol: "wrench.and.screwdriver.fill", family: .trade, description: "Schedule, annual leave and qualifications.")
             }
         }
     }
 
-    private func accountTypeCard(_ type: InvitedAccountType, icon: String, description: String) -> some View {
+    private func accountTypeCard(_ type: InvitedAccountType, symbol: String, family: PPFamily, description: String) -> some View {
         let selected = invitedAccountType == type
         let lockedToOperative = mode == .managerAddingOperative
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         return Button {
             guard !lockedToOperative, invitedAccountType != type else { return }
             let previousLevel = RulebookPermissionLevel(rawValue: invitedAccountType.rawValue) ?? .manager
@@ -351,44 +408,42 @@ struct AddUserView: View {
             hasNoLineManager = lineManagers.hasNoLineManager
         } label: {
             HStack(spacing: 14) {
-                Text(icon)
-                    .font(.system(size: 23))
-                    .frame(width: 48, height: 48)
-                    .background(ManageUserProfilePalette.chipPurpleBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                PPIconTile(symbol: symbol, family: family, size: 44, lifted: selected)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(type.title)
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
                     Text(description)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer()
+                Spacer(minLength: 8)
                 ZStack {
                     Circle()
-                        .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder, lineWidth: 2)
+                        .strokeBorder(selected ? PPAddUserColor.selected : Color(.separator), lineWidth: 2)
                         .frame(width: 24, height: 24)
                     if selected {
                         Circle()
-                            .fill(ManageUserProfilePalette.avatarGradientTop)
+                            .fill(PPAddUserColor.selected)
                             .frame(width: 24, height: 24)
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.white)
                     }
                 }
+                .accessibilityHidden(true)
             }
-            .padding(16)
-            .background(selected ? ManageUserProfilePalette.chipPurpleBg : ProjectWorksRevampColors.chipSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder, lineWidth: selected ? 2 : 1.5)
-            )
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(PPColor.card, in: shape)
+            .overlay(shape.strokeBorder(selected ? PPAddUserColor.selected : PPBookingColor.cardBorder, lineWidth: selected ? 2 : 0.5))
+            .shadow(color: selected ? PPAddUserColor.selected.opacity(0.18) : .clear, radius: 8, x: 0, y: 3)
+            .contentShape(shape)
         }
-        .accessibilityIdentifier("addUser.checkmark")
+        .accessibilityIdentifier("addUser.accountType.\(type.rawValue)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .buttonStyle(.plain)
     }
     
@@ -431,29 +486,27 @@ struct AddUserView: View {
 
     @ViewBuilder
     private var lineManagerPickerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Line manager(s)")
-                .font(.headline)
-            Text(lineManagerPickerFootnote)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            Button {
-                showingLineManagerPicker = true
-            } label: {
-                HStack {
-                    Text(lineManagerSummary)
-                        .foregroundStyle(selectedLineManagerUserIds.isEmpty && !hasNoLineManager ? .secondary : .primary)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            PPFormSectionLabel(text: "Line manager(s)")
+            VStack(alignment: .leading, spacing: 12) {
+                Text(lineManagerPickerFootnote)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    showingLineManagerPicker = true
+                } label: {
+                    lineManagerPickerLabel
                 }
-                .padding(12)
-                .background(Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityIdentifier("addUser.chevronRight")
+                .buttonStyle(.plain)
+                // The rulebook's line-manager message (`footerBlockingMessage`), shown inside this card (spec §4).
+                if let lineManagerInlineMessage {
+                    PPErrorCallout(message: lineManagerInlineMessage)
+                        .accessibilityIdentifier("addUser.blockingMessage")
+                }
             }
-            .accessibilityIdentifier("addUser.chevronRight")
-            .buttonStyle(.plain)
+            .ppFormCard(isError: lineManagerInlineMessage != nil)
         }
         .sheet(isPresented: $showingLineManagerPicker) {
             LineManagersMultiSelectSheet(
@@ -465,6 +518,35 @@ struct AddUserView: View {
         }
         .onChange(of: selectedLineManagerUserIds) { _, newIds in
             if !newIds.isEmpty { hasNoLineManager = false }
+        }
+    }
+
+    /// Display only (owner decision 4): the existing `lineManagerSummary` label as one chip, or a dashed
+    /// "Choose line manager" button while nothing is chosen. Both open the same Line managers sheet.
+    @ViewBuilder
+    private var lineManagerPickerLabel: some View {
+        if selectedLineManagerUserIds.isEmpty && !hasNoLineManager {
+            Label("Choose line manager", systemImage: "plus")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(PPColor.brand)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(PPColor.brand.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                )
+                .contentShape(Rectangle())
+                .accessibilityValue(lineManagerSummary)
+        } else {
+            HStack(spacing: 8) {
+                PPChip(text: lineManagerSummary, symbol: "person.fill", tone: .blue)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .ppFormField()
+            .contentShape(Rectangle())
         }
     }
 
@@ -482,7 +564,7 @@ struct AddUserView: View {
     }
 
     private var stepDetailsWithManager: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 0) {
             stepDetailsWithManagerWithoutManagerPicker
 
             if invitedAccountType == .operative || invitedAccountType == .manager || invitedAccountType == .admin {
@@ -490,85 +572,100 @@ struct AddUserView: View {
             }
         }
     }
+
+    /// One field of the grouped details card: label above value.
+    private func detailsField<Field: View>(_ label: String, @ViewBuilder field: () -> Field) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            PPFormFieldLabel(text: label)
+            field()
+                .frame(minHeight: 30)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
     
     private var stepDetailsWithManagerWithoutManagerPicker: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Enter the user's basic information")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
-            
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("First Name")
-                        .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 12)
+
+            VStack(alignment: .leading, spacing: 0) {
+                detailsField("First Name") {
                     TextField("Enter first name", text: $firstName)
                         .accessibilityIdentifier("addUser.enterFirstName")
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Surname")
-                        .font(.headline)
+                Divider().padding(.leading, 14)
+                detailsField("Surname") {
                     TextField("Enter surname", text: $surname)
                         .accessibilityIdentifier("addUser.enterSurname")
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Email Address")
-                        .font(.headline)
+                Divider().padding(.leading, 14)
+                detailsField("Email Address") {
                     TextField("Enter email address", text: $email)
                         .accessibilityIdentifier("addUser.enterEmailAddress")
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.emailAddress)
                         .autocapitalization(.none)
                 }
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Mobile Number")
-                        .font(.headline)
+                Divider().padding(.leading, 14)
+                detailsField("Mobile Number") {
                     TextField("Enter mobile number", text: $mobileNumber)
                         .accessibilityIdentifier("addUser.enterMobileNumber")
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
                         .keyboardType(.phonePad)
                 }
+            }
+            .ppFormCard(padding: 0)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Employment Type")
-                        .font(.headline)
-                    Picker("Employment Type", selection: $employmentType) {
-                        ForEach(EmploymentType.allCases) { type in
-                            Text(type.title).tag(type)
-                        }
-                    }
-                    .accessibilityIdentifier("addUser.employmentType")
-                    .pickerStyle(.segmented)
+            PPFormSectionLabel(text: "Employment")
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    PPFormFieldLabel(text: "Employment Type")
+                    // Same value as the old segmented Picker: a tap sets `employmentType`.
+                    PPSegmentedPills(
+                        items: EmploymentType.allCases.map { type in
+                            PPSegmentItem(id: type, title: type.title, accessibilityIdentifier: "addUser.employmentType.\(type.rawValue)")
+                        },
+                        isSelected: { $0 == employmentType },
+                        onSelect: { employmentType = $0 }
+                    )
                 }
-                
+
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
                     StaffTradeTypeFormSection(
                         presetRaw: $tradePresetRaw,
                         customText: $tradeCustomText,
                         title: "Trade type *",
-                        footnote: "Required for operatives and managers."
+                        footnote: "Required for operatives and managers.",
+                        style: .card
                     )
                 }
-                
+
                 // RULEBOOK 1.14.0 §8, §11: every level has a rate field, because a self-employed person of any level
                 // needs a rate (`payRateRequiredError`) when the adder may set pay.
                 if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager
                     || invitedAccountType == .admin {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(inviteRateRequired ? "Day rate *" : "Day rate (optional)")
-                            .font(.headline)
-                        TextField("e.g. 250", text: dayRateBindingForSelectedType)
-                            .accessibilityIdentifier("addUser.eG250")
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .keyboardType(.decimalPad)
+                    VStack(alignment: .leading, spacing: 6) {
+                        PPFormFieldLabel(text: inviteRateRequired ? "Day rate *" : "Day rate (optional)")
+                        HStack(spacing: 6) {
+                            Text("£")
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                            TextField("e.g. 250", text: dayRateBindingForSelectedType)
+                                .accessibilityIdentifier("addUser.eG250")
+                                .keyboardType(.decimalPad)
+                                .monospacedDigit()
+                            Text("per day")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                        .ppFormField()
                         if let rateFieldError {
                             Text(rateFieldError)
                                 .font(.caption)
-                                .foregroundColor(.red)
+                                .foregroundStyle(PPColor.danger)
                                 .accessibilityIdentifier("addUser.payRateRequired")
                         }
                         Text(inviteRateRequired
@@ -576,49 +673,52 @@ struct AddUserView: View {
                              : (invitedAccountType == .operative || mode == .managerAddingOperative
                                 ? "Stored on their user account."
                                 : "Optional. Leave blank if not needed."))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .onChange(of: employmentType) { _, _ in rateFieldError = nil }
                 }
 
                 // Admins only (`canViewSensitiveProfile` for someone else). Saved to the placeholder's private/taxIds.
                 if canEnterTaxIds {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("VAT number (optional)")
-                            .font(.headline)
-                        TextField("If VAT registered", text: $vatNumber)
-                            .accessibilityIdentifier("addUser.ifVATRegistered")
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
-                            .onChange(of: vatNumber) { _, newValue in
-                                let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
-                                if newValue.count > limit { vatNumber = String(newValue.prefix(limit)) }
-                            }
-                    }
+                    let taxLayout = dynamicTypeSize.isAccessibilitySize
+                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+                        : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
+                    taxLayout {
+                        VStack(alignment: .leading, spacing: 6) {
+                            PPFormFieldLabel(text: "VAT number (optional)")
+                            TextField("If VAT registered", text: $vatNumber)
+                                .accessibilityIdentifier("addUser.ifVATRegistered")
+                                .textInputAutocapitalization(.characters)
+                                .autocorrectionDisabled()
+                                .onChange(of: vatNumber) { _, newValue in
+                                    let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
+                                    if newValue.count > limit { vatNumber = String(newValue.prefix(limit)) }
+                                }
+                                .ppFormField()
+                        }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("UTR number (optional)")
-                            .font(.headline)
-                        TextField("Unique Taxpayer Reference", text: $utrNumber)
-                            .accessibilityIdentifier("addUser.uniqueTaxpayerReference")
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
-                            .onChange(of: utrNumber) { _, newValue in
-                                let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
-                                if newValue.count > limit { utrNumber = String(newValue.prefix(limit)) }
-                            }
+                        VStack(alignment: .leading, spacing: 6) {
+                            PPFormFieldLabel(text: "UTR number (optional)")
+                            TextField("Unique Taxpayer Reference", text: $utrNumber)
+                                .accessibilityIdentifier("addUser.uniqueTaxpayerReference")
+                                .textInputAutocapitalization(.characters)
+                                .autocorrectionDisabled()
+                                .onChange(of: utrNumber) { _, newValue in
+                                    let limit = CanonicalBusinessEngine.sensitiveValueMax ?? 20
+                                    if newValue.count > limit { utrNumber = String(newValue.prefix(limit)) }
+                                }
+                                .ppFormField()
+                        }
                     }
                 }
 
                 if mode == .admin {
-                    Text("Timesheets follow employment type. Self-employed users get My Timesheets; PAYE users keep the current pay run until it is paid, then schedule no longer fills timesheets.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    PPInfoBox(text: "Timesheets follow employment type. Self-employed users get My Timesheets; PAYE users keep the current pay run until it is paid, then schedule no longer fills timesheets.")
                 }
             }
+            .ppFormCard()
         }
     }
     
@@ -628,19 +728,6 @@ struct AddUserView: View {
         LineManagerRulebook.candidates(for: inviteDraftUserForValidation, roster: userStore.organizationUsers)
     }
     
-    private var invitePermissionDivider: some View {
-        Rectangle()
-            .fill(Color(.separator).opacity(0.35))
-            .frame(height: 0.5)
-            .padding(.leading, 16)
-    }
-
-    private func permissionInviteCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
     private func resetAnnualLeaveInviteDefaults() {
         let defaults = userStore.organizationAnnualLeaveDefaults()
         annualLeaveDaysText = defaults.daysPerYear.truncatingRemainder(dividingBy: 1) == 0
@@ -693,90 +780,125 @@ struct AddUserView: View {
     }
 
     private var annualLeaveInvitationSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(annualLeaveAllowanceCopy.toggleTitle)
-                .font(.headline)
-            Toggle(annualLeaveAllowanceCopy.toggleTitle, isOn: $annualLeaveEnabledInvite)
-            Text(annualLeaveAllowanceCopy.toggleDescription)
+        VStack(alignment: .leading, spacing: 0) {
+            PPFormSectionLabel(text: "Annual leave allowance")
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    PPIconTile(symbol: "sun.max.fill", family: .trade, size: 30)
+                    Toggle(isOn: $annualLeaveEnabledInvite) {
+                        Text(annualLeaveAllowanceCopy.toggleTitle)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .tint(PPAddUserColor.selected)
+                    .accessibilityIdentifier("addUser.annualLeaveAllowance")
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(annualLeaveAllowanceCopy.toggleDescription)
+                    Text(annualLeaveAllowanceCopy.toggleNote)
+                }
                 .font(.caption)
-                .foregroundColor(.secondary)
-            Text(annualLeaveAllowanceCopy.toggleNote)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            if annualLeaveEnabledInvite {
-                permissionInviteCard {
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(PPColor.well, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                if annualLeaveEnabledInvite {
                     AnnualLeaveEntitlementEditor(
                         daysText: $annualLeaveDaysText,
                         startMonth: $annualLeaveStartMonth,
                         endMonth: $annualLeaveEndMonth,
                         carriesOver: $annualLeaveCarriesOver,
-                        isEnabled: true
+                        isEnabled: true,
+                        style: .card
                     )
-                    .padding(12)
+                    Divider()
                     VStack(alignment: .leading, spacing: 6) {
                         Text(annualLeaveAllowanceCopy.remainingTitle)
                             .font(.subheadline.weight(.semibold))
-                        TextField("Remaining", text: $remainingLeaveText)
-                            .keyboardType(.decimalPad)
-                            .textFieldStyle(.roundedBorder)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 6) {
+                            TextField("Remaining", text: $remainingLeaveText)
+                                .keyboardType(.decimalPad)
+                                .monospacedDigit()
+                                .accessibilityIdentifier("addUser.remainingLeave")
+                            Text("days left")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                        .ppFormField()
                         Text(annualLeaveAllowanceCopy.remainingNote)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(12)
                 }
             }
+            .ppFormCard()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var stepPermissionsControlled: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text(permissionsDescriptionHeader)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            
-            VStack(spacing: 16) {
-                if invitedAccountType == .operative {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Operative mode provides very limited access to the platform. It allows access to their schedule, request annual leave and maintain their qualifications.")
-                            .font(.subheadline)
-                            .foregroundColor(.primary)
-                        Text("The below features are additional options, which need to be selected to provide access.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                // RULEBOOK 1.11.0 §11: `permissionToggleRows({ level, user: draft, mode: 'add' })` — the same rows as
-                // the summary and Edit User. Admins: every toggle on and greyed out except Annual Leave Management;
-                // managers: Materials and Site audit on and greyed out; operatives: Materials and Site audit.
-                permissionInviteCard {
-                    VStack(spacing: 0) {
-                        let rows = invitePermissionRows(mode: .add).filter(\.visible)
-                        ForEach(Array(rows.enumerated()), id: \.element.field) { index, row in
-                            if index > 0 { invitePermissionDivider }
-                            PermissionToggle(
-                                title: row.label,
-                                description: row.help,
-                                isOn: invitePermissionBinding(row),
-                                isDisabled: !row.editable,
-                                style: .plainInset
-                            )
-                            // RULEBOOK 1.28.0 `permissionToggleRows` `note` (a PAYE admin's Timesheet self-sign).
-                            if let note = row.note, !note.isEmpty {
-                                Text(note)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.bottom, 6)
-                                    .accessibilityIdentifier("addUser.permissionNote.\(row.field)")
-                            }
-                        }
-                    }
-                }
-                annualLeaveInvitationSection
+        VStack(alignment: .leading, spacing: 0) {
+            if !permissionsDescriptionHeader.isEmpty {
+                Text(permissionsDescriptionHeader)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 8)
             }
+            if invitedAccountType == .operative {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Operative mode provides very limited access to the platform. It allows access to their schedule, request annual leave and maintain their qualifications.")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    Text("The below features are additional options, which need to be selected to provide access.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(PPAddUserColor.infoBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(.bottom, 4)
+            }
+            // RULEBOOK 1.11.0 §11: `permissionToggleRows({ level, user: draft, mode: 'add' })` — the same rows as
+            // the summary and Edit User. Admins: every toggle on and greyed out except Annual Leave Management;
+            // managers: Materials and Site audit on and greyed out; operatives: Materials and Site audit.
+            // A row locked on shows "Included"; a row locked off keeps a disabled switch (owner decision 2).
+            PPFormSectionLabel(text: "Modules")
+            VStack(spacing: 0) {
+                let rows = invitePermissionRows(mode: .add).filter(\.visible)
+                ForEach(Array(rows.enumerated()), id: \.element.field) { index, row in
+                    if index > 0 {
+                        Divider().padding(.leading, 42)
+                    }
+                    PPToggleRow(
+                        title: row.label,
+                        description: row.help,
+                        symbol: PPToggleRow.symbol(for: row.field),
+                        isOn: invitePermissionBinding(row),
+                        isLocked: !row.editable
+                    )
+                    // RULEBOOK 1.28.0 `permissionToggleRows` `note` (a PAYE admin's Timesheet self-sign).
+                    if let note = row.note, !note.isEmpty {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 42)
+                            .padding(.bottom, 6)
+                            .accessibilityIdentifier("addUser.permissionNote.\(row.field)")
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 2)
+            .ppFormCard(padding: 0)
+
+            annualLeaveInvitationSection
         }
     }
     
@@ -791,112 +913,102 @@ struct AddUserView: View {
         }
     }
     
+    /// One Account row on Review: label left, value right.
+    private func reviewRow<Value: View>(_ label: String, @ViewBuilder value: () -> Value) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            value()
+                .font(.subheadline.weight(.semibold))
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+    }
+
     private var stepReview: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Review before sending the invitation")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
-            
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Account")
-                        .font(.headline)
-                    if mode == .admin {
-                        HStack {
-                            Text("Type:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(invitedAccountType.title)
-                                .fontWeight(.medium)
-                        }
-                    } else {
-                        Text("Operative (invited by manager)")
-                            .fontWeight(.medium)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 12)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Account")
+                    .font(.headline)
+                    .padding(.bottom, 2)
+                if mode == .admin {
+                    reviewRow("Type") {
+                        Text(invitedAccountType.title)
                     }
-                    
-                    HStack {
-                        Text("Name:")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text("\(firstName) \(surname)")
-                            .fontWeight(.medium)
-                    }
-                    
-                    HStack {
-                        Text("Email:")
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(email)
-                            .fontWeight(.medium)
-                    }
-                HStack {
-                    Text("Employment type:")
-                        .foregroundColor(.secondary)
-                    Spacer()
+                } else {
+                    Text("Operative (invited by manager)")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.vertical, 10)
+                }
+
+                Divider()
+                reviewRow("Name") {
+                    Text("\(firstName) \(surname)")
+                }
+
+                Divider()
+                reviewRow("Email") {
+                    Text(email)
+                }
+
+                Divider()
+                reviewRow("Employment type") {
                     Text(employmentType.title)
-                        .fontWeight(.medium)
                 }
-                    
-                    if !mobileNumber.isEmpty {
-                        HStack {
-                            Text("Mobile:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(mobileNumber)
-                                .fontWeight(.medium)
-                        }
-                    }
-                    
-                    if permissions.operativeMode || permissions.manager || permissions.adminAccess {
-                        HStack(alignment: .top) {
-                            Text("Line manager:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(lineManagerSummary)
-                                .fontWeight(.medium)
-                                .multilineTextAlignment(.trailing)
-                        }
-                    }
-                    
-                    let reviewDayRate = selectedDayRateTextForReview
-                    if !reviewDayRate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        HStack {
-                            Text("Day rate:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(reviewDayRate)
-                                .fontWeight(.medium)
-                        }
-                    }
-                    
-                    if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
-                        HStack {
-                            Text("Trade:")
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text(StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText))
-                                .fontWeight(.medium)
-                        }
-                    }
 
-                    if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
-                        annualLeaveReviewRow
+                if !mobileNumber.isEmpty {
+                    Divider()
+                    reviewRow("Mobile") {
+                        Text(mobileNumber)
                     }
                 }
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(12)
-                
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Permissions summary")
-                        .font(.headline)
 
-                    permissionsAccessColumns
+                if permissions.operativeMode || permissions.manager || permissions.adminAccess {
+                    Divider()
+                    reviewRow("Line manager") {
+                        Text(lineManagerSummary)
+                    }
                 }
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(12)
+
+                let reviewDayRate = selectedDayRateTextForReview
+                if !reviewDayRate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Divider()
+                    reviewRow("Day rate") {
+                        Text(reviewDayRate)
+                            .monospacedDigit()
+                    }
+                }
+
+                if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                    Divider()
+                    reviewRow("Trade") {
+                        Text(StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText))
+                    }
+                }
+
+                if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager {
+                    Divider()
+                    annualLeaveReviewRow
+                }
             }
+            .ppFormCard()
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Permissions summary")
+                    .font(.headline)
+
+                permissionsAccessColumns
+            }
+            .ppFormCard()
+            .padding(.top, 12)
         }
     }
     
@@ -908,27 +1020,34 @@ struct AddUserView: View {
             
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 80))
-                .foregroundColor(.green)
+                .foregroundStyle(PPFamily.sites.top)
+                .accessibilityHidden(true)
             
             VStack(spacing: 8) {
                 Text("User Created Successfully!")
-                    .font(.title2)
+                    .font(.system(.title2, design: .rounded))
                     .fontWeight(.bold)
+                    .multilineTextAlignment(.center)
                 
                 Text("An invitation email has been sent to \(email)")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
             
             Spacer()
             
-            Button("Done") {
+            Button {
                 dismiss()
+            } label: {
+                Text("Done")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(PPBookingColor.primaryGradient, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             }
             .accessibilityIdentifier("addUser.done")
-            .buttonStyle(.borderedProminent)
-            .tint(.indigo)
+            .buttonStyle(PPPressableButtonStyle())
         }
         .padding(20)
     }
@@ -1006,27 +1125,31 @@ struct AddUserView: View {
     /// Review reads the allowance toggle. The days field stays at the company default when the toggle is off, so this must not call `parseAnnualLeaveDaysForInvite()` in that case.
     @ViewBuilder
     private var annualLeaveReviewRow: some View {
-        HStack(alignment: .top) {
-            Text("Annual leave:")
-                .foregroundColor(.secondary)
-            Spacer()
+        HStack(alignment: .top, spacing: 12) {
+            Text("Annual leave")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 12)
             if annualLeaveEnabledInvite {
                 let months = AnnualLeavePolicy.shortMonthSymbols()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(verbatim: "\(AnnualLeaveUsageHeroView.formatLeaveDays(parseAnnualLeaveDaysForInvite())) days / year")
-                        .fontWeight(.medium)
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
                     Text("\(months[annualLeaveStartMonth - 1]) → \(months[annualLeaveEndMonth - 1])")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                     Text(annualLeaveCarriesOver ? "Carries over" : "No carry over")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
             } else {
                 Text("Off")
-                    .fontWeight(.medium)
+                    .font(.subheadline.weight(.semibold))
             }
         }
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
     }
 
     /// RULEBOOK 1.11.0 §11: the summary rows are `permissionToggleRows(..., mode: 'summary')`, the same set Add User
@@ -1041,47 +1164,32 @@ struct AddUserView: View {
     private var permissionsAccessColumns: some View {
         let allowed = permissionItems.filter(\.isEnabled)
         let denied = permissionItems.filter { !$0.isEnabled }
-        return HStack(alignment: .top, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Can Access")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                ForEach(allowed, id: \.title) { item in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .accessibilityHidden(true)
-                        Text(item.title)
-                            .font(.caption)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
+                Text("Can access · \(allowed.count)".uppercased())
+                    .font(.caption.weight(.semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(PPAddUserColor.includedInk)
+                PPWrapLayout {
+                    ForEach(allowed, id: \.title) { item in
+                        PPAccessChip(title: item.title, allowed: true)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityLabel("Can access \(item.title)")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .trailing, spacing: 8) {
-                Text("Can't Access")
-                    .font(.subheadline.weight(.semibold))
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                ForEach(denied, id: \.title) { item in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(item.title)
-                            .font(.caption)
-                            .multilineTextAlignment(.trailing)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.red)
-                            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Can't access · \(denied.count)".uppercased())
+                    .font(.caption.weight(.semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(PPAddUserColor.errorInk)
+                PPWrapLayout {
+                    ForEach(denied, id: \.title) { item in
+                        PPAccessChip(title: item.title, allowed: false)
                     }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .accessibilityLabel("Cannot access \(item.title)")
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
     
@@ -1275,73 +1383,6 @@ struct AddUserView: View {
         guard !trimmed.isEmpty else { return nil }
         let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
         return Double(normalized)
-    }
-}
-
-// MARK: - Permission Toggle Component
-
-struct PermissionToggle: View {
-    let title: String
-    let description: String
-    @Binding var isOn: Bool
-    var isDisabled: Bool = false
-    var style: Style = .filledRow
-
-    enum Style {
-        case filledRow
-        case plainInset
-    }
-
-    @State private var expanded = false
-
-    var body: some View {
-        let row = HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
-                } label: {
-                    HStack(alignment: .center, spacing: 6) {
-                        Text(title)
-                            .font(.headline)
-                            .foregroundColor(isDisabled ? .secondary : .primary)
-                            .multilineTextAlignment(.leading)
-                        Image(systemName: "chevron.down")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(.secondary)
-                            .rotationEffect(.degrees(expanded ? 0 : -90))
-                    }
-                }
-                .accessibilityIdentifier("permissionToggle.chevronDown")
-                .buttonStyle(.plain)
-                if expanded {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Toggle("", isOn: $isOn)
-                .accessibilityIdentifier("permissionToggle.toggle")
-                .tint(.indigo)
-                .disabled(isDisabled)
-        }
-
-        Group {
-            switch style {
-            case .filledRow:
-                row
-                    .padding()
-                    .background(isDisabled ? Color(.systemGray5) : Color(.systemGray6))
-                    .cornerRadius(12)
-            case .plainInset:
-                row
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-            }
-        }
-        .opacity(isDisabled ? 0.6 : 1.0)
     }
 }
 

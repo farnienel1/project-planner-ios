@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add User UI Reference</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#E9EDF3;--ink:#0F1B33;--muted:#475569}
+body{margin:0;background:var(--bg);font-family:Inter,sans-serif;color:var(--ink)}
+header.top{padding:32px 24px 8px;max-width:1800px;margin:0 auto}
+header.top h1{margin:0 0 6px;font-size:28px}
+header.top p{margin:0;color:var(--muted);max-width:900px;line-height:1.5}
+.grid{display:flex;flex-wrap:wrap;gap:40px 32px;padding:24px;max-width:1800px;margin:0 auto;align-items:flex-start}
+.screen{margin:0;width:390px;display:flex;flex-direction:column;gap:12px}
+.screen figcaption{display:flex;flex-direction:column;gap:4px;min-height:84px}
+.screen figcaption b{font-size:16px}
+.screen figcaption span{font-size:13px;color:var(--muted);line-height:1.45}
+.phone{border-radius:44px;overflow:hidden;box-shadow:0 20px 50px rgba(15,27,51,.18),0 0 0 8px #0B1220;width:390px}
+@media (max-width:440px){.grid{padding:16px}.screen,.phone{width:100%}.phone{overflow-x:auto}}
+
+a{color:#1F56C9}a:hover{color:#17398A}
+section,label,h2,h3,p{flex-shrink:0}
+.pp-navy{background-color:#0E1B36;background-image:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);background-size:28px 28px}
+</style></head><body>
+<header class="top"><h1>Project Planner: Add New User UI</h1>
+<p>A visual reference for the iOS UI-only upgrade. Values shown are sample data taken from the current app. Read it alongside <code>add-user-ui-spec.md</code>, which lists every data field and where it now lives.</p></header>
+<div class="grid">
+<figure class="screen"><figcaption><b>Step 1 · Account type</b><span>The three account cards keep their names and descriptions. A live user card in the header fills in as you go, and the step tracker has labels.</span></figcaption><div class="phone">
+<div class="pp-navy" style="width: 390px; height: 844px; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <header style="padding: 54px 16px 0; display: flex; flex-direction: column; gap: 16px; color: #FFFFFF">
+    <div style="display: flex; align-items: center; gap: 8px">
+      <button style="height: 40px; padding: 0 16px; background: rgba(255,255,255,0.14); border: 0; border-radius: 20px; color: #FFFFFF; font: inherit; font-size: 15px; font-weight: 500; cursor: pointer">Cancel</button>
+      <h1 style="flex-grow: 1; margin: 0; text-align: center; font-size: 17px; font-weight: 600">Add new user</h1>
+      <span style="min-width: 76px; text-align: right; font-size: 13px; color: #93A1BC">Step 1 of 4</span>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 12px">
+      <div style="width: 48px; height: 48px; border-radius: 50%; border: 1.5px dashed rgba(255,255,255,0.35); color: #93A1BC; display: flex; align-items: center; justify-content: center">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0"></path></svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 3px">
+        <span style="font-size: 18px; font-weight: 700">New user</span>
+        <span style="font-size: 12.5px; color: #93A1BC">Choose an account type to start</span>
+      </div>
+    </div>
+
+    <ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #B97810 3px 6px);"></span><span style="font-size: 12px; color: #FFFFFF; font-weight: 600;">1 · Type</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: rgba(255,255,255,0.14);"></span><span style="font-size: 12px; color: #93A1BC;">2 · Details</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: rgba(255,255,255,0.14);"></span><span style="font-size: 12px; color: #93A1BC;">3 · Access</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: rgba(255,255,255,0.14);"></span><span style="font-size: 12px; color: #93A1BC;">4 · Review</span></li>
+      
+    </ol>
+  </header>
+
+  <div style="flex-grow: 1; margin-top: 18px; background: #F2F4F8; border-radius: 28px 28px 0 0; padding: 20px 16px 0; display: flex; flex-direction: column; gap: 12px; min-height: 0">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <h2 style="margin: 0; font-size: 20px; font-weight: 700">Account type</h2>
+      <p style="margin: 0; font-size: 13.5px; line-height: 1.45; color: #64748B">Choose what kind of account this will be. Super admin is never assigned from here.</p>
+    </div>
+
+    <div role="radiogroup" aria-label="Account type" style="display: flex; flex-direction: column; gap: 10px">
+      
+        <button role="radio" aria-checked="false" style="display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 18px; background: #FFFFFF; font: inherit; cursor: pointer; border: 1px solid #E3E8F0; margin: 1px;">
+          <span style="width: 48px; height: 48px; border-radius: 14px; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF; display: flex; align-items: center; justify-content: center; flex-shrink: 0"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg></span>
+          <span style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1; text-align: left">
+            <span style="font-size: 16px; font-weight: 600; color: #0F1B33">Administrator</span>
+            <span style="font-size: 12.5px; line-height: 1.4; color: #64748B">Full organisation access except operative mode.</span>
+          </span>
+          <span style="width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; border: 2px solid #C5CDD9;"></span>
+        </button>
+      
+        <button role="radio" aria-checked="true" style="display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 18px; background: #FFFFFF; font: inherit; cursor: pointer; border: 2px solid #2F6FE0; box-shadow: 0 6px 16px rgba(47,111,224,0.14);">
+          <span style="width: 48px; height: 48px; border-radius: 14px; background: linear-gradient(160deg, #8B7CF6, #5B46D6); color: #FFFFFF; display: flex; align-items: center; justify-content: center; flex-shrink: 0"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18v13H3zM9 7V4h6v3M3 12h18"></path></svg></span>
+          <span style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1; text-align: left">
+            <span style="font-size: 16px; font-weight: 600; color: #0F1B33">Manager</span>
+            <span style="font-size: 12.5px; line-height: 1.4; color: #64748B">Manage teams, schedules and optional modules.</span>
+          </span>
+          <span style="width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; background: #2F6FE0;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span>
+        </button>
+      
+        <button role="radio" aria-checked="false" style="display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 18px; background: #FFFFFF; font: inherit; cursor: pointer; border: 1px solid #E3E8F0; margin: 1px;">
+          <span style="width: 48px; height: 48px; border-radius: 14px; background: linear-gradient(160deg, #FBBF4A, #E08A0B); color: #FFFFFF; display: flex; align-items: center; justify-content: center; flex-shrink: 0"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17h18M5 17v-2a7 7 0 0 1 14 0v2M10 9V6h4v3"></path></svg></span>
+          <span style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1; text-align: left">
+            <span style="font-size: 16px; font-weight: 600; color: #0F1B33">Operative</span>
+            <span style="font-size: 12.5px; line-height: 1.4; color: #64748B">Schedule, annual leave and qualifications.</span>
+          </span>
+          <span style="width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; border: 2px solid #C5CDD9;"></span>
+        </button>
+      
+    </div>
+
+    <div style="flex-grow: 1"></div>
+    <div style="margin: 0 -16px; background: #FFFFFF; border-top: 1px solid #E3E8F0; padding: 12px 16px 30px; display: flex; gap: 10px">
+      <button disabled style="width: 96px; height: 52px; border-radius: 16px; background: #F2F4F8; color: #94A3B8; border: 0; font: inherit; font-size: 15.5px; font-weight: 600">Back</button>
+      <button style="flex-grow: 1; height: 52px; border-radius: 16px; background: linear-gradient(180deg, #3B7BF0, #2559D6); color: #FFFFFF; border: 0; font: inherit; font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; box-shadow: 0 4px 12px rgba(37,89,214,0.30)">Next: details<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
+    </div>
+  </div>
+</div>
+</div></figure>
+<figure class="screen"><figcaption><b>Step 2 · User details (line manager missing)</b><span>Fields are grouped into About you, Employment and Line manager(s). This shows the validation state: the original red message sits inline next to the problem, and the button says what is missing.</span></figcaption><div class="phone">
+<div class="pp-navy" style="width: 390px; height: 1540px; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <header style="padding: 54px 16px 0; display: flex; flex-direction: column; gap: 16px; color: #FFFFFF">
+    <div style="display: flex; align-items: center; gap: 8px">
+      <button style="height: 40px; padding: 0 16px; background: rgba(255,255,255,0.14); border: 0; border-radius: 20px; color: #FFFFFF; font: inherit; font-size: 15px; font-weight: 500; cursor: pointer">Cancel</button>
+      <h1 style="flex-grow: 1; margin: 0; text-align: center; font-size: 17px; font-weight: 600">Add new user</h1>
+      <span style="min-width: 76px; text-align: right; font-size: 13px; color: #93A1BC">Step 2 of 4</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px">
+      <div style="width: 48px; height: 48px; border-radius: 50%; background: linear-gradient(160deg, #8B7CF6, #5B46D6); display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 700">ST</div>
+      <div style="display: flex; flex-direction: column; gap: 5px">
+        <span style="font-size: 18px; font-weight: 700">Sam Taylor</span>
+        <span style="display: flex; gap: 5px">
+          <span style="font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: rgba(139,124,246,0.25); color: #D9D3FF">Manager</span>
+          <span style="font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: rgba(255,255,255,0.12); color: #C7D0E1">Self-employed</span>
+          <span style="font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: rgba(255,255,255,0.12); color: #C7D0E1">Electrician</span>
+        </span>
+      </div>
+    </div>
+    <ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: #3B7BF0;"></span><span style="font-size: 12px; color: #C7D0E1;">✓ Type</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #B97810 3px 6px);"></span><span style="font-size: 12px; color: #FFFFFF; font-weight: 600;">2 · Details</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: rgba(255,255,255,0.14);"></span><span style="font-size: 12px; color: #93A1BC;">3 · Access</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: rgba(255,255,255,0.14);"></span><span style="font-size: 12px; color: #93A1BC;">4 · Review</span></li>
+      
+    </ol>
+  </header>
+
+  <div style="flex-grow: 1; margin-top: 18px; background: #F2F4F8; border-radius: 28px 28px 0 0; padding: 20px 16px 0; display: flex; flex-direction: column; gap: 12px; min-height: 0">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <h2 style="margin: 0; font-size: 20px; font-weight: 700">User details</h2>
+      <p style="margin: 0; font-size: 13.5px; color: #64748B">Enter the user's basic information.</p>
+    </div>
+
+    <section style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; overflow: hidden">
+      
+        <label style="display: flex; flex-direction: column; gap: 3px; padding: 11px 14px; border-bottom: 1px solid #EEF1F6;">
+          <span style="font-size: 12px; font-weight: 600; color: #64748B">First name</span>
+          <input value="Sam" aria-label="First name" style="border: 0; outline: 0; padding: 0; background: transparent; font: inherit; font-size: 16px; color: #0F1B33">
+        </label>
+      
+        <label style="display: flex; flex-direction: column; gap: 3px; padding: 11px 14px; border-bottom: 1px solid #EEF1F6;">
+          <span style="font-size: 12px; font-weight: 600; color: #64748B">Surname</span>
+          <input value="Taylor" aria-label="Surname" style="border: 0; outline: 0; padding: 0; background: transparent; font: inherit; font-size: 16px; color: #0F1B33">
+        </label>
+      
+        <label style="display: flex; flex-direction: column; gap: 3px; padding: 11px 14px; border-bottom: 1px solid #EEF1F6;">
+          <span style="font-size: 12px; font-weight: 600; color: #64748B">Email address</span>
+          <input value="sam.taylor@email.com" aria-label="Email address" style="border: 0; outline: 0; padding: 0; background: transparent; font: inherit; font-size: 16px; color: #0F1B33">
+        </label>
+      
+        <label style="display: flex; flex-direction: column; gap: 3px; padding: 11px 14px; ">
+          <span style="font-size: 12px; font-weight: 600; color: #64748B">Mobile number</span>
+          <input value="07700 900123" aria-label="Mobile number" style="border: 0; outline: 0; padding: 0; background: transparent; font: inherit; font-size: 16px; color: #0F1B33">
+        </label>
+      
+    </section>
+
+    <h3 style="margin: 6px 4px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: #64748B">EMPLOYMENT</h3>
+    <section style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; padding: 14px; display: flex; flex-direction: column; gap: 14px">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <span style="font-size: 12px; font-weight: 600; color: #64748B">Employment type</span>
+        <div role="radiogroup" aria-label="Employment type" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; background: #F2F4F8; border-radius: 12px; padding: 4px">
+          <button style="height: 38px; border-radius: 9px; background: transparent; border: 0; font: inherit; font-size: 14px; font-weight: 500; color: #475569; cursor: pointer">PAYE</button>
+          <button aria-pressed="true" style="height: 38px; border-radius: 9px; background: #0E1B36; border: 0; font: inherit; font-size: 14px; font-weight: 600; color: #FFFFFF; cursor: pointer">Self-employed</button>
+        </div>
+      </div>
+
+      <button style="display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 14px; background: #F6F8FC; border: 1px solid #E3E8F0; font: inherit; color: #0F1B33; text-align: left; cursor: pointer">
+        <span style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(160deg, #FBBF4A, #E08A0B); color: #FFFFFF; display: flex; align-items: center; justify-content: center; flex-shrink: 0"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 6l4-4 4 4-4 4M18 6L7 17M4 20l3-3"></path></svg></span>
+        <span style="display: flex; flex-direction: column; flex-grow: 1"><span style="font-size: 12px; color: #64748B">Trade type *</span><span style="font-size: 15.5px; font-weight: 600">Electrician</span></span>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#2F6FE0" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 9l4-4 4 4M8 15l4 4 4-4"></path></svg>
+      </button>
+      <span style="margin-top: -8px; font-size: 11.5px; color: #64748B">Required for operatives and managers.</span>
+
+      <label style="display: flex; flex-direction: column; gap: 6px">
+        <span style="font-size: 12px; font-weight: 600; color: #64748B">Day rate *</span>
+        <span style="display: flex; align-items: center; height: 50px; border-radius: 14px; background: #F6F8FC; border: 1px solid #E3E8F0; padding: 0 14px; gap: 6px">
+          <span style="font-size: 16px; font-weight: 600; color: #64748B">£</span>
+          <input placeholder="e.g. 250" aria-label="Day rate" style="flex-grow: 1; border: 0; outline: 0; background: transparent; font: inherit; font-size: 16px; color: #0F1B33">
+          <span style="font-size: 13px; color: #64748B; white-space: nowrap">per day</span>
+        </span>
+        <span style="font-size: 11.5px; line-height: 1.4; color: #64748B">Set a day rate or hourly rate. Self-employed people are paid from it.</span>
+      </label>
+
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+        <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 600; color: #64748B">VAT number <span style="font-weight: 400">(optional)</span></span><input placeholder="If VAT registered" style="height: 46px; border-radius: 12px; background: #F6F8FC; border: 1px solid #E3E8F0; padding: 0 12px; font: inherit; font-size: 14.5px; outline: 0"></label>
+        <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 600; color: #64748B">UTR number <span style="font-weight: 400">(optional)</span></span><input placeholder="Unique Taxpayer Ref." style="height: 46px; border-radius: 12px; background: #F6F8FC; border: 1px solid #E3E8F0; padding: 0 12px; font: inherit; font-size: 14.5px; outline: 0"></label>
+      </div>
+
+      <div style="display: flex; gap: 10px; background: #EEF3FD; border-radius: 12px; padding: 10px 12px">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#2F6FE0" stroke-width="2" stroke-linecap="round" style="flex-shrink: 0; margin-top: 1px" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8v.5"></path></svg>
+        <span style="font-size: 12.5px; line-height: 1.45; color: #334155">Timesheets follow employment type. Self-employed users get My Timesheets; PAYE users keep the current pay run until it is paid, then schedule no longer fills timesheets.</span>
+      </div>
+    </section>
+
+    <h3 style="margin: 6px 4px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: #64748B">LINE MANAGER(S) *</h3>
+    <section style="background: #FFFFFF; border: 1.5px solid #F4B4B7; border-radius: 18px; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+      <span style="font-size: 13px; line-height: 1.45; color: #475569">Timesheets and annual leave requests from this person go to these line manager(s).</span>
+      <button style="height: 50px; border-radius: 14px; background: #F6F8FC; border: 1.5px dashed #C3D1F2; font: inherit; font-size: 15px; font-weight: 600; color: #1F56C9; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Choose line manager
+      </button>
+      <div role="alert" style="display: flex; gap: 10px; background: #FDECEC; border-radius: 12px; padding: 10px 12px">
+        <svg viewBox="0 0 24 24" width="18" height="18" style="flex-shrink: 0; margin-top: 1px" aria-hidden="true"><path d="M10.3 3.6a2 2 0 0 1 3.4 0l8.4 14.6a2 2 0 0 1-1.7 3H3.6a2 2 0 0 1-1.7-3z" fill="#E5484D"></path><path d="M12 9v5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"></path><circle cx="12" cy="17.3" r="1.3" fill="#fff"></circle></svg>
+        <span style="font-size: 12.5px; line-height: 1.45; color: #9F1C22">Set a line manager, or turn on both <b>Annual Leave Management</b> and <b>Timesheet self-sign</b> in Access. This person's timesheets and annual leave need approval.</span>
+      </div>
+    </section>
+
+    <div style="flex-grow: 1"></div>
+    <div style="margin: 0 -16px; background: #FFFFFF; border-top: 1px solid #E3E8F0; padding: 12px 16px 30px; display: flex; flex-direction: column; gap: 10px">
+      <span style="align-self: flex-start; font-size: 12.5px; font-weight: 600; color: #B42318; background: #FDECEC; padding: 6px 10px; border-radius: 999px">Line manager needed</span>
+      <div style="display: flex; gap: 10px">
+        <button style="width: 96px; height: 52px; border-radius: 16px; background: #F2F4F8; color: #0F1B33; border: 0; font: inherit; font-size: 15.5px; font-weight: 600; cursor: pointer">Back</button>
+        <button disabled style="flex-grow: 1; height: 52px; border-radius: 16px; background: #EEF1F6; color: #475569; border: 0; font: inherit; font-size: 15px; font-weight: 600; cursor: not-allowed">Add a line manager to continue</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div></figure>
+<figure class="screen"><figcaption><b>Step 3 · Access & annual leave (Manager)</b><span>Every permission toggle in its original order. Locked modules show "Included" instead of greyed-out switches. All annual leave fields and wording are kept.</span></figcaption><div class="phone">
+<div class="pp-navy" style="width: 390px; height: 1920px; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <header style="padding: 54px 16px 0; display: flex; flex-direction: column; gap: 16px; color: #FFFFFF">
+    <div style="display: flex; align-items: center; gap: 8px">
+      <button style="height: 40px; padding: 0 16px; background: rgba(255,255,255,0.14); border: 0; border-radius: 20px; color: #FFFFFF; font: inherit; font-size: 15px; font-weight: 500; cursor: pointer">Cancel</button>
+      <h1 style="flex-grow: 1; margin: 0; text-align: center; font-size: 17px; font-weight: 600">Add new user</h1>
+      <span style="min-width: 76px; text-align: right; font-size: 13px; color: #93A1BC">Step 3 of 4</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px">
+      <div style="width: 48px; height: 48px; border-radius: 50%; background: linear-gradient(160deg, #8B7CF6, #5B46D6); display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 700">ST</div>
+      <div style="display: flex; flex-direction: column; gap: 5px">
+        <span style="font-size: 18px; font-weight: 700">Sam Taylor</span>
+        <span style="display: flex; gap: 5px">
+          <span style="font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: rgba(139,124,246,0.25); color: #D9D3FF">Manager</span>
+          <span style="font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: rgba(255,255,255,0.12); color: #C7D0E1">Line manager: Test Admin</span>
+        </span>
+      </div>
+    </div>
+    <ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: #3B7BF0;"></span><span style="font-size: 12px; color: #C7D0E1;">✓ Type</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: #3B7BF0;"></span><span style="font-size: 12px; color: #C7D0E1;">✓ Details</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #B97810 3px 6px);"></span><span style="font-size: 12px; color: #FFFFFF; font-weight: 600;">3 · Access</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: rgba(255,255,255,0.14);"></span><span style="font-size: 12px; color: #93A1BC;">4 · Review</span></li>
+      
+    </ol>
+  </header>
+
+  <div style="flex-grow: 1; margin-top: 18px; background: #F2F4F8; border-radius: 28px 28px 0 0; padding: 20px 16px 0; display: flex; flex-direction: column; gap: 12px; min-height: 0">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <h2 style="margin: 0; font-size: 20px; font-weight: 700">Access</h2>
+      <p style="margin: 0; font-size: 13.5px; line-height: 1.45; color: #64748B">Choose optional manager access. Anything left off can be enabled later in Manage Users.</p>
+    </div>
+
+    <h3 style="margin: 6px 4px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: #64748B">MODULES</h3>
+    <section style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; overflow: hidden">
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3z"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Projects<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+          
+            <button aria-label="Projects" aria-pressed="true" style="width: 51px; height: 31px; border-radius: 16px; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; background: #2F6FE0"><span style="position: absolute; top: 2px; right: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #F2F4F8; color: #64748B;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 6l4-4 4 4-4 4M18 6L7 17M4 20l3-3"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Small Works<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+          
+            <button aria-label="Small Works" aria-pressed="false" style="width: 51px; height: 31px; border-radius: 16px; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; background: #DDE3EC"><span style="position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h8l5 5v13H6zM14 3v5h5M9 17v-3M12 17v-6M15 17v-4"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Weekly Report<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+          
+            <button aria-label="Weekly Report" aria-pressed="true" style="width: 51px; height: 31px; border-radius: 16px; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; background: #2F6FE0"><span style="position: absolute; top: 2px; right: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #F2F4F8; color: #64748B;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16v14H4zM4 10h16M8 3v4M16 3v4"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Daily Overview<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+          
+            <button aria-label="Daily Overview" aria-pressed="false" style="width: 51px; height: 31px; border-radius: 16px; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; background: #DDE3EC"><span style="position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #F2F4F8; color: #64748B;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V4h11v17M15 9h5v12M8 8h3M8 12h3M8 16h3M3 21h18"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Sub Contractors<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+          
+            <button aria-label="Sub Contractors" aria-pressed="false" style="width: 51px; height: 31px; border-radius: 16px; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; background: #DDE3EC"><span style="position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #F2F4F8; color: #64748B;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Annual Leave Management<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+          
+            <button aria-label="Annual Leave Management" aria-pressed="false" style="width: 51px; height: 31px; border-radius: 16px; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; background: #DDE3EC"><span style="position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #F2F4F8; color: #64748B;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16M6 16l9-9 3 3-9 9H6z"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Timesheet self-sign<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span>
+            <span style="font-size: 12px; line-height: 1.4; color: #64748B">Sign your own timesheet and generate the invoice without a line manager’s signature.</span>
+          </span>
+          
+          
+            <button aria-label="Timesheet self-sign" aria-pressed="false" style="width: 51px; height: 31px; border-radius: 16px; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; background: #DDE3EC"><span style="position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #F2F4F8; color: #64748B;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17h18M5 17v-2a7 7 0 0 1 14 0v2M10 9V6h4v3"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Operatives<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+          
+            <button aria-label="Operatives" aria-pressed="false" style="width: 51px; height: 31px; border-radius: 16px; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; background: #DDE3EC"><span style="position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #F2F4F8; color: #64748B;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.5 5 5.5.8-4 3.9.9 5.5L12 15.6 7.1 18.2 8 12.7 4 8.8l5.5-.8z"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Manage Qualifications<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+          
+            <button aria-label="Manage Qualifications" aria-pressed="false" style="width: 51px; height: 31px; border-radius: 16px; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; background: #DDE3EC"><span style="position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #F2F4F8; color: #64748B;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h11v10H3zM14 10h4l3 3v3h-7M7 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM17 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Wholesalers<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+          
+            <button aria-label="Wholesalers" aria-pressed="false" style="width: 51px; height: 31px; border-radius: 16px; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer; background: #DDE3EC"><span style="position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; border-bottom: 1px solid #EEF1F6;">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Materials<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: #0B6B47; background: #EAF7F1; padding: 5px 9px; border-radius: 999px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 11h12v9H6zM9 11V8a3 3 0 0 1 6 0v3"></path></svg>Included</span>
+          
+          
+        </div>
+      
+        <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; min-height: 58px; box-sizing: border-box; ">
+          <span style="width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: linear-gradient(160deg, #5B8CF0, #2F5FD0); color: #FFFFFF;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M8 12h8"></path></svg></span>
+          <span style="display: flex; flex-direction: column; flex-grow: 1; gap: 2px">
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 15px; font-weight: 500; color: #0F1B33">Site audit<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#94A3B8" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></span>
+            
+          </span>
+          
+            <span style="display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: #0B6B47; background: #EAF7F1; padding: 5px 9px; border-radius: 999px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 11h12v9H6zM9 11V8a3 3 0 0 1 6 0v3"></path></svg>Included</span>
+          
+          
+        </div>
+      
+    </section>
+
+    <h3 style="margin: 10px 4px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.1em; color: #64748B">ANNUAL LEAVE ALLOWANCE</h3>
+    <section style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; padding: 14px; display: flex; flex-direction: column; gap: 14px">
+      <div style="display: flex; align-items: center; gap: 12px">
+        <span style="width: 38px; height: 38px; border-radius: 11px; background: linear-gradient(160deg, #FBBF4A, #E08A0B); color: #FFFFFF; display: flex; align-items: center; justify-content: center; flex-shrink: 0"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"></path></svg></span>
+        <span style="flex-grow: 1; font-size: 15.5px; font-weight: 600">Annual leave allowance</span>
+        <button aria-label="Annual leave allowance" aria-pressed="true" style="width: 51px; height: 31px; border-radius: 16px; background: #2F6FE0; border: 0; position: relative; padding: 0; cursor: pointer"><span style="position: absolute; top: 2px; right: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px; background: #F6F8FC; border-radius: 12px; padding: 10px 12px; font-size: 12.5px; line-height: 1.45; color: #475569">
+        <span>Turn off annual leave allowances using this toggle. This is generally used for self-employed staff who do not get paid annual leave, therefore they do not have a set number of days per year.</span>
+        <span>When off, this person can still book and see annual leave. They see days taken in the company leave year, not a remaining balance or days per year.</span>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+        <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 600; color: #64748B">Days per year</span>
+          <span style="display: flex; align-items: center; height: 50px; border-radius: 14px; background: #F6F8FC; border: 1px solid #E3E8F0; padding: 0 14px"><input value="25" aria-label="Days per year" style="width: 100%; border: 0; outline: 0; background: transparent; font: inherit; font-size: 18px; font-weight: 700; color: #0F1B33"><span style="font-size: 13px; color: #64748B">days</span></span>
+        </label>
+        <div style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 600; color: #64748B">Company leave year</span>
+          <span style="display: flex; align-items: center; gap: 6px; height: 50px">
+            <button style="flex: 1; height: 50px; border-radius: 14px; background: #F6F8FC; border: 1px solid #E3E8F0; font: inherit; font-size: 15px; font-weight: 600; color: #1F56C9; cursor: pointer">Jan</button>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+            <button style="flex: 1; height: 50px; border-radius: 14px; background: #F6F8FC; border: 1px solid #E3E8F0; font: inherit; font-size: 15px; font-weight: 600; color: #1F56C9; cursor: pointer">Dec</button>
+          </span>
+        </div>
+      </div>
+      <span style="margin-top: -6px; font-size: 11.5px; line-height: 1.4; color: #64748B">The leave year runs from the first day of the start month to the last day of the end month (e.g. April → March).</span>
+
+      <div style="display: flex; align-items: flex-start; gap: 12px; padding-top: 12px; border-top: 1px solid #EEF1F6">
+        <span style="display: flex; flex-direction: column; gap: 3px; flex-grow: 1"><span style="font-size: 14.5px; font-weight: 600">Carry unused days into next leave year</span><span style="font-size: 12px; line-height: 1.4; color: #64748B">Unused allowance from the previous leave year is added to this year's balance (after booked and pending time in that year).</span></span>
+        <button aria-label="Carry unused days" aria-pressed="false" style="width: 51px; height: 31px; border-radius: 16px; background: #DDE3EC; border: 0; position: relative; padding: 0; flex-shrink: 0; cursor: pointer"><span style="position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,27,51,0.25)"></span></button>
+      </div>
+
+      <label style="display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid #EEF1F6">
+        <span style="font-size: 14.5px; font-weight: 600">Remaining allowance this year</span>
+        <span style="font-size: 12px; color: #64748B">Manually adjust this user's remaining annual leave allowance for this year.</span>
+        <span style="display: flex; align-items: center; height: 50px; border-radius: 14px; background: #F6F8FC; border: 1px solid #E3E8F0; padding: 0 14px"><input value="25" aria-label="Remaining allowance this year" style="width: 100%; border: 0; outline: 0; background: transparent; font: inherit; font-size: 18px; font-weight: 700; color: #0F1B33"><span style="font-size: 13px; color: #64748B; white-space: nowrap">days left</span></span>
+        <span style="font-size: 11.5px; color: #64748B">This number resets to the Days per year figure at the end of your company year.</span>
+      </label>
+    </section>
+
+    <div style="flex-grow: 1"></div>
+    <div style="margin: 0 -16px; background: #FFFFFF; border-top: 1px solid #E3E8F0; padding: 12px 16px 30px; display: flex; gap: 10px">
+      <button style="width: 96px; height: 52px; border-radius: 16px; background: #F2F4F8; color: #0F1B33; border: 0; font: inherit; font-size: 15.5px; font-weight: 600; cursor: pointer">Back</button>
+      <button style="flex-grow: 1; height: 52px; border-radius: 16px; background: linear-gradient(180deg, #3B7BF0, #2559D6); color: #FFFFFF; border: 0; font: inherit; font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; box-shadow: 0 4px 12px rgba(37,89,214,0.30)">Next: review<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
+    </div>
+  </div>
+</div>
+</div></figure>
+<figure class="screen"><figcaption><b>Step 4 · Review & create</b><span>The same account rows and permissions summary as before, with can and can't access shown as chips. Create user runs the existing action.</span></figcaption><div class="phone">
+<div class="pp-navy" style="width: 390px; height: 1240px; display: flex; flex-direction: column; font-family: 'Inter', sans-serif; color: #0F1B33; overflow: hidden; font-variant-numeric: tabular-nums">
+  <header style="padding: 54px 16px 0; display: flex; flex-direction: column; gap: 16px; color: #FFFFFF">
+    <div style="display: flex; align-items: center; gap: 8px">
+      <button style="height: 40px; padding: 0 16px; background: rgba(255,255,255,0.14); border: 0; border-radius: 20px; color: #FFFFFF; font: inherit; font-size: 15px; font-weight: 500; cursor: pointer">Cancel</button>
+      <h1 style="flex-grow: 1; margin: 0; text-align: center; font-size: 17px; font-weight: 600">Add new user</h1>
+      <span style="min-width: 76px; text-align: right; font-size: 13px; color: #93A1BC">Step 4 of 4</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px">
+      <div style="width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(160deg, #8B7CF6, #5B46D6); display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 700">ST</div>
+      <div style="display: flex; flex-direction: column; gap: 5px">
+        <span style="font-size: 20px; font-weight: 700">Sam Taylor</span>
+        <span style="font-size: 13px; color: #93A1BC">sam.taylor@email.com</span>
+      </div>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr))">
+      <div style="display: flex; flex-direction: column; gap: 2px; padding-right: 10px"><span style="font-size: 17px; font-weight: 700">Manager</span><span style="font-size: 12px; color: #93A1BC">Account type</span></div>
+      <div style="display: flex; flex-direction: column; gap: 2px; padding: 0 10px; border-left: 1px solid rgba(255,255,255,0.12)"><span style="font-size: 17px; font-weight: 700">4 of 12</span><span style="font-size: 12px; color: #93A1BC">Modules</span></div>
+      <div style="display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 1px solid rgba(255,255,255,0.12)"><span style="font-size: 17px; font-weight: 700">25 days</span><span style="font-size: 12px; color: #93A1BC">Annual leave</span></div>
+    </div>
+    <ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: #3B7BF0;"></span><span style="font-size: 12px; color: #C7D0E1;">✓ Type</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: #3B7BF0;"></span><span style="font-size: 12px; color: #C7D0E1;">✓ Details</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: #3B7BF0;"></span><span style="font-size: 12px; color: #C7D0E1;">✓ Access</span></li>
+      
+        <li style="display: flex; flex-direction: column; gap: 6px"><span style="height: 4px; border-radius: 2px; background: repeating-linear-gradient(-45deg, #F5A524 0 3px, #B97810 3px 6px);"></span><span style="font-size: 12px; color: #FFFFFF; font-weight: 600;">4 · Review</span></li>
+      
+    </ol>
+  </header>
+
+  <div style="flex-grow: 1; margin-top: 18px; background: #F2F4F8; border-radius: 28px 28px 0 0; padding: 20px 16px 0; display: flex; flex-direction: column; gap: 12px; min-height: 0">
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <h2 style="margin: 0; font-size: 20px; font-weight: 700">Review</h2>
+      <p style="margin: 0; font-size: 13.5px; color: #64748B">Review before sending the invitation.</p>
+    </div>
+
+    <section style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; overflow: hidden">
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid #EEF1F6"><h3 style="margin: 0; font-size: 15px; font-weight: 700">Account</h3></div>
+      
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #EEF1F6;"><span style="font-size: 13.5px; color: #64748B">Type</span><span style="display: flex; flex-direction: column; align-items: flex-end; gap: 1px; text-align: right"><span style="font-size: 14.5px; font-weight: 600">Manager</span></span></div>
+      
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #EEF1F6;"><span style="font-size: 13.5px; color: #64748B">Name</span><span style="display: flex; flex-direction: column; align-items: flex-end; gap: 1px; text-align: right"><span style="font-size: 14.5px; font-weight: 600">Sam Taylor</span></span></div>
+      
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #EEF1F6;"><span style="font-size: 13.5px; color: #64748B">Email</span><span style="display: flex; flex-direction: column; align-items: flex-end; gap: 1px; text-align: right"><span style="font-size: 14.5px; font-weight: 600">sam.taylor@email.com</span></span></div>
+      
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #EEF1F6;"><span style="font-size: 13.5px; color: #64748B">Employment type</span><span style="display: flex; flex-direction: column; align-items: flex-end; gap: 1px; text-align: right"><span style="font-size: 14.5px; font-weight: 600">Self-employed</span></span></div>
+      
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #EEF1F6;"><span style="font-size: 13.5px; color: #64748B">Mobile</span><span style="display: flex; flex-direction: column; align-items: flex-end; gap: 1px; text-align: right"><span style="font-size: 14.5px; font-weight: 600">07700 900123</span></span></div>
+      
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #EEF1F6;"><span style="font-size: 13.5px; color: #64748B">Line manager</span><span style="display: flex; flex-direction: column; align-items: flex-end; gap: 1px; text-align: right"><span style="font-size: 14.5px; font-weight: 600">Test Admin</span></span></div>
+      
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid #EEF1F6;"><span style="font-size: 13.5px; color: #64748B">Trade</span><span style="display: flex; flex-direction: column; align-items: flex-end; gap: 1px; text-align: right"><span style="font-size: 14.5px; font-weight: 600">Electrician</span></span></div>
+      
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 14px; "><span style="font-size: 13.5px; color: #64748B">Annual leave</span><span style="display: flex; flex-direction: column; align-items: flex-end; gap: 1px; text-align: right"><span style="font-size: 14.5px; font-weight: 600">25 days / year</span><span style="font-size: 12px; color: #64748B">Jan → Dec · No carry over</span></span></div>
+      
+    </section>
+
+    <section style="background: #FFFFFF; border: 1px solid #E3E8F0; border-radius: 18px; padding: 14px; display: flex; flex-direction: column; gap: 12px">
+      <h3 style="margin: 0; font-size: 15px; font-weight: 700">Permissions summary</h3>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: #0B6B47">CAN ACCESS · 4</span>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px">
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: #0B6B47; background: #EAF7F1; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Projects</span>
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: #0B6B47; background: #EAF7F1; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Weekly Report</span>
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: #0B6B47; background: #EAF7F1; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Materials</span>
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: #0B6B47; background: #EAF7F1; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Site audit</span>
+          
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid #EEF1F6">
+        <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: #B42318">CAN'T ACCESS · 8</span>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px">
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: #475569; background: #F2F4F8; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#D92D35" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>Small Works</span>
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: #475569; background: #F2F4F8; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#D92D35" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>Daily Overview</span>
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: #475569; background: #F2F4F8; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#D92D35" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>Sub Contractors</span>
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: #475569; background: #F2F4F8; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#D92D35" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>Annual Leave Management</span>
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: #475569; background: #F2F4F8; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#D92D35" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>Timesheet self-sign</span>
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: #475569; background: #F2F4F8; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#D92D35" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>Operatives</span>
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: #475569; background: #F2F4F8; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#D92D35" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>Manage Qualifications</span>
+          
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: #475569; background: #F2F4F8; padding: 6px 10px; border-radius: 999px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#D92D35" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>Wholesalers</span>
+          
+        </div>
+      </div>
+    </section>
+
+    <div style="flex-grow: 1"></div>
+    <div style="margin: 0 -16px; background: #FFFFFF; border-top: 1px solid #E3E8F0; padding: 12px 16px 30px; display: flex; gap: 10px">
+      <button style="width: 96px; height: 52px; border-radius: 16px; background: #F2F4F8; color: #0F1B33; border: 0; font: inherit; font-size: 15.5px; font-weight: 600; cursor: pointer">Back</button>
+      <button style="flex-grow: 1; height: 52px; border-radius: 16px; background: linear-gradient(180deg, #3B7BF0, #2559D6); color: #FFFFFF; border: 0; font: inherit; font-size: 16px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; box-shadow: 0 4px 12px rgba(37,89,214,0.30)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18v12H3zM3 7l9 6 9-6"></path></svg>Create user</button>
+    </div>
+  </div>
+</div>
+</div></figure>
+</div></body></html>
