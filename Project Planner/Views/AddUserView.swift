@@ -85,32 +85,31 @@ struct AddUserView: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                ManageUserProfilePalette.pageBackground.ignoresSafeArea()
-                VStack(spacing: 0) {
-                    wizardHeader
-                    if showSuccess {
-                        successView
-                    } else {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 0) {
-                                wizardProgressDots
-                                    .padding(.horizontal, 16)
-                                    .padding(.bottom, 8)
-                                Text(stepTitle)
-                                    .font(.system(size: 15, weight: .bold))
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.bottom, 12)
-                                stepContentInner
-                                    .padding(.horizontal, 16)
-                                    .padding(.bottom, 24)
-                            }
-                            .padding(.top, 8)
+            VStack(spacing: 0) {
+                wizardHeader
+                if showSuccess {
+                    successView
+                        .ppAddUserSheet()
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(stepTitle)
+                                .font(.system(.title2, design: .rounded))
+                                .fontWeight(.bold)
+                                .accessibilityAddTraits(.isHeader)
+                                .padding(.bottom, 4)
+                            stepContentInner
                         }
-                        wizardFooter
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, PPMetrics.screenGutter)
+                        .padding(.top, 20)
+                        .padding(.bottom, 24)
                     }
+                    .ppAddUserSheet()
+                    wizardFooter
                 }
             }
+            .background(PPNavyBackdrop().ignoresSafeArea())
             .navigationBarHidden(true)
             .onAppear {
                 resetAnnualLeaveInviteDefaults()
@@ -127,53 +126,126 @@ struct AddUserView: View {
         }
     }
 
+    // MARK: - Header (navy, display only)
+
+    /// Tracker labels (spec §3): "Permissions" reads "Access" in the tracker and the step heading only.
+    private static let trackerTitles = ["Type", "Details", "Access", "Review"]
+
     private var wizardHeader: some View {
-        VStack(spacing: 0) {
-            HStack {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
                 Button("Cancel") { dismiss() }
                     .accessibilityIdentifier("addUser.cancel")
-                    .font(.system(size: 17))
-                    .foregroundStyle(ManageUserProfilePalette.listBlue)
-                Spacer()
-                Text("Add New User")
-                    .font(.system(size: 17, weight: .bold))
-                Spacer()
-                Text("Step \(currentStep)/\(totalSteps)")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                    .buttonStyle(PPOnNavyPillButtonStyle())
+                Spacer(minLength: 4)
+                Text("Add new user")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 4)
+                Text("Step \(currentStep) of \(totalSteps)")
+                    .font(.footnote.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(PPAddUserColor.headerMuted)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            Divider()
+            headerUserCard
+            if currentStep == finalReviewStep && !showSuccess {
+                PPStatRow(items: reviewHeaderStats)
+            }
+            PPStepTracker(steps: trackerSteps, doneColor: PPAddUserColor.stepDone)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Step \(currentStep) of \(totalSteps)")
+                .accessibilityValue(Self.trackerTitles[min(max(currentStep, 1), Self.trackerTitles.count) - 1])
+                .accessibilityIdentifier("addUser.stepTracker")
         }
-        .background(ManageUserProfilePalette.pageBackground.opacity(0.95))
+        .padding(.horizontal, PPMetrics.screenGutter)
+        .padding(.top, 8)
+        .padding(.bottom, 18)
+        .environment(\.colorScheme, .dark)
     }
 
-    private var wizardProgressDots: some View {
-        HStack(spacing: 0) {
-            ForEach(1...totalSteps, id: \.self) { step in
-                ZStack {
-                    Circle()
-                        .fill(step < currentStep ? ManageUserProfilePalette.avatarGradientTop : (step == currentStep ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder))
-                        .frame(width: 26, height: 26)
-                    if step < currentStep {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.white)
-                    } else {
-                        Text("\(step)")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(step == currentStep ? .white : ManageUserProfilePalette.textSecondary)
-                    }
-                }
-                if step < totalSteps {
-                    Rectangle()
-                        .fill(step < currentStep ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder)
-                        .frame(height: 2.5)
-                        .padding(.horizontal, 5)
-                }
-            }
+    /// Display only: done steps get a tick and a blue bar, the current step the amber stripes. Not tappable (as before).
+    private var trackerSteps: [PPStepTrackerItem] {
+        Self.trackerTitles.enumerated().map { index, title in
+            let step = index + 1
+            return PPStepTrackerItem(
+                id: step,
+                title: title,
+                isDone: step < currentStep || showSuccess,
+                isCurrent: step == currentStep && !showSuccess
+            )
         }
+    }
+
+    /// Spec §1 "Header extras": the placeholder shows until a first name or surname is typed (owner decision 6).
+    private var headerHasName: Bool {
+        !(firstName + surname).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var headerInitials: String {
+        let letters = [firstName, surname].compactMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).first }
+        return String(letters).uppercased()
+    }
+
+    private var headerFamily: PPFamily {
+        switch invitedAccountType {
+        case .admin: return .plan
+        case .manager: return .people
+        case .operative: return .trade
+        }
+    }
+
+    /// Chips for the values already entered: account type, employment type, trade and line manager.
+    private var headerChips: [String] {
+        var chips = [invitedAccountType.title, employmentType.title]
+        if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager,
+           !tradePresetRaw.isEmpty {
+            chips.append(StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText))
+        }
+        if !selectedLineManagerUserIds.isEmpty || hasNoLineManager {
+            chips.append("Line manager: \(lineManagerSummary)")
+        }
+        return chips
+    }
+
+    /// The live user card. It reads the fields of this flow and writes nothing.
+    @ViewBuilder
+    private var headerUserCard: some View {
+        if headerHasName {
+            PPUserPreviewCard(
+                name: "\(firstName) \(surname)".trimmingCharacters(in: .whitespacesAndNewlines),
+                subtitle: currentStep == finalReviewStep ? email : nil,
+                initials: headerInitials,
+                family: headerFamily,
+                chips: currentStep == finalReviewStep ? [] : headerChips
+            )
+        } else {
+            PPUserPreviewCard(
+                name: "New user",
+                subtitle: "Choose an account type to start",
+                initials: nil,
+                family: headerFamily
+            )
+        }
+    }
+
+    /// Review header figures: account type, modules on (of the rows shown) and annual leave days. Display only.
+    private var reviewHeaderStats: [PPStatItem] {
+        let rows = permissionItems
+        let enabled = rows.filter(\.isEnabled).count
+        let leave = annualLeaveEnabledInvite
+            ? "\(AnnualLeaveUsageHeroView.formatLeaveDays(parseAnnualLeaveDaysForInvite())) days"
+            : "Off"
+        return [
+            PPStatItem(id: "type", value: invitedAccountType.title, label: "Account type"),
+            PPStatItem(id: "modules", value: "\(enabled) of \(rows.count)", label: "Modules"),
+            PPStatItem(id: "leave", value: leave, label: "Annual leave"),
+        ]
     }
 
     @ViewBuilder
@@ -187,33 +259,49 @@ struct AddUserView: View {
         }
     }
 
+    // MARK: - Bottom bar
+
     /// RULEBOOK §2: creating the user sends the invite, so the last step is online only.
     private var wizardFooter: some View {
-        VStack(spacing: 0) {
+        PPWizardBottomBar(
+            backEnabled: currentStep > 1,
+            backAction: {
+                withAnimation { currentStep -= 1 }
+            },
+            primaryTitle: primaryButtonTitle,
+            primarySymbol: currentStep == finalReviewStep ? "envelope.fill" : "arrow.right",
+            primarySymbolLeading: currentStep == finalReviewStep,
+            primaryEnabled: !(!canProceed || isCreating || (currentStep == finalReviewStep && !smartCache.isOnline)),
+            disabledTitle: nextDisabledTitle,
+            isBusy: isCreating,
+            primaryAction: {
+                if currentStep == finalReviewStep {
+                    createUser()
+                } else {
+                    withAnimation {
+                        if mode == .admin && currentStep == 1 {
+                            // Seeds only a new level; the line-manager picks were already reset by the account-type
+                            // card when the type changed (`AddUserLineManagerSelection`), so Next keeps them.
+                            applyPermissionsForInvitedType()
+                        }
+                        currentStep += 1
+                    }
+                }
+            }
+        ) {
             if currentStep == finalReviewStep && !smartCache.isOnline {
                 Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
                     .accessibilityIdentifier("offlinePolicy.onlineOnlyMessage")
             }
-            // Why the button will not go on, directly above it (red): the refused save's message, else the
-            // rule refusing this step (`lineManagerRequiredError`, LINE_MANAGER_REQUIRED_MESSAGE).
-            if let blockingMessage = footerBlockingMessage {
-                Text(blockingMessage)
-                    .foregroundStyle(.red)
-                    .font(.footnote)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
+            // A refused save's message, directly above the buttons (as before).
+            if let refusal = refusedCreateMessage {
+                PPErrorCallout(message: refusal)
                     .accessibilityIdentifier("addUser.blockingMessage")
             }
-            wizardFooterButtons
         }
-        .background(ProjectWorksRevampColors.surface)
     }
 
     /// The message shown above Next / Create User: a refused create first, else the line-manager rule on the
@@ -228,70 +316,37 @@ struct AddUserView: View {
         return AnnualLeaveApproval.lineManagerRequiredError(for: draft, users: userStore.organizationUsers)
     }
 
-    private var wizardFooterButtons: some View {
-        HStack(spacing: 11) {
-            Button {
-                withAnimation { currentStep -= 1 }
-            } label: {
-                Text("Back")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 14)
-                    .background(ManageUserProfilePalette.pageBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
-            .accessibilityIdentifier("addUser.back")
-            .buttonStyle(.plain)
-            .disabled(currentStep <= 1)
-            .opacity(currentStep <= 1 ? 0.35 : 1)
-
-            Button {
-                if currentStep == finalReviewStep {
-                    createUser()
-                } else {
-                    withAnimation {
-                        if mode == .admin && currentStep == 1 {
-                            // Seeds only a new level; the line-manager picks were already reset by the account-type
-                            // card when the type changed (`AddUserLineManagerSelection`), so Next keeps them.
-                            applyPermissionsForInvitedType()
-                        }
-                        currentStep += 1
-                    }
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Text(currentStep == finalReviewStep ? (isCreating ? "Creating…" : "Create User") : "Next")
-                        .font(.system(size: 16, weight: .bold))
-                    if currentStep != finalReviewStep {
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 15, weight: .bold))
-                    }
-                }
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(
-                    LinearGradient(
-                        colors: [Color(red: 0x4F / 255, green: 0x46 / 255, blue: 0xE5 / 255), ManageUserProfilePalette.listBlue],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: Color(red: 0x4F / 255, green: 0x46 / 255, blue: 0xE5 / 255).opacity(0.28), radius: 6, y: 3)
-            }
-            .accessibilityIdentifier("addUser.creating")
-            .buttonStyle(.plain)
-            .disabled(!canProceed || isCreating || (currentStep == finalReviewStep && !smartCache.isOnline))
-            .opacity((canProceed && !isCreating) ? 1 : 0.55)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(ProjectWorksRevampColors.surface)
-        .overlay(alignment: .top) { Divider() }
+    /// Display only: `footerBlockingMessage` when it is a refused save's message.
+    private var refusedCreateMessage: String? {
+        guard let errorMessage, !errorMessage.isEmpty else { return nil }
+        return footerBlockingMessage
     }
-    
+
+    /// Display only: `footerBlockingMessage` when it is the line-manager rule on the details step. Shown in the
+    /// Line manager card and on the disabled Next button.
+    private var lineManagerInlineMessage: String? {
+        guard refusedCreateMessage == nil else { return nil }
+        return footerBlockingMessage
+    }
+
+    /// Cosmetic label for the same Next / Create User action (spec §3).
+    private var primaryButtonTitle: String {
+        switch currentStep {
+        case 1: return "Next: details"
+        case 2: return "Next: access"
+        case 3: return "Next: review"
+        default: return isCreating ? "Creating…" : "Create User"
+        }
+    }
+
+    /// What the disabled button says (owner decision 5): the rulebook's line-manager message when that blocks the
+    /// step, otherwise a generic line. Read from the same `canProceed` / `footerBlockingMessage`; no new rule.
+    private var nextDisabledTitle: String {
+        if currentStep == finalReviewStep { return primaryButtonTitle }
+        if let lineManagerInlineMessage { return lineManagerInlineMessage }
+        return "Fill in the required fields to continue"
+    }
+
     // MARK: - Progress (legacy name kept for references)
     
     private var progressSlider: some View {
@@ -302,7 +357,7 @@ struct AddUserView: View {
         switch currentStep {
         case 1: return "Account Type"
         case 2: return "User Details"
-        case 3: return "Permissions"
+        case 3: return "Access"
         case 4: return "Review"
         default: return ""
         }
@@ -315,22 +370,23 @@ struct AddUserView: View {
             Text(mode == .managerAddingOperative
                 ? "This account is an operative. Super admin is never assigned from here."
                 : "Choose what kind of account this will be. Super admin is never assigned from here.")
-                .font(.system(size: 14))
-                .foregroundStyle(ManageUserProfilePalette.textSecondary)
-                .lineSpacing(3)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             VStack(spacing: 11) {
                 if mode != .managerAddingOperative {
-                    accountTypeCard(.admin, icon: "🛡️", description: "Full organisation access except operative mode.")
-                    accountTypeCard(.manager, icon: "👔", description: "Manage teams, schedules and optional modules.")
+                    accountTypeCard(.admin, symbol: "shield.fill", family: .plan, description: "Full organisation access except operative mode.")
+                    accountTypeCard(.manager, symbol: "briefcase.fill", family: .people, description: "Manage teams, schedules and optional modules.")
                 }
-                accountTypeCard(.operative, icon: "👷", description: "Schedule, annual leave and qualifications.")
+                accountTypeCard(.operative, symbol: "wrench.and.screwdriver.fill", family: .trade, description: "Schedule, annual leave and qualifications.")
             }
         }
     }
 
-    private func accountTypeCard(_ type: InvitedAccountType, icon: String, description: String) -> some View {
+    private func accountTypeCard(_ type: InvitedAccountType, symbol: String, family: PPFamily, description: String) -> some View {
         let selected = invitedAccountType == type
         let lockedToOperative = mode == .managerAddingOperative
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         return Button {
             guard !lockedToOperative, invitedAccountType != type else { return }
             let previousLevel = RulebookPermissionLevel(rawValue: invitedAccountType.rawValue) ?? .manager
@@ -351,44 +407,42 @@ struct AddUserView: View {
             hasNoLineManager = lineManagers.hasNoLineManager
         } label: {
             HStack(spacing: 14) {
-                Text(icon)
-                    .font(.system(size: 23))
-                    .frame(width: 48, height: 48)
-                    .background(ManageUserProfilePalette.chipPurpleBg)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                PPIconTile(symbol: symbol, family: family, size: 44, lifted: selected)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(type.title)
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(ManageUserProfilePalette.textPrimary)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
                     Text(description)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer()
+                Spacer(minLength: 8)
                 ZStack {
                     Circle()
-                        .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder, lineWidth: 2)
+                        .strokeBorder(selected ? PPAddUserColor.selected : Color(.separator), lineWidth: 2)
                         .frame(width: 24, height: 24)
                     if selected {
                         Circle()
-                            .fill(ManageUserProfilePalette.avatarGradientTop)
+                            .fill(PPAddUserColor.selected)
                             .frame(width: 24, height: 24)
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.white)
                     }
                 }
+                .accessibilityHidden(true)
             }
-            .padding(16)
-            .background(selected ? ManageUserProfilePalette.chipPurpleBg : ProjectWorksRevampColors.chipSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(selected ? ManageUserProfilePalette.avatarGradientTop : ProjectWorksRevampColors.searchBorder, lineWidth: selected ? 2 : 1.5)
-            )
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(PPColor.card, in: shape)
+            .overlay(shape.strokeBorder(selected ? PPAddUserColor.selected : PPBookingColor.cardBorder, lineWidth: selected ? 2 : 0.5))
+            .shadow(color: selected ? PPAddUserColor.selected.opacity(0.18) : .clear, radius: 8, x: 0, y: 3)
+            .contentShape(shape)
         }
-        .accessibilityIdentifier("addUser.checkmark")
+        .accessibilityIdentifier("addUser.accountType.\(type.rawValue)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .buttonStyle(.plain)
     }
     
