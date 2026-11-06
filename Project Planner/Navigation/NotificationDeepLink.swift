@@ -253,12 +253,16 @@ enum NotificationDeepLink {
             postTimesheetTeam(destination, surface: "teamSigned", weekStart: weekStart)
         // RULEBOOK 1.29.0 §25: the person's own Overtime page; Users' → that person → Overtime
         // (kinds from CanonicalBusinessEngine.notificationDestination).
+        // 1.33.0: the request id (`relatedId`) and `dayKey` open the payrun the notice names (`overtimeNotificationRange`,
+        // worked out on landing in `OvertimeDeepLinkView`).
         case "overtimeMine":
+            OvertimeDeepLinkContext.pending = (destination.relatedId, destination.dayKey)
             postSurface([
                 "route": MainMenuSurfaceRoute.invoicing.rawValue,
                 "timesheetSurface": "overtimeMine",
             ])
         case "overtimeUser":
+            OvertimeDeepLinkContext.pending = (destination.relatedId, destination.dayKey)
             var payload: [String: Any] = [
                 "route": MainMenuSurfaceRoute.invoicing.rawValue,
                 "timesheetSurface": "overtimeUser",

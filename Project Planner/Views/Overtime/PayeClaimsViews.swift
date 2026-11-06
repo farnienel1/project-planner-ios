@@ -12,8 +12,10 @@
 //  (`Rulebook+PayeClaims.swift`); these views only pass inputs and show results. Online only.
 //  RULEBOOK 1.32.0 §26: items and reviews load under every id of the person (`overtimePersonIds`); in Users' view a
 //  reviewer (`canReviewPayeClaims`) ticks or crosses each item and presses one Approve (`payeClaimReviewWrites` →
-//  `payeClaimReviews`, "Approved X of Y"); each item shows its state (`payeClaimReviewState`) and "Needs an admin"
-//  where the reviewer cannot apply it (`payeClaimReviewOutcomeLabel`), as web `PayeClaimsScreen.tsx`.
+//  `payeClaimReviews`, "Approved X of Y"); each item shows its state (`payeClaimReviewState`) and "Not theirs — left
+//  out." for an item on none of their ids (`payeClaimReviewOutcomeLabel`), as web `PayeClaimsScreen.tsx`.
+//  RULEBOOK 1.33.0 §26: a line manager can always review (no "Needs an admin"): items and reviews also load through
+//  `personUserId`, and a review of an item under another of the person's ids carries it (`payeClaimReviewWrites`).
 //
 
 import SwiftUI
@@ -55,13 +57,18 @@ enum PayeClaimPeople {
             ?? (userStore.displayUser?.id == subjectId ? userStore.displayUser : nil)
     }
 
-    static func generatedText(_ ms: Double?) -> String {
-        guard let ms else { return "saving…" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_GB")
-        formatter.timeZone = OrganizationRulebookContext.timeZone
-        formatter.dateFormat = "d MMM yyyy, HH:mm"
-        return formatter.string(from: Date(timeIntervalSince1970: ms / 1000))
+    /// 1.33.0 `reportGeneratedText`: "6 Nov 2026, 14:05 by Sam Smith" in the organisation zone; "saving…" until the
+    /// saved time is back.
+    static func generatedText(_ report: PayeClaimReportRecord, users: [AppUser]) -> String {
+        guard report.generatedAtMs != nil else { return "saving…" }
+        return CanonicalBusinessEngine.reportGeneratedText(
+            generatedAtMs: report.generatedAtMs,
+            generatedBy: report.generatedBy,
+            userId: report.userId,
+            userName: report.userName,
+            generatedByName: OvertimeScreenSupport.generatorName(report.generatedBy, users: users),
+            now: nil
+        ).generated
     }
 }
 
@@ -201,7 +208,7 @@ struct PayeClaimsPastPayrunsView: View {
                             title: "\(OvertimeScreenSupport.rangeTitle(OvertimeDayRange(start: report.rangeStart, end: report.rangeEnd))) · \(OrgMoney.format(report.totals.amount, currencyCode: report.currency))",
                             subtitle: busyReportId == report.id
                                 ? "Making PDF…"
-                                : "\(report.totals.itemCount) item(s) · made \(PayeClaimPeople.generatedText(report.generatedAtMs)) · Share PDF"
+                                : "\(report.totals.itemCount) item(s) · made \(PayeClaimPeople.generatedText(report, users: userStore.organizationUsers)) · Share PDF"
                         )
                     }
                     .buttonStyle(.plain)
@@ -229,7 +236,11 @@ struct PayeClaimsPastPayrunsView: View {
         defer { busyReportId = nil }
         let logo = await OvertimeReportPDF.loadLogo(firebaseBackend.currentOrganization?.companyLogoURL)
         let backend = firebaseBackend
-        let made = await PayeClaimReportPDF.makeFile(report: report, logo: logo) { path in
+        let made = await PayeClaimReportPDF.makeFile(
+            report: report,
+            logo: logo,
+            generatedByName: OvertimeScreenSupport.generatorName(report.generatedBy, users: userStore.organizationUsers)
+        ) { path in
             try await backend.payeClaimStoredFileData(path: path)
         }
         shareURL = made.url
@@ -405,7 +416,7 @@ struct PayeClaimsRangeView: View {
                 }
                 .buttonStyle(.plain)
                 // RULEBOOK 1.32.0 §26: the item's review state (`payeClaimReviewState`), the unsaved ✓ / ✕, and
-                // "Needs an admin" for an item the reviewer cannot apply (`payeClaimReviewOutcomeLabel`).
+                // 1.33.0 "Not theirs — left out." for an item on none of the person's ids (`payeClaimReviewOutcomeLabel`).
                 HStack(spacing: 8) {
                     if let state {
                         Text(state.label)
@@ -603,8 +614,7 @@ struct PayeClaimsRangeView: View {
             subjectUserId: subjectId,
             personIds: personIds,
             // The security rules require `reviewedBy` to be the signed-in Auth uid.
-            reviewerId: firebaseBackend.payeClaimsUid ?? viewer.id,
-            reviewerIsAdmin: CanonicalBusinessEngine.overtimeDeciderIsAdmin(RulebookPeople.person(viewer))
+            reviewerId: firebaseBackend.payeClaimsUid ?? viewer.id
         )
     }
 
@@ -646,7 +656,11 @@ struct PayeClaimsRangeView: View {
             )
             let logo = await OvertimeReportPDF.loadLogo(firebaseBackend.currentOrganization?.companyLogoURL)
             let backend = firebaseBackend
-            let made = await PayeClaimReportPDF.makeFile(report: report, logo: logo) { path in
+            let made = await PayeClaimReportPDF.makeFile(
+            report: report,
+            logo: logo,
+            generatedByName: OvertimeScreenSupport.generatorName(report.generatedBy, users: userStore.organizationUsers)
+        ) { path in
                 try await backend.payeClaimStoredFileData(path: path)
             }
             shareURL = made.url

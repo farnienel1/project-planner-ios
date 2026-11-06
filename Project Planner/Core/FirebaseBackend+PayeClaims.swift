@@ -23,8 +23,9 @@ nonisolated struct PayeClaimRefused: LocalizedError {
 /// Rows of several `userId ==` listeners merged in id order (plumbing only, no rule): the latest rows per id.
 @MainActor
 final class PayeClaimListenerMerge<Row> {
-    /// The ids, empty ones dropped and each listed once (as web's `Array.from(new Set(ids.filter(Boolean)))`).
-    let ids: [String]
+    /// The ids, empty ones dropped and each listed once (as web's `Array.from(new Set(ids.filter(Boolean)))`), then any
+    /// extra query keys (`add`).
+    private(set) var ids: [String]
     private var byId: [String: [Row]] = [:]
 
     init(ids: [String]) {
@@ -33,6 +34,11 @@ final class PayeClaimListenerMerge<Row> {
     }
 
     func set(_ id: String, _ rows: [Row]) { byId[id] = rows }
+
+    /// One more query key (1.33.0: the `personUserId ==` query), merged after the ids.
+    func add(_ key: String) {
+        if !ids.contains(key) { ids.append(key) }
+    }
 
     func rows() -> [Row] { ids.flatMap { byId[$0] ?? [] } }
 
@@ -85,8 +91,9 @@ extension FirebaseBackend {
 
     /// RULEBOOK 1.32.0 (`overtimePersonIds`): live items of one person under every id they go by, one `userId ==` query
     /// per id, merged in id order (web `listenPersonPayeClaims`). The first id is the person's users id and its error is
-    /// reported; a refused read under another id (a line manager may read only the users id they manage — those items
-    /// need an admin, decision A) is left out silently.
+    /// reported; a refused read under another id is left out silently. 1.33.0: plus the items stamped with the person's
+    /// current users id (`personUserId ==` the first id, written on create and by the backfill) — the query the read
+    /// rules allow the line manager for an item filed under another of the person's ids.
     func listenPersonPayeClaims(
         userIds: [String],
         kind: PayeClaimKind,
@@ -114,12 +121,29 @@ extension FirebaseBackend {
             )
             if let registration { registrations.append(registration) }
         }
+        if let personUserId = merge.ids.first, let org = try? payeClaimsOrganizationRef() {
+            let key = "personUserId:\(personUserId)"
+            merge.add(key)
+            let orgId = org.documentID
+            registrations.append(
+                org.collection(kind.collection).whereField("personUserId", isEqualTo: personUserId).addSnapshotListener { snapshot, error in
+                    let rows: [PayeClaimItem] = error != nil ? [] : (snapshot?.documents ?? []).compactMap { doc in
+                        CanonicalBusinessEngine.parsePayeClaimDocument(kind: kind, docId: doc.documentID, data: doc.data(), organizationId: orgId)
+                    }
+                    Task { @MainActor in
+                        merge.set(key, rows)
+                        onChange(merge.rows(uniqueBy: \.id))
+                    }
+                }
+            )
+        }
         return registrations
     }
 
     /// RULEBOOK 1.32.0 §26 (LIVE_COLLECTIONS `payeClaimReviews`: listen while the screen is open): live reviews of one
     /// person's price work and expenses under every id they go by, read through `parsePayeClaimReviewDocument`
-    /// (web `listenPayeClaimReviews`). A refused read under an id is left out.
+    /// (web `listenPayeClaimReviews`). A refused read under an id is left out. 1.33.0: plus the reviews carrying
+    /// `personUserId ==` the person's users id (an item filed under another of their ids), deduplicated by id.
     func listenPayeClaimReviews(
         userIds: [String],
         onChange: @escaping ([PayeClaimReviewRecord]) -> Void
@@ -127,14 +151,20 @@ extension FirebaseBackend {
         guard let org = try? payeClaimsOrganizationRef() else { return [] }
         let merge = PayeClaimListenerMerge<PayeClaimReviewRecord>(ids: userIds)
         let collection = CanonicalBusinessEngine.payeClaimReviewsCollection
-        return merge.ids.map { id in
-            org.collection(collection).whereField("userId", isEqualTo: id).addSnapshotListener { snapshot, error in
+        var queries: [(key: String, field: String, value: String)] = merge.ids.map { ($0, "userId", $0) }
+        if let personUserId = merge.ids.first {
+            let key = "personUserId:\(personUserId)"
+            merge.add(key)
+            queries.append((key, "personUserId", personUserId))
+        }
+        return queries.map { query in
+            org.collection(collection).whereField(query.field, isEqualTo: query.value).addSnapshotListener { snapshot, error in
                 let rows: [PayeClaimReviewRecord] = error != nil ? [] : (snapshot?.documents ?? []).compactMap { doc in
                     CanonicalBusinessEngine.parsePayeClaimReviewDocument(docId: doc.documentID, data: doc.data())
                 }
                 Task { @MainActor in
-                    merge.set(id, rows)
-                    onChange(merge.rows())
+                    merge.set(query.key, rows)
+                    onChange(merge.rows(uniqueBy: \.id))
                 }
             }
         }
@@ -323,6 +353,45 @@ extension FirebaseBackend {
                 }
                 return ["id": doc.documentID, "entries": entries.raw]
             }
+    }
+
+    // MARK: Payrun Snapshot (RULEBOOK 1.33.0 §7, admins; web `loadPayrunSnapshotInputs`)
+
+    /// Every price work item, expense item and claim report of the company, read once through the rulebook readers.
+    func loadPayrunSnapshotClaims() async throws -> (priceWork: [PayeClaimItem], expenses: [PayeClaimItem], reports: [PayeClaimReportRecord]) {
+        let org = try payeClaimsOrganizationRef()
+        let orgId = org.documentID
+        let reportsCollection = CanonicalBusinessEngine.payeClaimText("PAYE_CLAIM_REPORTS_COLLECTION", fallback: "payeClaimReports")
+        async let priceSnap = org.collection(PayeClaimKind.priceWork.collection).getDocuments()
+        async let expenseSnap = org.collection(PayeClaimKind.expense.collection).getDocuments()
+        async let reportSnap = org.collection(reportsCollection).getDocuments()
+        let (priceDocs, expenseDocs, reportDocs) = try await (priceSnap, expenseSnap, reportSnap)
+        return (
+            priceDocs.documents.compactMap {
+                CanonicalBusinessEngine.parsePayeClaimDocument(kind: .priceWork, docId: $0.documentID, data: $0.data(), organizationId: orgId)
+            },
+            expenseDocs.documents.compactMap {
+                CanonicalBusinessEngine.parsePayeClaimDocument(kind: .expense, docId: $0.documentID, data: $0.data(), organizationId: orgId)
+            },
+            reportDocs.documents.compactMap { CanonicalBusinessEngine.parsePayeClaimReportDocument(docId: $0.documentID, data: $0.data()) }
+        )
+    }
+
+    /// The timesheets of the given people (`settings` where `userId ==`, one query per id, the query User Timesheets
+    /// already makes), read through `parsePayrunSnapshotSheet`. A failed read leaves that person's sheets out.
+    func loadPayrunSnapshotSheets(userIds: [String]) async -> [[String: Any]] {
+        guard let org = try? payeClaimsOrganizationRef() else { return [] }
+        var seen = Set<String>()
+        let ids = userIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty && seen.insert($0).inserted }
+        var out: [[String: Any]] = []
+        for id in ids {
+            guard let snapshot = try? await org.collection("settings").whereField("userId", isEqualTo: id).getDocuments() else { continue }
+            for doc in snapshot.documents {
+                let data = FirebaseBackend.firestoreJSON(doc.data()) as? [String: Any] ?? [:]
+                if let sheet = CanonicalBusinessEngine.parsePayrunSnapshotSheet(docId: doc.documentID, data: data) { out.append(sheet) }
+            }
+        }
+        return out
     }
 
     /// The bytes of a stored file (the Storage rules decide who may read it). 25 MB cap.

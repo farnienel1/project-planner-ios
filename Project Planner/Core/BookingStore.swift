@@ -306,8 +306,11 @@ class BookingStore: ObservableObject {
                 return
             }
             let changed = BookingWritePatch.changedLabourFields(from: bookings[index], to: booking)
+            let before = bookings[index]
             bookings[index] = booking
             await saveData(writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed)])
+            // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the write).
+            if !changed.isEmpty { OvertimeReopenNotice.labour(before: before, after: booking) }
         }
     }
 
@@ -394,6 +397,8 @@ class BookingStore: ObservableObject {
         do {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             try await fb.deleteBooking(booking, organizationId: orgId)
+            // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the delete).
+            OvertimeReopenNotice.labour(before: booking, after: nil)
         } catch {
             // Refused (for example: only an admin may delete a labour booking), or the connection dropped:
             // deletes are online only, so nothing is queued. It still exists on the server; put it back.

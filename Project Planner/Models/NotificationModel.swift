@@ -68,7 +68,8 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case materialOrderCreated = "material_order_created"
         /// RULEBOOK 1.29.0 §13, §25: a PAYE person sent their overtime for approval (CanonicalBusinessEngine.overtimeRequestRecipients; push).
         case overtimeRequestSubmitted = "overtime_request_submitted"
-        /// RULEBOOK 1.29.0: "Overtime update" to the requester (`overtimeReviewedRecipients`; push).
+        /// RULEBOOK 1.29.0: to the requester (push). 1.33.0: "Overtime returned" after a Return (`overtimeReturnedRecipients`,
+        /// `overtimeReturnedMessage`) and the reopen notice to the person (`overtimeReopenedRecipients`).
         case overtimeRequestReviewed = "overtime_request_reviewed"
         /// RULEBOOK 1.29.0: a PAYE manager or admin changed their own booking directly (`bookingHoursChangedRecipients`;
         /// inbox only).

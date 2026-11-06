@@ -231,6 +231,7 @@ class ManagerScheduleStore: ObservableObject {
         let changedFields: Set<String>? = managerSiteBookings.first(where: { $0.id == normalizedBooking.id })
             .map { BookingWritePatch.changedManagerFields(from: $0, to: normalizedBooking) }
         if let changedFields, changedFields.isEmpty { return }
+        let previous = managerSiteBookings.first(where: { $0.id == normalizedBooking.id })
 
         applyLocalSave(normalizedBooking, organizationId: orgId)
 
@@ -241,6 +242,8 @@ class ManagerScheduleStore: ObservableObject {
 
         do {
             try await fb.saveManagerSiteBooking(normalizedBooking, organizationId: orgId, changedFields: changedFields)
+            // RULEBOOK 1.33.0 §25 reopen: an edit may reopen the PAYE overtime line (best effort, after the write).
+            if let previous { OvertimeReopenNotice.managerSite(before: previous, after: normalizedBooking) }
             loadData(force: true)
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
@@ -278,6 +281,8 @@ class ManagerScheduleStore: ObservableObject {
         do {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
+            // RULEBOOK 1.33.0 §25 reopen (best effort, after the delete).
+            OvertimeReopenNotice.managerSite(before: booking, after: nil)
             loadData(force: true)
         } catch {
             // Not queued (online only): the server still has it, so put it back on screen.

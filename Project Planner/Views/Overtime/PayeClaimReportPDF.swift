@@ -340,9 +340,10 @@ enum PayeClaimReportPDF {
     static func makeFile(
         report: PayeClaimReportRecord,
         logo: UIImage?,
+        generatedByName: String? = nil,
         readFile: (String) async throws -> Data
     ) async -> Made {
-        guard let layout = PayeClaimReportLayout.make(report: report, generatedText: PayeClaimPeople.generatedText(report.generatedAtMs)) else {
+        guard let layout = PayeClaimReportLayout.make(report: report, generatedByName: generatedByName) else {
             return Made(url: nil, notDrawn: 0)
         }
         var files: [String: Data] = [:]

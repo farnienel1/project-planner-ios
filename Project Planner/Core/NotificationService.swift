@@ -97,6 +97,8 @@ class NotificationService: ObservableObject {
     func setUserStore(_ store: UserStore) {
         self.userStore = store
         store.notificationService = self
+        // RULEBOOK 1.33.0: booking edits on this phone send the overtime reopen notice through this service.
+        OvertimeReopenNotice.service = self
     }
     
     func setOperativeStore(_ store: OperativeStore) {
@@ -1346,48 +1348,123 @@ class NotificationService: ObservableObject {
     // MARK: - PAYE overtime (RULEBOOK 1.29.0 §13, §25)
 
     /// `overtime_request_submitted` to `overtimeRequestRecipients(requester, roster)` — the requester's active line
-    /// managers and every active admin, never the requester. `deepLinkUserId` is the requester (opens Users' → that
-    /// person → Overtime); `relatedId` the request.
+    /// managers and every active admin, never the requester. 1.33.0: the text is `overtimeRequestSubmittedMessage`;
+    /// `deepLinkUserId` is the requester (opens Users' → that person → Overtime), `relatedId` the request and `dayKey`
+    /// the range start (the payrun it opens, `overtimeNotificationRange`).
     func notifyOvertimeRequestSubmitted(requester: AppUser, requestId: String, rangeStart: String, rangeEnd: String) async {
         guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
         guard let recipients = CanonicalBusinessEngine.overtimeRequestRecipients(
             requester: RulebookPeople.person(requester),
             roster: recipientRoster
         ) else { return }
-        let name = requester.fullName.isEmpty ? "Someone" : requester.fullName
+        guard let notice = CanonicalBusinessEngine.overtimeRequestSubmittedMessage(
+            requesterName: requester.fullName,
+            rangeStart: rangeStart,
+            rangeEnd: rangeEnd
+        ) else { return }
         for userId in recipients {
             let notification = AppNotification(
                 organizationId: organizationId,
                 type: .overtimeRequestSubmitted,
-                title: "Overtime request from \(name)",
-                message: "\(name) sent their overtime for \(rangeStart) to \(rangeEnd) for approval.",
+                title: notice.title,
+                message: notice.message,
                 userId: userId,
                 relatedKey: requestId,
-                deepLinkUserId: requester.id
+                deepLinkUserId: requester.id,
+                dayKey: rangeStart
             )
             await saveNotification(notification)
         }
     }
 
-    /// `overtime_request_reviewed` ("Overtime update") to `overtimeReviewedRecipients(requester, decider, roster)`.
-    /// 1.32.0: a partial approval (`complete` false) names the script's `reviewApprovalMessage` (`summary`), as web.
-    func notifyOvertimeRequestReviewed(requesterId: String, requestId: String, complete: Bool = true, summary: String = "") async {
+    /// 1.33.0 `overtime_request_reviewed` after Return to `overtimeReturnedRecipients(requester, decider, roster)`:
+    /// "Your line manager {name} has returned your overtime request" (`overtimeReturnedMessage`; an admin who is not the
+    /// line manager: "{name} has returned …"). `dayKey` is the request's range start.
+    func notifyOvertimeReturned(requesterId: String, requestId: String, rangeStart: String) async {
         guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
-        guard let recipients = CanonicalBusinessEngine.overtimeReviewedRecipients(
+        guard let recipients = CanonicalBusinessEngine.overtimeReturnedRecipients(
             requester: requesterId,
             decider: actorPerson,
             roster: recipientRoster
+        ) else { return }
+        let users = userStore?.organizationUsers ?? []
+        let requester = users.first { $0.id == requesterId }
+        let deciderIsLineManager = requester.map {
+            CanonicalBusinessEngine.overtimeDeciderIsLineManager(decider: actorPerson, requester: RulebookPeople.person($0), roster: recipientRoster)
+        } ?? false
+        let deciderName = userStore?.currentUser?.fullName
+        guard let notice = CanonicalBusinessEngine.overtimeReturnedMessage(
+            deciderName: deciderName,
+            deciderIsLineManager: deciderIsLineManager
         ) else { return }
         for userId in recipients {
             let notification = AppNotification(
                 organizationId: organizationId,
                 type: .overtimeRequestReviewed,
-                title: "Overtime update",
-                message: complete
-                    ? "Your overtime request was approved. Open Overtime to see the final hours."
-                    : "Part of your overtime request was approved (\(summary.hasSuffix(".") ? String(summary.dropLast()) : summary)). Open Overtime to see the final hours.",
+                title: notice.title,
+                message: notice.message,
                 userId: userId,
-                relatedKey: requestId
+                relatedKey: requestId,
+                dayKey: rangeStart.isEmpty ? nil : rangeStart
+            )
+            await saveNotification(notification)
+        }
+    }
+
+    /// 1.33.0 reopen (web `lib/overtime/overtimeReopenNotice.ts`): a manager or admin changed or deleted a PAYE person's
+    /// booking (`after` nil when deleted). When `overtimeLineReopened` says the overtime line reopened, the person — and
+    /// their line managers when the line had been returned (`overtimeReopenedRecipients`) — hear
+    /// `overtimeReopenedMessage`. The person's row opens their Overtime (`overtime_request_reviewed`); a line manager's
+    /// opens Users' → that person (`overtime_request_submitted`), as web. Best effort: never blocks the booking edit.
+    func notifyOvertimeLineReopened(before rawBefore: OvertimeBookingInput, after rawAfter: OvertimeBookingInput?) async {
+        guard let backend = firebaseBackend,
+              let organizationId = backend.currentOrganization?.firestoreDocumentId else { return }
+        // Job number and name from the loaded jobs (the notice names the job).
+        let jobs = (projectStore?.projects ?? []) + (projectStore?.smallWorks ?? [])
+        let before = OvertimeBookingInputs.withJobs([rawBefore], jobs: jobs).first ?? rawBefore
+        let after = rawAfter.map { OvertimeBookingInputs.withJobs([$0], jobs: jobs).first ?? $0 }
+        let users = userStore?.organizationUsers ?? []
+        guard let accountId = CanonicalBusinessEngine.notificationRecipientAccountId(
+            before.personId,
+            roster: recipientRoster,
+            catalogue: recipientCatalogue
+        ), let person = users.first(where: { $0.id == accountId }), person.isPayeEmployment else { return }
+        // The editor may not read another person's overtime (only admins, the person and their line manager may).
+        let records = await backend.readOvertimeRecords(userId: accountId)
+        let organization = OvertimeOrganizationDocument.document(backend.currentOrganization)
+        let outcome = CanonicalBusinessEngine.overtimeLineReopened(
+            before: before,
+            after: after,
+            organization: organization,
+            reviews: records?.reviews,
+            requests: records?.requests
+        )
+        guard outcome.reopened else { return }
+        let recipients = CanonicalBusinessEngine.overtimeReopenedRecipients(
+            bookedId: before.personId,
+            actor: actorPerson,
+            roster: recipientRoster,
+            operatives: (operativeStore?.allOperatives ?? []).map { ["id": $0.documentId, "email": $0.email] as [String: Any] },
+            returned: outcome.returned
+        )
+        let personName = person.fullName.isEmpty ? person.email : person.fullName
+        for userId in recipients {
+            let forPerson = userId == accountId
+            guard let notice = CanonicalBusinessEngine.overtimeReopenedMessage(
+                dayKey: before.dayKey,
+                jobNumber: before.jobNumber,
+                forLineManager: !forPerson,
+                personName: personName
+            ) else { continue }
+            let notification = AppNotification(
+                organizationId: organizationId,
+                type: forPerson ? .overtimeRequestReviewed : .overtimeRequestSubmitted,
+                title: notice.title,
+                message: notice.message,
+                userId: userId,
+                relatedKey: before.id,
+                deepLinkUserId: forPerson ? nil : accountId,
+                dayKey: before.dayKey
             )
             await saveNotification(notification)
         }
@@ -1395,7 +1472,9 @@ class NotificationService: ObservableObject {
 
     /// `booking_hours_changed_by_owner` (inbox only) to `bookingHoursChangedRecipients(owner, jobManagerIds, roster)`:
     /// the job's managers and the person's line managers, never the person.
-    func notifyBookingHoursChangedByOwner(owner: AppUser, booking: OvertimeBookingInput, jobManagerIds: [String]) async {
+    /// 1.33.0: `removed` when a red X deleted an all-overtime booking (web wording "removed their booking … (overtime not
+    /// worked)").
+    func notifyBookingHoursChangedByOwner(owner: AppUser, booking: OvertimeBookingInput, jobManagerIds: [String], removed: Bool = false) async {
         guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
         guard let recipients = CanonicalBusinessEngine.bookingHoursChangedRecipients(
             owner: RulebookPeople.person(owner),
@@ -1409,7 +1488,9 @@ class NotificationService: ObservableObject {
                 organizationId: organizationId,
                 type: .bookingHoursChangedByOwner,
                 title: "Hours changed",
-                message: "\(name) changed the hours of their booking on \(booking.dayKey)\(job).",
+                message: removed
+                    ? "\(name) removed their booking on \(booking.dayKey)\(job) (overtime not worked)."
+                    : "\(name) changed the hours of their booking on \(booking.dayKey)\(job).",
                 userId: userId,
                 relatedKey: booking.id,
                 dayKey: booking.dayKey

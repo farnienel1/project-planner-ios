@@ -177,6 +177,7 @@ struct WeeklyReportView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         quickSelectCard
                         invoicingPeriodCard
+                        payrunSnapshotButton
                         Text("Period warnings and pay breakdown are calculated when you tap Generate — this is separate from Home Warnings (live ops from today forward). Live bookings from projects, small works and daily overview feed this snapshot until a timesheet is counter-signed (or self-signed when the person has no line manager). Agreed timesheet figures then replace those days, including price work and expenses.")
                             .font(.system(size: 12))
                             .foregroundStyle(WeeklyReportColors.muted)
@@ -195,6 +196,36 @@ struct WeeklyReportView: View {
                     .padding(.bottom, 20)
                     .ppContentSheet()
                 }
+            }
+        }
+    }
+
+    /// RULEBOOK 1.33.0 §7: Payrun Snapshot (admins only, `canOpenWeeklyReport`; the page itself already asks it). One row
+    /// per person with their Timesheet, Overtime, Expenses and Price work state (`payrunSnapshotRows`).
+    @ViewBuilder
+    private var payrunSnapshotButton: some View {
+        if userStore.canOpenWeeklyReport() {
+            reportSectionCard(title: "Payrun", icon: "list.bullet.rectangle.portrait.fill", iconColor: WeeklyReportColors.cyan) {
+                NavigationLink {
+                    PayrunSnapshotView(
+                        firebaseBackend: firebaseBackend,
+                        userStore: userStore,
+                        bookingStore: bookingStore,
+                        managerScheduleStore: managerScheduleStore,
+                        projectStore: projectStore,
+                        operativeStore: operativeStore,
+                        notificationService: notificationService
+                    )
+                } label: {
+                    PPMenuRowLabel(
+                        title: CanonicalBusinessEngine.payrunSnapshotText("PAYRUN_SNAPSHOT_LABEL", fallback: "Payrun Snapshot"),
+                        symbol: "list.bullet.rectangle.portrait.fill",
+                        family: .plan,
+                        subtitle: "Where everyone's timesheet, overtime, expenses and price work stand"
+                    )
+                }
+                .buttonStyle(PPMenuRowButtonStyle())
+                .accessibilityIdentifier("weeklyReport.payrunSnapshot")
             }
         }
     }

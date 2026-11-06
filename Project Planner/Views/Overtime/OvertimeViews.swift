@@ -9,6 +9,10 @@
 //  overtime report. Every figure, state,
 //  permission and write shape comes from `CanonicalBusinessEngine` (`Rulebook+PayeOvertime.swift`); these views only pass
 //  inputs and show results. Online only.
+//  RULEBOOK 1.33.0 (§25): Send → Return. ✓ ✕ ⚙ through `overtimeChoiceAfter` / `overtimeChoiceView` (person and decider);
+//  Send for approval (`overtimeSubmitReady`, `overtimeSubmitLines`), Return overtime (`overtimeReturnReady`,
+//  `overtimeReturnWrites`) and Generate overtime report (`overtimeGenerateReady`); saved reports marked Out of date
+//  (`overtimeReportOutOfDate`); a notice opens the payrun it names (`overtimeNotificationRange`).
 //
 
 import SwiftUI
@@ -39,10 +43,23 @@ struct OvertimeDayRange: Hashable {
     var end: String
 }
 
-/// A deep link into the Overtime screens (`notificationDestination` kinds `overtimeMine` / `overtimeUser`).
+/// A deep link into the Overtime screens (`notificationDestination` kinds `overtimeMine` / `overtimeUser`). 1.33.0: the
+/// notice's request id and `dayKey` pick the payrun to open (`overtimeNotificationRange`).
 enum OvertimeDeepLink: Hashable {
-    case mine
-    case user(String)
+    case mine(requestId: String?, dayKey: String?)
+    case user(String, requestId: String?, dayKey: String?)
+}
+
+/// The request id and day of an overtime notice tap, held while Timesheets opens (`NotificationDeepLink` sets it,
+/// `InvoicingView` takes it). Plumbing only.
+@MainActor
+enum OvertimeDeepLinkContext {
+    static var pending: (requestId: String?, dayKey: String?)?
+
+    static func take() -> (requestId: String?, dayKey: String?) {
+        defer { pending = nil }
+        return pending ?? (nil, nil)
+    }
 }
 
 @MainActor
@@ -78,6 +95,27 @@ enum OvertimeScreenSupport {
 
     static func rangeTitle(_ range: OvertimeDayRange) -> String {
         "\(CanonicalBusinessEngine.formatPayePayrunDay(range.start)) – \(CanonicalBusinessEngine.formatPayePayrunDay(range.end))"
+    }
+
+    /// The generator's name from the roster (the report's `generatedBy`), for `reportGeneratedText`.
+    static func generatorName(_ generatedBy: String?, users: [AppUser]) -> String? {
+        guard let id = generatedBy, !id.isEmpty, let user = users.first(where: { $0.id.caseInsensitiveCompare(id) == .orderedSame }) else { return nil }
+        return name(user)
+    }
+
+    /// 1.33.0 `reportGeneratedText`: "6 Nov 2026, 14:05 by Sam Smith" in the organisation zone; "saving…" until the saved
+    /// time is back.
+    static func generatedText(_ report: OvertimeReportRecord, users: [AppUser]) -> String {
+        guard report.generatedAtMs != nil else { return "saving…" }
+        let generatedBy = report.raw["generatedBy"] as? String
+        return CanonicalBusinessEngine.reportGeneratedText(
+            generatedAtMs: report.generatedAtMs,
+            generatedBy: generatedBy,
+            userId: report.raw["userId"] as? String,
+            userName: report.userName,
+            generatedByName: generatorName(generatedBy, users: users),
+            now: nil
+        ).generated
     }
 }
 
@@ -194,22 +232,62 @@ struct OvertimeHubView: View {
     }
 }
 
-/// A deep link's landing: the person's Overtime page (`overtimeMine`) or Users' → that person → Overtime (`overtimeUser`).
+/// A deep link's landing (1.33.0): the payrun the notice names (`overtimeNotificationRange` over the request's range or the
+/// notice's day) on the person's Overtime page (`overtimeMine`) or Users' → that person → Overtime (`overtimeUser`); the
+/// person's Overtime ranges when nothing usable is given.
 struct OvertimeDeepLinkView: View {
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
     let link: OvertimeDeepLink
 
-    var body: some View {
+    @State private var requests: [OvertimeRequestRecord]?
+    @State private var listener = OvertimeListeners()
+
+    private var target: (subjectId: String?, scope: OvertimeScope, requestId: String?, dayKey: String?) {
         switch link {
-        case .mine:
-            if let me = userStore.displayUser {
-                OvertimeRangesView(subjectId: me.id, scope: .mine)
+        case .mine(let requestId, let dayKey): return (userStore.displayUser?.id, .mine, requestId, dayKey)
+        case .user(let id, let requestId, let dayKey): return (id, .review, requestId, dayKey)
+        }
+    }
+
+    var body: some View {
+        let target = self.target
+        Group {
+            if let subjectId = target.subjectId {
+                if let requests {
+                    let request = target.requestId.flatMap { id in requests.first { $0.id.caseInsensitiveCompare(id) == .orderedSame } }
+                    if let range = CanonicalBusinessEngine.overtimeNotificationRange(
+                        organization: OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization),
+                        todayKey: OvertimeScreenSupport.todayKey(),
+                        rangeStart: request?.rangeStart,
+                        rangeEnd: request?.rangeEnd,
+                        dayKey: target.dayKey
+                    ) {
+                        OvertimeLinesView(subjectId: subjectId, scope: target.scope, range: OvertimeDayRange(start: range.start, end: range.end))
+                    } else {
+                        OvertimeRangesView(subjectId: subjectId, scope: target.scope)
+                    }
+                } else {
+                    ProgressView("Opening overtime…")
+                }
             } else {
                 ProgressView()
             }
-        case .user(let id):
-            OvertimeRangesView(subjectId: id, scope: .review)
         }
+        .onAppear {
+            listener.stop()
+            guard let subjectId = target.subjectId else { return }
+            if let registration = firebaseBackend.listenOvertimeRequests(
+                userId: subjectId,
+                onChange: { requests = $0 },
+                onError: { _ in requests = [] }
+            ) {
+                listener.add(registration)
+            } else {
+                requests = []
+            }
+        }
+        .onDisappear { listener.stop() }
     }
 }
 
@@ -408,6 +486,7 @@ struct OvertimeRangesView: View {
 /// Past PAYE payruns (`payePastPayruns`, newest first) and the saved overtime reports (`overtimeReports`, read on open).
 struct OvertimePastPayrunsView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var userStore: UserStore
     let subjectId: String
     let scope: OvertimeScope
 
@@ -452,7 +531,7 @@ struct OvertimePastPayrunsView: View {
                     } label: {
                         OvertimeTile(
                             title: OvertimeScreenSupport.rangeTitle(OvertimeDayRange(start: report.rangeStart, end: report.rangeEnd)),
-                            subtitle: "\(OvertimeScreenSupport.hours(report.overtimeHours)) overtime · \(generatedText(report)) · Share PDF"
+                            subtitle: "\(OvertimeScreenSupport.hours(report.overtimeHours)) overtime · \(OvertimeScreenSupport.generatedText(report, users: userStore.organizationUsers)) · Share PDF"
                         )
                     }
                     .buttonStyle(.plain)
@@ -471,14 +550,9 @@ struct OvertimePastPayrunsView: View {
         }
     }
 
-    private func generatedText(_ report: OvertimeReportRecord) -> String {
-        guard let ms = report.generatedAtMs else { return "saving…" }
-        return OvertimeReportPDFLayout.generatedText(ms: ms)
-    }
-
     private func share(_ report: OvertimeReportRecord) async {
         let logo = await OvertimeReportPDF.loadLogo(firebaseBackend.currentOrganization?.companyLogoURL)
-        shareURL = OvertimeReportPDF.makeFile(report: report, logo: logo)
+        shareURL = OvertimeReportPDF.makeFile(report: report, logo: logo, users: userStore.organizationUsers)
     }
 }
 
@@ -540,13 +614,16 @@ struct OvertimeLinesView: View {
     @State private var bookings: [OvertimeBookingInput] = []
     @State private var reviews: [OvertimeReviewRecord] = []
     @State private var requests: [OvertimeRequestRecord] = []
+    @State private var reports: [OvertimeReportRecord] = []
     @State private var loadError: String?
-    @State private var draft: [String: OvertimeAction] = [:]
-    @State private var decisions: [String: OvertimeAction] = [:]
+    /// RULEBOOK 1.33.0 (Q-A7): the person's ✓ ✕ ⚙ before sending, and the decider's before returning, stay on this
+    /// screen only (`overtimeChoiceAfter`).
+    @State private var choices: [String: OvertimeChoice] = [:]
+    @State private var deciderChoices: [String: OvertimeChoice] = [:]
     @State private var busy = false
     @State private var message: String?
     @State private var cog: OvertimeCogTarget?
-    @State private var confirmCancel: OvertimeCancelPrompt?
+    @State private var confirmDelete: OvertimeDeletePrompt?
     @State private var shareURL: URL?
     @State private var listeners = OvertimeListeners()
 
@@ -562,6 +639,19 @@ struct OvertimeLinesView: View {
     }
     private var roster: [[String: Any]] { RulebookPeople.roster(userStore.organizationUsers) }
     private var isOnline: Bool { smartCache.isOnline }
+    /// 1.33.0 `payeOvertimeLines` names: the decider's name on a returned line ("Changed by {name}").
+    private var names: [String: String] {
+        Dictionary(userStore.organizationUsers.map { ($0.id, OvertimeScreenSupport.name($0)) }, uniquingKeysWith: { first, _ in first })
+    }
+    /// 1.33.0 `payeOvertimeLines` jobs: the job of a deleted line (its booking is gone).
+    private var jobRows: [[String: Any]] {
+        jobs.map { ["id": $0.documentId, "jobNumber": $0.jobNumber, "jobName": $0.siteName] as [String: Any] }
+    }
+    /// `hasActiveLineManager(person, roster)`: Generate needs every line returned when there is a line manager.
+    private var hasLineManager: Bool {
+        guard let subject else { return false }
+        return CanonicalBusinessEngine.overtimeHasActiveLineManager(person: RulebookPeople.person(subject), roster: roster)
+    }
 
     var body: some View {
         let org = organization
@@ -572,16 +662,30 @@ struct OvertimeLinesView: View {
             organization: org,
             range: (range.start, range.end),
             reviews: reviews,
-            requests: requests
+            requests: requests,
+            names: names,
+            jobs: jobRows
         )
         let bookingById = Dictionary(bookings.map { ($0.id.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
-        let pending = requests.filter { $0.isPending && $0.rangeStart <= range.end && $0.rangeEnd >= range.start }
+        let pending = requests
+            .filter { $0.isPending && $0.rangeStart <= range.end && $0.rangeEnd >= range.start }
+            .sorted { ($0.createdAtMs ?? 0) > ($1.createdAtMs ?? 0) }
+        let rangeReports = reports.filter { $0.rangeStart == range.start && $0.rangeEnd == range.end }
         let today = OvertimeScreenSupport.todayKey()
         // RULEBOOK 1.32.0 (option 2): tick, cross and cog up to the end of the current PAYE payrun.
         let editableUntil = CanonicalBusinessEngine.overtimeEditableUntil(org, todayKey: today)
         let modes = Dictionary(
             lines.map { ($0.id, editMode($0, todayKey: today, editableUntilKey: editableUntil)) },
             uniquingKeysWith: { first, _ in first }
+        )
+        let requestLines = lines.filter { modes[$0.id] == .request }
+        // RULEBOOK 1.33.0 button readiness: Send for approval and Generate overtime report.
+        let submit = CanonicalBusinessEngine.overtimeSubmitReady(lines: requestLines, choices: choices)
+        let generate = CanonicalBusinessEngine.overtimeGenerateReady(
+            lines: lines,
+            hasLineManager: hasLineManager,
+            choices: choices,
+            reports: rangeReports
         )
 
         OvertimeScreenScaffold(title: "Overtime · \(OvertimeScreenSupport.rangeTitle(range))") {
@@ -598,7 +702,13 @@ struct OvertimeLinesView: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(lines) { line in
-                lineCard(line, booking: bookingById[line.bookingId.lowercased()], mode: modes[line.id] ?? .readOnly, organization: org)
+                lineCard(
+                    line,
+                    booking: bookingById[line.bookingId.lowercased()],
+                    mode: modes[line.id] ?? .readOnly,
+                    organization: org,
+                    pendingSend: submit.bookingIds ?? []
+                )
             }
             if !lines.isEmpty {
                 Text("\(CanonicalBusinessEngine.overtimeText("OVERTIME_REPORT_TOTAL_LABEL", fallback: "Total overtime")): \(OvertimeScreenSupport.hours(CanonicalBusinessEngine.overtimeLinesTotal(lines)))")
@@ -612,26 +722,34 @@ struct OvertimeLinesView: View {
             }
 
             if scope == .mine {
-                if lines.contains(where: { modes[$0.id] == .request }) {
+                if !requestLines.isEmpty {
                     Button {
-                        Task { await sendForApproval(lines: lines, bookingById: bookingById, organization: org, modes: modes) }
+                        Task { await sendForApproval(lines: requestLines, organization: org, fallback: submit.message) }
                     } label: {
-                        primaryLabel(CanonicalBusinessEngine.overtimeText("OVERTIME_SEND_FOR_APPROVAL_LABEL", fallback: "Send for approval"), color: .green)
+                        primaryLabel(
+                            CanonicalBusinessEngine.overtimeText("OVERTIME_SEND_FOR_APPROVAL_LABEL", fallback: "Send for approval"),
+                            color: submit.ready ? .green : .gray
+                        )
                     }
-                    .disabled(busy || !isOnline)
+                    .disabled(busy || !submit.ready || !isOnline)
                     .accessibilityIdentifier("overtime.sendForApproval")
+                    if !submit.ready, let note = submit.message, !lines.isEmpty {
+                        Text(note).font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
-                let canReport = CanonicalBusinessEngine.canGenerateOvertimeReport(lines)
                 Button {
                     Task { await generateReport(lines: lines) }
                 } label: {
                     primaryLabel(
                         CanonicalBusinessEngine.overtimeText("OVERTIME_GENERATE_REPORT_LABEL", fallback: "Generate overtime report"),
-                        color: canReport ? .green : .gray
+                        color: generate.ready ? .green : .gray
                     )
                 }
-                .disabled(busy || !canReport || !isOnline)
+                .disabled(busy || !generate.ready || !isOnline)
                 .accessibilityIdentifier("overtime.generateReport")
+                if !generate.ready, let note = generate.message, !lines.isEmpty {
+                    Text(note).font(.footnote).foregroundStyle(.secondary)
+                }
                 ForEach(pending) { request in
                     Button("Withdraw request (\(OvertimeScreenSupport.rangeTitle(OvertimeDayRange(start: request.rangeStart, end: request.rangeEnd))))") {
                         Task { await run { try await firebaseBackend.withdrawOvertimeRequest(request) } }
@@ -642,30 +760,41 @@ struct OvertimeLinesView: View {
             if let message {
                 Text(message).font(.footnote)
             }
+            if !rangeReports.isEmpty {
+                savedReports(rangeReports, lines: lines)
+            }
         }
         .onAppear(perform: startListening)
         .onDisappear { listeners.stop() }
+        .task(id: subjectId) { await loadReports() }
         .sheet(item: $cog) { target in
             OvertimeCogSheet(booking: target.booking, organization: org) { start, end, multiplier in
                 cog = nil
-                let action = OvertimeAction.edit(start: start, end: end, multiplier: multiplier)
+                let event = OvertimeChoiceEvent.cog(start: start, end: end, multiplier: multiplier)
                 switch target.kind {
-                case .direct: Task { await direct(target.booking, action: action, organization: org) }
-                case .draft: draft[target.booking.id] = action
-                case .decision: decisions[target.booking.id] = action
+                case .direct:
+                    Task { await direct(target.booking, action: .edit(start: start, end: end, multiplier: multiplier), organization: org) }
+                case .choice:
+                    if let line = lines.first(where: { $0.bookingId.caseInsensitiveCompare(target.booking.id) == .orderedSame }) {
+                        choose(line, event: event)
+                    }
+                case .decision:
+                    if let next = CanonicalBusinessEngine.overtimeChoiceAfter(deciderChoices[target.booking.id], event: event) {
+                        deciderChoices[target.booking.id] = next
+                    }
                 }
             } onCancel: {
                 cog = nil
             }
         }
         .alert(
-            confirmCancel?.warning.title ?? "Remove this booking?",
-            isPresented: Binding(get: { confirmCancel != nil }, set: { if !$0 { confirmCancel = nil } }),
-            presenting: confirmCancel
+            confirmDelete?.warning.title ?? "Remove this booking?",
+            isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
+            presenting: confirmDelete
         ) { prompt in
-            Button(prompt.warning.back, role: .cancel) { confirmCancel = nil }
+            Button(prompt.warning.back, role: .cancel) { confirmDelete = nil }
             Button(prompt.warning.confirm, role: .destructive) {
-                confirmCancel = nil
+                confirmDelete = nil
                 prompt.apply()
             }
         } message: { prompt in
@@ -679,82 +808,84 @@ struct OvertimeLinesView: View {
     // MARK: Line card
 
     @ViewBuilder
-    private func lineCard(_ line: OvertimeLine, booking: OvertimeBookingInput?, mode: OvertimeEditMode, organization: [String: Any]) -> some View {
-        let proposal = draft[line.bookingId]
-        let preview: OvertimeRequestLine? = {
-            guard let booking, let proposal, proposal != .keep, proposal != .approve else { return nil }
-            return CanonicalBusinessEngine.overtimeRequestLineFields(booking, organization: organization, proposal: proposal, personIds: nil)?.line
-        }()
-        let cancelled = line.state == "cancelled"
-        // Look only: the picked choice is the unsent proposal, else the sent request line while it is still waiting,
-        // else a tick for a line the rulebook already reads as approved.
-        let sentLine: OvertimeRequestLine? = line.state == "waiting" ? line.requestLine : nil
-        let chosen = OvertimeLinesView.choice(proposal: proposal, sentLine: sentLine, state: line.state)
-        let afterLine: OvertimeRequestLine? = preview ?? ((proposal == nil && sentLine?.action != "keep") ? sentLine : nil)
-        let struck = afterLine != nil || chosen == .cross
+    private func lineCard(
+        _ line: OvertimeLine,
+        booking: OvertimeBookingInput?,
+        mode: OvertimeEditMode,
+        organization: [String: Any],
+        pendingSend: [String]
+    ) -> some View {
+        let choice: OvertimeChoice? = mode == .request ? CanonicalBusinessEngine.overtimeLineChoice(line, choices: choices) : nil
+        let look: OvertimeChoiceLook? = (booking != nil && choice != nil)
+            ? CanonicalBusinessEngine.overtimeChoiceView(choice, booking: booking, organization: organization, role: "person")
+            : nil
+        let locked = line.state == "waiting"
+        let gone = line.state == "cancelled" || line.state == "deleted"
+        let struck = gone || line.state == "returnedDeclined"
+        let returned = ["returnedApproved", "returnedChanged", "returnedDeclined"].contains(line.state)
+        let unsent = look.map { !$0.label.isEmpty && !locked && (!returned || pendingSend.contains(line.bookingId)) } ?? false
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(line.title)
                         .font(.body.weight(.semibold))
-                        .strikethrough(cancelled)
+                        .strikethrough(gone)
                     Text(lineDetail(line))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                // The old figure struck through on its own line, the new one under it (never overlapping on a phone).
+                // The old figure struck through on its own line, the new one under it (`overtimeChoiceView`).
                 OvertimeLineFigureStack(
-                    current: line.figures?.text,
-                    struck: struck,
-                    replacement: afterLine.map { $0.cancel ? "Booking cancelled" : OvertimeScreenSupport.hours($0.overtimeHoursAfter) }
+                    current: line.figures?.text ?? "0h",
+                    struck: struck || (look?.figureStruck ?? false) || line.figures == nil,
+                    replacement: look?.newFigure
                 )
                 .accessibilityIdentifier("overtime.line.figure")
             }
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(line.stateLabel)
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(stateColor(line.state).opacity(0.15), in: Capsule())
-                        .foregroundStyle(stateColor(line.state))
-                    if let proposal {
-                        Text("\(proposal.shortLabel) (not sent)")
+                    OvertimePill(text: line.stateLabel, color: stateColor(line.state))
+                    if unsent, let look {
+                        Text("\(look.label) (not sent)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer(minLength: 0)
-                if let booking, mode != .readOnly {
+                if let booking, mode == .direct {
                     OvertimeLineDecisionButtons(
-                        chosen: chosen,
+                        look: CanonicalBusinessEngine.overtimeChoiceView(nil, booking: booking, organization: organization, role: "person"),
                         crossLabel: "I didn't work these overtime hours",
-                        tickLabel: "Approve this line",
+                        tickLabel: "Confirm this line",
                         cogLabel: "Change start, finish or rate",
                         identifierPrefix: "overtime.line",
                         onCross: { onCross(line, booking: booking, mode: mode, organization: organization) },
                         onTick: { onTick(line, booking: booking, mode: mode, organization: organization) },
-                        onCog: { cog = OvertimeCogTarget(booking: booking, kind: mode == .direct ? .direct : .draft) }
+                        onCog: { cog = OvertimeCogTarget(booking: booking, kind: .direct) }
                     )
                     .disabled(busy || !isOnline)
+                } else if let booking, mode == .request, let look {
+                    OvertimeLineDecisionButtons(
+                        look: look,
+                        crossLabel: "I didn't work these overtime hours",
+                        tickLabel: "Confirm this line",
+                        cogLabel: "Change start, finish or rate",
+                        identifierPrefix: "overtime.line",
+                        onCross: { onCross(line, booking: booking, mode: mode, organization: organization) },
+                        onTick: { onTick(line, booking: booking, mode: mode, organization: organization) },
+                        onCog: { cog = OvertimeCogTarget(booking: booking, kind: .choice) }
+                    )
+                    .disabled(busy || locked || !isOnline)
                 }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
-        .opacity(cancelled ? 0.6 : 1)
-    }
-
-    /// The choice a line shows as picked (look only): the unsent proposal, else the sent request line while it is
-    /// still waiting, else a tick when the rulebook reads the line as approved.
-    static func choice(proposal: OvertimeAction?, sentLine: OvertimeRequestLine?, state: String) -> OvertimeLineChoice? {
-        if let proposal { return OvertimeLineChoice(proposal) }
-        if let sentLine, let sent = OvertimeLineChoice(requestAction: sentLine.action) { return sent }
-        return state == "approved" ? .tick : nil
+        .opacity(gone ? 0.6 : 1)
     }
 
     private func lineDetail(_ line: OvertimeLine) -> String {
@@ -766,12 +897,12 @@ struct OvertimeLinesView: View {
         return text
     }
 
+    /// The pill colour of a line state (as web `stateHue`): look only.
     private func stateColor(_ state: String) -> Color {
         switch state {
-        case "approved": return .green
-        case "needsReview": return .orange
-        case "changedSinceRequest": return PPColor.danger
-        case "cancelled": return .secondary
+        case "returnedApproved", "returnedChanged", "confirmed": return .green
+        case "returnedDeclined", "deleted", "cancelled": return PPColor.danger
+        case "needsReview", "reopened", "changedSinceRequest": return .orange
         default: return .blue
         }
     }
@@ -785,6 +916,43 @@ struct OvertimeLinesView: View {
             .foregroundStyle(.white)
     }
 
+    // MARK: Saved reports of this range (1.33.0: Out of date)
+
+    @ViewBuilder
+    private func savedReports(_ rangeReports: [OvertimeReportRecord], lines: [OvertimeLine]) -> some View {
+        Text("SAVED REPORTS FOR THIS RANGE")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.top, 8)
+        ForEach(rangeReports) { report in
+            let outOfDate = CanonicalBusinessEngine.overtimeReportOutOfDate(report, lines: lines)
+            Button {
+                Task { await share(report) }
+            } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    OvertimeTile(
+                        title: "\(OvertimeScreenSupport.hours(report.overtimeHours)) overtime",
+                        subtitle: "\(OvertimeScreenSupport.generatedText(report, users: userStore.organizationUsers)) · Share PDF"
+                    )
+                    if outOfDate {
+                        OvertimePill(
+                            text: CanonicalBusinessEngine.overtimeText("OVERTIME_REPORT_OUT_OF_DATE_LABEL", fallback: "Out of date"),
+                            color: .orange
+                        )
+                        .padding(.leading, 14)
+                        .accessibilityIdentifier("overtime.report.outOfDate")
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func share(_ report: OvertimeReportRecord) async {
+        let logo = await OvertimeReportPDF.loadLogo(firebaseBackend.currentOrganization?.companyLogoURL)
+        shareURL = OvertimeReportPDF.makeFile(report: report, logo: logo, users: userStore.organizationUsers)
+    }
+
     // MARK: Request review (Users' → person → Overtime)
 
     @ViewBuilder
@@ -795,107 +963,79 @@ struct OvertimeLinesView: View {
         requesterIds: [String]
     ) -> some View {
         let mayDecide = self.canDecide
-        // RULEBOOK 1.32.0: one Approve, enabled once any line is decided; it applies what this decider may.
-        let ready = CanonicalBusinessEngine.overtimeRequestAnyDecided(request, decisions: decisions)
-        // The same rule the approval transaction (and the security rules) apply, run on what this screen can read, so
-        // the button is never offered for an approval that would apply nothing, and each line shows its outcome.
-        let dryRun: OvertimeApprovalPlan? = {
-            guard ready else { return nil }
-            var live: [String: OvertimeBookingInput] = [:]
-            var unreadable: [String] = []
-            for line in request.lines {
-                if let booking = bookingById[line.bookingId.lowercased()] { live[line.bookingId] = booking } else { unreadable.append(line.bookingId) }
-            }
-            return CanonicalBusinessEngine.overtimeApprovalWrites(
-                request: request,
-                decisions: decisions,
-                bookings: live,
-                organization: organization,
-                deciderId: "preview",
-                requesterIds: requesterIds,
-                deciderIsAdmin: deciderIsAdmin,
-                writableBookingIds: live.values.filter { deciderCanWrite($0) }.map(\.id),
-                unreadableBookingIds: unreadable
-            )
-        }()
-        let blocked = dryRun?.refusalMessage
-        let outcomes = dryRun?.lineOutcomes ?? [:]
-        let applied = Set(request.appliedBookingIds.map { $0.lowercased() })
-        let openLines = request.lines.filter { !applied.contains($0.bookingId.lowercased()) }
+        let done = Set((request.appliedBookingIds + request.droppedBookingIds).map { $0.lowercased() })
+        let openLines = request.lines.filter { !done.contains($0.bookingId.lowercased()) }
+        // Bookings this screen cannot read, or that are not theirs, are left out of the Return (named) and never block it.
+        let skip = request.lines.filter { line in
+            guard let booking = bookingById[line.bookingId.lowercased()] else { return true }
+            return !CanonicalBusinessEngine.overtimeBookingIsTheirs(booking, personIds: requesterIds)
+        }.map(\.bookingId)
+        let decisions = deciderDecisions(request)
+        // RULEBOOK 1.33.0: Return overtime is green only once every waiting line is decided.
+        let ready = CanonicalBusinessEngine.overtimeReturnReady(request, decisions: decisions, skipBookingIds: skip)
         VStack(alignment: .leading, spacing: 10) {
             Text("Overtime request · \(OvertimeScreenSupport.rangeTitle(OvertimeDayRange(start: request.rangeStart, end: request.rangeEnd)))")
                 .font(.body.weight(.semibold))
             ForEach(openLines, id: \.bookingId) { line in
                 let booking = bookingById[line.bookingId.lowercased()]
-                let outcomeLabel = lineOutcomeLabel(line, booking: booking, outcomes: outcomes, requesterIds: requesterIds)
-                let decision = decisions[line.bookingId]
-                let chosen = decision.map { OvertimeLineChoice($0) }
-                // The decider's ✕ or ⚙ as the hours it leaves (the same `overtimeRequestLineFields` the person's own
-                // lines preview with), under the asked figure struck through.
-                let decided: OvertimeRequestLine? = {
-                    guard let booking, let decision, decision != .keep, decision != .approve else { return nil }
-                    return CanonicalBusinessEngine.overtimeRequestLineFields(booking, organization: organization, proposal: decision, personIds: nil)?.line
-                }()
+                let theirs = booking.map { CanonicalBusinessEngine.overtimeBookingIsTheirs($0, personIds: requesterIds) } ?? false
+                let look: OvertimeChoiceLook? = booking.map {
+                    CanonicalBusinessEngine.overtimeChoiceView(deciderChoices[line.bookingId], booking: $0, organization: organization, role: "decider")
+                }
+                let stale = booking.map { CanonicalBusinessEngine.overtimeLineIsStale(storedFingerprint: line.fingerprint, booking: $0) } ?? false
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .top, spacing: 12) {
-                        Text(describe(line) + decisionSuffix(line) + bookingNote(booking, requesterIds: requesterIds))
+                        Text(describe(line) + bookingNote(booking, theirs: theirs))
                             .font(.footnote)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 8)
-                        OvertimeLineFigureStack(
-                            current: line.cancel ? nil : OvertimeScreenSupport.hours(line.overtimeHoursAfter),
-                            struck: decided != nil || chosen == .cross,
-                            replacement: decided.map { $0.cancel ? "Booking cancelled" : OvertimeScreenSupport.hours($0.overtimeHoursAfter) }
-                        )
-                        .accessibilityIdentifier("overtime.review.figure")
-                    }
-                    if let outcomeLabel {
-                        Text(outcomeLabel)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Color.orange.opacity(0.15), in: Capsule())
-                            .foregroundStyle(Color.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("overtime.lineOutcome")
-                    }
-                    if mayDecide {
-                        HStack(spacing: 8) {
-                            Spacer(minLength: 0)
-                            if let booking {
-                                OvertimeLineDecisionButtons(
-                                    chosen: chosen,
-                                    crossLabel: "Remove the overtime",
-                                    tickLabel: "Approve as asked",
-                                    cogLabel: "Counter-change",
-                                    identifierPrefix: "overtime.review",
-                                    onCross: { strike(booking, organization: organization) { decisions[line.bookingId] = .strike } },
-                                    onTick: { decisions[line.bookingId] = .approve },
-                                    onCog: { cog = OvertimeCogTarget(booking: booking, kind: .decision) }
-                                )
-                            } else {
-                                Button("OK") { decisions[line.bookingId] = .approve }
-                                    .buttonStyle(.bordered)
-                            }
+                        if let look, look.cog == "filled", let newFigure = look.newFigure {
+                            OvertimeLineFigureStack(current: look.oldFigure, struck: true, replacement: newFigure)
+                                .accessibilityIdentifier("overtime.review.figure")
                         }
-                        .disabled(busy || !isOnline)
+                    }
+                    HStack(spacing: 8) {
+                        if let look, !look.label.isEmpty {
+                            OvertimePill(
+                                text: look.label,
+                                color: look.cross == "filled" ? PPColor.danger : (look.tick == "filled" ? .green : .orange)
+                            )
+                        }
+                        if stale && theirs, let label = CanonicalBusinessEngine.overtimeLineOutcomeLabel("stale") {
+                            OvertimePill(text: label, color: .orange)
+                                .accessibilityIdentifier("overtime.lineOutcome")
+                        }
+                        Spacer(minLength: 0)
+                        if mayDecide, let booking, theirs, let look {
+                            OvertimeLineDecisionButtons(
+                                look: look,
+                                crossLabel: "Decline this line",
+                                tickLabel: "Approve this line",
+                                cogLabel: "Change start, finish or rate",
+                                identifierPrefix: "overtime.review",
+                                onCross: { decide(line.bookingId, event: .cross) },
+                                onTick: { decide(line.bookingId, event: .tick) },
+                                onCog: { cog = OvertimeCogTarget(booking: booking, kind: .decision) }
+                            )
+                            .disabled(busy || !isOnline)
+                        }
                     }
                 }
             }
             if mayDecide {
-                if let blocked {
-                    Text(blocked).font(.footnote).foregroundStyle(PPColor.danger)
+                if !ready.ready, let note = ready.message {
+                    Text(note).font(.footnote).foregroundStyle(.secondary)
                 }
                 Button {
-                    Task { await approve(request, organization: organization, requesterIds: requesterIds, bookingById: bookingById) }
+                    Task { await returnRequest(request, decisions: decisions, organization: organization, requesterIds: requesterIds) }
                 } label: {
                     primaryLabel(
-                        CanonicalBusinessEngine.overtimeText("OVERTIME_APPROVE_LABEL", fallback: "Approve"),
-                        color: ready && blocked == nil ? .green : .gray
+                        CanonicalBusinessEngine.overtimeText("OVERTIME_RETURN_LABEL", fallback: "Return overtime"),
+                        color: ready.ready ? .green : .gray
                     )
                 }
-                .disabled(!ready || busy || blocked != nil || !isOnline)
-                .accessibilityIdentifier("overtime.approveRequest")
+                .disabled(!ready.ready || busy || !isOnline)
+                .accessibilityIdentifier("overtime.returnRequest")
             } else {
                 Text("Waiting for their line manager or an admin.").font(.footnote).foregroundStyle(.secondary)
             }
@@ -905,48 +1045,38 @@ struct OvertimeLinesView: View {
         .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
+    /// The decider's finished choices as decisions (`overtimeChoiceDecision`: ✓ approve, ⚙ + ✓ edit, ✕ strike).
+    private func deciderDecisions(_ request: OvertimeRequestRecord) -> [String: OvertimeAction] {
+        var decisions: [String: OvertimeAction] = [:]
+        for line in request.lines {
+            if let decision = CanonicalBusinessEngine.overtimeChoiceDecision(deciderChoices[line.bookingId]) {
+                decisions[line.bookingId] = decision
+            }
+        }
+        return decisions
+    }
+
+    /// The person's request line in words (as web `RequestReview`'s describe): the figures are the stored line's.
     private func describe(_ line: OvertimeRequestLine) -> String {
         let day = CanonicalBusinessEngine.formatPayePayrunDay(line.dayKey)
         let before = OvertimeScreenSupport.hours(line.overtimeHoursBefore)
         let after = OvertimeScreenSupport.hours(line.overtimeHoursAfter)
-        if line.cancel { return "\(day) · Asks to remove the booking" }
+        if line.cancel { return "\(day) · Not worked — asks to remove the booking" }
         if line.action == "edit" {
             let rate = line.proposedMultiplier.map { " at ×\(ScheduleCoverageFormat.hours($0))" } ?? ""
-            return "\(day) · Asks \(line.proposedStart ?? "")–\(line.proposedEnd ?? "")\(rate): \(before) → \(after)"
+            return "\(day) · Changed to \(line.proposedStart ?? "")–\(line.proposedEnd ?? "")\(rate): \(before) → \(after)"
         }
         if line.action == "strike" {
-            return "\(day) · Asks to trim to \(line.proposedStart ?? "")–\(line.proposedEnd ?? ""): \(before) → \(after)"
+            return "\(day) · Not worked — trim to \(line.proposedStart ?? "")–\(line.proposedEnd ?? ""): \(before) → \(after)"
         }
-        return "\(day) · Approve as booked: \(before)"
+        return "\(day) · Confirmed as booked: \(before)"
     }
 
-    private func decisionSuffix(_ line: OvertimeRequestLine) -> String {
-        guard let decision = decisions[line.bookingId] else { return "" }
-        switch decision {
-        case .keep, .approve: return " · ticked"
-        case .strike: return " · crossed"
-        case .edit(let start, let end, _): return " · changed to \(start)–\(end)"
+    private func bookingNote(_ booking: OvertimeBookingInput?, theirs: Bool) -> String {
+        guard booking != nil else {
+            return " · " + CanonicalBusinessEngine.overtimeText("OVERTIME_BOOKING_UNREADABLE_MESSAGE", fallback: "Can't read this booking — it is left out of this Return.")
         }
-    }
-
-    /// `overtimeLineOutcomeLabel` ("Needs an admin", "Changed since the request — …") of the approval dry run, on a
-    /// decided line of the requester's (unreadable and not-theirs lines already say so in `bookingNote`), as web.
-    private func lineOutcomeLabel(
-        _ line: OvertimeRequestLine,
-        booking: OvertimeBookingInput?,
-        outcomes: [String: String],
-        requesterIds: [String]
-    ) -> String? {
-        guard decisions[line.bookingId] != nil, let booking,
-              CanonicalBusinessEngine.overtimeBookingIsTheirs(booking, personIds: requesterIds) else { return nil }
-        return CanonicalBusinessEngine.overtimeLineOutcomeLabel(outcomes[line.bookingId])
-    }
-
-    private func bookingNote(_ booking: OvertimeBookingInput?, requesterIds: [String]) -> String {
-        guard let booking else {
-            return " · " + CanonicalBusinessEngine.overtimeText("OVERTIME_BOOKING_UNREADABLE_MESSAGE", fallback: "Can't read this booking — it is left out of this approval.")
-        }
-        if !CanonicalBusinessEngine.overtimeBookingIsTheirs(booking, personIds: requesterIds) {
+        if !theirs {
             return " · " + CanonicalBusinessEngine.overtimeText("OVERTIME_NOT_THEIR_BOOKING_MESSAGE", fallback: "This booking is not theirs — it is left out.")
         }
         return ""
@@ -955,7 +1085,7 @@ struct OvertimeLinesView: View {
     // MARK: Who (rulebook answers)
 
     private func editMode(_ line: OvertimeLine, todayKey: String, editableUntilKey: String) -> OvertimeEditMode {
-        guard scope == .mine, line.state != "cancelled", let viewer = viewerUser, let subject else { return .readOnly }
+        guard scope == .mine, line.state != "cancelled", line.state != "deleted", let viewer = viewerUser, let subject else { return .readOnly }
         var booking: [String: Any] = ["collection": line.collection, "dayKey": line.dayKey]
         if line.collection == "managerSiteBookings" {
             booking["userId"] = subjectId
@@ -987,30 +1117,6 @@ struct OvertimeLinesView: View {
         )
     }
 
-    private var deciderIsAdmin: Bool {
-        guard let viewer = viewerUser else { return false }
-        return CanonicalBusinessEngine.overtimeDeciderIsAdmin(RulebookPeople.person(viewer))
-    }
-
-    /// `canWriteBooking` for the decider (§16: an admin writes every booking; a line manager the jobs they manage).
-    private func deciderCanWrite(_ booking: OvertimeBookingInput) -> Bool {
-        guard let viewer = viewerUser else { return false }
-        var row: [String: Any] = ["collection": booking.collection]
-        if booking.collection == "managerSiteBookings" {
-            row["userId"] = booking.personId
-            row["locationType"] = booking.jobId == nil ? "office" : "project"
-            row["locationId"] = RulebookJSON.orNull(booking.jobId)
-        } else {
-            row["projectId"] = RulebookJSON.orNull(booking.jobId)
-        }
-        return CanonicalBusinessEngine.canWriteBooking(
-            userStore.jobAccessViewer(for: viewer),
-            booking: row,
-            job: booking.jobId.flatMap { JobAccessContext.jobFieldsById[$0.lowercased()] },
-            managers: JobAccessContext.managers
-        )
-    }
-
     // MARK: Actions
 
     private func startListening() {
@@ -1036,6 +1142,10 @@ struct OvertimeLinesView: View {
         }
     }
 
+    private func loadReports() async {
+        reports = (try? await firebaseBackend.loadOvertimeReports(userId: subjectId)) ?? []
+    }
+
     private func run(_ work: () async throws -> Void) async {
         busy = true
         message = nil
@@ -1047,7 +1157,7 @@ struct OvertimeLinesView: View {
         busy = false
     }
 
-    /// The red X: `overtimeStrikeOutcome` — trim, cancel after `OVERTIME_CANCEL_WARNING`, or not allowed.
+    /// The person's red X: `overtimeStrikeOutcome` — trim, delete after `OVERTIME_DELETE_WARNING` (1.33.0), or not allowed.
     private func strike(_ booking: OvertimeBookingInput, organization: [String: Any], apply: @escaping () -> Void) {
         guard let outcome = CanonicalBusinessEngine.overtimeStrikeOutcome(booking, organization: organization) else { return }
         switch outcome.kind {
@@ -1055,19 +1165,34 @@ struct OvertimeLinesView: View {
             message = outcome.message
         case "none":
             message = "Nothing on this booking is outside the working day."
-        case "cancel":
-            if let warning = outcome.warning ?? CanonicalBusinessEngine.overtimeCancelWarning {
-                confirmCancel = OvertimeCancelPrompt(warning: warning, apply: apply)
+        case "delete":
+            if let warning = outcome.warning ?? CanonicalBusinessEngine.overtimeDeleteWarning {
+                confirmDelete = OvertimeDeletePrompt(warning: warning, apply: apply)
             }
         default:
             apply()
         }
     }
 
+    /// One ✓ ✕ ⚙ event on the person's line (`overtimeChoiceAfter` from `overtimeLineChoice`).
+    private func choose(_ line: OvertimeLine, event: OvertimeChoiceEvent) {
+        let current = CanonicalBusinessEngine.overtimeLineChoice(line, choices: choices)
+        if let next = CanonicalBusinessEngine.overtimeChoiceAfter(current, event: event) {
+            choices[line.bookingId] = next
+        }
+    }
+
+    /// One ✓ ✕ ⚙ event on a decider's line.
+    private func decide(_ bookingId: String, event: OvertimeChoiceEvent) {
+        if let next = CanonicalBusinessEngine.overtimeChoiceAfter(deciderChoices[bookingId], event: event) {
+            deciderChoices[bookingId] = next
+        }
+    }
+
     private func onTick(_ line: OvertimeLine, booking: OvertimeBookingInput, mode: OvertimeEditMode, organization: [String: Any]) {
         switch mode {
         case .direct: Task { await direct(booking, action: .approve, organization: organization) }
-        case .request: draft[line.bookingId] = .keep
+        case .request: choose(line, event: .tick)
         case .readOnly: break
         }
     }
@@ -1077,16 +1202,21 @@ struct OvertimeLinesView: View {
         case .direct:
             strike(booking, organization: organization) { Task { await direct(booking, action: .strike, organization: organization) } }
         case .request:
-            strike(booking, organization: organization) { draft[line.bookingId] = .strike }
+            // Clearing a ✕ needs no warning; setting one on an all-overtime day does.
+            if CanonicalBusinessEngine.overtimeLineChoice(line, choices: choices)?.mark == "cross" {
+                choose(line, event: .cross)
+            } else {
+                strike(booking, organization: organization) { choose(line, event: .cross) }
+            }
         case .readOnly: break
         }
     }
 
-    /// A direct change (`overtimeDirectWrites`); `booking_hours_changed_by_owner` when the booking changed.
+    /// A direct change (`overtimeDirectWrites`); `booking_hours_changed_by_owner` when the booking changed or was deleted.
     private func direct(_ booking: OvertimeBookingInput, action: OvertimeAction, organization: [String: Any]) async {
         guard let subject else { return }
         await run {
-            guard let changed = try await firebaseBackend.applyDirectOvertime(
+            guard let plan = try await firebaseBackend.applyDirectOvertime(
                 booking: booking,
                 action: action,
                 person: subject,
@@ -1095,39 +1225,32 @@ struct OvertimeLinesView: View {
                 message = "That change is not allowed on this booking."
                 return
             }
-            if changed {
+            if plan.hoursChanged {
                 let job = booking.jobId.flatMap { JobAccessContext.jobFieldsById[$0.lowercased()] }
                 await notificationService.notifyBookingHoursChangedByOwner(
                     owner: subject,
                     booking: booking,
-                    jobManagerIds: CanonicalBusinessEngine.overtimeJobManagerIds(job)
+                    jobManagerIds: CanonicalBusinessEngine.overtimeJobManagerIds(job),
+                    removed: plan.bookingDelete != nil
                 )
             }
         }
     }
 
-    private func sendForApproval(
-        lines: [OvertimeLine],
-        bookingById: [String: OvertimeBookingInput],
-        organization: [String: Any],
-        modes: [String: OvertimeEditMode]
-    ) async {
+    /// Send for approval (1.33.0): the request lines are `overtimeSubmitLines` (only lines marked or changed since the
+    /// Return); then `overtime_request_submitted` to the line managers and admins.
+    private func sendForApproval(lines: [OvertimeLine], organization: [String: Any], fallback: String?) async {
         guard let subject else { return }
         let ids = personIds
-        var requestLines: [[String: Any]] = []
-        for line in lines where modes[line.id] == .request {
-            guard let booking = bookingById[line.bookingId.lowercased()] else { continue }
-            if let built = CanonicalBusinessEngine.overtimeRequestLineFields(
-                booking,
-                organization: organization,
-                proposal: draft[line.bookingId] ?? .keep,
-                personIds: ids
-            ) {
-                requestLines.append(built.raw)
-            }
-        }
-        guard !requestLines.isEmpty else {
-            message = CanonicalBusinessEngine.overtimeText("OVERTIME_NO_LINES_MESSAGE", fallback: "There is no overtime in this range.")
+        let built = CanonicalBusinessEngine.overtimeSubmitLines(
+            lines: lines,
+            choices: choices,
+            bookings: bookings,
+            organization: organization,
+            personIds: ids
+        )
+        guard !built.lines.isEmpty else {
+            message = fallback ?? CanonicalBusinessEngine.overtimeText("OVERTIME_NO_LINES_MESSAGE", fallback: "There is no overtime in this range.")
             return
         }
         await run {
@@ -1135,7 +1258,7 @@ struct OvertimeLinesView: View {
                 requester: subject,
                 rangeStart: range.start,
                 rangeEnd: range.end,
-                lines: requestLines,
+                lines: built.lines,
                 existing: requests,
                 personIds: ids,
                 bookings: bookings
@@ -1143,7 +1266,7 @@ struct OvertimeLinesView: View {
                 message = CanonicalBusinessEngine.overtimeText("OVERTIME_NO_LINES_MESSAGE", fallback: "There is no overtime in this range.")
                 return
             }
-            draft = [:]
+            choices = [:]
             await notificationService.notifyOvertimeRequestSubmitted(
                 requester: subject,
                 requestId: requestId,
@@ -1154,34 +1277,29 @@ struct OvertimeLinesView: View {
         }
     }
 
-    private func approve(
+    /// Return overtime (1.33.0, one transaction from `overtimeReturnWrites`), then "… has returned your overtime request".
+    private func returnRequest(
         _ request: OvertimeRequestRecord,
+        decisions: [String: OvertimeAction],
         organization: [String: Any],
-        requesterIds: [String],
-        bookingById: [String: OvertimeBookingInput]
+        requesterIds: [String]
     ) async {
         guard let viewer = viewerUser else { return }
-        let writable = Set(bookingById.values.filter { deciderCanWrite($0) }.map { $0.id.lowercased() })
-        let isAdmin = deciderIsAdmin
-        let chosen = decisions
         await run {
-            let result = try await firebaseBackend.approveOvertimeRequest(
+            let result = try await firebaseBackend.returnOvertimeRequest(
                 requestId: request.id,
-                decisions: chosen,
+                decisions: decisions,
                 organization: organization,
-                deciderId: viewer.id,
-                requesterIds: requesterIds,
-                deciderIsAdmin: isAdmin,
-                canWriteBooking: { writable.contains($0.id.lowercased()) }
+                deciderId: firebaseBackend.auth.currentUser?.uid ?? viewer.id,
+                requesterIds: requesterIds
             )
-            decisions = [:]
-            await notificationService.notifyOvertimeRequestReviewed(
+            deciderChoices = [:]
+            await notificationService.notifyOvertimeReturned(
                 requesterId: result.requesterUserId.isEmpty ? request.userId : result.requesterUserId,
                 requestId: request.id,
-                complete: result.complete,
-                summary: result.message
+                rangeStart: result.rangeStart.isEmpty ? request.rangeStart : result.rangeStart
             )
-            // RULEBOOK 1.32.0 `reviewApprovalMessage`: "Approved 2 of 5. …".
+            // RULEBOOK 1.33.0 `overtimeReturnMessage`: "Returned 5 lines. …".
             message = result.message
         }
     }
@@ -1197,23 +1315,40 @@ struct OvertimeLinesView: View {
                 rangeEnd: range.end,
                 lines: lines
             ) else { return }
+            reports.insert(report, at: 0)
             let logo = await OvertimeReportPDF.loadLogo(firebaseBackend.currentOrganization?.companyLogoURL)
-            shareURL = OvertimeReportPDF.makeFile(report: report, logo: logo)
+            shareURL = OvertimeReportPDF.makeFile(report: report, logo: logo, users: userStore.organizationUsers)
             message = "Report saved. Send it to payroll yourself."
         }
     }
 }
 
-/// Which change the cog makes: the person's own booking directly, a request proposal, or the decider's counter-change.
+/// A small coloured state pill (look only).
+struct OvertimePill: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.15), in: Capsule())
+            .foregroundStyle(color)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Which change the cog makes: the person's own booking directly, the person's choice, or the decider's choice.
 struct OvertimeCogTarget: Identifiable {
-    enum Kind { case direct, draft, decision }
+    enum Kind { case direct, choice, decision }
     let booking: OvertimeBookingInput
     let kind: Kind
     var id: String { "\(booking.lookupKey)|\(kind)" }
 }
 
-/// The red X cancel warning waiting for "Remove booking".
-struct OvertimeCancelPrompt {
+/// The red X delete warning (`OVERTIME_DELETE_WARNING`) waiting for "Remove booking".
+struct OvertimeDeletePrompt {
     let warning: OvertimeStrikeOutcome.Warning
     let apply: () -> Void
 }
@@ -1418,9 +1553,9 @@ struct OvertimeCogSheet: View {
 
 // MARK: - Report PDF
 
-/// The overtime report PDF, rebuilt from the saved copy (`overtimeReportRows`): company name and logo, the person, the
-/// range, one row per day and job (final figures, hours only) and the total. Drawn by `OvertimeReportPDFBuilder` in the
-/// invoice / timesheet PDF style.
+/// The overtime report PDF, rebuilt from the saved copy: RULEBOOK 1.33.0 every text is `overtimeReportRows` (header,
+/// generated by / at, columns, rows, a declined line's note, total, footer, out-of-date note). Drawn by
+/// `OvertimeReportPDFBuilder` in the invoice / timesheet PDF style.
 enum OvertimeReportPDF {
     static func loadLogo(_ urlString: String?) async -> UIImage? {
         guard let urlString, let url = URL(string: urlString), !urlString.isEmpty else { return nil }
@@ -1428,22 +1563,11 @@ enum OvertimeReportPDF {
         return UIImage(data: result.0)
     }
 
-    static func makeFile(report: OvertimeReportRecord, logo: UIImage?) -> URL? {
-        guard let rows = CanonicalBusinessEngine.overtimeReportRows(report.raw) else { return nil }
-        let savedLines = (report.raw["lines"] as? [Any])?.compactMap { $0 as? [String: Any] }
-        let total = OvertimeReportPDFLayout.splitTotal(rows.total)
-        let data = OvertimeReportPDFBuilder.makeData(OvertimeReportPDFBuilder.Content(
-            title: OvertimeReportPDFLayout.documentTitle(rows.title),
-            companyName: report.companyName,
-            personName: report.userName,
-            period: rows.subtitle,
-            generated: OvertimeReportPDFLayout.generatedText(ms: report.generatedAtMs),
-            rows: OvertimeReportPDFLayout.tableRows(savedLines: savedLines, rulebookRows: rows.rows),
-            totalLabel: total.label,
-            totalValue: total.value,
-            emptyMessage: CanonicalBusinessEngine.overtimeText("OVERTIME_NO_LINES_MESSAGE", fallback: "There is no overtime in this range."),
-            logo: logo
-        ))
+    @MainActor
+    static func makeFile(report: OvertimeReportRecord, logo: UIImage?, users: [AppUser]) -> URL? {
+        let generatorName = OvertimeScreenSupport.generatorName(report.raw["generatedBy"] as? String, users: users)
+        guard let rows = CanonicalBusinessEngine.overtimeReportRows(report.raw, generatedByName: generatorName) else { return nil }
+        let data = OvertimeReportPDFBuilder.makeData(OvertimeReportPDFBuilder.Content(rows, logo: logo))
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("overtime-\(report.rangeStart)-\(report.rangeEnd).pdf")
         do {
             try data.write(to: url, options: .atomic)
