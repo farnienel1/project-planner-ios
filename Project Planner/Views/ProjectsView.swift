@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 
 /// Row token. Putting the whole `Project` in the navigation path crashes when the list is built.
 private struct OpenedProjectToken: Hashable {

@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import FirebaseAuth
 @preconcurrency import FirebaseFirestore
 
 extension FirebaseBackend {
