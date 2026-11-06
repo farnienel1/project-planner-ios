@@ -4263,7 +4263,8 @@ class FirebaseBackend: ObservableObject {
                 firstName: storedText("firstName") ?? "",
                 surname: storedText("surname") ?? storedText("lastName") ?? "",
                 isActive: firestoreUserIsActive(from: data),
-                passwordSet: true
+                // RULEBOOK 1.34.0 §11: a ghost has no login.
+                passwordSet: firestoreBool(data["ghost"]) == true ? (firestoreBool(data["passwordSet"]) ?? false) : true
             )
             fallback.documentName = data["name"] as? String ?? ""
             fallback.documentDisplayName = data["displayName"] as? String ?? ""
@@ -4304,7 +4305,8 @@ class FirebaseBackend: ObservableObject {
             surname: row.text("surname"),
             mobileNumber: row.optionalText("mobileNumber"),
             isActive: row.bool("isActive", default: true),
-            passwordSet: row.bool("passwordSet", default: true),
+            // RULEBOOK 1.34.0 §11: a ghost has no login, so a missing `passwordSet` never reads as signed up for one.
+            passwordSet: row.bool("ghost") ? (firestoreBool(data["passwordSet"]) ?? false) : row.bool("passwordSet", default: true),
             permissions: permissions,
             isSuperAdmin: row.bool("isSuperAdmin"),
             policyAccepted: row.bool("policyAccepted"),
@@ -4350,6 +4352,9 @@ class FirebaseBackend: ObservableObject {
         // RULEBOOK 1.30.0 §26 (web `homeOrganizationId`): the organisation the users document stores, before any
         // reader fills `organizationId` with the open organisation. The price work approver check reads this.
         parsed.storedOrganizationId = organizationIdFromFirestore(data["organizationId"])
+        // RULEBOOK 1.34.0 §11: a ghost operative (`email: ''`, no login) and a converted row's kept-aside email.
+        parsed.isGhost = row.bool("ghost")
+        parsed.inviteEmailHint = row.optionalText("inviteEmailHint")
         return parsed
     }
 

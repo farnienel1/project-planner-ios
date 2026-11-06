@@ -45,7 +45,9 @@ enum UserTimesheetAccessRulebook {
                     "role": rolePayload(member),
                     "assignedManagerUserIds": member.assignedManagerUserIds,
                     "assignedManagerUserId": member.assignedManagerUserId ?? NSNull(),
-                    "hasNoLineManager": member.hasNoLineManager
+                    "hasNoLineManager": member.hasNoLineManager,
+                    // RULEBOOK 1.34.0 §8: a ghost operative has no timesheets, live or exported.
+                    "ghost": member.isGhost
                 ]
             }
         ]

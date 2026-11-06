@@ -1682,6 +1682,8 @@ class UserStore: ObservableObject {
             ],
             "formerUserIds": user.formerUserIds,
             "sameEmailUserIds": user.sameEmailUserIds,
+            // RULEBOOK 1.34.0 §11: a ghost has only its users document (no tax ids, membership or members entry).
+            "ghost": user.isGhost,
         ]
     }
 
@@ -2169,10 +2171,14 @@ class UserStore: ObservableObject {
                         email: emailRaw,
                         userStore: self
                     )
-                    let invitationRows: [[String: Any]] = try await InvitationDocument
-                        .fetch(invitationLookups, db: db, source: .server)
-                        .rows
-                        .map { ["id": $0.documentID, "email": ($0.data()["email"] as? String) ?? emailNormalized] }
+                    // RULEBOOK 1.34.0 §11: a ghost that was never invited has no email, so no invitation to look up.
+                    var invitationRows: [[String: Any]] = []
+                    if !emailRaw.isEmpty {
+                        invitationRows = try await InvitationDocument
+                            .fetch(invitationLookups, db: db, source: .server)
+                            .rows
+                            .map { ["id": $0.documentID, "email": ($0.data()["email"] as? String) ?? emailNormalized] }
+                    }
                     let membersMap = firebaseBackend.organizationMembersSnapshot.flatMap {
                         organizationIdsMatch($0.organizationId, organizationId) ? $0.members : nil
                     }

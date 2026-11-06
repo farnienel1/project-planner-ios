@@ -541,6 +541,13 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// RULEBOOK 1.9.0: the `parseUserDocument` `annualLeaveStored` keys (`daysPerYear`, `startMonth`, `endMonth`,
     /// `carriesOver`) the user document stores itself, for `CanonicalBusinessEngine.annualLeavePendingOmitFields`. Not encoded.
     var annualLeaveStoredKeys: [String] = []
+    /// RULEBOOK 1.34.0 §11 (`parseUserDocument.ghost`): a ghost operative — bookable, no app login, no email, no phone,
+    /// always self-employed. Stored as `users/{uid}.ghost: true`; written only by `ghostCreateWrites` (and the owner's
+    /// conversion script). An admin's Give app access keeps it true until the invitation is accepted.
+    var isGhost: Bool = false
+    /// RULEBOOK 1.34.0 §11 (`parseUserDocument.inviteEmailHint`): the email a converted no-login `operatives` row had,
+    /// kept aside for Give app access. Never an email claim; nil for everyone else.
+    var inviteEmailHint: String? = nil
     
     init(
         id: String,
@@ -667,6 +674,7 @@ extension AppUser {
         case documentName, documentDisplayName, formerUserIds, documentUpdatedAt
         case status, payBasis, profilePhotoUpdatedAt, operativeModeStored, storedLevelFlags, storedRoleText
         case storedOrganizationId
+        case isGhost, inviteEmailHint
     }
 
     init(from decoder: Decoder) throws {
@@ -720,6 +728,8 @@ extension AppUser {
         operativeModeStored = try container.decodeIfPresent(Bool.self, forKey: .operativeModeStored) ?? permissions.operativeMode
         storedLevelFlags = try container.decodeIfPresent([String: Bool].self, forKey: .storedLevelFlags)
         storedRoleText = try container.decodeIfPresent(String.self, forKey: .storedRoleText)
+        isGhost = try container.decodeIfPresent(Bool.self, forKey: .isGhost) ?? false
+        inviteEmailHint = try container.decodeIfPresent(String.self, forKey: .inviteEmailHint)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -772,6 +782,8 @@ extension AppUser {
         try container.encode(operativeModeStored, forKey: .operativeModeStored)
         try container.encodeIfPresent(storedLevelFlags, forKey: .storedLevelFlags)
         try container.encodeIfPresent(storedRoleText, forKey: .storedRoleText)
+        try container.encode(isGhost, forKey: .isGhost)
+        try container.encodeIfPresent(inviteEmailHint, forKey: .inviteEmailHint)
     }
 
     /// Timesheets when `timesheetsEnabled` is not stored: the rulebook's `defaultTimesheetsEnabled` (RULEBOOK 1.6.0 §8).
@@ -801,6 +813,8 @@ extension AppUser {
             "employmentType": employmentType.rawValue,
             "employmentTypeTransitionFrom": employmentTypeTransitionFrom?.rawValue ?? NSNull(),
             "employmentTypeEffectiveAt": employmentTypeEffectiveAt.map { $0.timeIntervalSince1970 * 1000 } ?? NSNull(),
+            // RULEBOOK 1.34.0 §8: a ghost operative never takes part in timesheets.
+            "ghost": isGhost,
         ]
         return CanonicalBusinessEngine.callJSON(
             "timesheetParticipant",
