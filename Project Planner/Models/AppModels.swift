@@ -650,7 +650,7 @@ struct AppUser: Identifiable, Codable, Hashable {
 
     /// `CanonicalBusinessEngine.rosterSegment`. Nil when the script did not run.
     var rosterSegment: UserRosterSegment? {
-        guard let raw = CanonicalBusinessEngine.rosterSegment(self) else { return nil }
+        guard let raw = GhostRulebook.segment(self) else { return nil }
         return UserRosterSegment(canonicalSegment: raw)
     }
 }

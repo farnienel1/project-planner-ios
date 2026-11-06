@@ -39,11 +39,11 @@ struct ManagersView: View {
     private var filteredManagers: [AppUser] {
         var managers = allManagers
         
-        managers = CanonicalBusinessEngine.listedRosterUsers(
+        managers = GhostRulebook.listed(
             managers,
             claimedEmails: userStore.organizationUserEmailClaims
         ) ?? []
-        managers = managers.filter { CanonicalBusinessEngine.rosterSegment($0) == rosterSegment.canonicalSegment }
+        managers = managers.filter { GhostRulebook.segment($0) == rosterSegment.canonicalSegment }
         
         // Filter by search text
         guard !filterText.isEmpty else { return managers }
@@ -169,11 +169,11 @@ struct ManagersView: View {
     
     /// Header numbers. Same `listedRosterUsers` / `rosterSegment` calls the list itself uses, before the search filter.
     private var managerRosterCounts: ManagersRosterCounts {
-        let listed = CanonicalBusinessEngine.listedRosterUsers(
+        let listed = GhostRulebook.listed(
             allManagers,
             claimedEmails: userStore.organizationUserEmailClaims
         ) ?? []
-        let segments = listed.map { CanonicalBusinessEngine.rosterSegment($0) }
+        let segments = listed.map { GhostRulebook.segment($0) }
         return ManagersRosterCounts(
             active: segments.filter { $0 == UserRosterSegment.active.canonicalSegment }.count,
             inactive: segments.filter { $0 == UserRosterSegment.inactive.canonicalSegment }.count,

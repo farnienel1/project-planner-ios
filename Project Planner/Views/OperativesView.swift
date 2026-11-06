@@ -332,11 +332,11 @@ struct OperativesView: View {
     
     /// Header numbers. Same `listedRosterUsers` / `rosterSegment` calls the tabs use, before search and filters.
     private var operativeRosterCounts: OperativesRosterCounts {
-        let listed = CanonicalBusinessEngine.listedRosterUsers(
+        let listed = GhostRulebook.listed(
             allOperativeUsers,
             claimedEmails: userStore.organizationUserEmailClaims
         ) ?? []
-        let segments = listed.map { CanonicalBusinessEngine.rosterSegment($0) }
+        let segments = listed.map { GhostRulebook.segment($0) }
         return OperativesRosterCounts(
             active: segments.filter { $0 == UserRosterSegment.active.canonicalSegment }.count,
             inactive: segments.filter { $0 == UserRosterSegment.inactive.canonicalSegment }.count,
@@ -392,11 +392,11 @@ struct OperativesView: View {
     
     /// Claim set is `organizations/{orgId}/userEmails` document ids. Pending is `rosterSegment`, not `passwordSet` alone.
     private func rosterListed(_ users: [AppUser], segment: UserRosterSegment) -> [AppUser] {
-        let listed = CanonicalBusinessEngine.listedRosterUsers(
+        let listed = GhostRulebook.listed(
             users,
             claimedEmails: userStore.organizationUserEmailClaims
         ) ?? []
-        return listed.filter { CanonicalBusinessEngine.rosterSegment($0) == segment.canonicalSegment }
+        return listed.filter { GhostRulebook.segment($0) == segment.canonicalSegment }
     }
 
     private var pendingOperativeInvitees: [AppUser] {

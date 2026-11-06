@@ -692,11 +692,11 @@ struct ManageUsersView: View {
 
     /// People on this tab. The claim set is `organizations/{orgId}/userEmails` document ids.
     private func rosterListed(_ users: [AppUser], segment: UserRosterSegment) -> [AppUser] {
-        let listed = CanonicalBusinessEngine.listedRosterUsers(
+        let listed = GhostRulebook.listed(
             users,
             claimedEmails: userStore.organizationUserEmailClaims
         ) ?? []
-        return listed.filter { CanonicalBusinessEngine.rosterSegment($0) == segment.canonicalSegment }
+        return listed.filter { GhostRulebook.segment($0) == segment.canonicalSegment }
     }
     
     // MARK: - Access Denied (non-admins)

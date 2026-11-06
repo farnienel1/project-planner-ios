@@ -590,7 +590,7 @@ class UserStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: Ignoring organisation user roster for \(requestedOrganizationId) — a save or a newer load replaced it while healing")
                 return
             }
-            guard let listed = CanonicalBusinessEngine.listedRosterUsers(healed, claimedEmails: roster.claimedEmails) else {
+            guard let listed = GhostRulebook.listed(healed, claimedEmails: roster.claimedEmails) else {
                 print("🔥🔥🔥 DEBUG: ROSTER_LIST script did not return a list — keeping the roster already on screen")
                 ReaderDiagnostics.shared.record(
                     collection: "users",
@@ -773,7 +773,7 @@ class UserStore: ObservableObject {
             isTombstoned: { RosterRetention.isTombstoned($0, organizationId: organizationId) }
         )
         let folded = collapseRosterByEmail(merged)
-        guard let listed = CanonicalBusinessEngine.listedRosterUsers(folded, claimedEmails: organizationUserEmailClaims) else {
+        guard let listed = GhostRulebook.listed(folded, claimedEmails: organizationUserEmailClaims) else {
             print("🔥🔥🔥 DEBUG: ROSTER_LISTENER script did not return a list — keeping the roster on screen")
             return
         }

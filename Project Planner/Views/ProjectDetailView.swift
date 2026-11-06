@@ -2869,7 +2869,7 @@ private struct ProjectVisibilitySettingsView: View {
     }
     
     private func filteredUsers(base: [AppUser]) -> [AppUser] {
-        let listed = CanonicalBusinessEngine.listedRosterUsers(
+        let listed = GhostRulebook.listed(
             base,
             claimedEmails: userStore.organizationUserEmailClaims
         ) ?? []
@@ -2878,11 +2878,11 @@ private struct ProjectVisibilitySettingsView: View {
             case .all:
                 return true
             case .active:
-                return CanonicalBusinessEngine.rosterSegment(user) == UserRosterSegment.active.canonicalSegment
+                return GhostRulebook.segment(user) == UserRosterSegment.active.canonicalSegment
             case .inactive:
-                return CanonicalBusinessEngine.rosterSegment(user) == UserRosterSegment.inactive.canonicalSegment
+                return GhostRulebook.segment(user) == UserRosterSegment.inactive.canonicalSegment
             case .pending:
-                return CanonicalBusinessEngine.rosterSegment(user) == UserRosterSegment.pending.canonicalSegment
+                return GhostRulebook.segment(user) == UserRosterSegment.pending.canonicalSegment
             }
         }
         .filter { user in
