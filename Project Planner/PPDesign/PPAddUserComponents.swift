@@ -38,16 +38,16 @@ enum PPAddUserColor {
 extension View {
     /// The light sheet under the navy header: page background with a 28pt top radius (`sheetBg`).
     func ppAddUserSheet() -> some View {
-        self
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: PPMetrics.contentCornerRadius,
+            topTrailingRadius: PPMetrics.contentCornerRadius,
+            style: .continuous
+        )
+        // Content is clipped to the rounded top; the fill runs on under the home indicator.
+        return self
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(PPColor.page)
-            .clipShape(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: PPMetrics.contentCornerRadius,
-                    topTrailingRadius: PPMetrics.contentCornerRadius,
-                    style: .continuous
-                )
-            )
+            .clipShape(shape)
+            .background(shape.fill(PPColor.page).ignoresSafeArea(edges: .bottom))
     }
 
     /// A grouped card (`card`, radius 18). `isError` turns the border red (spec §4, the line manager card).
