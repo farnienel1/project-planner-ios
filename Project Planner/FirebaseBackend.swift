@@ -225,6 +225,8 @@ class FirebaseBackend: ObservableObject {
     lazy var storage: Storage = Storage.storage()
     #endif
     private var authHandle: AuthStateDidChangeListenerHandle?
+    /// RULEBOOK 1.32.4 §16: the one `users/{uid}/private/authClaims` marker listener (`FirebaseBackend+AuthClaims`).
+    let authClaimsMarkerWatch = AuthClaimsMarkerWatch()
     /// Single-flight attach: `await` yields MainActor, so a second caller must wait instead of starting a parallel `perform` (duplicate listeners / races).
     private var authAttachInProgress = false
     
@@ -604,6 +606,9 @@ class FirebaseBackend: ObservableObject {
                 #endif
                 self.currentUser = user
                 self.isAuthenticated = user != nil
+                // RULEBOOK 1.32.4 §16: follow the signed-in person's auth-claims marker (replaced on a uid change,
+                // stopped on sign-out).
+                self.watchAuthClaimsMarker(for: user)
                 if let user = user {
                     print("🔥🔥🔥 Firebase user signed in: \(user.email ?? "N/A")")
 
