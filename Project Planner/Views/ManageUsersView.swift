@@ -1000,7 +1000,8 @@ struct ManageUserRowView: View {
                             .font(.body.weight(.semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                        Text(user.email)
+                        // RULEBOOK 1.34.0 §11: a ghost has no email; its row says "No app login" instead.
+                        Text(user.email.isEmpty ? GhostRulebook.badge(user) : user.email)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -1009,7 +1010,7 @@ struct ManageUserRowView: View {
                     HStack(spacing: 9) {
                         if user.passwordSet && canShowPasswordResetOnRow {
                             keyActionButton
-                        } else if canSendSignUpEmail && !user.passwordSet && isManagerOrOperative {
+                        } else if canSendSignUpEmail && !user.passwordSet && isManagerOrOperative && !user.email.isEmpty {
                             signUpActionButton
                         }
                         Image(systemName: "chevron.right")
@@ -1090,11 +1091,16 @@ struct ManageUserRowView: View {
         if let trade = tradeBadgeLabel {
             items.append(.init(label: trade, foreground: ManageUserProfilePalette.textSecondary, background: ProjectWorksRevampColors.grayTint, border: ProjectWorksRevampColors.searchBorder))
         }
+        // RULEBOOK 1.34.0 §11 `ghostBadgeLabel`: "No app login" (or "No app login · Invited").
+        let ghostBadge = GhostRulebook.badge(user)
+        if !ghostBadge.isEmpty {
+            items.append(.init(label: ghostBadge, foreground: ManageUserProfilePalette.textSecondary, background: ProjectWorksRevampColors.grayTint, border: ProjectWorksRevampColors.searchBorder))
+        }
         if user.rosterSegment == .inactive {
             items.append(.init(label: "Inactive", foreground: ManageUserProfilePalette.textSecondary, background: ProjectWorksRevampColors.grayTint, border: nil))
         } else if user.rosterSegment == .pending {
             items.append(.init(label: "Pending invite", foreground: Color(red: 0xE0 / 255, green: 0x86 / 255, blue: 0x00 / 255), background: Color(red: 0xFF / 255, green: 0xF5 / 255, blue: 0xE6 / 255), border: nil))
-        } else if user.passwordSet {
+        } else if user.passwordSet && !user.isGhost {
             items.append(.init(label: "Verified", foreground: Color(red: 0x15 / 255, green: 0xA3 / 255, blue: 0x4A / 255), background: Color(red: 0xE9 / 255, green: 0xF9 / 255, blue: 0xEF / 255), border: nil))
         }
         if showAdminBadge && !items.contains(where: { $0.label == "Administrator" }) {
@@ -1577,6 +1583,11 @@ struct EditUserView: View {
     @State private var isUploadingProfilePhoto = false
     @State private var profilePhotoUploadMessage: String?
     @State private var showingChangeUserType = false
+    /// RULEBOOK 1.34.0 §11: Give app access (admins, a ghost not yet invited).
+    @State private var showingGiveAppAccess = false
+    @State private var ghostAccessEmail = ""
+    @State private var ghostAccessMessage: String?
+    @State private var isGivingAppAccess = false
     @State private var changeUserTypeDraft: ManagedAccountKind = .operative
     @State private var managerSelfBookDraft = false
     @State private var managerTransitionOperatives = false
@@ -1720,7 +1731,78 @@ struct EditUserView: View {
 
     /// Password / invitation actions also available to managers who only manage operatives.
     private var canShowCredentialActions: Bool {
-        canUseAdminAccountTools || (isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative))
+        // RULEBOOK 1.34.0 §11: a ghost has no login — no password reset or sign-up email (Give app access invites one).
+        guard !isGhostProfile else { return false }
+        return canUseAdminAccountTools || (isManagerOperativeOnly && (user.permissions.operativeMode || user.role == .operative))
+    }
+
+    /// RULEBOOK 1.34.0 §11: this person is a ghost operative (no login, no email, no phone, always self-employed).
+    private var isGhostProfile: Bool { displayedUser.isGhost }
+
+    /// RULEBOOK 1.34.0 §11 `canUpgradeGhost(viewer, ghost)`: an admin, an active ghost not yet invited.
+    private var canGiveAppAccess: Bool {
+        GhostRulebook.canUpgrade(viewer: userStore.currentUser, ghost: displayedUser)
+    }
+
+    /// Give app access: the email the invitation goes to (a converted row's `inviteEmailHint` pre-filled), then the
+    /// rulebook's `ghostUpgradeWrites` and the usual set-up email (`UserStore.giveGhostAppAccess`).
+    private var giveAppAccessSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("name@company.com", text: $ghostAccessEmail)
+                        .keyboardType(.emailAddress)
+                        .textContentType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("editUser.giveAppAccess.email")
+                } header: {
+                    Text("Email")
+                } footer: {
+                    Text(CanonicalBusinessEngine.ghostUpgradeHelp)
+                }
+                if let ghostAccessMessage {
+                    Section {
+                        Text(ghostAccessMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle(CanonicalBusinessEngine.ghostUpgradeLabel)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showingGiveAppAccess = false }
+                        .accessibilityIdentifier("editUser.giveAppAccess.cancel")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send invitation") { giveAppAccess() }
+                        .accessibilityIdentifier("editUser.giveAppAccess.send")
+                        .disabled(isGivingAppAccess || !smartCache.isOnline)
+                }
+            }
+        }
+    }
+
+    private func giveAppAccess() {
+        guard !isGivingAppAccess else { return }
+        isGivingAppAccess = true
+        ghostAccessMessage = nil
+        let ghost = displayedUser
+        let email = ghostAccessEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            let result = await userStore.giveGhostAppAccess(ghost, email: email)
+            await MainActor.run {
+                isGivingAppAccess = false
+                if let error = result.error {
+                    ghostAccessMessage = error
+                } else {
+                    showingGiveAppAccess = false
+                    ghostAccessMessage = "Invitation sent to \(email.lowercased()). They stay bookable as they are until they accept."
+                }
+            }
+        }
     }
     
     private var linkedOperativeForUser: Operative? {
@@ -1731,6 +1813,10 @@ struct EditUserView: View {
             key = emailKey.isEmpty ? fallback : emailKey
         } else {
             key = displayedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // An empty email names nobody (ghosts have none); a converted ghost's row keeps the ghost's id (RULEBOOK 1.34.0).
+        guard !key.isEmpty else {
+            return operativeStore.allOperatives.first { $0.documentId.caseInsensitiveCompare(displayedUser.id) == .orderedSame }
         }
         return operativeStore.allOperatives.first {
             $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == key
@@ -2254,6 +2340,9 @@ struct EditUserView: View {
             .sheet(isPresented: $showingChangeUserType) {
                 changeUserTypeSheet
             }
+            .sheet(isPresented: $showingGiveAppAccess) {
+                giveAppAccessSheet
+            }
             .task {
                 await loadDayRateHistory()
             }
@@ -2508,14 +2597,17 @@ struct EditUserView: View {
             if canUseAdminAccountTools && !isViewingSuperAdminProfile {
                 activeToggleChromeSection
             }
-            permissionsSection
+            // RULEBOOK 1.34.0 §11: a ghost has no login, so no permissions to show.
+            if !isGhostProfile {
+                permissionsSection
+            }
             if let lineManagerValidationMessage {
                 Text(lineManagerValidationMessage)
                     .font(.footnote)
                     .foregroundStyle(.red)
                     .padding(.horizontal, 4)
             }
-            if canShowCredentialActions || canUseAdminAccountTools || canOfferChangeSuperAdmin {
+            if canShowCredentialActions || canUseAdminAccountTools || canOfferChangeSuperAdmin || canGiveAppAccess {
                 actionsChromeSection
             }
         }
@@ -2525,7 +2617,8 @@ struct EditUserView: View {
 
     @ViewBuilder
     private var editUserBillingAndTimesheetsSections: some View {
-        if canEditPermissionsMatrix || canViewTaxIds {
+        // RULEBOOK 1.34.0 §8, §11: a ghost has no timesheets and no tax ids.
+        if !isGhostProfile && (canEditPermissionsMatrix || canViewTaxIds) {
             VStack(alignment: .leading, spacing: 8) {
                 ManageUserSectionTitle(text: "Employment & timesheets")
                 billingDetailsCard
@@ -3131,6 +3224,7 @@ struct EditUserView: View {
                 VStack(spacing: 0) {
                     if canEditIdentityDetails {
                         ManageUserNameEditRow(firstName: $editFirstName, surname: $editSurname)
+                        if !isGhostProfile {
                         ManageUserCardDivider()
                         ManageUserDetailTextFieldRow(
                             iconName: "envelope.fill",
@@ -3155,6 +3249,7 @@ struct EditUserView: View {
                             contentType: .telephoneNumber,
                             autocapitalization: .never
                         )
+                        }
                     } else {
                         ManageUserDetailStaticRow(
                             iconName: "person.fill",
@@ -3163,6 +3258,7 @@ struct EditUserView: View {
                             label: "Name",
                             value: displayedUser.fullName
                         )
+                        if !isGhostProfile {
                         ManageUserCardDivider()
                         ManageUserDetailStaticRow(
                             iconName: "envelope.fill",
@@ -3182,6 +3278,17 @@ struct EditUserView: View {
                                 return "—"
                             }()
                         )
+                        }
+                    }
+                    if isGhostProfile {
+                        ManageUserCardDivider()
+                        ManageUserDetailStaticRow(
+                            iconName: "person.crop.circle.badge.questionmark",
+                            iconBackground: ManageUserProfilePalette.chipPurpleBg,
+                            iconForeground: ManageUserProfilePalette.chipPurpleFg,
+                            label: "App access",
+                            value: GhostRulebook.badge(displayedUser)
+                        )
                     }
                     ManageUserCardDivider()
                     ManageUserDetailStaticRow(
@@ -3193,8 +3300,8 @@ struct EditUserView: View {
                     )
                     ManageUserCardDivider()
                     // RULEBOOK §8: employment type is pay (`canChangePersonPay`); 1.13.0 `canViewPersonPay` decides
-                    // whether it is shown at all.
-                    if !userStore.canViewPay(of: displayedUser, context: .profile) {
+                    // whether it is shown at all. 1.34.0 §11: a ghost is always self-employed — not shown.
+                    if isGhostProfile || !userStore.canViewPay(of: displayedUser, context: .profile) {
                         EmptyView()
                     } else if canEditPermissionsMatrix && userStore.canChangePay(of: displayedUser) {
                         Menu {
@@ -3226,6 +3333,7 @@ struct EditUserView: View {
                             value: employmentTypeDraft.title
                         )
                     }
+                    if !isGhostProfile {
                     ManageUserCardDivider()
                     ManageUserDetailStaticRow(
                         iconName: "calendar",
@@ -3234,6 +3342,7 @@ struct EditUserView: View {
                         label: "Employment date",
                         value: employmentTransitionSummary
                     )
+                    }
                 }
             }
         }
@@ -3691,8 +3800,34 @@ struct EditUserView: View {
                     )
                 }
 
+                // RULEBOOK 1.34.0 §11 `canUpgradeGhost`: admins give a ghost app access (the invite placeholder flow).
+                if canGiveAppAccess {
+                    ManageUserAccountActionButton(
+                        iconName: "envelope.badge.fill",
+                        iconBackground: ManageUserProfilePalette.chipBlueBg,
+                        iconForeground: ManageUserProfilePalette.chipBlueFg,
+                        title: CanonicalBusinessEngine.ghostUpgradeLabel,
+                        subtitle: CanonicalBusinessEngine.ghostUpgradeHelp,
+                        action: {
+                            ghostAccessEmail = displayedUser.inviteEmailHint ?? ""
+                            ghostAccessMessage = nil
+                            showingGiveAppAccess = true
+                        },
+                        isBusy: isGivingAppAccess
+                    )
+                    .disabled(!smartCache.isOnline)
+                    .accessibilityIdentifier("editUser.giveAppAccess")
+                }
+                if let ghostAccessMessage {
+                    Text(ghostAccessMessage)
+                        .font(.caption)
+                        .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                        .padding(.leading, 4)
+                }
+
                 if canUseAdminAccountTools,
                    canEditPermissionsMatrix,
+                   !isGhostProfile,
                    !userStore.isOrganizationCreator(userId: user.id) {
                     ManageUserAccountActionButton(
                         iconName: "arrow.left.arrow.right.circle.fill",
@@ -4133,7 +4268,8 @@ struct EditUserView: View {
                 return
             }
             if canEditIdentityDetails && identityDirty {
-                guard isValidEmail(editEmail) else {
+                // A ghost has no email (RULEBOOK 1.34.0 §11); only its names are edited.
+                guard isGhostProfile || isValidEmail(editEmail) else {
                     await MainActor.run {
                         isUpdating = false
                         saveErrorMessage = "Please enter a valid email address."
