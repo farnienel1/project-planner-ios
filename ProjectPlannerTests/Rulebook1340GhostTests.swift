@@ -81,6 +81,28 @@ final class Rulebook1340GhostTests: XCTestCase {
         XCTAssertFalse(user.passwordSet)
     }
 
+    /// Review fix: `isGhostUser` is the stored Bool `true` only, as the security rules read it.
+    func testGhostFlagIsTheBoolTrueOnly() {
+        for value: Any in [1, "true", NSNull()] {
+            let user = FirebaseBackend.parseAppUserDocument(
+                userId: "TEST-NOT-GHOST",
+                data: ["organizationId": "TEST-ORG-1340", "email": "", "firstName": "TEST-N", "surname": "G", "ghost": value]
+            )
+            XCTAssertFalse(user.isGhost, "\(value)")
+        }
+        XCTAssertTrue(FirebaseBackend.storedGhostFlag(true))
+        XCTAssertFalse(FirebaseBackend.storedGhostFlag(1))
+        XCTAssertFalse(FirebaseBackend.storedGhostFlag("true"))
+        XCTAssertFalse(FirebaseBackend.storedGhostFlag(nil))
+    }
+
+    func testOwnProfileNeverWritesGhostMarkers() {
+        XCTAssertEqual(Set(FirebaseBackend.ownProfileForbiddenFields), ["ghost", "inviteEmailHint"])
+        let payload = FirebaseBackend.userDocumentPayload(ghost())
+        XCTAssertNil(payload["ghost"])
+        XCTAssertNil(payload["inviteEmailHint"])
+    }
+
     func testOrdinaryUserIsNotAGhost() {
         let user = FirebaseBackend.parseAppUserDocument(
             userId: "TEST-USER-1",
