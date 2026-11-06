@@ -42,7 +42,7 @@ struct OperativeClashReviewPanel: View {
                 Button(action: onCancelAll) {
                     HStack(spacing: 6) {
                         Image(systemName: "xmark")
-                        Text("Cancel booking")
+                        Text("Don't book")
                             .font(.system(size: 13, weight: .semibold))
                     }
                     .foregroundStyle(ProjectWorksRevampColors.ink)

@@ -91,7 +91,7 @@ class PPUITestCase: XCTestCase {
         let el = element(id)
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if el.exists, el.isHittable { return }
+            if el.exists, el.isHittable, isFullyOnScreen(el) { return }
             let scroll = app.scrollViews.firstMatch
             if scroll.exists {
                 scroll.swipeUp()
@@ -100,6 +100,39 @@ class PPUITestCase: XCTestCase {
             }
         }
         XCTAssertTrue(el.waitForExistence(timeout: 1), "GAP: could not scroll to '\(id)'")
+    }
+
+    /// True when the element's whole frame is inside the app window and, when a
+    /// tab bar is showing, fully above it. `isHittable` alone passes for an
+    /// element partly under the tab bar, so a tap at its centre can land on the
+    /// tab bar instead (seen on the Settings PAYE payday banner in A03).
+    func isFullyOnScreen(_ el: XCUIElement) -> Bool {
+        let frame = el.frame
+        guard !frame.isEmpty else { return false }
+        let window = app.windows.firstMatch
+        if window.exists {
+            let windowFrame = window.frame
+            if !windowFrame.isEmpty, !windowFrame.contains(frame) { return false }
+        }
+        let tabBar = app.tabBars.firstMatch
+        if tabBar.exists, tabBar.isHittable {
+            let tabBarFrame = tabBar.frame
+            if !tabBarFrame.isEmpty, frame.maxY > tabBarFrame.minY { return false }
+        }
+        return true
+    }
+
+    /// Waits (up to `timeout`) until the element's frame is the same on two reads 0.25 s apart, so a tap
+    /// does not land while a sheet or list is still animating.
+    func waitUntilSettled(_ el: XCUIElement, timeout: TimeInterval = 3) {
+        let deadline = Date().addingTimeInterval(timeout)
+        var last = el.frame
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            let now = el.frame
+            if now == last, !now.isEmpty { return }
+            last = now
+        }
     }
 
     func goBack() {
