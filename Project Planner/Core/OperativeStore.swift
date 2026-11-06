@@ -879,3 +879,22 @@ class OperativeStore: ObservableObject {
         return byName.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }
+
+// MARK: - Ghost operatives (RULEBOOK 1.34.0 §11)
+
+extension OperativeStore {
+    /// The `operatives` catalogue row of a person, for display and the row's own fields: the row on their email; for a
+    /// person with no email (a ghost), the row kept under the ghost's own id — a converted ghost keeps its row with
+    /// `linkedUserId` = that id and its email cleared — so that row is the ghost, never a separate person. An empty
+    /// email never matches another row.
+    func operativeRow(for user: AppUser) -> Operative? {
+        let email = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !email.isEmpty {
+            return allOperatives.first { $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email }
+        }
+        return allOperatives.first {
+            $0.documentId.caseInsensitiveCompare(user.id) == .orderedSame
+                || ($0.linkedUserId?.caseInsensitiveCompare(user.id) == .orderedSame)
+        }
+    }
+}

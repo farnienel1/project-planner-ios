@@ -219,24 +219,24 @@ struct OperativesView: View {
         case .email:
             return user.email.localizedCaseInsensitiveContains(filterText)
         case .startDate:
-            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+            if let op = operativeStore.operativeRow(for: user) {
                 let formatter = DateFormatter()
                 formatter.dateStyle = .medium
                 return formatter.string(from: op.startDate).localizedCaseInsensitiveContains(filterText)
             }
             return false
         case .skills:
-            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+            if let op = operativeStore.operativeRow(for: user) {
                 return op.skills.contains { $0.localizedCaseInsensitiveContains(filterText) }
             }
             return false
         case .qualifications:
-            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+            if let op = operativeStore.operativeRow(for: user) {
                 return op.qualifications.contains { $0.name.localizedCaseInsensitiveContains(filterText) }
             }
             return false
         case .dayRate:
-            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+            if let op = operativeStore.operativeRow(for: user) {
                 let rate = op.dayRate ?? op.hourlyRate
                 if let rate { return String(format: "%.0f", rate).contains(filterText) }
             }
@@ -248,10 +248,7 @@ struct OperativesView: View {
     private var linkedOperativeRecords: [(user: AppUser, operative: Operative)] {
         let operativeUsers = userStore.rosterList(.operatives)
         return operativeUsers.compactMap { user in
-            guard let op = operativeStore.allOperatives.first(where: {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
-                user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            }) else {
+            guard let op = operativeStore.operativeRow(for: user) else {
                 return nil
             }
             return (user, op)
@@ -488,7 +485,7 @@ struct OperativesView: View {
                         .listRowBackground(Color.clear)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(action: {
-                                if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+                                if let op = operativeStore.operativeRow(for: user) {
                                     operativeToDelete = op
                                 }
                             }) {
@@ -623,9 +620,18 @@ struct OperativeUserRowView: View {
                     Text(user.fullName)
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
-                    Text(user.email)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    if !user.email.isEmpty {
+                        Text(user.email)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    // RULEBOOK 1.34.0 §11 `ghostBadgeLabel`: "No app login" (or "· Invited").
+                    let ghostBadge = GhostRulebook.badge(user)
+                    if !ghostBadge.isEmpty {
+                        OperativeStatusPill(text: ghostBadge, tint: .secondary)
+                            .padding(.top, 2)
+                            .accessibilityIdentifier("operativeUserRow.ghostBadge")
+                    }
                     if user.rosterSegment == .pending {
                         OperativeStatusPill(text: "Pending", tint: .orange)
                             .padding(.top, 2)
