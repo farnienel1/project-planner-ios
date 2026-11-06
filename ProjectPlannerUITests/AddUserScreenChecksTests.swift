@@ -33,10 +33,21 @@ final class AddUserScreenChecksTests: PPUITestCase {
         add(attachment)
     }
 
-    /// Admin: Home → Main menu → Add user (AddUserView `.admin`).
+    /// Admin: More → "Add user" (AddUserView `.admin`). The old Main menu sheet (`mainMenu.screen`) is gone; every
+    /// More row carries `mainMenu.moreRow`, so the row is picked by its label, as the release screen checks do.
     private func openAddUserFromMainMenu() {
-        openMainMenu()
-        MainMenuSheet(test: self).tapRow("add_user")
+        openMore()
+        let row = app.buttons
+            .matching(NSPredicate(format: "identifier == %@ AND label BEGINSWITH %@", "mainMenu.moreRow", "Add user"))
+            .firstMatch
+        let deadline = Date().addingTimeInterval(10)
+        while !(row.exists && row.isHittable && isFullyOnScreen(row)) && Date() < deadline {
+            app.swipeUp()
+        }
+        XCTAssertTrue(row.exists, "More has no 'Add user' row")
+        guard row.exists else { return }
+        waitUntilSettled(row)
+        row.tap()
         assertExists("addUser.cancel", timeout: 8)
     }
 
