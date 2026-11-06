@@ -62,6 +62,12 @@ struct AddUserView: View {
     @State private var remainingLeaveText = "25"
     @State private var vatNumber = ""
     @State private var utrNumber = ""
+    /// RULEBOOK 1.34.0 §11: the Ghost account toggle (a bookable operative with no login, no email and no phone).
+    @State private var isGhost = false
+    @State private var ghostExplanationExpanded = false
+    /// A ghost is paid from a day OR an hourly rate (`ghostRate`); invites keep the day-rate field.
+    @State private var ghostPayBasis = "day"
+    @State private var ghostHourlyRateText = ""
 
     /// A new person has no uid yet, so this is the admin half of `canViewSensitiveProfile`.
     private var canEnterTaxIds: Bool {
@@ -77,10 +83,168 @@ struct AddUserView: View {
     
     private var finalReviewStep: Int { totalSteps }
     
-    init(mode: AddUserMode = .admin) {
+    /// `startAsGhost`: opened from a "new operative" way in (Home, Operatives) with the Ghost account toggle on —
+    /// the toggle still shows only when `canCreateGhost` allows it.
+    init(mode: AddUserMode = .admin, startAsGhost: Bool = false) {
         self.mode = mode
-        if mode == .managerAddingOperative {
+        if mode == .managerAddingOperative || startAsGhost {
             _invitedAccountType = State(initialValue: .operative)
+        }
+        _isGhost = State(initialValue: startAsGhost)
+    }
+
+    // MARK: - Ghost account (RULEBOOK 1.34.0 §11)
+
+    /// `canCreateGhost(viewer)`: admins and managers with the Operatives permission.
+    private var canCreateGhost: Bool {
+        GhostRulebook.canCreateGhost(userStore.currentUser)
+    }
+
+    /// True while the toggle is on and the adder may add a ghost (`ghostAddFormRows` decides the same).
+    private var ghostMode: Bool { isGhost && canCreateGhost }
+
+    /// `ghostAddFormRows({ ghost, canCreateGhost })`.
+    private var ghostFormRows: [RulebookGhostFormRow] {
+        CanonicalBusinessEngine.ghostAddFormRows(ghost: isGhost, canCreateGhost: canCreateGhost) ?? []
+    }
+
+    /// Whether a form field shows. With no answer from the script every field shows except the toggle.
+    private func formFieldVisible(_ field: String) -> Bool {
+        guard let row = ghostFormRows.first(where: { $0.field == field }) else { return field != "ghostToggle" }
+        return row.visible
+    }
+
+    private func parsedGhostRate() -> Double? {
+        parseDayRate(from: ghostPayBasis == "hourly" ? ghostHourlyRateText : operativeDayRateText)
+    }
+
+    /// The `GhostDraft` the rulebook reads (`ghostCreateError`, `ghostCreateWrites`).
+    private var ghostDraft: [String: Any] {
+        var draft: [String: Any] = [
+            "firstName": firstName,
+            "surname": surname,
+            "payBasis": ghostPayBasis,
+            "lineManagerIds": Array(selectedLineManagerUserIds).sorted(),
+            "tradeTypePreset": tradePresetRaw,
+        ]
+        if let rate = parsedGhostRate() {
+            draft[ghostPayBasis == "hourly" ? "hourlyRate" : "dayRate"] = rate
+        }
+        let custom = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if tradePresetRaw == StaffTradeType.other.rawValue, !custom.isEmpty { draft["tradeTypeCustom"] = custom }
+        var leave: [String: Any] = ["enabled": annualLeaveEnabledInvite]
+        if annualLeaveEnabledInvite {
+            leave["daysPerYear"] = parseAnnualLeaveDaysForInvite()
+            leave["startMonth"] = annualLeaveStartMonth
+            leave["endMonth"] = annualLeaveEndMonth
+            leave["carriesOver"] = annualLeaveCarriesOver
+            if let override = inviteRemainingOverride {
+                leave["yearAllowance"] = override.annualLeaveYearAllowance
+                leave["yearAllowanceKey"] = override.annualLeaveYearAllowanceKey
+            }
+        }
+        draft["annualLeave"] = leave
+        return draft
+    }
+
+    /// `ghostCreateError(draft, { roster })`: nil when the ghost can be saved. While the script has not answered, a
+    /// generic message (never a silent save).
+    private var ghostDraftError: String? {
+        switch CanonicalBusinessEngine.ghostCreateError(draft: ghostDraft, roster: LineManagerRulebook.roster(userStore.organizationUsers)) {
+        case .none: return "Fill in the required fields to continue"
+        case .some(let message): return message
+        }
+    }
+
+    /// The Ghost account toggle with its small expandable explanation (spec: the very top of Add user, operative).
+    @ViewBuilder
+    private var ghostToggleCard: some View {
+        if formFieldVisible("ghostToggle") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    PPIconTile(symbol: "person.crop.circle.badge.questionmark", family: .trade, size: 30)
+                    Toggle(isOn: $isGhost) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(CanonicalBusinessEngine.ghostToggleLabel)
+                                .font(.subheadline.weight(.semibold))
+                            Text(CanonicalBusinessEngine.ghostToggleHelp)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .tint(PPAddUserColor.selected)
+                    .accessibilityIdentifier("addUser.ghostToggle")
+                }
+                let explanation = CanonicalBusinessEngine.ghostOperativeExplanation
+                if !explanation.isEmpty {
+                    DisclosureGroup(isExpanded: $ghostExplanationExpanded) {
+                        Text(explanation)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 6)
+                    } label: {
+                        Text("What is a ghost account?")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .accessibilityIdentifier("addUser.ghostExplanation")
+                }
+            }
+            .ppFormCard()
+            .onChange(of: isGhost) { _, on in
+                guard on else { return }
+                // A ghost is always an operative, self-employed, with no email or phone (`ghostCreateWrites`).
+                if invitedAccountType != .operative { selectAccountType(.operative) }
+                employmentType = .selfEmployed
+                email = ""
+                mobileNumber = ""
+                vatNumber = ""
+                utrNumber = ""
+                rateFieldError = nil
+                errorMessage = nil
+            }
+        }
+    }
+
+    /// Day or hourly rate for a ghost (`ghostRate`: one basis, above 0).
+    private var ghostPaySection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            PPFormFieldLabel(text: ghostPayBasis == "hourly" ? "Hourly rate *" : "Day rate *")
+            PPSegmentedPills(
+                items: [
+                    PPSegmentItem(id: "day", title: "Day rate", accessibilityIdentifier: "addUser.ghostPayBasis.day"),
+                    PPSegmentItem(id: "hourly", title: "Hourly rate", accessibilityIdentifier: "addUser.ghostPayBasis.hourly"),
+                ],
+                isSelected: { $0 == ghostPayBasis },
+                onSelect: { ghostPayBasis = $0 }
+            )
+            HStack(spacing: 6) {
+                Text("£")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                if ghostPayBasis == "hourly" {
+                    TextField("e.g. 30", text: $ghostHourlyRateText)
+                        .accessibilityIdentifier("addUser.ghostHourlyRate")
+                        .keyboardType(.decimalPad)
+                        .monospacedDigit()
+                } else {
+                    TextField("e.g. 250", text: $operativeDayRateText)
+                        .accessibilityIdentifier("addUser.eG250")
+                        .keyboardType(.decimalPad)
+                        .monospacedDigit()
+                }
+                Text(ghostPayBasis == "hourly" ? "per hour" : "per day")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .ppFormField()
+            Text(CanonicalBusinessEngine.ghostRateRequiredMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
     
@@ -204,6 +368,7 @@ struct AddUserView: View {
     /// Chips for the values already entered: account type, employment type, trade and line manager.
     private var headerChips: [String] {
         var chips = [invitedAccountType.title, employmentType.title]
+        if ghostMode { chips.insert(CanonicalBusinessEngine.ghostToggleLabel, at: 0) }
         if mode == .managerAddingOperative || invitedAccountType == .operative || invitedAccountType == .manager,
            !tradePresetRaw.isEmpty {
             chips.append(StaffTradeType.displayLabel(presetRaw: tradePresetRaw, custom: tradeCustomText))
@@ -270,7 +435,7 @@ struct AddUserView: View {
                 withAnimation { currentStep -= 1 }
             },
             primaryTitle: primaryButtonTitle,
-            primarySymbol: currentStep == finalReviewStep ? "envelope.fill" : "arrow.right",
+            primarySymbol: currentStep == finalReviewStep ? (ghostMode ? "person.fill.badge.plus" : "envelope.fill") : "arrow.right",
             primarySymbolLeading: currentStep == finalReviewStep,
             primaryEnabled: !(!canProceed || isCreating || (currentStep == finalReviewStep && !smartCache.isOnline)),
             disabledTitle: nextDisabledTitle,
@@ -309,6 +474,15 @@ struct AddUserView: View {
     /// details step once the rest of the step is filled in.
     private var footerBlockingMessage: String? {
         if let errorMessage, !errorMessage.isEmpty { return errorMessage }
+        if ghostMode {
+            // Only the line-manager part of `ghostCreateError` belongs in the Line manager card.
+            guard currentStep == 2, !firstName.isEmpty, !surname.isEmpty, let message = ghostDraftError else { return nil }
+            let lineManagerMessages = [
+                CanonicalBusinessEngine.ghostLineManagerRequiredMessage,
+                CanonicalBusinessEngine.ghostLineManagerInvalidMessage,
+            ].filter { !$0.isEmpty }
+            return lineManagerMessages.contains(message) ? message : nil
+        }
         guard currentStep == 2,
               invitedAccountType == .operative || invitedAccountType == .manager || invitedAccountType == .admin,
               !firstName.isEmpty, !surname.isEmpty, !email.isEmpty else { return nil }
@@ -336,7 +510,7 @@ struct AddUserView: View {
         case 1: return "Next: details"
         case 2: return "Next: access"
         case 3: return "Next: review"
-        default: return isCreating ? "Creating…" : "Create User"
+        default: return isCreating ? "Creating…" : (ghostMode ? "Add ghost" : "Create User")
         }
     }
 
@@ -345,6 +519,7 @@ struct AddUserView: View {
     private var nextDisabledTitle: String {
         if currentStep == finalReviewStep { return primaryButtonTitle }
         if let lineManagerInlineMessage { return lineManagerInlineMessage }
+        if ghostMode, currentStep == 2, let message = ghostDraftError { return message }
         return "Fill in the required fields to continue"
     }
 
@@ -368,6 +543,21 @@ struct AddUserView: View {
     
     private var stepAccountType: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // RULEBOOK 1.34.0 §11: the Ghost account toggle sits at the very top (`ghostAddFormRows` `ghostToggle`).
+            ghostToggleCard
+            if formFieldVisible("accountType") {
+                stepAccountTypeCards
+            } else {
+                Text("A ghost account is an operative with no app login. Fill in their name, pay and line manager next.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var stepAccountTypeCards: some View {
+        VStack(alignment: .leading, spacing: 16) {
             Text(mode == .managerAddingOperative
                 ? "This account is an operative. Super admin is never assigned from here."
                 : "Choose what kind of account this will be. Super admin is never assigned from here.")
@@ -390,22 +580,7 @@ struct AddUserView: View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         return Button {
             guard !lockedToOperative, invitedAccountType != type else { return }
-            let previousLevel = RulebookPermissionLevel(rawValue: invitedAccountType.rawValue) ?? .manager
-            invitedAccountType = type
-            applyPermissionsForInvitedType()
-            resetAnnualLeaveInviteDefaults()
-            let lineManagers = AddUserLineManagerSelection.afterAccountTypeSelection(
-                previous: previousLevel,
-                next: RulebookPermissionLevel(rawValue: type.rawValue) ?? .manager,
-                lineManagerIds: selectedLineManagerUserIds,
-                hasNoLineManager: hasNoLineManager,
-                // RULEBOOK 1.24.0 §11 `CanonicalBusinessEngine` `lineManagerSelectionAfterLevelChange`: the invite draft
-                // as `person`, as `lineManagerCandidates` gets it.
-                person: inviteDraftUserForValidation,
-                roster: userStore.organizationUsers
-            )
-            selectedLineManagerUserIds = lineManagers.lineManagerIds
-            hasNoLineManager = lineManagers.hasNoLineManager
+            selectAccountType(type)
         } label: {
             HStack(spacing: 14) {
                 PPIconTile(symbol: symbol, family: family, size: 44, lifted: selected)
@@ -447,6 +622,26 @@ struct AddUserView: View {
         .buttonStyle(.plain)
     }
     
+    /// The account-type change the cards make (also used when Ghost account is switched on: a ghost is an operative).
+    private func selectAccountType(_ type: InvitedAccountType) {
+        let previousLevel = RulebookPermissionLevel(rawValue: invitedAccountType.rawValue) ?? .manager
+        invitedAccountType = type
+        applyPermissionsForInvitedType()
+        resetAnnualLeaveInviteDefaults()
+        let lineManagers = AddUserLineManagerSelection.afterAccountTypeSelection(
+            previous: previousLevel,
+            next: RulebookPermissionLevel(rawValue: type.rawValue) ?? .manager,
+            lineManagerIds: selectedLineManagerUserIds,
+            hasNoLineManager: hasNoLineManager,
+            // RULEBOOK 1.24.0 §11 `CanonicalBusinessEngine` `lineManagerSelectionAfterLevelChange`: the invite draft
+            // as `person`, as `lineManagerCandidates` gets it.
+            person: inviteDraftUserForValidation,
+            roster: userStore.organizationUsers
+        )
+        selectedLineManagerUserIds = lineManagers.lineManagerIds
+        hasNoLineManager = lineManagers.hasNoLineManager
+    }
+
     private var stepDetailsOnly: some View {
         stepDetailsWithManagerWithoutManagerPicker
     }
@@ -566,6 +761,9 @@ struct AddUserView: View {
     /// RULEBOOK §8, §11: `lineManagerRequiredError` on the invite with nobody chosen says whether one is required
     /// (every operative and manager, whatever self-book); only admins may have none.
     private var lineManagerPickerFootnote: String {
+        if ghostMode {
+            return "Required. They book this person's annual leave and see when they are not booked."
+        }
         var unassigned = inviteDraftUserForValidation
         unassigned.hasNoLineManager = false
         if AnnualLeaveApproval.lineManagerRequiredError(for: unassigned, users: userStore.organizationUsers) != nil {
@@ -615,24 +813,50 @@ struct AddUserView: View {
                     TextField("Enter surname", text: $surname)
                         .accessibilityIdentifier("addUser.enterSurname")
                 }
-                Divider().padding(.leading, 14)
-                detailsField("Email Address") {
-                    TextField("Enter email address", text: $email)
-                        .accessibilityIdentifier("addUser.enterEmailAddress")
-                        .keyboardType(.emailAddress)
-                        .autocapitalization(.none)
+                // RULEBOOK 1.34.0 §11 `ghostAddFormRows`: a ghost has no email and no phone.
+                if formFieldVisible("email") {
+                    Divider().padding(.leading, 14)
+                    detailsField("Email Address") {
+                        TextField("Enter email address", text: $email)
+                            .accessibilityIdentifier("addUser.enterEmailAddress")
+                            .keyboardType(.emailAddress)
+                            .autocapitalization(.none)
+                    }
                 }
-                Divider().padding(.leading, 14)
-                detailsField("Mobile Number") {
-                    TextField("Enter mobile number", text: $mobileNumber)
-                        .accessibilityIdentifier("addUser.enterMobileNumber")
-                        .keyboardType(.phonePad)
+                if formFieldVisible("mobileNumber") {
+                    Divider().padding(.leading, 14)
+                    detailsField("Mobile Number") {
+                        TextField("Enter mobile number", text: $mobileNumber)
+                            .accessibilityIdentifier("addUser.enterMobileNumber")
+                            .keyboardType(.phonePad)
+                    }
                 }
             }
             .ppFormCard(padding: 0)
 
-            PPFormSectionLabel(text: "Employment")
+            PPFormSectionLabel(text: ghostMode ? "Pay and trade" : "Employment")
             VStack(alignment: .leading, spacing: 16) {
+                if ghostMode {
+                    // RULEBOOK 1.34.0 §11: always self-employed, a day OR hourly rate (required), trade optional.
+                    ghostPaySection
+                    StaffTradeTypeFormSection(
+                        presetRaw: $tradePresetRaw,
+                        customText: $tradeCustomText,
+                        title: "Trade type",
+                        footnote: "Optional.",
+                        style: .card
+                    )
+                } else {
+                    employmentInviteFields
+                }
+            }
+            .ppFormCard()
+        }
+    }
+
+    /// The invite form's employment fields (Ghost account off).
+    @ViewBuilder
+    private var employmentInviteFields: some View {
                 VStack(alignment: .leading, spacing: 6) {
                     PPFormFieldLabel(text: "Employment Type")
                     // Same value as the old segmented Picker: a tap sets `employmentType`.
@@ -730,9 +954,6 @@ struct AddUserView: View {
                 if mode == .admin {
                     PPInfoBox(text: "Timesheets follow employment type. Self-employed users get My Timesheets; PAYE users keep the current pay run until it is paid, then schedule no longer fills timesheets.")
                 }
-            }
-            .ppFormCard()
-        }
     }
     
     /// RULEBOOK 1.11.0 §11: `lineManagerCandidates(person, roster)` — active admins, super admins and managers,
@@ -854,6 +1075,23 @@ struct AddUserView: View {
 
     private var stepPermissionsControlled: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if formFieldVisible("permissions") {
+                stepPermissionModules
+            } else {
+                // RULEBOOK 1.34.0 §11: a ghost has no login, so no permissions; its leave allowance stays (its line
+                // manager or an admin books its leave).
+                Text("A ghost account has no app login, so it has no permissions. Set the annual leave allowance their line manager books against.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 8)
+            }
+            annualLeaveInvitationSection
+        }
+    }
+
+    private var stepPermissionModules: some View {
+        VStack(alignment: .leading, spacing: 0) {
             if !permissionsDescriptionHeader.isEmpty {
                 Text(permissionsDescriptionHeader)
                     .font(.subheadline)
@@ -910,8 +1148,6 @@ struct AddUserView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 2)
             .ppFormCard(padding: 0)
-
-            annualLeaveInvitationSection
         }
     }
     
@@ -943,7 +1179,7 @@ struct AddUserView: View {
 
     private var stepReview: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Review before sending the invitation")
+            Text(ghostMode ? "Review before adding this person" : "Review before sending the invitation")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 12)
@@ -952,7 +1188,11 @@ struct AddUserView: View {
                 Text("Account")
                     .font(.headline)
                     .padding(.bottom, 2)
-                if mode == .admin {
+                if ghostMode {
+                    reviewRow("Type") {
+                        Text("\(invitedAccountType.title) · \(CanonicalBusinessEngine.ghostToggleLabel)")
+                    }
+                } else if mode == .admin {
                     reviewRow("Type") {
                         Text(invitedAccountType.title)
                     }
@@ -967,9 +1207,11 @@ struct AddUserView: View {
                     Text("\(firstName) \(surname)")
                 }
 
-                Divider()
-                reviewRow("Email") {
-                    Text(email)
+                if formFieldVisible("email") {
+                    Divider()
+                    reviewRow("Email") {
+                        Text(email)
+                    }
                 }
 
                 Divider()
@@ -991,10 +1233,10 @@ struct AddUserView: View {
                     }
                 }
 
-                let reviewDayRate = selectedDayRateTextForReview
+                let reviewDayRate = ghostMode && ghostPayBasis == "hourly" ? ghostHourlyRateText : selectedDayRateTextForReview
                 if !reviewDayRate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Divider()
-                    reviewRow("Day rate") {
+                    reviewRow(ghostMode && ghostPayBasis == "hourly" ? "Hourly rate" : "Day rate") {
                         Text(reviewDayRate)
                             .monospacedDigit()
                     }
@@ -1014,14 +1256,16 @@ struct AddUserView: View {
             }
             .ppFormCard()
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Permissions summary")
-                    .font(.headline)
+            if formFieldVisible("permissions") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Permissions summary")
+                        .font(.headline)
 
-                permissionsAccessColumns
+                    permissionsAccessColumns
+                }
+                .ppFormCard()
+                .padding(.top, 12)
             }
-            .ppFormCard()
-            .padding(.top, 12)
         }
     }
     
@@ -1042,7 +1286,9 @@ struct AddUserView: View {
                     .fontWeight(.bold)
                     .multilineTextAlignment(.center)
                 
-                Text("An invitation email has been sent to \(email)")
+                Text(ghostMode
+                     ? "\(firstName) \(surname) has been added. They have no app login and can be booked straight away."
+                     : "An invitation email has been sent to \(email)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -1121,6 +1367,8 @@ struct AddUserView: View {
         case 1:
             return true
         case 2:
+            // RULEBOOK 1.34.0 §11: a ghost needs names, a rate and a line manager (`ghostCreateError`).
+            if ghostMode { return ghostDraftError == nil }
             let base = !firstName.isEmpty && !surname.isEmpty && !email.isEmpty && isValidEmail(email) && tradeRequiredAndValid
             if invitedAccountType == .operative || invitedAccountType == .manager || invitedAccountType == .admin {
                 return base && lineManagerSelectionValid
@@ -1206,7 +1454,42 @@ struct AddUserView: View {
         }
     }
     
+    /// RULEBOOK 1.34.0 §11: Ghost account on — `ghostCreateWrites` (no invitation, no email), then `operative_created`.
+    private func createGhostAccount() {
+        if let leaveYearError = CanonicalBusinessEngine.leaveYearMonthsError(
+            startMonth: annualLeaveStartMonth,
+            endMonth: annualLeaveEndMonth
+        ) {
+            errorMessage = leaveYearError
+            return
+        }
+        if let message = ghostDraftError {
+            errorMessage = message
+            return
+        }
+        guard !isCreating else { return }
+        isCreating = true
+        errorMessage = nil
+        let draft = ghostDraft
+        let name = "\(firstName) \(surname)".trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            let success = await userStore.createGhost(draft: draft, displayName: name)
+            await MainActor.run {
+                isCreating = false
+                if success {
+                    withAnimation { showSuccess = true }
+                } else {
+                    errorMessage = userStore.errorMessage ?? "Failed to add this person. Please try again."
+                }
+            }
+        }
+    }
+
     private func createUser() {
+        if ghostMode {
+            createGhostAccount()
+            return
+        }
         if permissions.operativeMode && (permissions.adminAccess || permissions.manager || permissions.operatives) {
             errorMessage = "Operative mode cannot be combined with admin, manager, or operative management flags."
             return
