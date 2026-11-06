@@ -11,8 +11,11 @@ final class Rulebook1311Tests: XCTestCase {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     }
 
-    func testRulebookVersionIs1311() {
-        XCTAssertEqual(CanonicalBusinessEngine.rulebookStamp()?.version, "1.31.1")
+    /// These queries follow the 1.31.1 rules, so the packed rulebook must be 1.31.1 or later. The exact version is
+    /// `RulebookParityTests`' job (script stamp == `docs/RULEBOOK.md`), so later syncs do not have to edit this test.
+    func testRulebookVersionIsAtLeast1311() throws {
+        let version = try XCTUnwrap(CanonicalBusinessEngine.rulebookStamp()?.version)
+        XCTAssertNotEqual(version.compare("1.31.1", options: .numeric), .orderedAscending, "rulebook \(version) is older than 1.31.1")
     }
 
     // MARK: invitedBy on a new invitation
