@@ -122,6 +122,19 @@ class PPUITestCase: XCTestCase {
         return true
     }
 
+    /// Waits (up to `timeout`) until the element's frame is the same on two reads 0.25 s apart, so a tap
+    /// does not land while a sheet or list is still animating.
+    func waitUntilSettled(_ el: XCUIElement, timeout: TimeInterval = 3) {
+        let deadline = Date().addingTimeInterval(timeout)
+        var last = el.frame
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            let now = el.frame
+            if now == last, !now.isEmpty { return }
+            last = now
+        }
+    }
+
     func goBack() {
         let closers = [PPID.navBack, PPID.mainMenuDone, PPID.moreClose, PPID.sheetDone, PPID.sheetClose]
         for id in closers {

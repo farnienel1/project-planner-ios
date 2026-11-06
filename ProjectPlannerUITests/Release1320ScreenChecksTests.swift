@@ -33,11 +33,14 @@ final class Release1320ScreenChecksTests: PPUITestCase {
             .matching(NSPredicate(format: "identifier == %@ AND label BEGINSWITH %@", "mainMenu.moreRow", title))
             .firstMatch
         let deadline = Date().addingTimeInterval(10)
-        while !(row.exists && row.isHittable) && Date() < deadline {
+        while !(row.exists && row.isHittable && isFullyOnScreen(row)) && Date() < deadline {
             app.swipeUp()
         }
         XCTAssertTrue(row.exists, "More has no '\(title)' row")
-        if row.exists { row.tap() }
+        guard row.exists else { return }
+        // The More sheet slides in; a tap while it is still moving can be lost (A01 failed this way on #200).
+        waitUntilSettled(row)
+        row.tap()
     }
 
     private func openSettings(role: String) {
