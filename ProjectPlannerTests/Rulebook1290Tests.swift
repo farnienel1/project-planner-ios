@@ -184,12 +184,13 @@ final class Rulebook1290Tests: XCTestCase {
                 personIds: ["sam"], bookings: [booking], organization: org, range: range, reviews: reviews, requests: requests
             ).first?.state
         }
-        XCTAssertEqual(state(b1, reviews: [review]), "approved")
+        // 1.33.0: a line confirmed without a line manager reads `confirmed` (was `approved`).
+        XCTAssertEqual(state(b1, reviews: [review]), "confirmed")
         var moved = b1
         moved.workEndTime = "15:00"
         XCTAssertTrue(CanonicalBusinessEngine.overtimeLineIsStale(storedFingerprint: fingerprint, booking: moved))
         XCTAssertTrue(CanonicalBusinessEngine.overtimeLineIsStale(storedFingerprint: fingerprint, booking: nil))
-        XCTAssertEqual(state(moved, reviews: [review]), "needsReview", "a change after a decision goes back to Needs review")
+        XCTAssertEqual(state(moved, reviews: [review]), "reopened", "1.33.0: a change after a decision reopens the line")
         let line = try XCTUnwrap(CanonicalBusinessEngine.overtimeRequestLineFields(b1, organization: org, proposal: .keep, personIds: nil))
         let pending = try request("R1", ["userId": "sam", "rangeStart": range.start, "rangeEnd": range.end, "status": "pending", "lines": [line.raw]])
         XCTAssertEqual(state(b1, requests: [pending]), "waiting")

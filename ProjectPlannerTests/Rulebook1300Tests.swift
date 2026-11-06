@@ -218,8 +218,9 @@ final class Rulebook1300Tests: XCTestCase {
             currency: "GBP",
             organizationId: org
         ))
-        XCTAssertEqual(Set(fields.keys), ["userId", "title", "details", "jobNumber", "date", "amount", "currency", "evidence", "createdBy"],
-                       "the keys the 1.30 rules allow (plus createdAt and the write metadata the app adds)")
+        XCTAssertEqual(Set(fields.keys), ["userId", "title", "details", "jobNumber", "date", "amount", "currency", "evidence", "createdBy", "personUserId"],
+                       "the keys the rules allow (1.33.0 adds personUserId; plus createdAt and the write metadata the app adds)")
+        XCTAssertEqual(fields["personUserId"] as? String, "sam")
         XCTAssertEqual((fields["amount"] as? NSNumber)?.doubleValue, 12.5)
         XCTAssertEqual(fields["createdBy"] as? String, "sam")
         let evidence = try XCTUnwrap(fields["evidence"] as? [[String: Any]])
@@ -239,7 +240,7 @@ final class Rulebook1300Tests: XCTestCase {
         XCTAssertEqual(fields["approvedByName"] as? String, "Mia Test")
         XCTAssertEqual(Set(fields.keys), [
             "userId", "title", "details", "jobNumber", "startDate", "endDate", "approvedByUserId", "approvedByName", "amount",
-            "currency", "evidence", "createdBy",
+            "currency", "evidence", "createdBy", "personUserId",
         ])
         XCTAssertEqual(fields["jobNumber"] as? String, "J-1042", "1.30.1: stored trimmed")
         XCTAssertNil(CanonicalBusinessEngine.priceWorkWriteFields(
