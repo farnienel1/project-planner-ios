@@ -48,7 +48,11 @@ final class AddUserScreenChecksTests: PPUITestCase {
         guard row.exists else { return }
         waitUntilSettled(row)
         row.tap()
-        assertExists("addUser.cancel", timeout: 8)
+        // A slow simulator can swallow the first tap while the More list settles (Pro Max, AU02 on #202):
+        // wait longer, and tap the row once more if Add User has not opened.
+        if element("addUser.cancel").waitForExistence(timeout: 12) { return }
+        if row.exists, row.isHittable { row.tap() }
+        assertExists("addUser.cancel", timeout: 12)
     }
 
     /// Manager with the Operatives permission: Operatives → + (AddUserView `.managerAddingOperative`).
