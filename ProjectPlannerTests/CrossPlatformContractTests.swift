@@ -120,7 +120,9 @@ final class CrossPlatformContractTests: XCTestCase {
                 // `managerUserIds` is written beside `managerIds` by `jobSaveFields` (`jobManagerUserIds` against the
                 // loaded managers and roster, RULEBOOK 1.10.0 §16); the read copy keeps the stored list.
                 if !job.storedManagerUserIds.isEmpty { payload["managerUserIds"] = job.storedManagerUserIds }
-                let stored = try XCTUnwrap(sample["data"] as? [String: Any])
+                // RULEBOOK 1.33.0 (owner decision 6 Nov): the managers' hide list is never written any more. The
+                // contract's iOS sample (web `crossPlatformContract.samples.ts`) still lists it — reported to web.
+                let stored = try XCTUnwrap(sample["data"] as? [String: Any]).filter { $0.key != "hiddenManagerUserIds" }
                 // Every field the contract says iOS writes is written, as the same kind of value.
                 for (key, value) in stored {
                     guard let written = payload[key] else {

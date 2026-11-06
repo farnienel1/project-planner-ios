@@ -1107,11 +1107,12 @@ class UserStore: ObservableObject {
         return CanonicalBusinessEngine.canManageOperatives(u.permissionSubject)
     }
     
-    /// Organisation material catalogue (batch upload, CRUD). Admins and managers only — not operatives with project materials access.
+    /// Organisation material catalogue (batch upload, CRUD). RULEBOOK 1.33.0 §16 `canManageMaterialCatalogue` (owner
+    /// decision 4 Nov): admins and super admins only — managers still search the catalogue and send orders.
     func canManageMaterialCatalogue() -> Bool {
         if isOperativeMode() { return false }
         guard let u = displayUser else { return false }
-        return hasAdminAccess() || u.permissions.manager
+        return CanonicalBusinessEngine.canManageMaterialCatalogue(Self.staffAccountRole(for: u))
     }
 
     /// Wholesalers page. Off hides the page. Super admin is unchanged.
@@ -3360,6 +3361,8 @@ class UserStore: ObservableObject {
                      organizationId: organizationId,
                      personId: user.id,
                      email: user.email,
+                     // RULEBOOK 1.33.0: the person's own company; another company's users document is never written.
+                     personOrganizationId: user.storedOrganizationId ?? user.organizationId,
                      isActive: isActive,
                      roster: unfoldedOrganizationUsers.map { row in
                          ["id": row.id, "email": row.email, "organizationId": row.storedOrganizationId ?? row.organizationId]

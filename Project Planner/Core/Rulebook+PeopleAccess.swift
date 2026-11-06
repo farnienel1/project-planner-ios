@@ -187,22 +187,58 @@ extension CanonicalBusinessEngine {
         return writes
     }
 
-    /// `userActiveWrites({ organizationId, person, isActive, roster })`: `isActive` on every users document of the
-    /// person in this organisation and `accountActive` on their membership. Empty when the script did not answer.
+    /// `userActiveWrites({ organizationId, person, isActive, roster, membershipExists })`: `isActive` on every users
+    /// document of the person in this organisation and `accountActive` on their membership. RULEBOOK 1.33.0 (owner row
+    /// 4 Nov): `person.organizationId` is the person's own company — their users document is written only when it is
+    /// this one; `membershipExists` false leaves the membership out (nil: unknown, the app updates an existing one only).
+    /// Empty when the script did not answer.
     nonisolated static func userActiveWrites(
         organizationId: String,
         personId: String,
         email: String?,
+        personOrganizationId: String? = nil,
         isActive: Bool,
-        roster: [[String: Any]]
+        roster: [[String: Any]],
+        membershipExists: Bool? = nil
     ) -> [RulebookPathWrite] {
-        let input: [String: Any] = [
+        var person: [String: Any] = ["id": personId, "email": (email as Any?) ?? NSNull()]
+        if let personOrganizationId { person["organizationId"] = personOrganizationId }
+        var input: [String: Any] = [
             "organizationId": organizationId,
-            "person": ["id": personId, "email": (email as Any?) ?? NSNull()] as [String: Any],
+            "person": person,
             "isActive": isActive,
             "roster": roster,
         ]
+        if let membershipExists { input["membershipExists"] = membershipExists }
         return pathWrites(callJSON("userActiveWrites", arguments: [input])) ?? []
+    }
+
+    // MARK: Line manager set once, then locked (RULEBOOK 1.33.0 §11, owner decision 6 Nov)
+
+    /// `canChangeLineManager(actor, target, { isCreate, invitation })`: admins any person, any time; a manager with the
+    /// Operatives permission only for an operative, and only while adding them (`isCreate`) or on an invitation they
+    /// sent that is not accepted yet; everyone else never. False when the script did not answer.
+    nonisolated static func canChangeLineManager(
+        actor: [String: Any],
+        target: [String: Any],
+        isCreate: Bool = false,
+        invitation: (accepted: Bool, invitedBy: String)? = nil
+    ) -> Bool {
+        var options: [String: Any] = ["isCreate": isCreate]
+        if let invitation { options["invitation"] = ["accepted": invitation.accepted, "invitedBy": invitation.invitedBy] }
+        return callJSON("canChangeLineManager", arguments: [actor, target, options]) as? Bool ?? false
+    }
+
+    /// `lineManagerChanged(before, after)`: the stored line manager ids or `hasNoLineManager` differ (ids without
+    /// case, order ignored). True when the script did not answer, so a locked screen refuses rather than writes.
+    nonisolated static func lineManagerChanged(before: [String: Any], after: [String: Any]) -> Bool {
+        callJSON("lineManagerChanged", arguments: [before, after]) as? Bool ?? true
+    }
+
+    /// `LINE_MANAGER_LOCKED_MESSAGE`.
+    nonisolated static var lineManagerLockedMessage: String {
+        constant("LINE_MANAGER_LOCKED_MESSAGE", as: String.self)
+            ?? "Only an admin can change the line manager once this person has been added."
     }
 
     // MARK: One flag reader (§11)
@@ -227,5 +263,15 @@ extension CanonicalBusinessEngine {
     nonisolated static func warningScopeListsUnbookedLabour(_ scope: [String: Any]?) -> Bool {
         guard let scope, (scope["kind"] as? String) == "jobs" else { return true }
         return scope["unbookedLabour"] as? Bool ?? false
+    }
+}
+
+extension AppUser {
+    /// The person as `canChangeLineManager` / `lineManagerChanged` read them (RULEBOOK 1.33.0 §11): the level flags and
+    /// toggles (`permissionSubject`), every id and the line-manager fields (`RulebookPeople.person`).
+    var lineManagerAccessRow: [String: Any] {
+        var row = permissionSubject
+        for (key, value) in RulebookPeople.person(self) where row[key] == nil { row[key] = value }
+        return row
     }
 }

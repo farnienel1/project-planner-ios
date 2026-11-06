@@ -33,6 +33,22 @@ enum OfflineSyncCoordinator {
         postDropped(entry: entry)
     }
 
+    /// RULEBOOK 1.33.0 (owner decision 4 Nov): Undo of a queued booking delete from the sync list. The item leaves the
+    /// queue unsent and the booking is put back on this device.
+    static func undoDelete(entryId: UUID, outbox: OfflineOutboxStore? = nil) {
+        let outbox = outbox ?? OfflineOutboxStore.shared
+        guard let queued = outbox.queuedDelete(entryId: entryId) else { return }
+        outbox.removeEntry(id: entryId)
+        postDeleteRestored(entry: queued.entry, payload: queued.payload)
+    }
+
+    /// The outcome of a queued delete that was not written (`offlineDeleteReplayDecision`): resolved with nothing to
+    /// send (`alreadyGone`), or refused with a message (the booking is put back).
+    private enum OfflineDeleteOutcome: Error {
+        case resolved
+        case refused(message: String)
+    }
+
     static func processOutbox(
         firebaseBackend: FirebaseBackend,
         outbox: OfflineOutboxStore? = nil
@@ -73,6 +89,18 @@ enum OfflineSyncCoordinator {
                 synced += 1
                 // The server confirmed this change: follow-ups that wait for it (leave approver notices) run now.
                 NotificationCenter.default.post(name: .offlineOutboxEntrySynced, object: nil, userInfo: entryInfo(entry))
+            } catch let outcome as OfflineDeleteOutcome {
+                // RULEBOOK 1.33.0: a queued delete that was not written leaves the queue: gone already (nothing to do),
+                // or refused — the booking comes back with the rulebook's message.
+                switch outcome {
+                case .resolved:
+                    outbox.removeEntry(id: entry.id)
+                    synced += 1
+                case .refused(let message):
+                    outbox.removeRefused(id: entry.id, message: message)
+                    restoreRefusedDelete(entry: entry)
+                    failed += 1
+                }
             } catch {
                 if let writeError = error as? OfflinePartialUpdateWriter.WriteError {
                     // Another account is signed in, or the path is unusable: retrying cannot help.
@@ -115,15 +143,18 @@ enum OfflineSyncCoordinator {
         ]
     }
 
-    /// Bookings: `bookingReplayRefusedIsFinal`; every other queued item: `replayRefusedIsFinal`.
+    /// Bookings: `bookingReplayRefusedIsFinal`; every other queued item: `replayRefusedIsFinal`. The Firestore code is
+    /// read through an app error that wraps it (1.33.0: before, a refusal the backend re-wrapped was never seen as
+    /// final and retried until the attempt limit). Queued deletes are decided in `replayDelete`.
     private static func replayIsFinal(_ error: Error, entry: OfflineOutboxEntry) -> Bool {
         switch entry.operation {
-        case .saveBooking, .saveManagerSiteBooking, .deleteBooking, .deleteManagerSiteBooking:
+        case .saveBooking, .saveManagerSiteBooking:
             return BookingWritePatch.isRefusedFinal(error, isCreate: bookingSaveIsCreate(entry))
+        case .deleteBooking, .deleteManagerSiteBooking:
+            return false
         default:
-            let nsError = error as NSError
-            guard nsError.domain == "FIRFirestoreErrorDomain" else { return false }
-            return CanonicalBusinessEngine.replayRefusedIsFinal(errorCode: nsError.code, isCreate: queuedItemIsCreate(entry))
+            guard let code = BookingWritePatch.firestoreErrorCode(error) else { return false }
+            return CanonicalBusinessEngine.replayRefusedIsFinal(errorCode: code, isCreate: queuedItemIsCreate(entry))
         }
     }
 
@@ -165,18 +196,8 @@ enum OfflineSyncCoordinator {
                 changedFields: payload.changedFields.map { Set($0) }
             )
 
-        case .deleteBooking:
-            let payload = try decoder.decode(OfflineDeleteBookingPayload.self, from: entry.payload)
-            var deleteStub = Booking(
-                id: payload.bookingId,
-                operativeId: UUID(),
-                projectId: UUID(),
-                date: Date(),
-                timeSlot: .fullDay,
-                bookedBy: ""
-            )
-            deleteStub.documentId = payload.documentId
-            try await firebaseBackend.deleteBooking(deleteStub, organizationId: entry.organizationId)
+        case .deleteBooking, .deleteManagerSiteBooking:
+            try await replayDelete(entry: entry, firebaseBackend: firebaseBackend)
 
         case .saveManagerSiteBooking:
             let payload = try decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: entry.payload)
@@ -185,17 +206,6 @@ enum OfflineSyncCoordinator {
                 organizationId: entry.organizationId,
                 changedFields: payload.changedFields.map { Set($0) }
             )
-
-        case .deleteManagerSiteBooking:
-            let payload = try decoder.decode(OfflineDeleteManagerSiteBookingPayload.self, from: entry.payload)
-            let deleteStub = ManagerSiteBooking(
-                id: payload.bookingId,
-                userId: "",
-                date: Date(),
-                timeSlot: .morning,
-                locationType: .office
-            )
-            try await firebaseBackend.deleteManagerSiteBooking(deleteStub, organizationId: entry.organizationId)
 
         case .saveMaterialItem:
             let payload = try decoder.decode(OfflineSaveMaterialItemPayload.self, from: entry.payload)
@@ -246,6 +256,61 @@ enum OfflineSyncCoordinator {
         }
     }
 
+    /// RULEBOOK 1.33.0 §2: replays a queued delete (`offlineDeleteReplayDecision` in a transaction with its
+    /// tombstone). The document id is the stored one (a lower-case manager schedule id stays lower case). A server
+    /// refusal is read with `offlineDeleteRefusalDecision`: not-found is gone already, permission-denied is refused
+    /// (the booking comes back), anything else retries.
+    private static func replayDelete(entry: OfflineOutboxEntry, firebaseBackend: FirebaseBackend) async throws {
+        let payload = try JSONDecoder().decode(OfflineDeleteBookingPayload.self, from: entry.payload)
+        let collection = payload.collection ?? (entry.operation == .deleteManagerSiteBooking ? "managerSiteBookings" : "bookings")
+        let documentId = payload.documentId ?? payload.bookingId.uuidString
+        let decision: String
+        do {
+            decision = try await firebaseBackend.replayOfflineBookingDelete(
+                collection: collection,
+                documentId: documentId,
+                organizationId: entry.organizationId,
+                fingerprint: payload.fingerprint
+            )
+        } catch {
+            guard let code = BookingWritePatch.firestoreErrorCode(error) else { throw error }
+            switch CanonicalBusinessEngine.offlineDeleteRefusalDecision(code: code) {
+            case "alreadyGone": throw OfflineDeleteOutcome.resolved
+            case "refusePermission": throw OfflineDeleteOutcome.refused(message: CanonicalBusinessEngine.offlineDeleteRefusedMessage)
+            default: throw error
+            }
+        }
+        switch decision {
+        case "apply":
+            return
+        case "alreadyGone", "dropLocal":
+            throw OfflineDeleteOutcome.resolved
+        case "refuseChanged":
+            throw OfflineDeleteOutcome.refused(message: CanonicalBusinessEngine.offlineDeleteChangedMessage)
+        default:
+            throw OfflineDeleteOutcome.refused(message: CanonicalBusinessEngine.offlineDeleteRefusedMessage)
+        }
+    }
+
+    /// A refused delete: the booking reappears on this device (the server still has it; its listener confirms).
+    private static func restoreRefusedDelete(entry: OfflineOutboxEntry) {
+        guard let payload = try? JSONDecoder().decode(OfflineDeleteBookingPayload.self, from: entry.payload) else { return }
+        NotificationCenter.default.post(name: .offlineOutboxEntryRefused, object: nil, userInfo: entryInfo(entry))
+        postDeleteRestored(entry: entry, payload: payload)
+    }
+
+    /// Tells the stores to put a booking whose queued delete was undone or refused back (`.offlineBookingDeleteRestored`).
+    private static func postDeleteRestored(entry: OfflineOutboxEntry, payload: OfflineDeleteBookingPayload) {
+        var info: [String: Any] = [
+            "bookingId": payload.bookingId.uuidString,
+            "collection": payload.collection ?? (entry.operation == .deleteManagerSiteBooking ? "managerSiteBookings" : "bookings"),
+            "organizationId": entry.organizationId,
+        ]
+        if let booking = payload.labourBooking { info["labourBooking"] = booking }
+        if let booking = payload.managerBooking { info["managerBooking"] = booking }
+        NotificationCenter.default.post(name: .offlineBookingDeleteRestored, object: nil, userInfo: info)
+    }
+
     /// Removes a refused item for good and tells the stores to drop the local copy.
     private static func handleRefused(entry: OfflineOutboxEntry, outbox: OfflineOutboxStore) {
         let message: String
@@ -254,7 +319,7 @@ enum OfflineSyncCoordinator {
             // `BOOKING_REPLAY_REFUSED_MESSAGE`
             message = CanonicalBusinessEngine.bookingReplayRefusedMessage
         case .deleteBooking, .deleteManagerSiteBooking:
-            message = "You do not have permission to delete this booking. It has been put back."
+            message = CanonicalBusinessEngine.offlineDeleteRefusedMessage
         default:
             message = "\(entry.displayTitle): this change was refused by the server and was not saved."
         }
@@ -265,6 +330,11 @@ enum OfflineSyncCoordinator {
     /// Tells the stores an entry left the queue unsynced, so they drop its local pending copy.
     private static func postDropped(entry: OfflineOutboxEntry) {
         NotificationCenter.default.post(name: .offlineOutboxEntryRefused, object: nil, userInfo: entryInfo(entry))
+        // A discarded or dropped delete was never sent: the booking is still on the server, so it comes back here.
+        if entry.operation == .deleteBooking || entry.operation == .deleteManagerSiteBooking,
+           let payload = try? JSONDecoder().decode(OfflineDeleteBookingPayload.self, from: entry.payload) {
+            postDeleteRestored(entry: entry, payload: payload)
+        }
         switch entry.operation {
         case .saveBooking, .deleteBooking:
             NotificationCenter.default.post(
@@ -289,6 +359,10 @@ extension Notification.Name {
     /// A queued booking write was refused for good. userInfo: `bookingId` (String), `collection`
     /// (`bookings` | `managerSiteBookings`), `operation` (outbox operation raw value).
     static let offlineBookingReplayRefused = Notification.Name("offlineBookingReplayRefused")
+    /// RULEBOOK 1.33.0: a queued booking delete was undone or refused; the booking goes back on this device.
+    /// userInfo: `bookingId`, `collection`, `organizationId` (Strings) and `labourBooking` (`Booking`) or
+    /// `managerBooking` (`ManagerSiteBooking`) when the item carried the copy.
+    static let offlineBookingDeleteRestored = Notification.Name("offlineBookingDeleteRestored")
     /// One outbox entry was written and confirmed by the server. userInfo: `operation`, `entityId`,
     /// `organizationId` (Strings).
     static let offlineOutboxEntrySynced = Notification.Name("offlineOutboxEntrySynced")

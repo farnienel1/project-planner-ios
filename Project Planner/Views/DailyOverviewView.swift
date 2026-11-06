@@ -89,19 +89,71 @@ struct DailyOverviewView: View {
     /// Bookings that fill this day. `bookingOccupiesDay` decides the status (Completed counts; Cancelled does not),
     /// so the project cards and every row below use the same list as web.
     private var dayBookings: [Booking] {
-        bookingStore.bookings.filter { booking in
+        let scope = overviewScope
+        return bookingStore.bookings.filter { booking in
             CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate)
                 && CanonicalBusinessEngine.bookingOccupiesDay(booking.status.rawValue) == true
+                && labourBookingInScope(booking, scope: scope)
         }
     }
     
     private var dayHolidays: [HolidayBooking] {
-        holidayStore.approvedBookings(covering: overviewDate)
+        let scope = overviewScope
+        return holidayStore.approvedBookings(covering: overviewDate).filter { holidayInScope($0, scope: scope) }
+    }
+
+    // MARK: Team scope (RULEBOOK 1.33.0 §6)
+
+    /// The viewer's Daily Overview scope (`dailyOverviewScopeFor`, owner decision 5 Nov / Q-D1 6 Nov): admins see
+    /// everyone and every subcontractor booking; a manager only themselves and their reports. Booked people, leave,
+    /// unbooked people and the day's hours all follow it (`isDailyOverviewRowInScope`). Nil is everything.
+    private var overviewScope: [String: Any]? {
+        DailyOverviewScopeSupport.scope(users: userStore.organizationUsers, operatives: operativeStore.allOperatives)
+    }
+
+    private func labourBookingInScope(_ booking: Booking, scope: [String: Any]?) -> Bool {
+        guard scope != nil else { return true }
+        let email = emailForLabourBooking(
+            operativeId: booking.operativeId,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
+        return DailyOverviewScopeSupport.isRowInScope(scope, personIds: [booking.storedOperativeId], email: email)
+    }
+
+    private func managerBookingInScope(_ booking: ManagerSiteBooking, scope: [String: Any]?) -> Bool {
+        guard scope != nil else { return true }
+        let email = StaffEmailIdentity.account(forUserId: booking.userId, in: userStore.organizationUsers)?.email
+        return DailyOverviewScopeSupport.isRowInScope(scope, personIds: [booking.userId], email: email)
+    }
+
+    private func holidayInScope(_ holiday: HolidayBooking, scope: [String: Any]?) -> Bool {
+        guard scope != nil else { return true }
+        let ids = [holiday.userId, holiday.operativeIdRaw].compactMap { $0 }.filter { !$0.isEmpty }
+        let email = holiday.userId.flatMap { StaffEmailIdentity.account(forUserId: $0, in: userStore.organizationUsers)?.email }
+            ?? holiday.operativeIdRaw.flatMap { raw in
+                operativeStore.allOperatives.first { $0.documentId.caseInsensitiveCompare(raw) == .orderedSame }?.email
+            }
+        return DailyOverviewScopeSupport.isRowInScope(scope, personIds: ids, email: email)
+    }
+
+    /// Manager schedule bookings of the people in scope.
+    private var scopedManagerBookings: [ManagerSiteBooking] {
+        let scope = overviewScope
+        guard scope != nil else { return managerScheduleStore.managerSiteBookings }
+        return managerScheduleStore.managerSiteBookings.filter { managerBookingInScope($0, scope: scope) }
+    }
+
+    /// Subcontractor bookings: admins only (`isDailyOverviewRowInScope` with `subcontractor`).
+    private var scopedSubcontractorBookings: [SubcontractorBooking] {
+        DailyOverviewScopeSupport.isRowInScope(overviewScope, personIds: [], email: nil, subcontractor: true)
+            ? subcontractorStore.bookings
+            : []
     }
     
     private var dayOfficeBookings: [ManagerSiteBooking] {
         let p = payrollTimePolicy
-        return managerScheduleStore.managerSiteBookings
+        return scopedManagerBookings
             .filter { booking in
                 CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .office
@@ -111,7 +163,7 @@ struct DailyOverviewView: View {
     
     private var dayWorkingFromHomeBookings: [ManagerSiteBooking] {
         let p = payrollTimePolicy
-        return managerScheduleStore.managerSiteBookings
+        return scopedManagerBookings
             .filter { booking in
                 CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .workingFromHome
@@ -121,7 +173,7 @@ struct DailyOverviewView: View {
     
     private var daySiteSurveyBookings: [ManagerSiteBooking] {
         let p = payrollTimePolicy
-        return managerScheduleStore.managerSiteBookings
+        return scopedManagerBookings
             .filter { booking in
                 CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .siteSurvey
@@ -130,7 +182,7 @@ struct DailyOverviewView: View {
     }
     
     private var dayCustomBookingsByName: [String: [ManagerSiteBooking]] {
-        let list = managerScheduleStore.managerSiteBookings.filter { booking in
+        let list = scopedManagerBookings.filter { booking in
             CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate) &&
                 booking.locationType == .custom
         }
@@ -166,12 +218,12 @@ struct DailyOverviewView: View {
         for b in dayBookings {
             keys.insert(overviewPersonKey(operativeId: b.operativeId))
         }
-        for b in managerScheduleStore.managerSiteBookings {
+        for b in scopedManagerBookings {
             guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
             guard b.locationType == .project || b.locationType == .smallWork else { continue }
             keys.insert(overviewPersonKey(userId: b.userId))
         }
-        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
             keys.insert("sub:\(b.subcontractorId.uuidString)")
         }
         return keys.count
@@ -197,7 +249,9 @@ struct DailyOverviewView: View {
             policy: payrollTimePolicy,
             includeWeekends: detection.includeWeekendsForUnbookedLabour,
             excludedUserIds: detection.excludedUserIdsFromUnbookedWarnings,
-            weekendCoverage: detection.weekendCoverage
+            weekendCoverage: detection.weekendCoverage,
+            // RULEBOOK 1.33.0 §6: a manager's unbooked people are their own team (`dailyOverviewScopeFor`).
+            scope: .dailyOverview
         )
     }
 
@@ -219,12 +273,12 @@ struct DailyOverviewView: View {
         for b in dayBookings {
             keys.insert(overviewPersonKey(operativeId: b.operativeId))
         }
-        for b in managerScheduleStore.managerSiteBookings where cal.isDate(b.date, inSameDayAs: overviewDate) {
+        for b in scopedManagerBookings where cal.isDate(b.date, inSameDayAs: overviewDate) {
             if scheduleOptions.includesManagerScheduleLocation(b) {
                 keys.insert(overviewPersonKey(userId: b.userId))
             }
         }
-        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
             keys.insert("sub:\(b.subcontractorId.uuidString)")
         }
         return keys.count
@@ -240,12 +294,12 @@ struct DailyOverviewView: View {
         for b in dayBookings {
             if let split = b.workedHoursSplit(policy: p) { splits.append(split) }
         }
-        for b in managerScheduleStore.managerSiteBookings {
+        for b in scopedManagerBookings {
             guard cal.isDate(b.date, inSameDayAs: overviewDate) else { continue }
             guard b.locationType == .project || b.locationType == .smallWork else { continue }
             if let split = b.workedHoursSplit(policy: p) { splits.append(split) }
         }
-        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
             if let split = b.payrollMirrorBooking().workedHoursSplit(policy: p) { splits.append(split) }
         }
         return splits
@@ -263,11 +317,11 @@ struct DailyOverviewView: View {
         let p = payrollTimePolicy
         let cal = CanonicalBusinessEngine.businessCalendar
         var results = dayBookings.map { $0.payrollHoursResult(policy: p) }
-        for b in managerScheduleStore.managerSiteBookings
+        for b in scopedManagerBookings
         where cal.isDate(b.date, inSameDayAs: overviewDate) && (b.locationType == .project || b.locationType == .smallWork) {
             results.append(b.payrollHoursResult(policy: p))
         }
-        for b in subcontractorStore.bookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
             results.append(b.payrollMirrorBooking().payrollHoursResult(policy: p))
         }
         return results
@@ -348,12 +402,12 @@ struct DailyOverviewView: View {
     
     private var displayedProjectIds: [UUID] {
         var ids = Set(bookingsByProject.keys)
-        let managerIds = managerScheduleStore.managerSiteBookings.compactMap { booking -> UUID? in
+        let managerIds = scopedManagerBookings.compactMap { booking -> UUID? in
             guard CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate),
                   (booking.locationType == .project || booking.locationType == .smallWork) else { return nil }
             return booking.locationId
         }
-        let subcontractorIds = subcontractorStore.bookings.compactMap { booking -> UUID? in
+        let subcontractorIds = scopedSubcontractorBookings.compactMap { booking -> UUID? in
             guard CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate),
                   booking.status != .cancelled else { return nil }
             return booking.projectId
@@ -920,6 +974,7 @@ struct DailyOverviewView: View {
                 project: project,
                 bookings: bookings,
                 day: overviewDate,
+                scope: overviewScope,
                 // RULEBOOK 1.10.0 §16: `canWriteBooking` — admins, or a manager of this job.
                 canEditBookings: canBookLabour && userStore.canWriteBooking(on: project),
                 onEditOperative: { booking in
@@ -1223,9 +1278,11 @@ private extension DailyOverviewView {
         }
     }
 
-    /// RULEBOOK §2 `offlineAvailability("booking.delete")`: online only, with the standard message.
+    /// RULEBOOK 1.33.0 §2 `offlineAvailability(bookingDeleteOfflineAction("bookings"))`: allowed offline (queued with
+    /// its tombstone, "Pending sync"); nil while the action is usable.
     private var labourBookingDeleteDisabledReason: String? {
-        OfflinePolicy.isEnabled(.deleteBooking, isOnline: smartCache.isOnline) ? nil : OfflinePolicy.onlineOnlyMessage
+        OfflinePolicy.isEnabled(OfflinePolicy.deleteAction(collection: "bookings"), isOnline: smartCache.isOnline)
+            ? nil : OfflinePolicy.onlineOnlyMessage
     }
 
     @ViewBuilder
@@ -1289,13 +1346,19 @@ private extension DailyOverviewView {
                     )
                 },
                 onCancel: { bookingEditTarget = nil },
-                onDelete: {
+                // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete it.
+                onDelete: managerScheduleStore.canDeleteBooking(booking) ? {
                     bookingEditTarget = nil
                     Task { await managerScheduleStore.deleteBooking(booking) }
-                }
+                } : nil
             )
         case .subcontractor(let booking, _, _):
-            SubcontractorBookingEditSheet(booking: booking) {
+            SubcontractorBookingEditSheet(
+                booking: booking,
+                // RULEBOOK 1.33.0 §2: deleting a subcontractor booking is online only (`booking.delete_subcontractor`).
+                deleteDisabledReason: OfflinePolicy.isEnabled(.deleteSubcontractorBooking, isOnline: smartCache.isOnline)
+                    ? nil : OfflinePolicy.onlineOnlyMessage
+            ) {
                 bookingEditTarget = nil
             }
             .environmentObject(firebaseBackend)
@@ -1573,6 +1636,8 @@ struct ProjectBookingCard: View {
     let project: Project
     let bookings: [Booking]
     let day: Date
+    /// RULEBOOK 1.33.0 §6: the viewer's Daily Overview scope (`dailyOverviewScopeFor`); nil is everything.
+    var scope: [String: Any]? = nil
     var canEditBookings: Bool = false
     var onEditOperative: ((Booking) -> Void)?
     var onEditManager: ((ManagerSiteBooking) -> Void)?
@@ -1614,13 +1679,20 @@ struct ProjectBookingCard: View {
             .filter { booking in
                 booking.locationId == project.id &&
                     (booking.locationType == .project || booking.locationType == .smallWork) &&
-                    CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: day)
+                    CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: day) &&
+                    (scope == nil || DailyOverviewScopeSupport.isRowInScope(
+                        scope,
+                        personIds: [booking.userId],
+                        email: StaffEmailIdentity.account(forUserId: booking.userId, in: userStore.organizationUsers)?.email
+                    ))
             }
             .sorted { $0.minutesSortKey(policy: payrollTimePolicy) < $1.minutesSortKey(policy: payrollTimePolicy) }
     }
 
     private var subcontractorBookingsThisProjectDay: [SubcontractorBooking] {
-        subcontractorStore.bookings
+        // RULEBOOK 1.33.0 §6: subcontractor bookings only for admins (`isDailyOverviewRowInScope` with `subcontractor`).
+        guard DailyOverviewScopeSupport.isRowInScope(scope, personIds: [], email: nil, subcontractor: true) else { return [] }
+        return subcontractorStore.bookings
             .filter { booking in
                 booking.projectId == project.id &&
                     CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: day) &&

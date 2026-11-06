@@ -70,10 +70,15 @@ final class OfflineBookingTombstoneTests: XCTestCase {
 
     func testOfflinePolicyTableCoversEveryAction() {
         XCTAssertEqual(OfflinePolicy.availability(.createBooking), .allowedOffline)
-        // Rulebook 1.2.0: deleting a booking is online only (the delete and its tombstone are not queued).
-        XCTAssertEqual(OfflinePolicy.availability(.deleteBooking), .onlineOnly)
-        XCTAssertFalse(OfflinePolicy.queuesWhileOffline(.deleteBooking, isOnline: false))
-        XCTAssertEqual(OfflinePolicy.availability(.cancelBooking), .allowedOffline)
+        // Rulebook 1.33.0 (owner decision 4 Nov): deleting a labour or manager schedule booking is queued offline with
+        // its tombstone; a subcontractor booking stays online only; there is no cancel action.
+        XCTAssertEqual(OfflinePolicy.availability(.deleteBooking), .allowedOffline)
+        XCTAssertTrue(OfflinePolicy.queuesWhileOffline(.deleteBooking, isOnline: false))
+        XCTAssertEqual(OfflinePolicy.availability(.deleteSubcontractorBooking), .onlineOnly)
+        XCTAssertEqual(OfflinePolicy.deleteAction(collection: "bookings"), .deleteBooking)
+        XCTAssertEqual(OfflinePolicy.deleteAction(collection: "managerSiteBookings"), .deleteBooking)
+        XCTAssertEqual(OfflinePolicy.deleteAction(collection: "subcontractorBookings"), .deleteSubcontractorBooking)
+        XCTAssertNil(OfflineAction(rawValue: "booking.cancel"))
         XCTAssertEqual(OfflinePolicy.availability(.annualLeaveRequest), .allowedOffline)
         XCTAssertEqual(OfflinePolicy.availability(.ownNotificationToggles), .allowedOffline)
         XCTAssertEqual(OfflinePolicy.availability(.currency), .onlineOnly)

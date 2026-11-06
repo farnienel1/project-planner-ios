@@ -25,9 +25,142 @@ struct SmallWorksView: View {
     @State private var searchText = ""
     @State private var showingCreateSmallWorks = false
     @State private var deadlineAssignedProjectIds: Set<UUID> = []
+    /// RULEBOOK 1.33.0 §21: the person's own list (picks in `organizations/{orgId}/worksListPicks/{uid}`).
+    @StateObject private var myWorks = MyWorksPicksModel()
+    /// The My list chosen (true) or a status chip chosen (false); nil is the rulebook's default (`defaultWorksListTab`).
+    @State private var myListChosen: Bool? = nil
+    @State private var showingMyWorksPicker = false
 
     private var listCounts: WorksListStatusCounts {
         WorksListStatusCounts.from(smallWorksBeforeStatusFilter)
+    }
+
+    // MARK: My list (RULEBOOK 1.33.0 §21)
+
+    /// `hasMyWorksList`: admins and managers get the My list; operatives never.
+    private var hasMyList: Bool {
+        CanonicalBusinessEngine.hasMyWorksList(userStore.displayJobAccessViewer)
+    }
+
+    /// The My list is shown: chosen, or the first and default filter (`defaultWorksListTab` = `mine`).
+    private var showsMyList: Bool {
+        guard hasMyList else { return false }
+        return myListChosen ?? (CanonicalBusinessEngine.defaultWorksListTab(userStore.displayJobAccessViewer) == "mine")
+    }
+
+    /// `myWorksList`: the saved picks, else the jobs they manage (until their first save); every status.
+    private var myListJobs: [Project] {
+        guard hasMyList, myWorks.loaded else { return [] }
+        return CanonicalBusinessEngine.myWorksList(
+            projectStore.projects + projectStore.smallWorks,
+            picks: myWorks.picks,
+            viewer: userStore.displayJobAccessViewer,
+            context: worksListContext,
+            kind: .smallWorks
+        )
+    }
+
+    /// The status filter as the tiles and chips see it: none while the My list is shown; choosing one leaves the My list.
+    private var statusSelection: Binding<ProjectStatus?> {
+        Binding(
+            get: { showsMyList ? nil : selectedStatus },
+            set: { selectedStatus = $0; myListChosen = false }
+        )
+    }
+
+    private func chooseStatus(_ status: ProjectStatus?) {
+        selectedStatus = status
+        myListChosen = false
+    }
+
+    private func refreshMyWorksListener() {
+        guard hasMyList else {
+            myWorks.stop()
+            return
+        }
+        myWorks.listen(
+            backend: firebaseBackend,
+            organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId,
+            uid: firebaseBackend.currentUser?.uid
+        )
+    }
+
+    private var myWorksPickerSheet: some View {
+        MyWorksPickerSheet(
+            kind: .smallWorks,
+            rows: CanonicalBusinessEngine.myWorksPickerRows(
+                projectStore.projects + projectStore.smallWorks,
+                picks: myWorks.picks,
+                viewer: userStore.displayJobAccessViewer,
+                context: worksListContext,
+                kind: .smallWorks
+            ),
+            accent: WorksDashboardListStyle.smallWorks.accent
+        ) { ids in
+            guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+                  let uid = firebaseBackend.currentUser?.uid else {
+                throw NSError(domain: "MyWorks", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in to an organisation."])
+            }
+            try await firebaseBackend.saveMyWorksPicks(organizationId: orgId, uid: uid, kind: .smallWorks, ids: ids)
+        }
+    }
+
+    private var myListLoadingState: some View {
+        ProgressView("Loading your list…")
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 28)
+    }
+
+    private var myListEmptyState: some View {
+        VStack(spacing: 14) {
+            PPIconTile(symbol: "star", family: .sites, size: PPMetrics.quickActionIcon, lifted: true)
+            Text(CanonicalBusinessEngine.myWorksEmptyTitle(.smallWorks))
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+            Button(CanonicalBusinessEngine.myWorksEmptyActionLabel(.smallWorks)) {
+                showingMyWorksPicker = true
+            }
+            .accessibilityIdentifier("smallWorks.myList.choose")
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .tint(PPColor.brand)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private var myListChips: some View {
+        if hasMyList {
+            WorksRevampFilterChip(
+                title: "\(CanonicalBusinessEngine.myWorksTabLabel(.smallWorks)) · \(myListJobs.count)",
+                isSelected: showsMyList,
+                selectedForeground: WorksDashboardPalette.ink,
+                selectedFill: WorksDashboardListStyle.smallWorks.accent,
+                titleFont: .subheadline.weight(.semibold),
+                horizontalPadding: 15,
+                verticalPadding: 9,
+                accessibilityIdentifier: "smallWorks.filter.mine",
+                action: { myListChosen = true }
+            )
+            if showsMyList {
+                Button {
+                    showingMyWorksPicker = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(WorksDashboardPalette.ink)
+                        .frame(width: 36, height: 36)
+                        .background(Circle().fill(ProjectWorksRevampColors.surface))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("smallWorks.myList.picker")
+                .accessibilityLabel("Choose small works for your list")
+            }
+        }
     }
 
     private var canCreateSmallWorks: Bool {
@@ -90,6 +223,8 @@ struct SmallWorksView: View {
                     // Reset navigation when Small Works tab is selected
                     navigationPath.removeLast(navigationPath.count)
                     selectedStatus = .active
+                    // RULEBOOK 1.33.0 §21: back to the default filter (My Small works for admins and managers).
+                    myListChosen = nil
                 }
             }
             .onAppear {
@@ -97,7 +232,13 @@ struct SmallWorksView: View {
                     selectedStatus = .active
                 }
                 openPendingCatalogueJob()
+                refreshMyWorksListener()
             }
+            .onChange(of: firebaseBackend.currentOrganization?.firestoreDocumentId) { _, _ in
+                // Organisation context: a switch re-subscribes; the previous company's picks are never shown.
+                refreshMyWorksListener()
+            }
+            .onChange(of: hasMyList) { _, _ in refreshMyWorksListener() }
             .onReceive(NotificationCenter.default.publisher(for: .pushWorkCatalogueDetail)) { note in
                 let isSmallWorks = note.userInfo?["isSmallWorks"] as? Bool ?? false
                 guard isSmallWorks else { return }
@@ -116,6 +257,9 @@ struct SmallWorksView: View {
                         .environmentObject(operativeStore)
                         .environmentObject(userStore)
                 }
+            }
+            .sheet(isPresented: $showingMyWorksPicker) {
+                myWorksPickerSheet
             }
             .sheet(isPresented: $showingCreateSmallWorks) {
                 CreateSmallWorksView()
@@ -197,17 +341,21 @@ struct SmallWorksView: View {
                 subtitle: WorksDashboardListStyle.smallWorks.subtitle
             )
             .accessibilityAddTraits(.isHeader)
-            WorksDashboardStatsRow(counts: listCounts, selectedStatus: $selectedStatus)
+            WorksDashboardStatsRow(counts: listCounts, selectedStatus: statusSelection)
                 .padding(.top, 18)
             WorksDashboardSearchRow(text: $searchText, placeholder: WorksDashboardListStyle.smallWorks.searchPlaceholder) {
                 Menu {
-                    Button("All · \(listCounts.all)") { selectedStatus = nil }
+                    if hasMyList {
+                        Button("\(CanonicalBusinessEngine.myWorksTabLabel(.smallWorks)) · \(myListJobs.count)") { myListChosen = true }
+                            .accessibilityIdentifier("smallWorks.filter.mine")
+                    }
+                    Button("All · \(listCounts.all)") { chooseStatus(nil) }
                         .accessibilityIdentifier("smallWorks.filter.all")
-                    Button("Active · \(listCounts.active)") { selectedStatus = .active }
+                    Button("Active · \(listCounts.active)") { chooseStatus(.active) }
                         .accessibilityIdentifier("smallWorks.filter.active")
-                    Button("Upcoming · \(listCounts.upcoming)") { selectedStatus = .upcoming }
+                    Button("Upcoming · \(listCounts.upcoming)") { chooseStatus(.upcoming) }
                         .accessibilityIdentifier("smallWorks.filter.upcoming")
-                    Button("Completed · \(listCounts.completed)") { selectedStatus = .completed }
+                    Button("Completed · \(listCounts.completed)") { chooseStatus(.completed) }
                         .accessibilityIdentifier("smallWorks.filter.completed")
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
@@ -238,6 +386,10 @@ struct SmallWorksView: View {
             ProgressView("Finding jobs assigned to you...")
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 28)
+        } else if showsMyList && !myWorks.loaded && !smallWorksBeforeStatusFilter.isEmpty {
+            myListLoadingState
+        } else if showsMyList && filteredSmallWorks.isEmpty && !smallWorksBeforeStatusFilter.isEmpty {
+            myListEmptyState
         } else if searchFilteredSmallWorks.isEmpty {
             if filteredSmallWorks.isEmpty {
                 emptyStateView
@@ -266,9 +418,10 @@ struct SmallWorksView: View {
     private var filterChipsRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                myListChips
                 WorksRevampFilterChip(
                     title: "All · \(listCounts.all)",
-                    isSelected: selectedStatus == nil,
+                    isSelected: !showsMyList && selectedStatus == nil,
                     selectedForeground: WorksDashboardPalette.ink,
                     selectedFill: WorksDashboardListStyle.smallWorks.accent,
                     titleFont: .subheadline.weight(.semibold),
@@ -276,11 +429,11 @@ struct SmallWorksView: View {
                     verticalPadding: 9
                 ,
                     accessibilityIdentifier: "smallWorks.filter.all",
-                    action: { selectedStatus = nil }
+                    action: { chooseStatus(nil) }
                 )
                 WorksRevampFilterChip(
                     title: "Active · \(listCounts.active)",
-                    isSelected: selectedStatus == .active,
+                    isSelected: !showsMyList && selectedStatus == .active,
                     selectedForeground: WorksDashboardPalette.ink,
                     selectedFill: WorksDashboardListStyle.smallWorks.accent,
                     titleFont: .subheadline.weight(.semibold),
@@ -288,11 +441,11 @@ struct SmallWorksView: View {
                     verticalPadding: 9
                 ,
                     accessibilityIdentifier: "smallWorks.filter.active",
-                    action: { selectedStatus = .active }
+                    action: { chooseStatus(.active) }
                 )
                 WorksRevampFilterChip(
                     title: "Upcoming · \(listCounts.upcoming)",
-                    isSelected: selectedStatus == .upcoming,
+                    isSelected: !showsMyList && selectedStatus == .upcoming,
                     selectedForeground: WorksDashboardPalette.ink,
                     selectedFill: WorksDashboardListStyle.smallWorks.accent,
                     titleFont: .subheadline.weight(.semibold),
@@ -300,11 +453,11 @@ struct SmallWorksView: View {
                     verticalPadding: 9
                 ,
                     accessibilityIdentifier: "smallWorks.filter.upcoming",
-                    action: { selectedStatus = .upcoming }
+                    action: { chooseStatus(.upcoming) }
                 )
                 WorksRevampFilterChip(
                     title: "Completed · \(listCounts.completed)",
-                    isSelected: selectedStatus == .completed,
+                    isSelected: !showsMyList && selectedStatus == .completed,
                     selectedForeground: WorksDashboardPalette.ink,
                     selectedFill: WorksDashboardListStyle.smallWorks.accent,
                     titleFont: .subheadline.weight(.semibold),
@@ -312,7 +465,7 @@ struct SmallWorksView: View {
                     verticalPadding: 9
                 ,
                     accessibilityIdentifier: "smallWorks.filter.completed",
-                    action: { selectedStatus = .completed }
+                    action: { chooseStatus(.completed) }
                 )
             }
         }
@@ -359,7 +512,7 @@ struct SmallWorksView: View {
 
             if isEmptyDueToStatusFilterOnly {
                 Button("Show all small works") {
-                    selectedStatus = nil
+                    chooseStatus(nil)
                 }
                 .accessibilityIdentifier("smallWorks.showAllSmallWorks")
                 .buttonStyle(.borderedProminent)
@@ -468,11 +621,13 @@ struct SmallWorksView: View {
     }
     
     private var isEmptyDueToStatusFilterOnly: Bool {
-        guard selectedStatus != nil else { return false }
+        guard !showsMyList, selectedStatus != nil else { return false }
         return !smallWorksBeforeStatusFilter.isEmpty && filteredSmallWorks.isEmpty
     }
     
     private var filteredSmallWorks: [Project] {
+        // RULEBOOK 1.33.0 §21: the My list (`myWorksList`) is its own filter, every status.
+        if showsMyList { return myListJobs }
         var works = smallWorksBeforeStatusFilter
         
         if let status = selectedStatus {

@@ -32,6 +32,18 @@ extension CanonicalBusinessEngine {
         return callJSON("canSendMaterialOrders", arguments: [viewer]) as? Bool ?? false
     }
 
+    /// RULEBOOK 1.33.0 §16 `canManageMaterialCatalogue(viewer)`: who adds, edits and deletes Materials catalogue items
+    /// and prices — admins and super admins outside operative mode only. False when the script did not answer.
+    nonisolated static func canManageMaterialCatalogue(_ role: CanonicalStaffAccountRole) -> Bool {
+        let viewer: [String: Any] = [
+            "isSuperAdmin": role.isSuperAdmin,
+            "isAdmin": role.isAdmin,
+            "isManager": role.isManager,
+            "isOperativeMode": role.isOperativeMode,
+        ]
+        return callJSON("canManageMaterialCatalogue", arguments: [viewer]) as? Bool ?? false
+    }
+
     /// `MATERIAL_ORDER_TYPED_RECIPIENTS_MAX` (3).
     nonisolated static var materialOrderTypedRecipientsMax: Int {
         constant("MATERIAL_ORDER_TYPED_RECIPIENTS_MAX", as: Int.self) ?? 3

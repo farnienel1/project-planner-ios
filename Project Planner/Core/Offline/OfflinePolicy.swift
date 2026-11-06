@@ -24,9 +24,12 @@ nonisolated enum OfflineAction: String, Sendable, CaseIterable {
     // Allowed offline
     case createBooking = "booking.create"
     case editBooking = "booking.edit"
-    case cancelBooking = "booking.cancel"
-    /// Online only since rulebook 1.2.0: the delete and its tombstone are not queued.
+    /// RULEBOOK 1.33.0: deleting a labour or manager schedule booking is allowed offline — queued with its tombstone
+    /// and replayed through `offlineDeleteReplayDecision`. There is no cancel action any more (bookings are Book /
+    /// Edit / Delete only).
     case deleteBooking = "booking.delete"
+    /// RULEBOOK 1.33.0: deleting a subcontractor booking stays online only (`bookingDeleteOfflineAction`).
+    case deleteSubcontractorBooking = "booking.delete_subcontractor"
     case annualLeaveRequest = "annual_leave.request"
     case ownProfileFields = "profile.own_fields"
     case ownNotificationToggles = "notifications.own_toggles"
@@ -86,6 +89,12 @@ nonisolated enum OfflinePolicy {
         let value = table[action.rawValue]
             ?? (CanonicalBusinessEngine.callJSON("offlineAvailability", arguments: [action.rawValue]) as? String)
         return OfflineAvailability(canonical: value) ?? .onlineOnly
+    }
+
+    /// The delete action for a booking in `collection` (`bookingDeleteOfflineAction`): `booking.delete` for labour
+    /// and manager schedule bookings, `booking.delete_subcontractor` (online only) for anything else.
+    static func deleteAction(collection: String) -> OfflineAction {
+        OfflineAction(rawValue: CanonicalBusinessEngine.bookingDeleteOfflineAction(collection: collection)) ?? .deleteSubcontractorBooking
     }
 
     /// True when the control for `action` is usable now.

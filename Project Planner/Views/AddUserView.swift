@@ -422,6 +422,16 @@ struct AddUserView: View {
         )
     }
 
+    /// RULEBOOK 1.33.0 §11 `canChangeLineManager(actor, invite, { isCreate: true })`.
+    private var mayChangeLineManager: Bool {
+        guard let actor = userStore.currentUser else { return false }
+        return CanonicalBusinessEngine.canChangeLineManager(
+            actor: actor.lineManagerAccessRow,
+            target: inviteDraftUserForValidation.lineManagerAccessRow,
+            isCreate: true
+        )
+    }
+
     /// `lineManagerRequiredError` for the invite as it will be saved (RULEBOOK §8, §11).
     private var lineManagerSelectionValid: Bool {
         var draft = inviteDraftUserForValidation
@@ -454,6 +464,9 @@ struct AddUserView: View {
             }
             .accessibilityIdentifier("addUser.chevronRight")
             .buttonStyle(.plain)
+            // RULEBOOK 1.33.0 §11 `canChangeLineManager` (`isCreate`): set while adding, by admins and, for an
+            // operative, by a manager with the Operatives permission.
+            .disabled(!mayChangeLineManager)
         }
         .sheet(isPresented: $showingLineManagerPicker) {
             LineManagersMultiSelectSheet(

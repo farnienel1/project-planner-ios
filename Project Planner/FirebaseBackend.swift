@@ -2242,7 +2242,8 @@ class FirebaseBackend: ObservableObject {
             "managerIds": managerIds.isEmpty ? FieldValue.delete() as Any : managerIds as Any,
             "isLive": job.isLive,
             "description": job.description ?? "",
-            "hiddenManagerUserIds": Array(job.hiddenManagerUserIds).sorted(),
+            // RULEBOOK 1.33.0: only the operatives' hide list is written; `hiddenManagerUserIds` is never written (a
+            // stored value stays as it is — saves write changed fields only).
             "hiddenOperativeUserIds": Array(job.hiddenOperativeUserIds).sorted(),
             "usesMapPinForLocation": job.usesMapPinForLocation,
             "latitude": orDelete(job.latitude),
@@ -2322,7 +2323,6 @@ class FirebaseBackend: ObservableObject {
         let storedPrimary = row.optionalText("managerId")
         let managerIds = storedManagerIds.map { WorkDocumentKeys.inAppId(for: $0) }
         let managerId = storedPrimary.map { WorkDocumentKeys.inAppId(for: $0) }
-        let hiddenManagerUserIds = Set(row.strings("hiddenManagerUserIds"))
         let hiddenOperativeUserIds = Set(row.strings("hiddenOperativeUserIds"))
         let siteName = row.optionalText("siteName") ?? (smallWorks ? "Unnamed Small Works" : "Unnamed Project")
         let addressLine1 = row.text("addressLine1")
@@ -2345,7 +2345,6 @@ class FirebaseBackend: ObservableObject {
                 isLive: row.bool("isLive", default: true),
                 description: row.optionalText("description"),
                 notes: row.optionalText("notes"),
-                hiddenManagerUserIds: hiddenManagerUserIds,
                 hiddenOperativeUserIds: hiddenOperativeUserIds
             )
             job.managerId = managerId
@@ -2371,7 +2370,6 @@ class FirebaseBackend: ObservableObject {
                 isLive: row.bool("isLive", default: true),
                 description: row.optionalText("description"),
                 notes: row.optionalText("notes"),
-                hiddenManagerUserIds: hiddenManagerUserIds,
                 hiddenOperativeUserIds: hiddenOperativeUserIds
             )
         }
@@ -2432,8 +2430,8 @@ class FirebaseBackend: ObservableObject {
 
     func loadProjects(organizationId: String) async throws -> [Project] {
         let orgId = try await ensureReadableOrganization(organizationId)
-        // RULEBOOK 1.10.0 §17: the job queries `jobQueryPlan` names (whole collection for admins and toggle
-        // managers, `managerUserIds array-contains` for other managers, single documents for operatives).
+        // RULEBOOK 1.10.0 §17 / 1.33.0: the job queries `jobQueryPlan` names (whole collection for admins and every
+        // manager, single documents for operatives).
         let rows = try await readPlannedJobRows(organizationId: orgId, collection: "projects")
         let jobs = Self.jobs(fromDocuments: rows, smallWorks: false)
         print("🔥🔥🔥 DEBUG: [LOAD] ✅ Loaded \(jobs.count) of \(rows.count) projects documents")
@@ -8023,7 +8021,7 @@ class FirebaseBackend: ObservableObject {
     }
 
     func loadManagerSiteBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [ManagerSiteBooking] {
-        // RULEBOOK 1.10.0 §17: `bookingQueryPlan` (per visible job `locationId in`, own `userId ==`, or whole).
+        // RULEBOOK 1.33.0 §17: `bookingQueryPlan` (whole collection for admins and every manager; none for operatives).
         let plan = bookingReadSources(organizationId: organizationId, collection: "managerSiteBookings", startingOn: start)
         return managerSiteBookingsFromFirestoreDocuments(try await readPlannedQueryDocuments(plan.sources))
     }
@@ -10027,7 +10025,7 @@ extension FirebaseBackend {
     }
     
     func loadSubcontractorBookings(organizationId: String) async throws -> [SubcontractorBooking] {
-        // RULEBOOK 1.10.0 §17: `bookingQueryPlan` (whole collection, or per visible job `projectId in`).
+        // RULEBOOK 1.33.0 §17: `bookingQueryPlan` (whole collection for admins and every manager; none for operatives).
         let plan = bookingReadSources(organizationId: organizationId, collection: "subcontractorBookings", startingOn: nil)
         let documents = try await readPlannedQueryDocuments(plan.sources)
         return Self.subcontractorBookings(fromDocuments: documents.map { (id: $0.documentID, data: $0.data()) })

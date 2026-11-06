@@ -42,10 +42,12 @@ final class Rulebook1100JobAccessTests: XCTestCase {
     func testCanSeeJobByRoleAndToggle() {
         XCTAssertTrue(CanonicalBusinessEngine.canSeeJob(admin, job: managedBy("zz"), managers: [], kind: .projects))
         XCTAssertTrue(CanonicalBusinessEngine.canSeeJob(toggleManager, job: managedBy("zz"), managers: [], kind: .projects))
-        XCTAssertFalse(CanonicalBusinessEngine.canSeeJob(toggleManager, job: managedBy("zz"), managers: [], kind: .smallWorks),
-                       "the Projects toggle does not show every small works job")
+        // RULEBOOK 1.33.0 §17 (owner decision 6 Nov): every manager sees every job, whatever their toggles.
+        XCTAssertTrue(CanonicalBusinessEngine.canSeeJob(toggleManager, job: managedBy("zz"), managers: [], kind: .smallWorks),
+                      "1.33.0: a manager sees every small works job without the Small works toggle")
         XCTAssertTrue(CanonicalBusinessEngine.canSeeJob(manager, job: managedBy("m1"), managers: [], kind: .projects))
-        XCTAssertFalse(CanonicalBusinessEngine.canSeeJob(manager, job: managedBy("zz"), managers: [], kind: .projects))
+        XCTAssertTrue(CanonicalBusinessEngine.canSeeJob(manager, job: managedBy("zz"), managers: [], kind: .projects),
+                      "1.33.0: a manager sees jobs they do not manage")
         XCTAssertFalse(CanonicalBusinessEngine.canSeeJob(operative, job: managedBy("o1"), managers: [], kind: .projects))
     }
 
@@ -118,12 +120,11 @@ final class Rulebook1100JobAccessTests: XCTestCase {
     func testJobQueryPlanPerViewer() {
         let adminPlan = queries(CanonicalBusinessEngine.jobQueryPlan(admin, documentIds: [], enforced: true))
         XCTAssertEqual(adminPlan.map { $0["kind"] as? String }, ["all", "all"])
+        // RULEBOOK 1.33.0 §17: every manager lists both job collections whole (no `managed` query any more).
         let togglePlan = queries(CanonicalBusinessEngine.jobQueryPlan(toggleManager, documentIds: [], enforced: true))
-        XCTAssertEqual(togglePlan.map { $0["kind"] as? String }, ["all", "managed"])
-        XCTAssertEqual(togglePlan.last?["value"] as? String, "t1")
+        XCTAssertEqual(togglePlan.map { $0["kind"] as? String }, ["all", "all"])
         let managerPlan = queries(CanonicalBusinessEngine.jobQueryPlan(manager, documentIds: [], enforced: true))
-        XCTAssertEqual(managerPlan.map { $0["kind"] as? String }, ["managed", "managed"])
-        XCTAssertEqual(managerPlan.first?["field"] as? String, "managerUserIds")
+        XCTAssertEqual(managerPlan.map { $0["kind"] as? String }, ["all", "all"])
         let operativePlan = queries(CanonicalBusinessEngine.jobQueryPlan(operative, documentIds: ["a1b2"], enforced: true))
         XCTAssertEqual(operativePlan.map { $0["kind"] as? String }, ["documents", "documents"])
         XCTAssertEqual(operativePlan.first?["ids"] as? [String], ["a1b2", "A1B2"], "every spelling the rules can trace")
@@ -135,15 +136,15 @@ final class Rulebook1100JobAccessTests: XCTestCase {
         let adminPlan = CanonicalBusinessEngine.bookingQueryPlan(admin, visibleJobIds: ["job-1"], ownBookingIds: nil, enforced: true)
         XCTAssertEqual(adminPlan?["readsEveryBooking"] as? Bool, true)
         XCTAssertEqual(queries(adminPlan).count, 3)
-        // RULEBOOK 1.11.0 §17: enforced, `readsEveryBooking` is admins only; a toggle manager reads their kind by
-        // `jobCollection` (web staffAccess.ts `readsEveryBooking`).
-        XCTAssertFalse(CanonicalBusinessEngine.readsEveryBooking(toggleManager, enforced: true))
-        XCTAssertTrue(CanonicalBusinessEngine.readsEveryBooking(toggleManager, enforced: false), "every manager reads every booking while enforced reads are off")
-        let managerPlan = queries(CanonicalBusinessEngine.bookingQueryPlan(manager, visibleJobIds: ["job-1"], ownBookingIds: ["m1", "OP-1"], enforced: true))
-        XCTAssertEqual(managerPlan.map { $0["collection"] as? String },
-                       ["bookings", "subcontractorBookings", "managerSiteBookings", "bookings", "managerSiteBookings"])
-        XCTAssertEqual(managerPlan.first?["values"] as? [String], ["job-1", "JOB-1"])
-        XCTAssertEqual(managerPlan.last?["op"] as? String, "==")
+        // RULEBOOK 1.33.0 §17 (owner decision 6 Nov): every manager reads every booking, switch on or off — no
+        // `jobCollection`, per-job or own manager-site queries any more (web staffAccess.ts `readsEveryBooking`).
+        XCTAssertTrue(CanonicalBusinessEngine.readsEveryBooking(toggleManager, enforced: true))
+        XCTAssertTrue(CanonicalBusinessEngine.readsEveryBooking(manager, enforced: true))
+        let managerPlan = CanonicalBusinessEngine.bookingQueryPlan(manager, visibleJobIds: ["job-1"], ownBookingIds: ["m1", "OP-1"], enforced: true)
+        XCTAssertEqual(managerPlan?["readsEveryBooking"] as? Bool, true)
+        XCTAssertEqual(queries(managerPlan).map { $0["collection"] as? String },
+                       ["bookings", "managerSiteBookings", "subcontractorBookings"])
+        XCTAssertEqual(Set(queries(managerPlan).compactMap { $0["kind"] as? String }), ["all"])
         let operativePlan = queries(CanonicalBusinessEngine.bookingQueryPlan(operative, visibleJobIds: ["job-1"], ownBookingIds: ["o1", "OP-1"], enforced: true))
         XCTAssertEqual(operativePlan.count, 1, "an operative reads their own bookings only")
         XCTAssertEqual(operativePlan.first?["field"] as? String, "operativeId")
@@ -180,9 +181,9 @@ final class Rulebook1100JobAccessTests: XCTestCase {
         XCTAssertEqual(restricted["kind"] as? String, "jobs")
         XCTAssertEqual(Set(restricted["personIds"] as? [String] ?? []), ["m1", "u9", "op-9"],
                        "themselves and their report, under every row on the report's email")
-        XCTAssertEqual(restricted["unbookedLabour"] as? Bool, false, "unbooked labour needs every booking")
-        // 1.11.0: `unbookedLabour` is `readsEveryBooking`, which (enforced) is admins only.
-        XCTAssertEqual(input(toggleManager)["unbookedLabour"] as? Bool, false)
+        // 1.33.0: `unbookedLabour` is `readsEveryBooking`, true for every manager.
+        XCTAssertEqual(restricted["unbookedLabour"] as? Bool, true, "1.33.0: every manager reads every booking")
+        XCTAssertEqual(input(toggleManager)["unbookedLabour"] as? Bool, true)
         XCTAssertEqual(input(toggleManager)["kind"] as? String, "jobs", "1.31.0: job toggles no longer widen the scope")
         XCTAssertTrue(CanonicalBusinessEngine.isJobInWarningScope(restricted, jobId: "JOB-1"), "a job they manage")
         XCTAssertFalse(CanonicalBusinessEngine.isJobInWarningScope(restricted, jobId: "job-2"))

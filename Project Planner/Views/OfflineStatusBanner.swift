@@ -21,18 +21,29 @@ struct OfflineStatusBanner: View {
                     }
             }
         }
-        // RULEBOOK §2: a refused replay is final; tell the person once (`BOOKING_REPLAY_REFUSED_MESSAGE`).
+        // RULEBOOK §2: a refused replay is final; tell the person once (`BOOKING_REPLAY_REFUSED_MESSAGE`; 1.33.0 a
+        // refused offline delete: `OFFLINE_DELETE_CHANGED_MESSAGE` / `OFFLINE_DELETE_REFUSED_MESSAGE`). Otherwise a
+        // notice after a change that went through (`bookingDeleteSignedTimesheetWarning`).
         .alert(
-            "Change not saved",
+            outbox.lastRefusalMessage != nil ? "Change not saved" : "Booking deleted",
             isPresented: Binding(
-                get: { outbox.lastRefusalMessage != nil },
-                set: { if !$0 { outbox.lastRefusalMessage = nil } }
+                get: { outbox.lastRefusalMessage != nil || outbox.lastNoticeMessage != nil },
+                set: { if !$0 { dismissMessage() } }
             )
         ) {
-            Button("OK", role: .cancel) { outbox.lastRefusalMessage = nil }
+            // The binding's setter clears the message shown (once, whichever way the alert closes).
+            Button("OK", role: .cancel) {}
                 .accessibilityIdentifier("offlineStatusBanner.refusedOK")
         } message: {
-            Text(outbox.lastRefusalMessage ?? "")
+            Text(outbox.lastRefusalMessage ?? outbox.lastNoticeMessage ?? "")
+        }
+    }
+
+    private func dismissMessage() {
+        if outbox.lastRefusalMessage != nil {
+            outbox.lastRefusalMessage = nil
+        } else {
+            outbox.lastNoticeMessage = nil
         }
     }
 
@@ -170,6 +181,16 @@ struct OfflineSyncQueueSheet: View {
                                 Text(entry.displayDetail)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                if entry.operation == .deleteBooking || entry.operation == .deleteManagerSiteBooking {
+                                    // RULEBOOK 1.33.0 (owner decision 4 Nov): a queued delete can be undone here.
+                                    Button("Undo delete") {
+                                        OfflineSyncCoordinator.undoDelete(entryId: entry.id)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .font(.caption.weight(.semibold))
+                                    .disabled(smartCache.isSyncing)
+                                    .accessibilityIdentifier("offlineSyncQueue.undoDelete")
+                                }
                                 if OfflineSyncCoordinator.reachedAttemptLimit(entry) {
                                     stuckEntryControls(entry)
                                 }
