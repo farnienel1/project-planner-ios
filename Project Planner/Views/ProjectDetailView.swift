@@ -2767,16 +2767,9 @@ private struct ProjectVisibilitySettingsView: View {
     @EnvironmentObject var userStore: UserStore
     
     let projectId: UUID
-    @State private var selectedTab: VisibilityTab = .managers
     @State private var searchText = ""
     @State private var filterMode: VisibilityFilterMode = .active
     @State private var showSearch = false
-    
-    private enum VisibilityTab: String, CaseIterable, Identifiable {
-        case managers = "Managers"
-        case operatives = "Operatives"
-        var id: String { rawValue }
-    }
     
     private enum VisibilityFilterMode: String, CaseIterable, Identifiable {
         case all = "All"
@@ -2790,31 +2783,20 @@ private struct ProjectVisibilitySettingsView: View {
         projectStore.projects.first(where: { $0.id == projectId })
     }
     
-    private var managers: [AppUser] {
-        filteredUsers(base: userStore.organizationUsers.filter { user in
-            !user.permissions.operativeMode && user.permissions.manager && !user.isExcludedFromManagerVisibilityHiding
-        })
-    }
-    
     private var operatives: [AppUser] {
         filteredUsers(base: userStore.organizationUsers.filter { $0.permissions.operativeMode })
     }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("View")
+            // RULEBOOK 1.33.0 §17, §21 (owner decisions 6 Nov): every manager sees every job, so the managers' hide list
+            // is gone (never read or written). Only the operatives' list stays: `visibleJobs` hides the job from an
+            // operative named in `hiddenOperativeUserIds`, even when they are booked on it.
+            Text("Hide this job from these operatives")
                 .font(.title2.bold())
-            Text("This feature can be used to select who will not be able to view the project or small works. Admins always have access and cannot be hidden.")
+            Text("Untick an operative to hide this job from them, even when they are booked on it. Admins and managers always see every job.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            
-            Picker("Role", selection: $selectedTab) {
-                ForEach(VisibilityTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
-                }
-            }
-            .accessibilityIdentifier("projectVisibilitySettings.role")
-            .pickerStyle(.segmented)
             
             HStack(spacing: 12) {
                 Menu {
@@ -2845,7 +2827,7 @@ private struct ProjectVisibilitySettingsView: View {
             }
             
             List {
-                ForEach(selectedTab == .managers ? managers : operatives) { user in
+                ForEach(operatives) { user in
                     Button {
                         toggleVisibility(for: user)
                     } label: {
@@ -2900,28 +2882,16 @@ private struct ProjectVisibilitySettingsView: View {
     
     private func isVisible(_ user: AppUser) -> Bool {
         guard let project else { return false }
-        if selectedTab == .managers {
-            return !project.hiddenManagerUserIds.contains(user.id)
-        }
         return !project.hiddenOperativeUserIds.contains(user.id)
     }
     
     private func toggleVisibility(for user: AppUser) {
         guard var project else { return }
         let opened = project
-        if user.isExcludedFromManagerVisibilityHiding { return }
-        if selectedTab == .managers {
-            if project.hiddenManagerUserIds.contains(user.id) {
-                project.hiddenManagerUserIds.remove(user.id)
-            } else {
-                project.hiddenManagerUserIds.insert(user.id)
-            }
+        if project.hiddenOperativeUserIds.contains(user.id) {
+            project.hiddenOperativeUserIds.remove(user.id)
         } else {
-            if project.hiddenOperativeUserIds.contains(user.id) {
-                project.hiddenOperativeUserIds.remove(user.id)
-            } else {
-                project.hiddenOperativeUserIds.insert(user.id)
-            }
+            project.hiddenOperativeUserIds.insert(user.id)
         }
         Task { await projectStore.updateProject(project, editedFrom: opened) }
     }

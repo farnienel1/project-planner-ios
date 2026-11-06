@@ -2,12 +2,14 @@
 //  FirebaseBackend+ReadPlans.swift
 //  Project Planner
 //
-//  RULEBOOK 1.10.0 §17 "Reads are enforced": Firestore rules are not filters, so a manager without the Projects /
-//  Small works toggle and an operative may not list a whole job or booking collection. Every job and booking read
-//  and listener here is built from `jobQueryPlan` / `bookingQueryPlan` (through `CanonicalBusinessEngine`, see
-//  `Rulebook+JobAccess.swift`): one Firestore query per plan entry (plus `date >= bookingLoadStart` where the
-//  collection has it), merged by document id. Admins and managers with a toggle keep whole collections. The same
-//  queries are valid under the rules before 1.10.0. App plumbing only; no rule is decided here.
+//  RULEBOOK 1.10.0 §17 "Reads are enforced": Firestore rules are not filters, so an operative may not list a whole
+//  job or booking collection. Every job and booking read and listener here is built from `jobQueryPlan` /
+//  `bookingQueryPlan` (through `CanonicalBusinessEngine`, see `Rulebook+JobAccess.swift`): one Firestore query per
+//  plan entry (plus `date >= bookingLoadStart` where the collection has it), merged by document id. 1.33.0: admins
+//  and every manager (outside operative mode) read whole job and booking collections (`seesEveryJob`,
+//  `readsEveryBooking`); operatives read single job documents and their own bookings (`operativeId in`). The
+//  per-manager (`managerUserIds array-contains`), per-kind and per-job queries are gone. App plumbing only; no rule is
+//  decided here.
 //
 
 import Foundation
@@ -112,11 +114,6 @@ extension FirebaseBackend {
             case "all":
                 sources.append(PlannedReadSource(kind: .query(base, withoutDateBound: nil)))
                 parts.append("all")
-            case "managed":
-                let field = query["field"] as? String ?? "managerUserIds"
-                guard let value = query["value"] as? String, !value.isEmpty else { continue }
-                sources.append(PlannedReadSource(kind: .query(base.whereField(field, arrayContains: value), withoutDateBound: nil)))
-                parts.append("managed:\(field)=\(value)")
             case "documents":
                 for id in query["ids"] as? [String] ?? [] where !id.isEmpty {
                     sources.append(PlannedReadSource(kind: .document(base.document(id))))
@@ -164,7 +161,8 @@ extension FirebaseBackend {
             case "all":
                 sources.append(bounded(base))
                 parts.append("all")
-            case "job", "own":
+            case "own":
+                // RULEBOOK 1.33.0 §17: the only filtered booking query left is the viewer's own (`operativeId in`).
                 guard let field = query["field"] as? String,
                       let values = query["values"] as? [String], !values.isEmpty else { continue }
                 let filtered: Query = (query["op"] as? String) == "=="

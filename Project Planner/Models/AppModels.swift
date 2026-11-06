@@ -840,11 +840,6 @@ extension AppUser {
         return !trimmed.isEmpty && !trimmed.hasPrefix("directory:")
     }
 
-    /// Org-wide admins always see every job; they cannot be denied access via View / `hiddenManagerUserIds`.
-    var isExcludedFromManagerVisibilityHiding: Bool {
-        isRosterAdmin
-    }
-
     /// Base £/hour for payroll: explicit hourly rate, or day rate ÷ 8 when only day rate is set.
     var payrollHourlyRate: Double? {
         if let hr = hourlyRate, hr > 0 { return hr }

@@ -69,7 +69,7 @@ extension CanonicalBusinessEngine {
         constant("JOB_MANAGER_LIST_FIELDS", as: [String].self) ?? ["managerIds", "managerId", "assignedManagerUserIds", "managerUserIds"]
     }
 
-    /// `seesEveryJob(role, kind, toggles)`: admins; managers with that kind's toggle (both toggles with no kind).
+    /// `seesEveryJob(role, kind, toggles)`: 1.33.0 admins and every manager outside operative mode, whatever the toggles.
     nonisolated static func seesEveryJob(_ viewer: JobAccessViewer, kind: JobKind?) -> Bool {
         let json = viewer.json
         return callJSON("seesEveryJob", arguments: [json["role"] as Any, kind?.rawValue ?? NSNull(), json["toggles"] as Any]) as? Bool ?? false

@@ -13,7 +13,8 @@ import FirebaseAuth
 @MainActor
 class ProjectStore: ObservableObject {
     @Published var projects: [Project] = [] {
-        // RULEBOOK 1.10.0 §17: a restricted manager reads the bookings of the jobs they see (`bookingQueryPlan`).
+        // RULEBOOK 1.10.0 §17: the loaded jobs feed `canWriteBooking` and the job fields of the read context (1.33.0:
+        // every manager reads every booking, so `bookingQueryPlan` no longer depends on them).
         didSet {
             JobAccessContext.updateJobs(projects)
             revision &+= 1

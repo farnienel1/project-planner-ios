@@ -59,7 +59,6 @@ extension Project {
         row["isLive"] = isLive
         row["startDayKey"] = OrganizationRulebookContext.dayKey(startDate)
         row["endDayKey"] = OrganizationRulebookContext.dayKey(endDate)
-        row["hiddenManagerUserIds"] = hiddenManagerUserIds.sorted()
         row["hiddenOperativeUserIds"] = hiddenOperativeUserIds.sorted()
         row["_i"] = index
         return row
