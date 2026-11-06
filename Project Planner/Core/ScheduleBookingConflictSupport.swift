@@ -66,7 +66,9 @@ enum ScheduleBookablePersonBuilder {
         let operatives = operativesForScheduling(operatives: sourceOperatives, users: sourceUsers)
         let users = CanonicalBusinessEngine.listedCurrentLabourPeople(sourceUsers) ?? sourceUsers
         var rows: [ScheduleBookablePerson] = []
-        var seenEmails = Set<String>()
+        // RULEBOOK 1.34.0 §11 `personDedupeKey`: one row per email, else per id — every person with no email (a ghost)
+        // keeps their own row (before 1.34.0 they all shared the key "" and only the first was bookable).
+        var seenKeys = Set<String>()
 
         let pastOperativeIds = Set(
             bookings
@@ -75,8 +77,8 @@ enum ScheduleBookablePersonBuilder {
         )
 
         func append(operative: Operative, user: AppUser?, role: String) {
-            let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard seenEmails.insert(email).inserted else { return }
+            let key = GhostRulebook.dedupeKey(id: Booking.storedOperativeId(for: operative.id), email: operative.email)
+            guard !key.isEmpty, seenKeys.insert(key).inserted else { return }
             let bookingIds = (user.map { labourBookingIds(for: $0, operatives: sourceOperatives) } ?? []).union([operative.id])
             rows.append(
                 ScheduleBookablePerson(
@@ -108,7 +110,7 @@ enum ScheduleBookablePersonBuilder {
 
         for user in users where user.passwordSet && labourKind(user) == "manager" {
             let email = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard seenEmails.contains(email) == false else { continue }
+            guard !seenKeys.contains(GhostRulebook.dedupeKey(id: user.id, email: user.email)) else { continue }
             // A manager with no catalogue row is booked under their user id, like an operative.
             guard let op = operatives.first(where: {
                 $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email

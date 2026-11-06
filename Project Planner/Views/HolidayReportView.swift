@@ -61,7 +61,8 @@ struct HolidayReportView: View {
     }
 
     private var joinDate: Date {
-        if let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+        if !user.email.isEmpty,
+           let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
             return operative.startDate
         }
         return user.createdAt

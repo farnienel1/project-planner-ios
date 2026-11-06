@@ -891,7 +891,10 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
         if let oid = person.operativeId,
            let op = operativeStore.allOperatives.first(where: { $0.id == oid }) {
-            return userStore.organizationUsers.first { $0.email.lowercased() == op.email.lowercased() }
+            // RULEBOOK 1.34.0 §11: a converted ghost's row has no email and keeps the ghost's id.
+            let email = op.email.lowercased()
+            return userStore.organizationUsers.first { !email.isEmpty && $0.email.lowercased() == email }
+                ?? userStore.organizationUsers.first { $0.id.caseInsensitiveCompare(op.documentId) == .orderedSame }
         }
         return nil
     }
@@ -1558,18 +1561,26 @@ struct OperativeAnnualLeaveCalendarView: View {
 enum AnnualLeavePersonBuilder {
     static func build(users: [AppUser], operatives: [Operative]) -> [AnnualLeavePerson] {
         var rows: [AnnualLeavePerson] = []
-        var seenEmails = Set<String>()
+        // RULEBOOK 1.34.0 §11 `personDedupeKey`: one row per email, else per id, so every ghost (no email) is listed.
+        var seenKeys = Set<String>()
 
         let operativesByEmail = Dictionary(
-            operatives.map { ($0.email.lowercased(), $0) },
+            operatives.filter { !$0.email.isEmpty }.map { ($0.email.lowercased(), $0) },
             uniquingKeysWith: { first, _ in first }
         )
+        func operativeKey(_ op: Operative) -> String {
+            GhostRulebook.dedupeKey(id: op.documentId, email: op.email)
+        }
 
         for user in users where user.isActive {
             if AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: user, users: users) { continue }
             let email = user.email.lowercased()
-            guard seenEmails.insert(email).inserted else { continue }
-            let linkedOp = operativesByEmail[email]
+            guard seenKeys.insert(GhostRulebook.dedupeKey(id: user.id, email: user.email)).inserted else { continue }
+            // A converted ghost's row keeps the ghost's id and has no email.
+            let linkedOp = email.isEmpty
+                ? operatives.first { $0.documentId.caseInsensitiveCompare(user.id) == .orderedSame }
+                : operativesByEmail[email]
+            if let linkedOp { seenKeys.insert(operativeKey(linkedOp)) }
             let trade = tradeLabel(for: user, operative: linkedOp)
             let (first, last) = nameParts(
                 display: user.fullName.isEmpty ? user.email : user.fullName,
@@ -1597,11 +1608,11 @@ enum AnnualLeavePersonBuilder {
 
         for op in operatives where op.isActive {
             let email = op.email.lowercased()
-            if let linkedUser = users.first(where: { $0.email.lowercased() == email }),
+            if let linkedUser = users.first(where: { !email.isEmpty && $0.email.lowercased() == email }),
                AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: linkedUser, users: users) {
                 continue
             }
-            guard seenEmails.insert(email).inserted else { continue }
+            guard seenKeys.insert(operativeKey(op)).inserted else { continue }
             rows.append(
                 AnnualLeavePerson(
                     id: "op-\(op.id.uuidString)",

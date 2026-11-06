@@ -1716,9 +1716,10 @@ struct ScheduleOperativeView: View {
     
     private func isOperativeOnApprovedHoliday(operative: Operative, date: Date) -> Bool {
         let normalizedEmail = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        // RULEBOOK 1.34.0 §11: an empty email names nobody (ghosts have none); a converted ghost's row keeps its id.
         let linkedUser = userStore.organizationUsers.first {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
-        }
+            !normalizedEmail.isEmpty && $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == normalizedEmail
+        } ?? userStore.organizationUsers.first { $0.id.caseInsensitiveCompare(operative.documentId) == .orderedSame }
         return holidayStore.approvedBookings(covering: date).contains { booking in
             if booking.operativeId == operative.id { return true }
             if let uid = booking.userId, let linkedUser, uid == linkedUser.id { return true }
