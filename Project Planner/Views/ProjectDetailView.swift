@@ -296,7 +296,12 @@ struct ProjectDetailView: View {
             .environmentObject(notificationService)
         }
         .sheet(item: $subcontractorEditBooking) { booking in
-            SubcontractorBookingEditSheet(booking: booking) {
+            SubcontractorBookingEditSheet(
+                booking: booking,
+                // RULEBOOK 1.33.0 §2: deleting a subcontractor booking is online only (`booking.delete_subcontractor`).
+                deleteDisabledReason: OfflinePolicy.isEnabled(.deleteSubcontractorBooking, isOnline: smartCache.isOnline)
+                    ? nil : OfflinePolicy.onlineOnlyMessage
+            ) {
                 subcontractorEditBooking = nil
             }
             .environmentObject(firebaseBackend)
@@ -1585,9 +1590,11 @@ struct ProjectDetailView: View {
         }
     }
 
-    /// RULEBOOK §2 `offlineAvailability("booking.delete")`: online only, with the standard message.
+    /// RULEBOOK 1.33.0 §2 `offlineAvailability(bookingDeleteOfflineAction("bookings"))`: allowed offline (queued with
+    /// its tombstone, "Pending sync"); nil while the action is usable.
     private var labourBookingDeleteDisabledReason: String? {
-        OfflinePolicy.isEnabled(.deleteBooking, isOnline: smartCache.isOnline) ? nil : OfflinePolicy.onlineOnlyMessage
+        OfflinePolicy.isEnabled(OfflinePolicy.deleteAction(collection: "bookings"), isOnline: smartCache.isOnline)
+            ? nil : OfflinePolicy.onlineOnlyMessage
     }
 
     @ViewBuilder
@@ -1674,13 +1681,19 @@ struct ProjectDetailView: View {
                     }
                 },
                 onCancel: { bookingEditTarget = nil },
-                onDelete: {
+                // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete it.
+                onDelete: managerScheduleStore.canDeleteBooking(booking) ? {
                     bookingEditTarget = nil
                     Task { await managerScheduleStore.deleteBooking(booking) }
-                }
+                } : nil
             )
         case .subcontractor(let booking, _, _):
-            SubcontractorBookingEditSheet(booking: booking) {
+            SubcontractorBookingEditSheet(
+                booking: booking,
+                // RULEBOOK 1.33.0 §2: deleting a subcontractor booking is online only (`booking.delete_subcontractor`).
+                deleteDisabledReason: OfflinePolicy.isEnabled(.deleteSubcontractorBooking, isOnline: smartCache.isOnline)
+                    ? nil : OfflinePolicy.onlineOnlyMessage
+            ) {
                 bookingEditTarget = nil
             }
             .environmentObject(firebaseBackend)

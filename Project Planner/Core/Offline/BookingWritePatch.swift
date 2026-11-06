@@ -138,17 +138,16 @@ enum BookingWritePatch {
         return value
     }
 
-    /// True when `error` is Firestore permission-denied (`bookingReplayRefusedIsFinal`).
+    /// True when `error` is Firestore permission-denied (`bookingReplayRefusedIsFinal`). The code is read through an
+    /// app error that wraps it (`firestoreErrorCode`; 1.33.0 refusal detection fix).
     static func isRefusedFinal(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        guard nsError.domain == "FIRFirestoreErrorDomain" else { return false }
-        return CanonicalBusinessEngine.bookingReplayRefusedIsFinal(errorCode: nsError.code)
+        guard let code = firestoreErrorCode(error) else { return false }
+        return CanonicalBusinessEngine.bookingReplayRefusedIsFinal(errorCode: code)
     }
 
     /// `bookingReplayRefusedIsFinal({ code, isCreate })` for a Firestore error on a queued booking save.
     static func isRefusedFinal(_ error: Error, isCreate: Bool?) -> Bool {
-        let nsError = error as NSError
-        guard nsError.domain == "FIRFirestoreErrorDomain" else { return false }
-        return CanonicalBusinessEngine.bookingReplayRefusedIsFinal(errorCode: nsError.code, isCreate: isCreate)
+        guard let code = firestoreErrorCode(error) else { return false }
+        return CanonicalBusinessEngine.bookingReplayRefusedIsFinal(errorCode: code, isCreate: isCreate)
     }
 }

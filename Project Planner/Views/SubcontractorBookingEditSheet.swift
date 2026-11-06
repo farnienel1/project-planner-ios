@@ -9,15 +9,27 @@ struct SubcontractorBookingEditSheet: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var subcontractorStore: SubcontractorStore
     let booking: SubcontractorBooking
+    /// RULEBOOK 1.33.0 §2: deleting a subcontractor booking is online only (`booking.delete_subcontractor`); the
+    /// presenter passes the offline message, nil when online.
+    var deleteDisabledReason: String?
     let onDismiss: () -> Void
 
     @State private var isSaving = false
     @State private var selectedContactIds: Set<UUID>
 
-    init(booking: SubcontractorBooking, onDismiss: @escaping () -> Void) {
+    init(booking: SubcontractorBooking, deleteDisabledReason: String? = nil, onDismiss: @escaping () -> Void) {
         self.booking = booking
+        self.deleteDisabledReason = deleteDisabledReason
         self.onDismiss = onDismiss
         _selectedContactIds = State(initialValue: Set(booking.bookedContactIds))
+    }
+
+    /// RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete this booking.
+    private var removeAction: (() -> Void)? {
+        guard JobAccessContext.bookingRemoveAction(collection: "subcontractorBookings", projectId: booking.storedProjectId) == "delete" else {
+            return nil
+        }
+        return { deleteBooking() }
     }
 
     private var payrollTimePolicy: OrgPayrollTimePolicy {
@@ -60,7 +72,8 @@ struct SubcontractorBookingEditSheet: View {
                     saveBooking(start: start, end: end, breakRemoved: breakRemoved)
                 },
                 onCancel: onDismiss,
-                onDelete: { deleteBooking() }
+                onDelete: removeAction,
+                deleteDisabledReason: deleteDisabledReason
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

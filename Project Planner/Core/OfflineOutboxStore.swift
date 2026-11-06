@@ -16,22 +16,34 @@ struct OfflineSaveBookingPayload: Codable {
     /// Stored fields this queued edit changed (`BookingWritePatch.labourFieldNames`). Nil means a
     /// create: the whole booking is written. Entries queued before this field existed decode as nil.
     var changedFields: [String]? = nil
+    /// RULEBOOK 1.33.0: `bookingDeleteFingerprint` of the booking as last synced, before this queued edit. A later
+    /// offline delete stores it (never the fingerprint of the unsynced edit). Nil for a create and older entries.
+    var baselineFingerprint: String? = nil
 }
 
+/// A queued delete of a labour (`deleteBooking`) or manager schedule (`deleteManagerSiteBooking`) booking.
+/// RULEBOOK 1.33.0 (owner decision 4 Nov "Offline delete on iOS"): it replays with its tombstone through
+/// `offlineDeleteReplayDecision`. Every field after `bookingId` is optional, so an item queued by an older build
+/// (`{ bookingId }` or `{ bookingId, documentId }`) still decodes (Q-G1: convert, no user action).
 struct OfflineDeleteBookingPayload: Codable {
     let bookingId: UUID
-    /// Firestore document id when it is not `bookingId.uuidString`.
+    /// Firestore document id when it is not `bookingId.uuidString` (a lower-case or non-UUID id kept as stored).
     var documentId: String? = nil
+    /// `bookings` or `managerSiteBookings`; nil in older items (the entry's operation says which).
+    var collection: String? = nil
+    /// `bookingDeleteFingerprint` of the booking as last synced from the server; nil in older items.
+    var fingerprint: String? = nil
+    /// The booking as it was, put back on Undo or when the replay is refused.
+    var labourBooking: Booking? = nil
+    var managerBooking: ManagerSiteBooking? = nil
 }
 
 struct OfflineSaveManagerSiteBookingPayload: Codable {
     let booking: ManagerSiteBooking
     /// Changed fields (`BookingWritePatch.managerFieldNames`); nil for a create.
     var changedFields: [String]? = nil
-}
-
-struct OfflineDeleteManagerSiteBookingPayload: Codable {
-    let bookingId: UUID
+    /// RULEBOOK 1.33.0: as `OfflineSaveBookingPayload.baselineFingerprint`.
+    var baselineFingerprint: String? = nil
 }
 
 struct OfflineSaveMaterialItemPayload: Codable {
@@ -83,9 +95,9 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
     var displayTitle: String {
         switch operation {
         case .saveBooking: return "Labour booking"
-        case .deleteBooking: return "Remove labour booking"
+        case .deleteBooking: return "Delete labour booking"
         case .saveManagerSiteBooking: return "Schedule booking"
-        case .deleteManagerSiteBooking: return "Remove schedule booking"
+        case .deleteManagerSiteBooking: return "Delete schedule booking"
         case .saveMaterialItem: return "Material catalogue / job item"
         case .deleteMaterialItem: return "Remove material item"
         case .sendMaterialRequest: return "Material order"
@@ -159,6 +171,10 @@ final class OfflineOutboxStore: ObservableObject {
     /// banner to show once. `BOOKING_REPLAY_REFUSED_MESSAGE` for a booking save.
     @Published var lastRefusalMessage: String?
 
+    /// RULEBOOK 1.33.0: a notice after a change that went through (the signed-timesheet warning on a booking delete,
+    /// `bookingDeleteSignedTimesheetWarning`), shown once by the offline banner.
+    @Published var lastNoticeMessage: String?
+
     var pendingCount: Int { entries.count }
 
     /// RULEBOOK §2 "Pending sync": the outbox still holds a change for this entity (booking UUID string,
@@ -196,6 +212,29 @@ final class OfflineOutboxStore: ObservableObject {
         return (saves, deleted)
     }
 
+    /// Booking ids this device has queued to delete in `organizationId` for `collection` (`bookings` or
+    /// `managerSiteBookings`). A server or cache snapshot is filtered by these until the delete replays (§2).
+    func pendingDeletedBookingIds(collection: String, organizationId: String) -> Set<UUID> {
+        let operation: OfflineOutboxEntry.Operation = collection == "managerSiteBookings" ? .deleteManagerSiteBooking : .deleteBooking
+        var ids = Set<UUID>()
+        for entry in entries where entry.organizationId == organizationId && entry.operation == operation {
+            if let payload = try? decoder.decode(OfflineDeleteBookingPayload.self, from: entry.payload) {
+                ids.insert(payload.bookingId)
+            } else if let id = UUID(uuidString: entry.entityId) {
+                ids.insert(id)
+            }
+        }
+        return ids
+    }
+
+    /// The queued delete for an entity, if any (the outbox sheet's Undo).
+    func queuedDelete(entryId: UUID) -> (entry: OfflineOutboxEntry, payload: OfflineDeleteBookingPayload)? {
+        guard let entry = entries.first(where: { $0.id == entryId }),
+              entry.operation == .deleteBooking || entry.operation == .deleteManagerSiteBooking,
+              let payload = try? decoder.decode(OfflineDeleteBookingPayload.self, from: entry.payload) else { return nil }
+        return (entry, payload)
+    }
+
     /// Every entity id with a queued change.
     var pendingEntityIds: Set<String> {
         Set(entries.map { $0.entityId.uppercased() })
@@ -215,13 +254,23 @@ final class OfflineOutboxStore: ObservableObject {
     /// Queues a booking save. `changedFields` nil queues a create (the whole booking); otherwise only
     /// those fields are written on replay. A second edit before replay adds its fields to the first;
     /// an edit after a queued create stays a create with the newer values.
-    func enqueueSaveBooking(_ booking: Booking, changedFields: Set<String>? = nil, organizationId: String) {
+    func enqueueSaveBooking(
+        _ booking: Booking,
+        changedFields: Set<String>? = nil,
+        organizationId: String,
+        baselineFingerprint: String? = nil
+    ) {
         var fields: [String]? = changedFields.map { Array($0).sorted() }
+        // RULEBOOK 1.33.0: the first queued edit keeps the fingerprint of the copy last synced from the server.
+        var baseline = changedFields == nil ? nil : baselineFingerprint
         if let existing = entries.first(where: { $0.entityId == booking.id.uuidString && $0.operation == .saveBooking }),
            let old = try? decoder.decode(OfflineSaveBookingPayload.self, from: existing.payload) {
             fields = Self.mergedChangedFields(old.changedFields, fields)
+            baseline = fields == nil ? nil : (old.baselineFingerprint ?? baseline)
         }
-        guard let payload = try? encoder.encode(OfflineSaveBookingPayload(booking: booking, changedFields: fields)) else { return }
+        guard let payload = try? encoder.encode(
+            OfflineSaveBookingPayload(booking: booking, changedFields: fields, baselineFingerprint: baseline)
+        ) else { return }
         enqueue(
             OfflineOutboxEntry(
                 organizationId: organizationId,
@@ -233,28 +282,96 @@ final class OfflineOutboxStore: ObservableObject {
         )
     }
 
-    func enqueueDeleteBooking(_ bookingId: UUID, documentId: String? = nil, organizationId: String) {
-        guard let payload = try? encoder.encode(OfflineDeleteBookingPayload(bookingId: bookingId, documentId: documentId)) else { return }
-        removePending(forEntityId: bookingId.uuidString)
-        enqueue(
-            OfflineOutboxEntry(
-                organizationId: organizationId,
-                operation: .deleteBooking,
-                entityId: bookingId.uuidString,
-                payload: payload
-            ),
-            dedupeSameEntity: false
+    /// What queuing an offline delete did (RULEBOOK 1.33.0).
+    enum OfflineDeleteQueueResult: Equatable {
+        /// Queued with the fingerprint of the copy last synced; replays with its tombstone.
+        case queued
+        /// The booking was created offline and never reached the server: its queued create is removed and nothing
+        /// is sent (`offlineDeleteReplayDecision` `dropLocal`).
+        case droppedLocal
+    }
+
+    /// RULEBOOK 1.33.0 (owner decision 4 Nov "Offline delete on iOS"): queues the delete of a labour booking with
+    /// `fingerprint` (`bookingDeleteFingerprint` of this device's copy). A queued create of the same booking is dropped
+    /// instead (created and deleted offline sends nothing); a queued edit is replaced, and its baseline (the copy
+    /// last synced) is the fingerprint kept.
+    @discardableResult
+    func enqueueDeleteBooking(_ booking: Booking, fingerprint: String, organizationId: String) -> OfflineDeleteQueueResult {
+        let entityId = booking.id.uuidString
+        var baseline = fingerprint
+        if let existing = entries.first(where: { $0.entityId == entityId && $0.operation == .saveBooking }),
+           let old = try? decoder.decode(OfflineSaveBookingPayload.self, from: existing.payload) {
+            if old.changedFields == nil {
+                removePending(forEntityId: entityId)
+                persistToDisk()
+                return .droppedLocal
+            }
+            baseline = old.baselineFingerprint ?? fingerprint
+        }
+        let model = OfflineDeleteBookingPayload(
+            bookingId: booking.id,
+            documentId: booking.documentKey,
+            collection: "bookings",
+            fingerprint: baseline,
+            labourBooking: booking
         )
+        guard let payload = try? encoder.encode(model) else { return .queued }
+        removePending(forEntityId: entityId)
+        enqueue(
+            OfflineOutboxEntry(organizationId: organizationId, operation: .deleteBooking, entityId: entityId, payload: payload),
+            dedupeSameEntity: true
+        )
+        return .queued
+    }
+
+    /// As `enqueueDeleteBooking` for a manager schedule booking. The document id is kept as stored, so a lower-case
+    /// id written by web is deleted under its own spelling (1.33.0: the lower-case schedule id fix).
+    @discardableResult
+    func enqueueDeleteManagerSiteBooking(_ booking: ManagerSiteBooking, fingerprint: String, organizationId: String) -> OfflineDeleteQueueResult {
+        let entityId = booking.id.uuidString
+        var baseline = fingerprint
+        if let existing = entries.first(where: { $0.entityId == entityId && $0.operation == .saveManagerSiteBooking }),
+           let old = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: existing.payload) {
+            if old.changedFields == nil {
+                removePending(forEntityId: entityId)
+                persistToDisk()
+                return .droppedLocal
+            }
+            baseline = old.baselineFingerprint ?? fingerprint
+        }
+        let model = OfflineDeleteBookingPayload(
+            bookingId: booking.id,
+            documentId: booking.documentKey,
+            collection: "managerSiteBookings",
+            fingerprint: baseline,
+            managerBooking: booking
+        )
+        guard let payload = try? encoder.encode(model) else { return .queued }
+        removePending(forEntityId: entityId)
+        enqueue(
+            OfflineOutboxEntry(organizationId: organizationId, operation: .deleteManagerSiteBooking, entityId: entityId, payload: payload),
+            dedupeSameEntity: true
+        )
+        return .queued
     }
 
     /// Queues a manager schedule booking save; `changedFields` as in `enqueueSaveBooking`.
-    func enqueueSaveManagerSiteBooking(_ booking: ManagerSiteBooking, changedFields: Set<String>? = nil, organizationId: String) {
+    func enqueueSaveManagerSiteBooking(
+        _ booking: ManagerSiteBooking,
+        changedFields: Set<String>? = nil,
+        organizationId: String,
+        baselineFingerprint: String? = nil
+    ) {
         var fields: [String]? = changedFields.map { Array($0).sorted() }
+        var baseline = changedFields == nil ? nil : baselineFingerprint
         if let existing = entries.first(where: { $0.entityId == booking.id.uuidString && $0.operation == .saveManagerSiteBooking }),
            let old = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: existing.payload) {
             fields = Self.mergedChangedFields(old.changedFields, fields)
+            baseline = fields == nil ? nil : (old.baselineFingerprint ?? baseline)
         }
-        guard let payload = try? encoder.encode(OfflineSaveManagerSiteBookingPayload(booking: booking, changedFields: fields)) else { return }
+        guard let payload = try? encoder.encode(
+            OfflineSaveManagerSiteBookingPayload(booking: booking, changedFields: fields, baselineFingerprint: baseline)
+        ) else { return }
         enqueue(
             OfflineOutboxEntry(
                 organizationId: organizationId,
@@ -263,20 +380,6 @@ final class OfflineOutboxStore: ObservableObject {
                 payload: payload
             ),
             dedupeSameEntity: true
-        )
-    }
-
-    func enqueueDeleteManagerSiteBooking(_ bookingId: UUID, organizationId: String) {
-        guard let payload = try? encoder.encode(OfflineDeleteManagerSiteBookingPayload(bookingId: bookingId)) else { return }
-        removePending(forEntityId: bookingId.uuidString)
-        enqueue(
-            OfflineOutboxEntry(
-                organizationId: organizationId,
-                operation: .deleteManagerSiteBooking,
-                entityId: bookingId.uuidString,
-                payload: payload
-            ),
-            dedupeSameEntity: false
         )
     }
 

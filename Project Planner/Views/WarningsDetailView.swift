@@ -645,6 +645,7 @@ struct WarningsDetailView: View {
             OperativeClashWarningCard(
                 warning: warning,
                 onRemove: { removeClashEntry(warning, entry: $0) },
+                canRemove: { clashEntryRemovable($0) },
                 onApprove: { approveClash(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
@@ -653,6 +654,7 @@ struct WarningsDetailView: View {
             ManagerClashWarningCard(
                 warning: warning,
                 onRemove: { removeClashEntry(warning, entry: $0) },
+                canRemove: { clashEntryRemovable($0) },
                 onApprove: { approveClash(warning) },
                 onOpenDay: { openDayDate = warning.occurrenceDate.map(IdentifiableDay.init) },
                 onRemoveWarning: { requestRemoveWarning(warning) }
@@ -1087,7 +1089,20 @@ struct WarningsDetailView: View {
         return matches.isEmpty ? [warning] : matches
     }
 
-    private func removeClashEntry(_ warning: Warning, entry: Warning.ClashTimelineEntry) {
+    /// RULEBOOK 1.33.0 §2 `bookingRemoveAction`: the clash row's remove button only for the people who may delete
+    /// that booking (web `ClashWarningCard`).
+    private func clashEntryRemovable(_ entry: Warning.ClashTimelineEntry) -> Bool {
+        if let managerId = entry.managerBookingId,
+           let booking = managerScheduleStore.managerSiteBookings.first(where: { $0.id == managerId }) {
+            return managerScheduleStore.canDeleteBooking(booking)
+        }
+        if let booking = bookingStore.bookings.first(where: { $0.id == entry.bookingId }) {
+            return bookingStore.canDeleteBooking(booking)
+        }
+        return false
+    }
+
+        private func removeClashEntry(_ warning: Warning, entry: Warning.ClashTimelineEntry) {
         if entry.managerBookingId != nil {
             removeManagerBooking(warning, entry: entry)
         } else {

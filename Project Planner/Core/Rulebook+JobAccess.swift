@@ -373,6 +373,27 @@ nonisolated enum JobAccessContext {
         return "You can only change bookings on jobs you manage."
     }
 
+    /// RULEBOOK 1.33.0 §2 `bookingRemoveAction(viewer, booking, job, managers)`: the one remove control a booking
+    /// screen shows — `delete` (with its tombstone) for exactly the people `canDeleteBooking` allows, `none` for
+    /// everyone else; there is no cancel. `delete` before the profile loads (the security rules still decide).
+    static func bookingRemoveAction(
+        collection: String,
+        projectId: String? = nil,
+        userId: String? = nil,
+        locationType: String? = nil,
+        locationId: String? = nil
+    ) -> String {
+        guard let viewer = readViewer else { return "delete" }
+        var booking: [String: Any] = ["collection": collection]
+        if let projectId { booking["projectId"] = projectId }
+        if let userId { booking["userId"] = userId }
+        if let locationType { booking["locationType"] = locationType }
+        if let locationId { booking["locationId"] = locationId }
+        let jobKey = (collection == "managerSiteBookings" ? locationId : projectId)?.lowercased() ?? ""
+        let job = jobKey.isEmpty ? nil : jobFieldsById[jobKey]
+        return CanonicalBusinessEngine.bookingRemoveAction(viewer, booking: booking, job: job, managers: managers)
+    }
+
     static func updateVisibleJobIds(_ ids: [String]) {
         let next = sortedUnique(ids)
         guard next != visibleJobIds else { return }

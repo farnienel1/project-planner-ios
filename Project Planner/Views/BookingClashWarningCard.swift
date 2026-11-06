@@ -11,6 +11,8 @@ import SwiftUI
 struct OperativeClashWarningCard: View {
     let warning: Warning
     let onRemove: (Warning.ClashTimelineEntry) -> Void
+    /// RULEBOOK 1.33.0 §2 `bookingRemoveAction`: the remove button shows only when this is true for the row's booking.
+    var canRemove: (Warning.ClashTimelineEntry) -> Bool = { _ in true }
     let onApprove: () -> Void
     let onOpenDay: () -> Void
     let onRemoveWarning: () -> Void
@@ -19,6 +21,7 @@ struct OperativeClashWarningCard: View {
         BookingClashWarningCard(
             warning: warning,
             onRemove: onRemove,
+            canRemove: canRemove,
             onApprove: onApprove,
             onOpenDay: onOpenDay,
             onRemoveWarning: onRemoveWarning
@@ -29,6 +32,8 @@ struct OperativeClashWarningCard: View {
 struct ManagerClashWarningCard: View {
     let warning: Warning
     let onRemove: (Warning.ClashTimelineEntry) -> Void
+    /// RULEBOOK 1.33.0 §2 `bookingRemoveAction`: the remove button shows only when this is true for the row's booking.
+    var canRemove: (Warning.ClashTimelineEntry) -> Bool = { _ in true }
     let onApprove: () -> Void
     let onOpenDay: () -> Void
     let onRemoveWarning: () -> Void
@@ -37,6 +42,7 @@ struct ManagerClashWarningCard: View {
         BookingClashWarningCard(
             warning: warning,
             onRemove: onRemove,
+            canRemove: canRemove,
             onApprove: onApprove,
             onOpenDay: onOpenDay,
             onRemoveWarning: onRemoveWarning
@@ -47,6 +53,8 @@ struct ManagerClashWarningCard: View {
 struct BookingClashWarningCard: View {
     let warning: Warning
     let onRemove: (Warning.ClashTimelineEntry) -> Void
+    /// RULEBOOK 1.33.0 §2 `bookingRemoveAction`: the remove button shows only when this is true for the row's booking.
+    var canRemove: (Warning.ClashTimelineEntry) -> Bool = { _ in true }
     let onApprove: () -> Void
     let onOpenDay: () -> Void
     let onRemoveWarning: () -> Void
@@ -289,6 +297,7 @@ struct BookingClashWarningCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            if canRemove(entry) {
             Button {
                 onRemove(entry)
             } label: {
@@ -302,6 +311,7 @@ struct BookingClashWarningCard: View {
             .accessibilityIdentifier("bookingClashWarningCard.removeEntryJobNumberMap")
             .buttonStyle(.plain)
             .accessibilityLabel("Remove \(entry.jobNumber.map { "\($0) " } ?? "")\(entry.displayTitle)")
+            }
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 10)
