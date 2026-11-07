@@ -104,6 +104,24 @@ class BookingStore: ObservableObject {
             }
         }
 
+        // 1.33.1 review item 4: a write Firestore held after its wait timed out was refused by the server. Drop the
+        // local optimistic copy, so the live listener's next snapshot (the server's booking, or none) is what shows.
+        NotificationCenter.default.addObserver(
+            forName: SDKPendingWrites.lateRefusalNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard note.userInfo?["collection"] as? String == "bookings",
+                  let documentId = note.userInfo?["documentId"] as? String else { return }
+            let noteOrganizationId = note.userInfo?["organizationId"] as? String ?? ""
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let open = self.firebaseBackend?.resolvedOrganizationIdForOfflineWrites() ?? ""
+                guard BookingPendingSync.sameOrganization(noteOrganizationId, open) else { return }
+                self.dropLocalCopyAfterLateRefusal(documentId: documentId)
+            }
+        }
+
         // RULEBOOK 1.33.0: a queued delete was undone from the sync list or refused on replay — the booking comes back.
         NotificationCenter.default.addObserver(
             forName: .offlineBookingDeleteRestored,
@@ -121,6 +139,19 @@ class BookingStore: ObservableObject {
                 self.restoreDeletedBooking(booking)
             }
         }
+    }
+
+    /// 1.33.1 review item 4: the server refused a write Firestore held for this booking. The copy on this phone is
+    /// dropped (ids without case); the listener brings back the server's copy if there is one.
+    func dropLocalCopyAfterLateRefusal(documentId: String) {
+        let key = documentId.lowercased()
+        let before = bookings.count
+        bookings.removeAll { $0.documentKey.lowercased() == key || $0.id.uuidString.lowercased() == key }
+        guard bookings.count != before else { return }
+        smartCache?.cacheBookings(bookings)
+        let snapshot = bookings
+        Task { try? await persistenceService.saveBookingData(bookings: snapshot) }
+        ScheduleChangeNotifier.postBookingStoreDidChange()
     }
 
     /// Puts back a booking whose queued delete was undone or refused (it is still on the server).
@@ -316,7 +347,8 @@ class BookingStore: ObservableObject {
     @discardableResult
     private func addBookingsReturningResults(
         _ newBookings: [Booking],
-        organizationId capturedOrganizationId: String? = nil
+        organizationId capturedOrganizationId: String? = nil,
+        session: BookingWriteSession? = nil
     ) async -> [UUID: BookingSaveResult] {
         guard !newBookings.isEmpty else { return [:] }
         if let refusal = organizationChangedRefusal(capturedOrganizationId) {
@@ -336,7 +368,8 @@ class BookingStore: ObservableObject {
         bookings.append(contentsOf: newBookings)
         return await saveData(
             writes: newBookings.map { BookingWrite(booking: $0, changedFields: nil) },
-            organizationId: capturedOrganizationId
+            organizationId: capturedOrganizationId,
+            session: session
         )
     }
     
@@ -349,7 +382,8 @@ class BookingStore: ObservableObject {
     @discardableResult
     private func updateBookingReturningResult(
         _ booking: Booking,
-        organizationId capturedOrganizationId: String? = nil
+        organizationId capturedOrganizationId: String? = nil,
+        session: BookingWriteSession? = nil
     ) async -> BookingSaveResult {
         if let refusal = organizationChangedRefusal(capturedOrganizationId) {
             errorMessage = refusal
@@ -371,7 +405,8 @@ class BookingStore: ObservableObject {
             bookings[index] = booking
             let results = await saveData(
                 writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline)],
-                organizationId: capturedOrganizationId
+                organizationId: capturedOrganizationId,
+                session: session
             )
             // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the write).
             if !changed.isEmpty { OvertimeReopenNotice.labour(before: before, after: booking) }
@@ -387,16 +422,34 @@ class BookingStore: ObservableObject {
     /// read a stale one as a failed edit, and a timed-out edit that was queued as "not saved").
     /// `organizationId`: the organisation the screen captured when Save was pressed. Every write of this save goes
     /// there, and nothing is written once another organisation is open (`organizationChanged`).
-    func updateBookingReportingProblem(_ booking: Booking, organizationId: String? = nil) async -> BookingSaveResult {
+    /// `session` (review item 1): the save this edit belongs to — one organisation check and one "a wait timed out"
+    /// state for every booking of a Confirm. Without one, the edit is its own save.
+    func updateBookingReportingProblem(
+        _ booking: Booking,
+        organizationId: String? = nil,
+        session: BookingWriteSession? = nil
+    ) async -> BookingSaveResult {
         errorMessage = nil
-        return await updateBookingReturningResult(booking, organizationId: organizationId)
+        return await updateBookingReturningResult(
+            booking,
+            organizationId: organizationId,
+            session: session ?? BookingWriteSession(organizationId: organizationId)
+        )
     }
 
     /// `addBookings`, then each new booking's own outcome by id (1.33.1): a booking is counted as saved only once its
     /// write is known, never before.
-    func addBookingsReportingProblem(_ newBookings: [Booking], organizationId: String? = nil) async -> [UUID: BookingSaveResult] {
+    func addBookingsReportingProblem(
+        _ newBookings: [Booking],
+        organizationId: String? = nil,
+        session: BookingWriteSession? = nil
+    ) async -> [UUID: BookingSaveResult] {
         errorMessage = nil
-        return await addBookingsReturningResults(newBookings, organizationId: organizationId)
+        return await addBookingsReturningResults(
+            newBookings,
+            organizationId: organizationId,
+            session: session ?? BookingWriteSession(organizationId: organizationId)
+        )
     }
 
     /// Shown when the organisation changed between Save and the write (1.33.1): nothing is written.
@@ -419,8 +472,7 @@ class BookingStore: ObservableObject {
     /// RULEBOOK §2 "Pending sync": this booking has a change the server has not confirmed — in the app outbox, or
     /// (1.33.1) in Firestore's own queue after its confirmation wait timed out (`SDKPendingWrites`).
     func isPendingSync(_ booking: Booking) -> Bool {
-        OfflineOutboxStore.shared.hasPendingSync(bookingId: booking.id)
-            || SDKPendingWrites.shared.contains(collection: "bookings", documentId: booking.documentKey)
+        BookingPendingSync.isPending(bookingId: booking.id, collection: "bookings", documentKey: booking.documentKey)
     }
 
     /// How a delete is written (1.33.1).
@@ -529,6 +581,20 @@ class BookingStore: ObservableObject {
             return
         }
 
+        // 1.33.1 review item 5: the delete goes through Firestore, so a change of this booking still queued in the
+        // outbox would replay after it and be refused against the tombstone. As `enqueueDeleteBooking` does with a
+        // queued edit (RULEBOOK §2), it is replaced: removed here, its synced copy kept for a delete that has to queue
+        // after all. A create still queued offline was never sent: nothing is sent (§2 `dropLocal`).
+        var queuedFingerprint = fingerprint
+        switch OfflineOutboxStore.shared.discardQueuedBookingSaves(bookingId: booking.id) {
+        case .create where !pendingInFirestore:
+            return
+        case .edit(let baseline):
+            queuedFingerprint = baseline ?? fingerprint
+        case .nothing, .create:
+            break
+        }
+
         do {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             if pendingInFirestore {
@@ -552,7 +618,7 @@ class BookingStore: ObservableObject {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
                OfflinePolicy.availability(action) == .allowedOffline {
                 // The connection dropped: the delete waits in the outbox with its tombstone (§2).
-                OfflineOutboxStore.shared.enqueueDeleteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
+                OfflineOutboxStore.shared.enqueueDeleteBooking(booking, fingerprint: queuedFingerprint, organizationId: orgId)
                 return
             }
             // Refused (only an admin or the job's manager may delete it): it is still on the server; put it back.
@@ -811,23 +877,26 @@ class BookingStore: ObservableObject {
     /// `write` gets the confirmation wait for that write: the full `FirestoreWriteAck.defaultTimeoutSeconds` until one
     /// write of this save times out, then `afterTimeoutAckSeconds`, so a group save on a weak signal never waits 15 s
     /// per booking (the later writes are still handed to Firestore in order and reported Pending sync).
-    static let afterTimeoutAckSeconds: Double = 1
+    /// Review item 1: the timeout state is the save's `BookingWriteSession`, so it carries across every edit and new
+    /// booking of one Confirm, and a timed-out read before an edit counts too.
+    static let afterTimeoutAckSeconds: Double = BookingWriteSession.afterTimeoutWaitSeconds
 
     static func performWrites(
         _ writes: [BookingWrite],
         organizationId: String,
         isOnline: Bool,
+        session: BookingWriteSession? = nil,
         write: (BookingWrite, _ ackTimeoutSeconds: Double) async throws -> Void
     ) async -> WriteRun {
         var run = WriteRun()
-        var ackTimeout = FirestoreWriteAck.defaultTimeoutSeconds
+        let session = session ?? BookingWriteSession(organizationId: organizationId)
         for item in writes {
             do {
-                try await write(item, ackTimeout)
+                try await write(item, session.ackSeconds)
                 run.results[item.booking.id] = .saved
             } catch {
+                session.note(error)
                 if FirestoreWriteAck.isPendingInSDK(error) {
-                    ackTimeout = afterTimeoutAckSeconds
                     run.pendingCount += 1
                     run.results[item.booking.id] = .queued(pendingSyncMessage)
                 } else if OfflineWriteSupport.shouldQueue(error: error, isOnline: isOnline) {
@@ -860,7 +929,11 @@ class BookingStore: ObservableObject {
     /// 1.33.1: returns what happened to each write (saved, Pending sync, or refused), so a screen reports this save's
     /// own outcome (`performWrites`). The organisation is read once, at the start, and used for every write.
     @discardableResult
-    private func saveData(writes: [BookingWrite] = [], organizationId capturedOrganizationId: String? = nil) async -> [UUID: BookingSaveResult] {
+    private func saveData(
+        writes: [BookingWrite] = [],
+        organizationId capturedOrganizationId: String? = nil,
+        session: BookingWriteSession? = nil
+    ) async -> [UUID: BookingSaveResult] {
         var results: [UUID: BookingSaveResult] = [:]
         do {
             // Save to local storage
@@ -908,16 +981,19 @@ class BookingStore: ObservableObject {
 
                 print("🔥🔥🔥 DEBUG: Saving bookings to Firebase for organization: \(organizationId)")
 
+                let session = session ?? BookingWriteSession(organizationId: organizationId)
                 let run = await Self.performWrites(
                     writes,
                     organizationId: organizationId,
-                    isOnline: smartCache?.isOnline ?? true
+                    isOnline: smartCache?.isOnline ?? true,
+                    session: session
                 ) { write, ackTimeout in
                     try await firebaseBackend.saveBooking(
                         write.booking,
                         organizationId: organizationId,
                         changedFields: write.changedFields,
-                        ackTimeoutSeconds: ackTimeout
+                        ackTimeoutSeconds: ackTimeout,
+                        session: session
                     )
                 }
                 results = run.results
@@ -1099,5 +1175,29 @@ nonisolated enum BookingSaveResult: Equatable {
     var keepsBooking: Bool {
         if case .refused = self { return false }
         return true
+    }
+}
+
+/// RULEBOOK §2 "Pending sync" for a labour or manager schedule booking (1.33.1 review item 3): a change in the app
+/// outbox, or a write Firestore holds whose confirmation wait timed out (`SDKPendingWrites`). One test for the stores
+/// and the rows (`PendingSyncIndicator`).
+enum BookingPendingSync {
+    @MainActor
+    static func isPending(bookingId: UUID, collection: String, documentKey: String) -> Bool {
+        isPending(entityId: bookingId.uuidString, collection: collection, documentKey: documentKey)
+    }
+
+    @MainActor
+    static func isPending(entityId: String, collection: String?, documentKey: String?) -> Bool {
+        if OfflineOutboxStore.shared.hasPendingSync(entityId: entityId) { return true }
+        guard let collection, let documentKey else { return false }
+        return SDKPendingWrites.shared.contains(collection: collection, documentId: documentKey)
+    }
+
+    /// Ids compare as stored, normalised and without case; an empty id on either side matches (as the restore notes).
+    nonisolated static func sameOrganization(_ a: String, _ b: String) -> Bool {
+        let left = a.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let right = b.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return left.isEmpty || right.isEmpty || left == right
     }
 }

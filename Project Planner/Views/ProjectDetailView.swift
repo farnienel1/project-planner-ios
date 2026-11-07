@@ -92,6 +92,9 @@ struct ProjectDetailView: View {
     @State private var afterBookingEditDismiss: (() -> Void)?
     /// Why a labour booking delete did not happen (refused or offline), shown once the edit sheet has closed.
     @State private var labourDeleteRefusalMessage: String?
+    /// 1.33.1 review item 2: the outcome of an Edit booking save (saved, Pending sync, or not saved with why), shown
+    /// once the sheet has closed.
+    @State private var bookingEditSaveAlert: ScheduleBookingSaveAlert?
     @EnvironmentObject private var smartCache: SmartCacheService
     @State private var lastSchedulingDataRefreshAt: Date?
     @State private var subcontractorEditBooking: SubcontractorBooking?
@@ -248,6 +251,13 @@ struct ProjectDetailView: View {
                 .accessibilityIdentifier("projectDetail.deleteRefused.ok")
         } message: {
             Text(labourDeleteRefusalMessage ?? "")
+        }
+        .alert(item: $bookingEditSaveAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK"))
+            )
         }
         .sheet(isPresented: $showingScheduleSubcontractor) {
             ScheduleSubcontractorView(project: project)
@@ -1658,9 +1668,19 @@ struct ProjectDetailView: View {
                         users: userStore.organizationUsers,
                         policy: firebaseBackend.payrollPolicy(for: updated.date)
                     ) : []
+                    // 1.33.1 review item 2: the organisation open when Save was pressed; the write goes there or not at
+                    // all, and its own outcome is shown once the sheet has closed.
+                    let savingOrganizationId = firebaseBackend.resolvedOrganizationIdForOfflineWrites()
                     afterBookingEditDismiss = {
                         leaveGate.runSingle(rows: rows, afterDismiss: true) {
-                            Task { await bookingStore.updateBooking(updated) }
+                            Task {
+                                let result = await bookingStore.updateBookingReportingProblem(
+                                    updated,
+                                    organizationId: savingOrganizationId,
+                                    session: BookingWriteSession(organizationId: savingOrganizationId)
+                                )
+                                bookingEditSaveAlert = ScheduleBookingSaveAlert.forEdit(result)
+                            }
                         }
                     }
                     bookingEditTarget = nil
@@ -1704,9 +1724,17 @@ struct ProjectDetailView: View {
                         users: userStore.organizationUsers,
                         policy: firebaseBackend.payrollPolicy(for: updated.date)
                     ) : []
+                    let savingOrganizationId = firebaseBackend.resolvedOrganizationIdForOfflineWrites()
                     afterBookingEditDismiss = {
                         leaveGate.runSingle(rows: rows, afterDismiss: true) {
-                            Task { await managerScheduleStore.saveBooking(updated) }
+                            Task {
+                                let result = await managerScheduleStore.saveBookingReportingProblem(
+                                    updated,
+                                    organizationId: savingOrganizationId,
+                                    session: BookingWriteSession(organizationId: savingOrganizationId)
+                                )
+                                bookingEditSaveAlert = ScheduleBookingSaveAlert.forEdit(result)
+                            }
                         }
                     }
                     bookingEditTarget = nil
@@ -1888,7 +1916,7 @@ struct ProjectDetailView: View {
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                         .lineLimit(1)
                     // RULEBOOK §2: queued offline change not yet confirmed by the server.
-                    PendingSyncIndicator(entityId: booking.id.uuidString)
+                    PendingSyncIndicator(booking: booking)
                 }
                 Spacer(minLength: 4)
                 Text(booking.scheduleLabel(policy: p))
@@ -1928,7 +1956,7 @@ struct ProjectDetailView: View {
                         .foregroundStyle(ProjectWorksRevampColors.ink)
                         .lineLimit(1)
                     // RULEBOOK §2: queued offline change not yet confirmed by the server.
-                    PendingSyncIndicator(entityId: booking.id.uuidString)
+                    PendingSyncIndicator(managerBooking: booking)
                 }
                 Spacer(minLength: 4)
                 Text(booking.scheduleLabel(policy: p))

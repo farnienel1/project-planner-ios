@@ -1757,6 +1757,10 @@ struct ScheduleOperativeView: View {
             // 1.33.1: the organisation open when Save was pressed. Every write and notice of this save goes there, and
             // nothing more is written if another organisation is opened meanwhile.
             let savingOrganizationId = firebaseBackend.resolvedOrganizationIdForOfflineWrites()
+            // 1.33.1 review item 1: one save for the whole Confirm — the organisation is checked once, and after the
+            // first wait that times out (a write, a read before an edit, or the organisation check) every later wait of
+            // this Confirm is 1 s at most, so a dead link cannot add 15–38 s per booking.
+            let writeSession = BookingWriteSession(organizationId: savingOrganizationId)
 
             for operative in operatives {
                 let dates = effectiveDates(for: operative.id)
@@ -1791,7 +1795,11 @@ struct ScheduleOperativeView: View {
                         replaced.status = .confirmed
                         replaced.updatedAt = Date()
                         // 1.33.1: judged on this save's own message, never one an earlier load or save left behind.
-                        let result = await bookingStore.updateBookingReportingProblem(replaced, organizationId: savingOrganizationId)
+                        let result = await bookingStore.updateBookingReportingProblem(
+                            replaced,
+                            organizationId: savingOrganizationId,
+                            session: writeSession
+                        )
                         saveResults.append(result)
                         if result.keepsBooking {
                             createdDatesByOperative[operative.id, default: []].insert(replaced.date)
@@ -1833,7 +1841,11 @@ struct ScheduleOperativeView: View {
             }
 
             if !newBookings.isEmpty {
-                let results = await bookingStore.addBookingsReportingProblem(newBookings, organizationId: savingOrganizationId)
+                let results = await bookingStore.addBookingsReportingProblem(
+                    newBookings,
+                    organizationId: savingOrganizationId,
+                    session: writeSession
+                )
                 for booking in newBookings {
                     // A booking the store never reported on was not written: treated as not saved.
                     let result = results[booking.id] ?? .refused("This booking could not be saved.")

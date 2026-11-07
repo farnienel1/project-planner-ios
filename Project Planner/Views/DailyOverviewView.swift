@@ -1080,7 +1080,7 @@ struct DailyOverviewView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     // RULEBOOK §2: queued offline change not yet confirmed by the server.
-                    PendingSyncIndicator(entityId: booking.id.uuidString)
+                    PendingSyncIndicator(managerBooking: booking)
                 }
             }
             Spacer(minLength: 0)
@@ -1899,9 +1899,9 @@ struct ProjectBookingCard: View {
                     .lineLimit(2)
                 // RULEBOOK §2: queued offline change not yet confirmed by the server.
                 if let b = row.operativeBooking {
-                    PendingSyncIndicator(entityId: b.id.uuidString)
+                    PendingSyncIndicator(booking: b)
                 } else if let b = row.managerBooking {
-                    PendingSyncIndicator(entityId: b.id.uuidString)
+                    PendingSyncIndicator(managerBooking: b)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

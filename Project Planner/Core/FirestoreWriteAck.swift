@@ -14,6 +14,7 @@
 //  `SDKPendingWrites` remembers which documents still wait for the server and forgets them when the write lands.
 //
 
+import Combine
 import Foundation
 @preconcurrency import FirebaseFirestore
 
@@ -52,8 +53,10 @@ enum FirestoreWriteAck {
         case localCache
     }
 
-    nonisolated static func editReadSource(pendingOnThisDevice: Bool) -> EditReadSource {
-        pendingOnThisDevice ? .localCache : .server
+    /// `afterTimeout` (1.33.1 review item 1): once one wait of this save timed out, the server read is skipped and the
+    /// cache is read, so a Confirm on a dead link does not wait again for a read that cannot answer.
+    nonisolated static func editReadSource(pendingOnThisDevice: Bool, afterTimeout: Bool = false) -> EditReadSource {
+        (pendingOnThisDevice || afterTimeout) ? .localCache : .server
     }
 
     /// What an edit does with what its read found.
@@ -88,6 +91,15 @@ enum FirestoreWriteAck {
         let token = PendingToken()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             gate.continuation = continuation
+            let timer = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+                // Cancelled: the write finished first (review NIT), nothing to do.
+                guard !Task.isCancelled else { return }
+                if gate.resume(with: .failure(timeoutError)), let pendingKey, timeoutError is TimedOut {
+                    token.marked = true
+                    SDKPendingWrites.shared.mark(pendingKey)
+                }
+            }
             Task { @MainActor in
                 var failure: Error?
                 do {
@@ -95,6 +107,8 @@ enum FirestoreWriteAck {
                 } catch {
                     failure = error
                 }
+                // The write finished: its timer has nothing left to do (review NIT).
+                timer.cancel()
                 if let pendingKey, token.marked {
                     SDKPendingWrites.shared.settle(pendingKey, error: failure)
                 }
@@ -102,13 +116,6 @@ enum FirestoreWriteAck {
                     gate.resume(with: .failure(failure))
                 } else {
                     gate.resume(with: .success(()))
-                }
-            }
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
-                if gate.resume(with: .failure(timeoutError)), let pendingKey, timeoutError is TimedOut {
-                    token.marked = true
-                    SDKPendingWrites.shared.mark(pendingKey)
                 }
             }
         }
@@ -149,11 +156,25 @@ enum FirestoreWriteAck {
 /// Used for "Pending sync" on screen and so an edit or delete of such a booking is written through Firestore after it
 /// (never refused as not-found, never queued in the app outbox as a second copy).
 @MainActor
-final class SDKPendingWrites {
+final class SDKPendingWrites: ObservableObject {
     static let shared = SDKPendingWrites()
 
-    /// Lower-cased document path → number of timed-out writes still on their way.
-    private var counts: [String: Int] = [:]
+    /// Lower-cased document path → number of timed-out writes still on their way. Published so a row's "Pending sync"
+    /// (`PendingSyncIndicator`) appears and goes with it (1.33.1 review item 3).
+    @Published private var counts: [String: Int] = [:]
+
+    /// A booking write the server refused after its wait had timed out (1.33.1 review item 4). `userInfo`:
+    /// `organizationId`, `collection`, `documentId` (as written in the path). The stores drop their local copy so the
+    /// next listener snapshot is the truth.
+    static let lateRefusalNotification = Notification.Name("SDKPendingWrites.lateRefusal")
+
+    /// The parts of a booking document path (`organizations/{orgId}/{collection}/{documentId}`), nil for any other path.
+    nonisolated static func pathParts(_ path: String) -> (organizationId: String, collection: String, documentId: String)? {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard parts.count == 4, parts[0].lowercased() == "organizations",
+              !parts[1].isEmpty, !parts[2].isEmpty, !parts[3].isEmpty else { return nil }
+        return (parts[1], parts[2], parts[3])
+    }
 
     /// The document path, lower-cased (ids compare without case, RULEBOOK §1).
     nonisolated static func key(organizationId: String, collection: String, documentId: String) -> String {
@@ -165,8 +186,9 @@ final class SDKPendingWrites {
         ScheduleChangeNotifier.postBookingStoreDidChange()
     }
 
-    /// The write finished after its wait timed out. Refused by the server: logged, never sent again (the live listener
-    /// drops the booking Firestore rolled back).
+    /// The write finished after its wait timed out. Refused by the server: never sent again. 1.33.1 review item 4: the
+    /// person is told (`BOOKING_REPLAY_REFUSED_MESSAGE`, the app-wide "Change not saved" alert) and the stores drop the
+    /// local optimistic copy, so the live listener's next snapshot (Firestore rolled the write back) is what shows.
     func settle(_ path: String, error: Error?) {
         let key = path.lowercased()
         if let count = counts[key] {
@@ -174,8 +196,20 @@ final class SDKPendingWrites {
         }
         if let error {
             print("🔥🔥🔥 DEBUG: [SDKPendingWrites] Write to \(path) was refused after its wait timed out (not resent): \(error.localizedDescription)")
+            Self.reportLateRefusal(path: path)
         }
         ScheduleChangeNotifier.postBookingStoreDidChange()
+    }
+
+    /// Tells the person and the stores that a write Firestore held was refused by the server.
+    static func reportLateRefusal(path: String) {
+        OfflineOutboxStore.shared.lastRefusalMessage = CanonicalBusinessEngine.bookingReplayRefusedMessage
+        guard let parts = pathParts(path) else { return }
+        NotificationCenter.default.post(
+            name: lateRefusalNotification,
+            object: nil,
+            userInfo: ["organizationId": parts.organizationId, "collection": parts.collection, "documentId": parts.documentId]
+        )
     }
 
     func contains(path: String) -> Bool {
@@ -191,5 +225,73 @@ final class SDKPendingWrites {
     /// Tests only.
     func removeAll() {
         counts.removeAll()
+    }
+}
+
+/// 1.33.1 review item 1: one save — a Schedule booking Confirm (its edits and new bookings) or one Edit booking Save —
+/// shares one organisation (resolved once, never per booking) and one "a wait timed out" state. Before, each booking
+/// paid its own organisation read (up to 8 s), its own read before an edit (15 s) and its own confirmation wait (15 s),
+/// about 38 s per booking on a dead link. After the first timeout every later wait of the save is
+/// `afterTimeoutWaitSeconds` at most and the read before an edit goes to this device's cache; a save that has run for
+/// `budgetSeconds` waits no longer than that either. What is written, and in what order, is unchanged: a write that is
+/// not confirmed in time stays with Firestore and is reported Pending sync.
+@MainActor
+final class BookingWriteSession {
+    /// The longest any wait of a save lasts once one wait of it has timed out.
+    static let afterTimeoutWaitSeconds: Double = 1
+    /// The organisation check's server read (as `getDocumentWithServerTimeoutAndCacheFallback`).
+    static let organizationReadSeconds: Double = 8
+    /// After this long, a save's later waits are short as if one had timed out.
+    static let budgetSeconds: Double = 20
+
+    /// The organisation captured when Save was pressed.
+    let organizationId: String?
+    private(set) var timedOut = false
+    private let startedAt: Date
+    private let now: () -> Date
+    /// Normalised preferred id → the id the check resolved.
+    private var resolvedOrganizations: [String: String] = [:]
+
+    init(organizationId: String?, now: @escaping () -> Date = { Date() }) {
+        self.organizationId = organizationId
+        self.now = now
+        self.startedAt = now()
+    }
+
+    /// How long a wait of `full` seconds may last now.
+    func wait(_ full: Double) -> Double {
+        if timedOut { return min(full, Self.afterTimeoutWaitSeconds) }
+        let remaining = Self.budgetSeconds - now().timeIntervalSince(startedAt)
+        return min(full, max(Self.afterTimeoutWaitSeconds, remaining))
+    }
+
+    /// The confirmation wait of the next write.
+    var ackSeconds: Double { wait(FirestoreWriteAck.defaultTimeoutSeconds) }
+    /// The server read before the next edit.
+    var editReadSeconds: Double { wait(FirestoreWriteAck.defaultTimeoutSeconds) }
+    /// The organisation check, when it has not run yet.
+    var organizationCheckSeconds: Double { wait(Self.organizationReadSeconds) }
+
+    func noteTimeout() {
+        timedOut = true
+    }
+
+    /// Notes a timed-out write or read of this save.
+    func note(_ error: Error) {
+        if error is FirestoreWriteAck.TimedOut || error is FirestoreWriteAck.ReadTimedOut { noteTimeout() }
+    }
+
+    /// The organisation every write of this save goes to, checked once. `check` gets its time limit and returns the
+    /// id and whether the check timed out (then the rest of the save waits briefly).
+    func organization(
+        _ preferred: String,
+        check: (_ timeoutSeconds: Double) async throws -> (id: String, timedOut: Bool)
+    ) async throws -> String {
+        let key = normalizedOrganizationId(preferred).lowercased()
+        if let resolved = resolvedOrganizations[key] { return resolved }
+        let result = try await check(organizationCheckSeconds)
+        if result.timedOut { noteTimeout() }
+        resolvedOrganizations[key] = result.id
+        return result.id
     }
 }

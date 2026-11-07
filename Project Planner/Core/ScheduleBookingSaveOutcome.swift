@@ -72,8 +72,31 @@ struct ScheduleBookingSaveAlert: Identifiable, Equatable {
     let id = UUID()
     let outcome: ScheduleBookingSaveOutcome
     let message: String
+    /// An Edit booking save from the Scheduling grid (one booking), rather than a Schedule booking Confirm.
+    var isEdit: Bool = false
+
+    static let editSavedMessage = "Booking saved."
+
+    /// 1.33.1 review item 2: what the Scheduling grid's Edit booking shows once its sheet has closed — saved, Pending
+    /// sync, or not saved with why — from this save's own outcome.
+    static func forEdit(_ result: BookingSaveResult) -> ScheduleBookingSaveAlert {
+        let outcome = ScheduleBookingSaveOutcome.decide(results: [result])
+        switch outcome {
+        case .confirmed, .nothingToSave:
+            return ScheduleBookingSaveAlert(outcome: .confirmed, message: editSavedMessage, isEdit: true)
+        case .pendingSync(let message), .savedWithProblem(let message), .notSaved(let message):
+            return ScheduleBookingSaveAlert(outcome: outcome, message: message, isEdit: true)
+        }
+    }
 
     var title: String {
+        if isEdit {
+            switch outcome {
+            case .confirmed, .nothingToSave: return "Booking saved"
+            case .pendingSync: return "Booking saved — Pending sync"
+            case .savedWithProblem, .notSaved: return "Booking not saved"
+            }
+        }
         switch outcome {
         case .confirmed: return "Booking confirmed"
         case .pendingSync: return "Booking saved — Pending sync"
