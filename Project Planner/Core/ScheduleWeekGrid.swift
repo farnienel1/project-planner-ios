@@ -186,7 +186,7 @@ enum ScheduleWeekGrid {
         operativeBookings: [Booking],
         managerBookings: [ManagerSiteBooking],
         policy: OrgPayrollTimePolicy,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> Double {
         let operativeSet = Set(operativeIds)
         let userSet = Set(userIds)
@@ -210,7 +210,7 @@ enum ScheduleWeekGrid {
         operativeBookings: [Booking],
         managerBookings: [ManagerSiteBooking],
         policy: OrgPayrollTimePolicy,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> String? {
         let probe = Booking(
             operativeId: operativeIds.first ?? UUID(),

@@ -267,7 +267,7 @@ fileprivate struct MyScheduleDayNavigatorCard: View {
             .buttonStyle(PPOnNavyCircleButtonStyle())
             Button(action: onSelectDay) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(cal.isDateInToday(day) ? "Today · Tap to pick a day" : "Tap to pick a day")
+                    Text(cal.isDate(day, inSameDayAs: Date()) ? "Today · Tap to pick a day" : "Tap to pick a day")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(PPColor.onNavySecondary)
                         .lineLimit(1)
@@ -2933,7 +2933,7 @@ struct OperativeScheduleContentView: View {
         let weekdayFormatter = DateFormatter()
         weekdayFormatter.timeZone = calendar.timeZone
         weekdayFormatter.dateFormat = "EEE"
-        let isToday = calendar.isDateInToday(date)
+        let isToday = calendar.isDate(date, inSameDayAs: Date())
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 PPCalendarStub(

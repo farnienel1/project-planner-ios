@@ -20,7 +20,7 @@ enum ScheduleDateSelectionPolicy {
         date: Date,
         selected: inout Set<Date>,
         policy: OrgPayrollTimePolicy,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> String? {
         let normalized = calendar.startOfDay(for: date)
         if selected.contains(normalized) {
@@ -46,7 +46,7 @@ enum ScheduleDateSelectionPolicy {
         count: Int,
         into selected: inout Set<Date>,
         startingFrom anchor: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) {
         selected.removeAll()
         var cursor = calendar.startOfDay(for: anchor)
@@ -63,7 +63,7 @@ enum ScheduleDateSelectionPolicy {
     static func saturdaySundaySelectionAllowed(
         selected: Set<Date>,
         policy: OrgPayrollTimePolicy,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> Bool {
         let hasSat = selected.contains { calendar.component(.weekday, from: $0) == 7 }
         let hasSun = selected.contains { calendar.component(.weekday, from: $0) == 1 }
@@ -76,7 +76,7 @@ enum ScheduleDateSelectionPolicy {
         _ date: Date,
         to selected: Set<Date>,
         policy: OrgPayrollTimePolicy,
-        calendar: Calendar = .current
+        calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> Bool {
         guard PayrollTimePolicyCatalog.isWeekend(date, calendar: calendar) else { return true }
         let wd = calendar.component(.weekday, from: date)

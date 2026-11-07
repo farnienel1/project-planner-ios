@@ -196,12 +196,12 @@ enum PayrollTimePolicyCatalog {
         return resolvedSundaySettings(from: policy)
     }
 
-    static func isWeekend(_ day: Date, calendar: Calendar = .current) -> Bool {
+    static func isWeekend(_ day: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> Bool {
         let wd = calendar.component(.weekday, from: day)
         return wd == 1 || wd == 7
     }
 
-    static func isWeekday(_ day: Date, calendar: Calendar = .current) -> Bool {
+    static func isWeekday(_ day: Date, calendar: Calendar = OrganizationRulebookContext.calendar) -> Bool {
         !isWeekend(day, calendar: calendar)
     }
 

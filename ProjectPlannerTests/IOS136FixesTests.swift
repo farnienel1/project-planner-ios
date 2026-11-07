@@ -188,4 +188,35 @@ final class IOS136FixesTests: XCTestCase {
             XCTAssertTrue(sheetInjections.contains(".environmentObject(\(store))"), store)
         }
     }
+
+    // MARK: 5. Scheduling days are organisation-zone days (guardrail 2)
+
+    /// Failure before: the date picker's toggle used the organisation calendar but its defaults (quick select, the
+    /// Saturday/Sunday check, the week grid overlap) used the phone's, so one selection could hold both kinds of
+    /// midnight, and a phone west of the organisation put a stored booking on the day before.
+    func testDateSelectionDefaultsToOrganisationDays() {
+        var selected = Set<Date>()
+        let calendar = OrganizationRulebookContext.calendar
+        let wednesdayNoon = LogicFixtures.day(2026, 11, 4, calendar: calendar)
+        XCTAssertNil(ScheduleDateSelectionPolicy.toggle(date: wednesdayNoon, selected: &selected, policy: .default))
+        XCTAssertEqual(selected, [calendar.startOfDay(for: wednesdayNoon)])
+        XCTAssertEqual(selected.first.map { OrganizationRulebookContext.dayKey($0) }, "2026-11-04")
+        let saturday = LogicFixtures.day(2026, 11, 7, calendar: calendar)
+        XCTAssertTrue(PayrollTimePolicyCatalog.isWeekend(saturday))
+        XCTAssertFalse(PayrollTimePolicyCatalog.isWeekend(wednesdayNoon))
+    }
+
+    func testTheSchedulingWeekReadsTheOrganisationCalendar() throws {
+        let view = try source("Project Planner/Views/ProjectDetailView.swift")
+        for name in ["weekStartDate", "weekDays", "bookingsForDate", "subcontractorBookingsForDate", "managerBookingsForDate", "changeWeek", "schedulingDayCard", "schedulingCompactDayCell", "schedulingShortDayTitle"] {
+            let marker = name == "weekStartDate" || name == "weekDays" ? "private var \(name):" : "private func \(name)("
+            let start = try XCTUnwrap(view.range(of: marker), name)
+            let body = view[start.upperBound...].prefix(700)
+            let end = body.range(of: "\n    private ")?.lowerBound ?? body.endIndex
+            XCTAssertFalse(body[..<end].contains("Calendar.current"), name)
+            XCTAssertFalse(body[..<end].contains("isDateInToday"), name)
+        }
+        let subcontractor = try source("Project Planner/Views/ScheduleSubcontractorView.swift")
+        XCTAssertFalse(subcontractor.contains("Calendar.current"))
+    }
 }

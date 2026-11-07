@@ -611,7 +611,7 @@ struct OperativeCustomHoursSheet: View {
         // caller had at hand; `policy` is the fallback before an organisation is loaded.
         let policy = CanonicalBusinessEngine.payrollPolicyInEffect(on: referenceDay, fallback: callerPolicy)
         self.policy = policy
-        self.referenceDay = Calendar.current.startOfDay(for: referenceDay)
+        self.referenceDay = OrganizationRulebookContext.calendar.startOfDay(for: referenceDay)
         self.rulebookDay = referenceDay
         if let noteDays, !noteDays.isEmpty {
             self.noteDays = noteDays
