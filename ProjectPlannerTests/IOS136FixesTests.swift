@@ -142,4 +142,28 @@ final class IOS136FixesTests: XCTestCase {
             XCTAssertFalse(try source(path).contains("status != .cancelled"), path)
         }
     }
+
+    // MARK: 3. Bank holiday years are a union per organisation and region
+
+    /// Failure before: opening Company details (no `alsoYears`) after a leave screen replaced the loaded years, so the
+    /// previous leave year's bank holidays vanished and carry-over counted them as leave days until a leave screen
+    /// reloaded.
+    func testALoadWithoutExtraYearsKeepsTheYearsALeaveScreenLoaded() {
+        let scope = BankHolidayService.loadScope(organizationId: "TEST-ORG", regionId: "GB-ENG-WLS")
+        let leaveScreen = BankHolidayService.yearsToLoad(requested: [2025, 2026, 2027, 2028, 2024], previouslyLoaded: [])
+        let companyDetails = BankHolidayService.yearsToLoad(
+            requested: [2025, 2026, 2027, 2028],
+            previouslyLoaded: Set(leaveScreen)
+        )
+        XCTAssertEqual(companyDetails, [2024, 2025, 2026, 2027, 2028])
+        XCTAssertEqual(scope, BankHolidayService.loadScope(organizationId: "test-org", regionId: "GB-ENG-WLS"))
+    }
+
+    func testAnotherOrganisationOrRegionStartsAfresh() {
+        let home = BankHolidayService.loadScope(organizationId: "TEST-ORG", regionId: "GB-ENG-WLS")
+        XCTAssertNotEqual(home, BankHolidayService.loadScope(organizationId: "TEST-OTHER", regionId: "GB-ENG-WLS"))
+        XCTAssertNotEqual(home, BankHolidayService.loadScope(organizationId: "TEST-ORG", regionId: "GB-SCT"))
+        let service = try? source("Project Planner/Core/BankHolidayService.swift")
+        XCTAssertTrue(service?.contains("previouslyLoaded: loadedScope == scope ? loadedYears : []") == true)
+    }
 }
