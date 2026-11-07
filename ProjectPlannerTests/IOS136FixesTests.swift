@@ -94,4 +94,52 @@ final class IOS136FixesTests: XCTestCase {
         XCTAssertTrue(coordinator.contains("OvertimeReopenNotice.managerSite(before: previous, after: payload.booking)"))
         XCTAssertTrue(coordinator.contains("OvertimeReopenNotice.labour(before: booking, after: nil)"), "a replayed delete tells them too")
     }
+
+    // MARK: 2. `bookingOccupiesDay`, never a private Cancelled / Completed filter
+
+    /// Failure before: the week grid ignored a Completed booking when checking a new booking for overlap, although the
+    /// rulebook (`bookingOccupiesDay`, `bookingRequestClashIds`) says Completed still fills the day; Cancelled never does.
+    func testTheWeekGridOverlapCountsCompletedButNeverCancelled() {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        let day = LogicFixtures.day(2026, 11, 4, calendar: calendar)
+        let person = UUID()
+        func message(_ status: BookingStatus) -> String? {
+            let existing = LogicFixtures.booking(
+                on: day, slot: .customHours, start: "07:30", end: "16:00", status: status, operativeId: person
+            )
+            return ScheduleWeekGrid.overlapMessage(
+                operativeIds: [person],
+                userIds: [],
+                day: day,
+                timeSlot: .customHours,
+                workStart: "15:00",
+                workEnd: "17:00",
+                operativeBookings: [existing],
+                managerBookings: [],
+                policy: LogicFixtures.policy,
+                calendar: calendar
+            )
+        }
+        XCTAssertNotNil(message(.completed))
+        XCTAssertNotNil(message(.confirmed))
+        XCTAssertNil(message(.cancelled))
+    }
+
+    func testTheOccupiesDayAnswerIsTheRulebooksForEveryStatus() {
+        for status in BookingStatus.allCases {
+            XCTAssertEqual(status.occupiesDay, CanonicalBusinessEngine.bookingOccupiesDay(status.rawValue), status.rawValue)
+        }
+    }
+
+    /// Booking-day filters call `occupiesDay`; the only `.cancelled` left in these files is none.
+    func testNoPrivateCancelledFilterInTheBookingDayScreens() throws {
+        for path in [
+            "Project Planner/Core/ScheduleWeekGrid.swift",
+            "Project Planner/Views/BookLabourFlowView.swift",
+            "Project Planner/Views/DailyOverviewView.swift",
+            "Project Planner/Views/WeeklyReportView.swift",
+        ] {
+            XCTAssertFalse(try source(path).contains("status != .cancelled"), path)
+        }
+    }
 }

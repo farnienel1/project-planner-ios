@@ -241,8 +241,8 @@ enum ScheduleWeekGrid {
 
     private static func counts(_ booking: Booking, on day: Date, calendar: Calendar) -> Bool {
         calendar.isDate(booking.date, inSameDayAs: day)
-            && booking.status != .cancelled
-            && booking.status != .completed
+            // RULEBOOK `bookingOccupiesDay` (as `bookingRequestClashIds`: cancelled never, Completed still fills the day).
+            && booking.status.occupiesDay
     }
 
     private static func range(_ interval: CanonicalMinuteInterval) -> ScheduleClockRange {

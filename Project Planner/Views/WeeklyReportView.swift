@@ -1470,7 +1470,7 @@ struct WeeklyReportView: View {
             let day = cal.startOfDay(for: $0.date)
             return day >= reportStartDay
                 && day <= reportEndDay
-                && $0.status != .cancelled
+                && $0.status.occupiesDay  // RULEBOOK `bookingOccupiesDay`
         }
         return filtered.compactMap { booking in
             let project = projectStore.projects.first(where: { $0.id == booking.projectId })
