@@ -144,15 +144,6 @@ final class FixedSampleScreenSnapshotTests: XCTestCase {
         )
     }
 
-    func testNewOperative() {
-        assertScreenModes(
-            CreateOperativeView()
-                .environmentObject(OperativeStore())
-                .environmentObject(NotificationService())
-                .environmentObject(UserStore())
-        )
-    }
-
     func testNewManager() {
         assertScreenModes(
             CreateManagerView()

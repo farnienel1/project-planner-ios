@@ -85,6 +85,11 @@ jobs:
             exit 0
           fi
           echo "Simulator: $sim ($DEVICE)"
+          # Boot the simulator and wait until it has finished booting before the tests start. Without this the first
+          # test of a leg pays for the cold boot inside app.launch() and can fail with "Timed out while requesting
+          # launch progress" (Pro Max AU01, run 42308162643) although the app and the test are fine.
+          xcrun simctl boot "$sim" 2>/dev/null || true
+          xcrun simctl bootstatus "$sim" -b || echo "::warning::simctl bootstatus did not confirm the boot; continuing"
           set +e
           xcodebuild test \
             -project "Project Planner.xcodeproj" \

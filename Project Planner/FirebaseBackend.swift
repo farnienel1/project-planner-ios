@@ -4239,6 +4239,17 @@ class FirebaseBackend: ObservableObject {
     /// transition, missing leave fields (the organisation `annualLeaveDefaults`) and missing `timesheetsEnabled`
     /// (`defaultTimesheetsEnabled`) all come from the script. Only the stored `name` / `displayName` strings and the
     /// legacy tax ids (moved to `users/{uid}/private/taxIds`) are read here as stored.
+    /// RULEBOOK 1.34.0 §11 (review fix): `users/{uid}.ghost` counts only when it is stored as the Bool `true` — the same
+    /// test as the rulebook's `isGhostUser` and the security rules. A number 1 or the text "true" is not a ghost.
+    nonisolated static func storedGhostFlag(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID() && number.boolValue
+    }
+
+    /// RULEBOOK 1.34.0 §11 (review fix): the ghost markers the signed-in person never writes on their own users
+    /// document (the rules refuse it). Only `ghostCreateWrites` / `ghostUpgradeWrites` (another person's document) do.
+    nonisolated static let ownProfileForbiddenFields = ["ghost", "inviteEmailHint"]
+
     static func parseAppUserDocument(
         userId: String,
         data: [String: Any],
@@ -4263,7 +4274,8 @@ class FirebaseBackend: ObservableObject {
                 firstName: storedText("firstName") ?? "",
                 surname: storedText("surname") ?? storedText("lastName") ?? "",
                 isActive: firestoreUserIsActive(from: data),
-                passwordSet: true
+                // RULEBOOK 1.34.0 §11: a ghost has no login.
+                passwordSet: Self.storedGhostFlag(data["ghost"]) ? (firestoreBool(data["passwordSet"]) ?? false) : true
             )
             fallback.documentName = data["name"] as? String ?? ""
             fallback.documentDisplayName = data["displayName"] as? String ?? ""
@@ -4304,7 +4316,8 @@ class FirebaseBackend: ObservableObject {
             surname: row.text("surname"),
             mobileNumber: row.optionalText("mobileNumber"),
             isActive: row.bool("isActive", default: true),
-            passwordSet: row.bool("passwordSet", default: true),
+            // RULEBOOK 1.34.0 §11: a ghost has no login, so a missing `passwordSet` never reads as signed up for one.
+            passwordSet: Self.storedGhostFlag(data["ghost"]) ? (firestoreBool(data["passwordSet"]) ?? false) : row.bool("passwordSet", default: true),
             permissions: permissions,
             isSuperAdmin: row.bool("isSuperAdmin"),
             policyAccepted: row.bool("policyAccepted"),
@@ -4350,6 +4363,10 @@ class FirebaseBackend: ObservableObject {
         // RULEBOOK 1.30.0 §26 (web `homeOrganizationId`): the organisation the users document stores, before any
         // reader fills `organizationId` with the open organisation. The price work approver check reads this.
         parsed.storedOrganizationId = organizationIdFromFirestore(data["organizationId"])
+        // RULEBOOK 1.34.0 §11: a ghost operative (`email: ''`, no login) and a converted row's kept-aside email.
+        // RULEBOOK 1.34.0 review fix: `isGhostUser` is the stored Bool `true` only (as the rules), never 1 / "true".
+        parsed.isGhost = row.bool("ghost") && Self.storedGhostFlag(data["ghost"])
+        parsed.inviteEmailHint = row.optionalText("inviteEmailHint")
         return parsed
     }
 
@@ -5859,7 +5876,9 @@ class FirebaseBackend: ObservableObject {
         } else {
             let snapshot = try await ref.getDocument(source: .server)
             guard snapshot.exists, let stored = snapshot.data() else {
-                let create = payload.filter { !($0.value is FieldValue) }
+                let create = payload.filter {
+                    !($0.value is FieldValue) && !(user.id == uid && Self.ownProfileForbiddenFields.contains($0.key))
+                }
                 // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.sharedDocumentPayWrite`: with `privatePay` on the new
                 // users document carries no pay; the pay goes to `payProfiles/{uid}` once the document exists.
                 let privatePay = SecuritySwitchContext.privatePay
@@ -5878,6 +5897,9 @@ class FirebaseBackend: ObservableObject {
         var changes = write.firestoreFields(from: payload)
         changes.removeValue(forKey: "organizationId")
         changes.removeValue(forKey: "createdAt")
+        if user.id == uid {
+            for key in Self.ownProfileForbiddenFields { changes.removeValue(forKey: key) }
+        }
         if changes["profilePhotoURL"] is FieldValue {
             changes.removeValue(forKey: "profilePhotoURL")
         }

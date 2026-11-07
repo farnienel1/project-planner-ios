@@ -145,8 +145,15 @@ struct HomeView: View {
                 .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingCreateOperative) {
-            CreateOperativeView()
-                .environmentObject(operativeStore)
+            // RULEBOOK 1.34.0 §11: a new operative with no login is a ghost (a users document), never an `operatives`
+            // row — Add user opens with the Ghost account toggle on (shown only when `ghostToggleVisible` allows it: `canCreateGhost` and the `ghostAccounts` switch, owner decision 7 Nov "1b").
+            AddUserView(
+                mode: userStore.currentUser?.isRosterAdmin == true ? .admin : .managerAddingOperative,
+                startAsGhost: true
+            )
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(smartCache)
         }
         .sheet(isPresented: $showingCreateManager) {
             CreateManagerView()
@@ -1788,11 +1795,9 @@ struct OperativeQualificationsReadOnlyView: View {
     @State private var repairMessage: String?
     
     private var operative: Operative? {
-        guard let email = userStore.currentUser?.email else { return nil }
-        let e = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        return operativeStore.allOperatives.first {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == e
-        }
+        // The person's own row (`personDedupeKey`); an empty email never matches another no-email row.
+        guard let user = userStore.currentUser else { return nil }
+        return operativeStore.operativeRow(for: user)
     }
     
     var body: some View {
@@ -1853,6 +1858,9 @@ struct OperativeQualificationsReadOnlyView: View {
         guard userStore.isOperativeMode() else { return }
         guard !isRepairingLink else { return }
         guard let u = userStore.currentUser else { return }
+        // RULEBOOK 1.34.0 §11: a ghost is a users document only; never create an `operatives` row for one (an invited
+        // ghost signs in only after accepting, which drops the ghost flag).
+        guard !u.isGhost else { return }
         
         let email = u.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !email.isEmpty else { return }
@@ -1922,10 +1930,9 @@ private struct HomeProfileCardSheet: View {
     @State private var taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
 
     private var operative: Operative? {
-        guard let email = user?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
-        return operativeStore.allOperatives.first {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
-        }
+        // The person's own row (`personDedupeKey`); an empty email never matches another no-email row.
+        guard let user else { return nil }
+        return operativeStore.operativeRow(for: user)
     }
 
     private var displayName: String {

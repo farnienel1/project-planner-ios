@@ -170,8 +170,10 @@ struct OperativesView: View {
     
     private func openUserProfile(for operative: Operative) {
         // Find the corresponding app user by email and open their profile
+        // `operativeRow(for:in:)` (`personDedupeKey`): a row with no email opens the ghost it is kept under, never
+        // the first account with an empty email (RULEBOOK 1.34.0).
         let matchingUser = userStore.organizationUsers.first { user in
-            user.email.lowercased() == operative.email.lowercased()
+            OperativeStore.operativeRow(for: user, in: [operative]) != nil
         }
         if let user = matchingUser, user.isStoredUserDocument {
             selectedUserForProfile = user
@@ -219,24 +221,24 @@ struct OperativesView: View {
         case .email:
             return user.email.localizedCaseInsensitiveContains(filterText)
         case .startDate:
-            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+            if let op = operativeStore.operativeRow(for: user) {
                 let formatter = DateFormatter()
                 formatter.dateStyle = .medium
                 return formatter.string(from: op.startDate).localizedCaseInsensitiveContains(filterText)
             }
             return false
         case .skills:
-            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+            if let op = operativeStore.operativeRow(for: user) {
                 return op.skills.contains { $0.localizedCaseInsensitiveContains(filterText) }
             }
             return false
         case .qualifications:
-            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+            if let op = operativeStore.operativeRow(for: user) {
                 return op.qualifications.contains { $0.name.localizedCaseInsensitiveContains(filterText) }
             }
             return false
         case .dayRate:
-            if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+            if let op = operativeStore.operativeRow(for: user) {
                 let rate = op.dayRate ?? op.hourlyRate
                 if let rate { return String(format: "%.0f", rate).contains(filterText) }
             }
@@ -248,10 +250,7 @@ struct OperativesView: View {
     private var linkedOperativeRecords: [(user: AppUser, operative: Operative)] {
         let operativeUsers = userStore.rosterList(.operatives)
         return operativeUsers.compactMap { user in
-            guard let op = operativeStore.allOperatives.first(where: {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
-                user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            }) else {
+            guard let op = operativeStore.operativeRow(for: user) else {
                 return nil
             }
             return (user, op)
@@ -332,11 +331,11 @@ struct OperativesView: View {
     
     /// Header numbers. Same `listedRosterUsers` / `rosterSegment` calls the tabs use, before search and filters.
     private var operativeRosterCounts: OperativesRosterCounts {
-        let listed = CanonicalBusinessEngine.listedRosterUsers(
+        let listed = GhostRulebook.listed(
             allOperativeUsers,
             claimedEmails: userStore.organizationUserEmailClaims
         ) ?? []
-        let segments = listed.map { CanonicalBusinessEngine.rosterSegment($0) }
+        let segments = listed.map { GhostRulebook.segment($0) }
         return OperativesRosterCounts(
             active: segments.filter { $0 == UserRosterSegment.active.canonicalSegment }.count,
             inactive: segments.filter { $0 == UserRosterSegment.inactive.canonicalSegment }.count,
@@ -392,11 +391,11 @@ struct OperativesView: View {
     
     /// Claim set is `organizations/{orgId}/userEmails` document ids. Pending is `rosterSegment`, not `passwordSet` alone.
     private func rosterListed(_ users: [AppUser], segment: UserRosterSegment) -> [AppUser] {
-        let listed = CanonicalBusinessEngine.listedRosterUsers(
+        let listed = GhostRulebook.listed(
             users,
             claimedEmails: userStore.organizationUserEmailClaims
         ) ?? []
-        return listed.filter { CanonicalBusinessEngine.rosterSegment($0) == segment.canonicalSegment }
+        return listed.filter { GhostRulebook.segment($0) == segment.canonicalSegment }
     }
 
     private var pendingOperativeInvitees: [AppUser] {
@@ -488,7 +487,7 @@ struct OperativesView: View {
                         .listRowBackground(Color.clear)
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(action: {
-                                if let op = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+                                if let op = operativeStore.operativeRow(for: user) {
                                     operativeToDelete = op
                                 }
                             }) {
@@ -623,9 +622,18 @@ struct OperativeUserRowView: View {
                     Text(user.fullName)
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
-                    Text(user.email)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    if !user.email.isEmpty {
+                        Text(user.email)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    // RULEBOOK 1.34.0 §11 `ghostBadgeLabel`: "No app login" (or "· Invited").
+                    let ghostBadge = GhostRulebook.badge(user)
+                    if !ghostBadge.isEmpty {
+                        OperativeStatusPill(text: ghostBadge, tint: .secondary)
+                            .padding(.top, 2)
+                            .accessibilityIdentifier("operativeUserRow.ghostBadge")
+                    }
                     if user.rosterSegment == .pending {
                         OperativeStatusPill(text: "Pending", tint: .orange)
                             .padding(.top, 2)
@@ -788,160 +796,6 @@ struct OperativeDetailRowView: View {
     }
 }
 
-struct AddOperativeView: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject var operativeStore: OperativeStore
-    
-    @State private var firstName = ""
-    @State private var lastName = ""
-    @State private var email = ""
-    @State private var phone = ""
-    @State private var startDate = Date()
-    @State private var selectedQualifications: Set<Qualification> = []
-    @State private var hourlyRate = ""
-    @State private var notes = ""
-    @State private var tradePresetRaw = StaffTradeType.electrician.rawValue
-    @State private var tradeCustomText = ""
-    
-    var body: some View {
-        NavigationView {
-            Form {
-                Section("Personal Information") {
-                    TextField("First Name", text: $firstName)
-                        .accessibilityIdentifier("addOperative.firstName")
-                    TextField("Last Name", text: $lastName)
-                        .accessibilityIdentifier("addOperative.lastName")
-                    TextField("Email", text: $email)
-                        .accessibilityIdentifier("addOperative.email")
-                        .keyboardType(.emailAddress)
-                        .autocapitalization(.none)
-                    TextField("Phone", text: $phone)
-                        .accessibilityIdentifier("addOperative.phone")
-                        .keyboardType(.phonePad)
-                    DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
-                        .accessibilityIdentifier("addOperative.startDate")
-                }
-                
-                Section("Qualifications") {
-                    if operativeStore.qualifications.isEmpty {
-                        Text("No qualifications added yet.")
-                            .foregroundColor(.secondary)
-                            .font(.subheadline)
-                    } else {
-                        ForEach(operativeStore.qualifications, id: \.id) { qualification in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(qualification.name)
-                                        .font(.body)
-                                    
-                                    if qualification.hasEndDate, let endDate = qualification.endDate {
-                                        Text("Expires: \(endDate, style: .date)")
-                                            .font(.caption)
-                                            .foregroundColor(.orange)
-                                    } else {
-                                        Text("No expiration")
-                                            .font(.caption)
-                                            .foregroundColor(.green)
-                                    }
-                                }
-                                
-                                Spacer()
-                                
-                                if selectedQualifications.contains(qualification) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                            
-                            .accessibilityIdentifier("addOperative.checkmarkCircleFill").onTapGesture {
-                                if selectedQualifications.contains(qualification) {
-                                    selectedQualifications.remove(qualification)
-                                } else {
-                                    selectedQualifications.insert(qualification)
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                Section {
-                    StaffTradeTypeFormSection(
-                        presetRaw: $tradePresetRaw,
-                        customText: $tradeCustomText,
-                        title: "Trade type *",
-                        footnote: "Required."
-                    )
-                }
-                
-                Section("Additional Info") {
-                    TextField("Day rate (\(OrgMoney.symbol()))", text: $hourlyRate)
-                        .accessibilityIdentifier("addOperative.dayRateEG4550")
-                    TextField("Notes", text: $notes, axis: .vertical)
-                        .accessibilityIdentifier("addOperative.notes")
-                        .lineLimit(3...6)
-                }
-            }
-            .navigationTitle("Add Operative")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                        .accessibilityIdentifier("addOperative.cancel")
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveOperative()
-                    }
-                    .accessibilityIdentifier("addOperative.save")
-                    .disabled(!isFormValid)
-                }
-            }
-        }
-    }
-    
-    private var isFormValid: Bool {
-        !firstName.isEmpty && !lastName.isEmpty && !email.isEmpty &&
-        StaffTradeTypeFormSection.isValid(presetRaw: tradePresetRaw, customText: tradeCustomText)
-    }
-    
-    private func saveOperative() {
-        // Parse the hourly rate, preserving currency symbols
-        let parsedRate = parseCurrencyAmount(hourlyRate)
-        let tp = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let tc = tradeCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        let operative = Operative(
-            firstName: firstName.trimmingCharacters(in: .whitespaces),
-            lastName: lastName.trimmingCharacters(in: .whitespaces),
-            email: email.trimmingCharacters(in: .whitespaces),
-            phone: phone.isEmpty ? nil : phone.trimmingCharacters(in: .whitespaces),
-            startDate: startDate,
-            skills: [],
-            qualifications: Array(selectedQualifications),
-            // A day rate, so exactly one amount is stored (RULEBOOK §8).
-            hourlyRate: nil,
-            dayRate: parsedRate.amount,
-            currencySymbol: parsedRate.symbol,
-            tradeTypePreset: tp.isEmpty ? nil : tp,
-            tradeTypeCustom: tc.isEmpty ? nil : tc
-        )
-        
-        Task {
-            await operativeStore.addOperative(operative)
-            await MainActor.run {
-                dismiss()
-            }
-        }
-    }
-    
-    private func parseCurrencyAmount(_ input: String) -> (amount: Double?, symbol: String?) {
-        parseOrganisationAmount(input)
-    }
-}
 
 struct EditOperativeView: View {
     @Environment(\.dismiss) private var dismiss
@@ -1232,9 +1086,13 @@ struct EditOperativeView: View {
         let previousAmount = rowIsHourly ? baseline.hourlyRate : baseline.dayRate
         let newAmount = parsedRate.amount
         let emailNorm = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let linkedUser = userStore.organizationUsers.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
-        })
+        // A row with no email (a converted ghost, RULEBOOK 1.34.0) belongs to the account it is kept under
+        // (`OperativeStore.operativeRow(for:in:)`), never the first account with an empty email.
+        let linkedUser = emailNorm.isEmpty
+            ? userStore.organizationUsers.first(where: { OperativeStore.operativeRow(for: $0, in: [operative]) != nil })
+            : userStore.organizationUsers.first(where: {
+                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
+            })
         // Compared in hundredths: the field shows two decimals, so an untouched field is not a change.
         let payChanged = previousAmount.map { ($0 * 100).rounded() } != newAmount.map { ($0 * 100).rounded() }
         if payChanged && !userStore.canChangePay(of: linkedUser) {

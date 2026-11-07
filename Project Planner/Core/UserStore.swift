@@ -590,7 +590,7 @@ class UserStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: Ignoring organisation user roster for \(requestedOrganizationId) — a save or a newer load replaced it while healing")
                 return
             }
-            guard let listed = CanonicalBusinessEngine.listedRosterUsers(healed, claimedEmails: roster.claimedEmails) else {
+            guard let listed = GhostRulebook.listed(healed, claimedEmails: roster.claimedEmails) else {
                 print("🔥🔥🔥 DEBUG: ROSTER_LIST script did not return a list — keeping the roster already on screen")
                 ReaderDiagnostics.shared.record(
                     collection: "users",
@@ -773,7 +773,7 @@ class UserStore: ObservableObject {
             isTombstoned: { RosterRetention.isTombstoned($0, organizationId: organizationId) }
         )
         let folded = collapseRosterByEmail(merged)
-        guard let listed = CanonicalBusinessEngine.listedRosterUsers(folded, claimedEmails: organizationUserEmailClaims) else {
+        guard let listed = GhostRulebook.listed(folded, claimedEmails: organizationUserEmailClaims) else {
             print("🔥🔥🔥 DEBUG: ROSTER_LISTENER script did not return a list — keeping the roster on screen")
             return
         }
@@ -1682,6 +1682,8 @@ class UserStore: ObservableObject {
             ],
             "formerUserIds": user.formerUserIds,
             "sameEmailUserIds": user.sameEmailUserIds,
+            // RULEBOOK 1.34.0 §11: a ghost has only its users document (no tax ids, membership or members entry).
+            "ghost": user.isGhost,
         ]
     }
 
@@ -2169,10 +2171,14 @@ class UserStore: ObservableObject {
                         email: emailRaw,
                         userStore: self
                     )
-                    let invitationRows: [[String: Any]] = try await InvitationDocument
-                        .fetch(invitationLookups, db: db, source: .server)
-                        .rows
-                        .map { ["id": $0.documentID, "email": ($0.data()["email"] as? String) ?? emailNormalized] }
+                    // RULEBOOK 1.34.0 §11: a ghost that was never invited has no email, so no invitation to look up.
+                    var invitationRows: [[String: Any]] = []
+                    if !emailRaw.isEmpty {
+                        invitationRows = try await InvitationDocument
+                            .fetch(invitationLookups, db: db, source: .server)
+                            .rows
+                            .map { ["id": $0.documentID, "email": ($0.data()["email"] as? String) ?? emailNormalized] }
+                    }
                     let membersMap = firebaseBackend.organizationMembersSnapshot.flatMap {
                         organizationIdsMatch($0.organizationId, organizationId) ? $0.members : nil
                     }
@@ -2281,6 +2287,21 @@ class UserStore: ObservableObject {
         let trimmedMobile = mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
         let mobileOut: String? = (trimmedMobile?.isEmpty == false) ? trimmedMobile : nil
 
+        // A ghost (RULEBOOK 1.34.0 §11) has no email: only its names (and optional phone) change, on its own
+        // users document and its own operatives row. The email fan-out below (same-email documents, the operatives
+        // and managers rows on the previous email, the email claim) would match every no-email row, so it never runs.
+        if updated.isGhost {
+            return await updateGhostIdentity(
+                index: index,
+                userId: userId,
+                firstName: trimmedFirst,
+                surname: trimmedSurname,
+                enteredEmail: trimmedEmail,
+                mobileNumber: mobileOut,
+                operativeStore: operativeStore
+            )
+        }
+
         guard !trimmedEmail.isEmpty else {
             errorMessage = "Email cannot be empty."
             return false
@@ -2321,7 +2342,8 @@ class UserStore: ObservableObject {
         let previousSurname = organizationUsers[index].surname
         var idsToPatch = Set(organizationUsers.filter { person in
             let email = person.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            return email == oldEmailNorm || email == savedEmail
+            // An empty email names nobody (ghosts, anonymised profiles; RULEBOOK 1.34.0).
+            return !email.isEmpty && (email == oldEmailNorm || email == savedEmail)
         }.map(\.id))
         idsToPatch.insert(userId)
 
@@ -2352,7 +2374,7 @@ class UserStore: ObservableObject {
             }
 
             if let opStore = operativeStore {
-                if let oi = opStore.operatives.firstIndex(where: {
+                if !oldEmailNorm.isEmpty, let oi = opStore.operatives.firstIndex(where: {
                     $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == oldEmailNorm
                 }) {
                     var op = opStore.operatives[oi]
@@ -2363,7 +2385,7 @@ class UserStore: ObservableObject {
                     op.updatedAt = Date()
                     await opStore.updateOperative(op)
                 }
-                let managerIndexes = opStore.managers.indices.filter {
+                let managerIndexes: [Int] = oldEmailNorm.isEmpty ? [] : opStore.managers.indices.filter {
                     opStore.managers[$0].email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == oldEmailNorm
                 }
                 for mi in managerIndexes {
@@ -2373,7 +2395,7 @@ class UserStore: ObservableObject {
                     opStore.managers[mi].mobileNumber = mobileOut ?? ""
                     opStore.managers[mi].updatedAt = Date()
                 }
-                do {
+                if !oldEmailNorm.isEmpty { do {
                     try await firebaseBackend.updateManagerIdentityInPlace(
                         organizationId: orgId,
                         previousEmail: oldEmailNorm,
@@ -2384,7 +2406,7 @@ class UserStore: ObservableObject {
                     )
                 } catch {
                     print("🔥🔥🔥 DEBUG: manager identity update skipped: \(error.localizedDescription)")
-                }
+                } }
             }
 
             var people = organizationUsers
@@ -2430,6 +2452,75 @@ class UserStore: ObservableObject {
             print("🔥🔥🔥 DEBUG: updateUserIdentityProfile error: \(error)")
             return false
         }
+    }
+
+    /// The ghost branch of `updateUserIdentityProfile`: a partial update (`userProfileWriteFields` via
+    /// `patchUserIdentity`, with write metadata) of `users/{ghostId}` only — names and phone, never `email` — and the
+    /// ghost's own `operatives` row (`OperativeStore.operativeRow(for:)`), never a row matched on an empty email.
+    /// A ghost gets an email only through Give app access (`ghostUpgradeWrites`).
+    private func updateGhostIdentity(
+        index: Int,
+        userId: String,
+        firstName: String,
+        surname: String,
+        enteredEmail: String,
+        mobileNumber: String?,
+        operativeStore: OperativeStore?
+    ) async -> Bool {
+        guard let firebaseBackend = firebaseBackend, organizationUsers.indices.contains(index) else { return false }
+        let previous = organizationUsers[index]
+        let storedEmail = previous.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !enteredEmail.isEmpty && enteredEmail != storedEmail {
+            errorMessage = "A ghost has no email. Use \u{201C}\(CanonicalBusinessEngine.ghostUpgradeLabel)\u{201D} to invite them."
+            return false
+        }
+        do {
+            try await firebaseBackend.patchUserIdentity(
+                userId: previous.id,
+                firstName: firstName,
+                surname: surname,
+                email: previous.email,
+                mobileNumber: mobileNumber,
+                previous: previous
+            )
+        } catch {
+            errorMessage = "Could not save profile: \(error.localizedDescription)"
+            print("🔥🔥🔥 DEBUG: ghost identity patch failed for \(userId): \(error)")
+            return false
+        }
+        if let opStore = operativeStore, var op = opStore.operativeRow(for: previous) {
+            let phoneChanged = (op.phone ?? "") != (mobileNumber ?? "")
+            if op.firstName != firstName || op.lastName != surname || phoneChanged {
+                op.firstName = firstName
+                op.lastName = surname
+                op.phone = mobileNumber
+                op.updatedAt = Date()
+                await opStore.updateOperative(op)
+            }
+        }
+        var updated = previous
+        updated.firstName = firstName
+        updated.surname = surname
+        updated.mobileNumber = mobileNumber
+        if organizationUsers.indices.contains(index), organizationUsers[index].id == previous.id {
+            organizationUsers[index] = updated
+        } else if let current = organizationUsers.firstIndex(where: { $0.id == previous.id }) {
+            organizationUsers[current] = updated
+        }
+        identityRevision = IdentityRevision(
+            userIds: [previous.id],
+            previousFirst: previous.firstName,
+            previousSurname: previous.surname,
+            firstName: firstName,
+            surname: surname,
+            email: previous.email,
+            mobile: mobileNumber,
+            savedAt: Date()
+        )
+        if let orgForRoster = firebaseBackend.currentOrganization?.firestoreDocumentId ?? Optional(previous.organizationId) {
+            RosterRetention.save(organizationUsers, organizationId: orgForRoster)
+        }
+        return true
     }
 
              func updateUserPermissions(
@@ -3007,10 +3098,9 @@ class UserStore: ObservableObject {
 
                 var historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = []
                 if dayRateChanged, let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                    let emailNorm = updatedUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                    let linkedOperativeId = operativeStore?.operatives.first(where: {
-                        $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
-                    })?.id
+                    // The person's own `operatives` row (`personDedupeKey`), never the first no-email row for a
+                    // ghost (RULEBOOK 1.34.0); no row → no `operativeId` on the history row (users id only).
+                    let linkedOperativeId = operativeStore?.operativeRow(for: updatedUser)?.id
                     let change = await payRateChangeRows(
                         organizationId: orgId,
                         user: updatedUser,
@@ -3486,6 +3576,12 @@ class UserStore: ObservableObject {
         }
     }
     
+    /// The `operatives` row `syncActiveOperativesWithUserAccounts` mirrors a person onto: their own row through
+    /// `OperativeStore.operativeRow(for:in:)`, never a row matched on an empty email.
+    static func syncTargetOperativeRow(for user: AppUser, in rows: [Operative]) -> Operative? {
+        OperativeStore.operativeRow(for: user, in: rows)
+    }
+
     /// Keeps roster `Operative.isActive` in sync with active operative app-user accounts so scheduling pickers include them.
     func syncActiveOperativesWithUserAccounts(operativeStore: OperativeStore) async {
         if WarningsRefreshHelper.isHomeWarningsWarmInFlight {
@@ -3494,9 +3590,12 @@ class UserStore: ObservableObject {
         }
         for user in organizationUsers where user.permissions.operativeMode && user.isActive {
             let em = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let idx = operativeStore.operatives.firstIndex(where: {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
-            }) else { continue }
+            // The person's own row only (`operativeRow(for:)`, `personDedupeKey`): an empty email (a ghost, RULEBOOK
+            // 1.34.0) never matches the first no-email row, so a ghost's rate, trade and active flag never land on
+            // another person's row. A ghost reaches only the row kept under its own id (converted ghosts).
+            guard let row = Self.syncTargetOperativeRow(for: user, in: operativeStore.operatives),
+                  let idx = operativeStore.operatives.firstIndex(where: { $0.documentId == row.documentId })
+            else { continue }
             var op = operativeStore.operatives[idx]
             var changed = false
             if !op.isActive {

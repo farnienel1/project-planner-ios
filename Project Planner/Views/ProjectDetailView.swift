@@ -2169,11 +2169,8 @@ struct ProjectDetailView: View {
             return tasks
         }
         let email = userStore.currentUser?.email
-        let emNorm = email?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if userStore.isOperativeMode() {
-            if let operative = operativeStore.allOperatives.first(where: {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emNorm
-            }) {
+            if let operative = userStore.currentUser.flatMap({ operativeStore.operativeRow(for: $0) }) {
                 tasks = tasks.filter { task in
                     task.allAssignedOperativeIds.contains(operative.id)
                 }
@@ -2869,7 +2866,7 @@ private struct ProjectVisibilitySettingsView: View {
     }
     
     private func filteredUsers(base: [AppUser]) -> [AppUser] {
-        let listed = CanonicalBusinessEngine.listedRosterUsers(
+        let listed = GhostRulebook.listed(
             base,
             claimedEmails: userStore.organizationUserEmailClaims
         ) ?? []
@@ -2878,11 +2875,11 @@ private struct ProjectVisibilitySettingsView: View {
             case .all:
                 return true
             case .active:
-                return CanonicalBusinessEngine.rosterSegment(user) == UserRosterSegment.active.canonicalSegment
+                return GhostRulebook.segment(user) == UserRosterSegment.active.canonicalSegment
             case .inactive:
-                return CanonicalBusinessEngine.rosterSegment(user) == UserRosterSegment.inactive.canonicalSegment
+                return GhostRulebook.segment(user) == UserRosterSegment.inactive.canonicalSegment
             case .pending:
-                return CanonicalBusinessEngine.rosterSegment(user) == UserRosterSegment.pending.canonicalSegment
+                return GhostRulebook.segment(user) == UserRosterSegment.pending.canonicalSegment
             }
         }
         .filter { user in
@@ -4114,11 +4111,8 @@ private struct AddProjectTaskView: View {
     }
 
     private func operativeIdForCurrentUserEmail() -> UUID? {
-        guard let em = userStore.currentUser?.email else { return nil }
-        let n = em.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        return operativeStore.allOperatives.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == n
-        })?.id
+        guard let user = userStore.currentUser else { return nil }
+        return operativeStore.operativeRow(for: user)?.id
     }
 
     private func mergedAssignmentSets() -> (managers: Set<UUID>, operatives: Set<UUID>) {
