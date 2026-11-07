@@ -107,9 +107,13 @@ private struct SettingsProfileSheetsModifier: ViewModifier {
     }
 }
 
+/// RULEBOOK 1.35.0 §12: the one My Profile screen. Settings → My Profile and the Home avatar (`HomeProfileCardSheet`)
+/// both open it; it holds every field the two screens had (photo, name, email, organisation, rate, employment type,
+/// billing details, qualifications) and the "Your figures" card (`MyProfileFiguresCard`, `myProfileSummary`).
 struct SettingsProfileDetailView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var operativeStore: OperativeStore
     /// RULEBOOK 1.13.0 §8 (Q1 step C): the person's own pay, read pay profile first (`overlayPayProfile`).
     @State private var payShownUser: AppUser?
     @State private var showingManualLinkSheet = false
@@ -258,7 +262,18 @@ struct SettingsProfileDetailView: View {
                             profileValueRow("Day rate", OrgMoney.format(dayRate))
                         }
                     }
+                    // Employment type today in the organisation zone (`employmentTypeOnDay` through `AppUser.employmentType(on:)`).
+                    if let user = payShownUser ?? userStore.currentUser {
+                        SettingsHubChrome.divider()
+                        profileValueRow("Employment type", user.employmentType(on: Date()).title)
+                    }
+                    SettingsHubChrome.divider()
+                    profileValueRow("Qualifications", qualificationsText)
+                        .accessibilityIdentifier("settingsProfileDetail.qualifications")
                 }
+
+                MyProfileFiguresCard()
+                    .padding(.top, 8)
 
                 SettingsHubChrome.sectionTitle("Billing details")
                 SettingsHubChrome.card {
@@ -316,6 +331,14 @@ struct SettingsProfileDetailView: View {
             }
             .padding(16)
         }
+    }
+
+    /// The person's own `operatives` row (`personDedupeKey`), for the qualification names (from the Home profile card).
+    private var qualificationsText: String {
+        guard let user = userStore.currentUser,
+              let operative = operativeStore.operativeRow(for: user),
+              !operative.qualifications.isEmpty else { return "None added" }
+        return operative.qualifications.map(\.name).joined(separator: ", ")
     }
 
     private func profileValueRow(_ title: String, _ value: String, valueColor: Color = Color.secondary) -> some View {

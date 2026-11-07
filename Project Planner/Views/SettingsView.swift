@@ -239,6 +239,11 @@ struct SettingsView: View {
                 SettingsProfileDetailView()
                     .environmentObject(firebaseBackend)
                     .environmentObject(userStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(holidayStore)
+                    .environmentObject(taskStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(managerScheduleStore)
             } label: {
                 settingsHubRow(
                     icon: "person.fill",
