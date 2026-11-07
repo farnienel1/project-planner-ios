@@ -1750,8 +1750,9 @@ struct ScheduleOperativeView: View {
             let operatives = selectableOperatives.filter { selectedOperatives.contains($0.id) }
             var newBookings: [Booking] = []
             var createdDatesByOperative: [UUID: Set<Date>] = [:]
-            /// 1.33.1: the message a save left (`BookingStore.*ReportingProblem`), shown instead of silently staying put.
-            var saveProblem: String? = nil
+            /// 1.33.1 review item 4: each booking's own outcome (saved, queued as Pending sync, refused). A booking is
+            /// counted, and its notice sent, only once its outcome says it was kept.
+            var saveResults: [BookingSaveResult] = []
             let groupId: String? = operatives.count > 1 ? UUID().uuidString : nil
 
             for operative in operatives {
@@ -1787,9 +1788,9 @@ struct ScheduleOperativeView: View {
                         replaced.status = .confirmed
                         replaced.updatedAt = Date()
                         // 1.33.1: judged on this save's own message, never one an earlier load or save left behind.
-                        if let problem = await bookingStore.updateBookingReportingProblem(replaced) {
-                            saveProblem = problem
-                        } else {
+                        let result = await bookingStore.updateBookingReportingProblem(replaced)
+                        saveResults.append(result)
+                        if result.keepsBooking {
                             createdDatesByOperative[operative.id, default: []].insert(replaced.date)
                         }
                         continue
@@ -1824,30 +1825,32 @@ struct ScheduleOperativeView: View {
                         )
                         booking.updatedAt = Date()
                         newBookings.append(booking)
-                        createdDatesByOperative[operative.id, default: []].insert(OrganizationRulebookContext.calendar.startOfDay(for: date))
                     }
                 }
             }
 
             if !newBookings.isEmpty {
-                if let problem = await bookingStore.addBookingsReportingProblem(newBookings) {
-                    saveProblem = problem
+                let results = await bookingStore.addBookingsReportingProblem(newBookings)
+                for booking in newBookings {
+                    // A booking the store never reported on was not written: treated as not saved.
+                    let result = results[booking.id] ?? .refused("This booking could not be saved.")
+                    saveResults.append(result)
+                    if result.keepsBooking {
+                        createdDatesByOperative[booking.operativeId, default: []].insert(booking.date)
+                    }
                 }
             }
 
             // 1.33.1: the screen finishes as soon as the bookings are saved on this phone. The "You've been booked"
             // notices follow on their own task: each one waits for the server, and awaiting them here left the
             // Confirm spinner turning for ever although the booking had saved.
-            let outcome = ScheduleBookingSaveOutcome.decide(
-                savedCount: createdDatesByOperative.values.reduce(0) { $0 + $1.count },
-                problem: saveProblem
-            )
+            let outcome = ScheduleBookingSaveOutcome.decide(results: saveResults)
             await MainActor.run {
                 isBooking = false
                 switch outcome {
                 case .confirmed:
                     showingBookingConfirmation = true
-                case .savedWithProblem(let message), .notSaved(let message):
+                case .pendingSync(let message), .savedWithProblem(let message), .notSaved(let message):
                     saveOutcomeAlert = ScheduleBookingSaveAlert(outcome: outcome, message: message)
                 case .nothingToSave:
                     saveOutcomeAlert = ScheduleBookingSaveAlert(outcome: outcome, message: ScheduleBookingSaveOutcome.nothingToSaveMessage)

@@ -655,11 +655,45 @@ struct OperativeCustomHoursSheet: View {
         )?.minutes ?? policy.unpaidBreakMinutes
 
         let ic = initialChoice
-        let startHM: (Int, Int)
-        let endHM: (Int, Int)
         let included: Bool
         var otm: Double? = nil
+        let opening = Self.openingHoursAndMinutes(policy: policy, referenceDay: referenceDay, noteDays: noteDays, initialChoice: ic)
+        let startHM = opening.start
+        let endHM = opening.end
 
+        if let ic {
+            included = Self.initialBreakIncluded(initialChoice: ic, showsBreakControls: showsBreakControls)
+            if let m = ic.otMultiplierOverride {
+                otm = m
+            }
+        } else {
+            // A new booking starts with the unpaid break on, as web (`breakRemoved` false); it only matters on a day whose
+            // break is unpaid (`unpaidBreakAppliesOnDay`).
+            included = Self.initialBreakIncluded(initialChoice: nil, showsBreakControls: showsBreakControls)
+        }
+
+        _startHour = State(initialValue: startHM.0)
+        _startMinute = State(initialValue: startHM.1)
+        _endHour = State(initialValue: endHM.0)
+        _endMinute = State(initialValue: endHM.1)
+        _lastValidStartHour = State(initialValue: startHM.0)
+        _lastValidStartMinute = State(initialValue: startHM.1)
+        _lastValidEndHour = State(initialValue: endHM.0)
+        _lastValidEndMinute = State(initialValue: endHM.1)
+        _breakIncluded = State(initialValue: included)
+        _otRate = State(initialValue: otm)
+        initialOtRate = otm
+    }
+
+    /// The start and finish the sheet opens on (quarter-hour wheels): the booking's own clock times, else the day's
+    /// default (`customHoursPrefillForDays`, a set-window weekend day's window, the standard day). `policy` is the one in
+    /// effect on `referenceDay`. 1.33.1: shared with `openingTimes`, so a caller can tell whether Save changed them.
+    static func openingHoursAndMinutes(
+        policy: OrgPayrollTimePolicy,
+        referenceDay: Date,
+        noteDays: [Date]?,
+        initialChoice ic: OperativeDayBookingChoice?
+    ) -> (start: (hour: Int, minute: Int), end: (hour: Int, minute: Int)) {
         let timeline = PayrollTimePolicyCatalog.timelinePolicy(for: referenceDay, policy: policy)
         // RULEBOOK 1.13.1 §4.3 `weekendCustomHoursDefault`: a set-window Saturday or Sunday opens on that day's window.
         let weekendPrefill = CanonicalBusinessEngine.weekendCustomHoursDefault(
@@ -680,51 +714,32 @@ struct OperativeCustomHoursSheet: View {
             let s = ic.workStartTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let e = ic.workEndTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !s.isEmpty, !e.isEmpty {
-                startHM = BookingHMTimePickerSupport.clampToQuarterHour(s, fallbackHour: 8, fallbackMinute: 0)
-                endHM = BookingHMTimePickerSupport.clampToQuarterHour(e, fallbackHour: 16, fallbackMinute: 30)
-            } else {
-                startHM = BookingHMTimePickerSupport.clampToQuarterHour(
-                    defaultStart,
-                    fallbackHour: 8,
-                    fallbackMinute: 0
-                )
-                endHM = BookingHMTimePickerSupport.clampToQuarterHour(
-                    defaultEnd,
-                    fallbackHour: 16,
-                    fallbackMinute: 30
+                return (
+                    BookingHMTimePickerSupport.clampToQuarterHour(s, fallbackHour: 8, fallbackMinute: 0),
+                    BookingHMTimePickerSupport.clampToQuarterHour(e, fallbackHour: 16, fallbackMinute: 30)
                 )
             }
-            included = Self.initialBreakIncluded(initialChoice: ic, showsBreakControls: showsBreakControls)
-            if let m = ic.otMultiplierOverride {
-                otm = m
-            }
-        } else {
-            startHM = BookingHMTimePickerSupport.clampToQuarterHour(
-                defaultStart,
-                fallbackHour: 8,
-                fallbackMinute: 0
-            )
-            endHM = BookingHMTimePickerSupport.clampToQuarterHour(
-                defaultEnd,
-                fallbackHour: 16,
-                fallbackMinute: 30
-            )
-            // A new booking starts with the unpaid break on, as web (`breakRemoved` false); it only matters on a day whose
-            // break is unpaid (`unpaidBreakAppliesOnDay`).
-            included = Self.initialBreakIncluded(initialChoice: nil, showsBreakControls: showsBreakControls)
         }
+        return (
+            BookingHMTimePickerSupport.clampToQuarterHour(defaultStart, fallbackHour: 8, fallbackMinute: 0),
+            BookingHMTimePickerSupport.clampToQuarterHour(defaultEnd, fallbackHour: 16, fallbackMinute: 30)
+        )
+    }
 
-        _startHour = State(initialValue: startHM.0)
-        _startMinute = State(initialValue: startHM.1)
-        _endHour = State(initialValue: endHM.0)
-        _endMinute = State(initialValue: endHM.1)
-        _lastValidStartHour = State(initialValue: startHM.0)
-        _lastValidStartMinute = State(initialValue: startHM.1)
-        _lastValidEndHour = State(initialValue: endHM.0)
-        _lastValidEndMinute = State(initialValue: endHM.1)
-        _breakIncluded = State(initialValue: included)
-        _otRate = State(initialValue: otm)
-        initialOtRate = otm
+    /// `openingHoursAndMinutes` as the "HH:mm" text Save hands back, for the policy the caller passes the sheet
+    /// (resolved to the one in effect on `referenceDay`, as the sheet does).
+    static func openingTimes(
+        policy callerPolicy: OrgPayrollTimePolicy,
+        referenceDay: Date,
+        noteDays: [Date]? = nil,
+        initialChoice: OperativeDayBookingChoice?
+    ) -> (start: String, end: String) {
+        let policy = CanonicalBusinessEngine.payrollPolicyInEffect(on: referenceDay, fallback: callerPolicy)
+        let opening = openingHoursAndMinutes(policy: policy, referenceDay: referenceDay, noteDays: noteDays, initialChoice: initialChoice)
+        return (
+            BookingHMTimePickerSupport.format(hour: opening.start.0, minute: opening.start.1),
+            BookingHMTimePickerSupport.format(hour: opening.end.0, minute: opening.end.1)
+        )
     }
 
     /// The Unpaid break state the sheet opens with: an existing booking's own stored state (`isBreakRemoved`), on for
@@ -1981,19 +1996,37 @@ private struct UnpaidBreakWarningSheet: View {
 /// 1.33.1: what Edit booking (Scheduling) writes onto the booking it opened, for the times, break and rate on the
 /// sheet — the mapping the inline save closures had, moved here unchanged so a test can hold it. The store then writes
 /// only the fields that differ (`BookingWritePatch.changedLabourFields` / `changedManagerFields`, RULEBOOK §1).
+/// 1.33.1 review item 6: a Full day (or other named slot) saved with the times the sheet opened on — Save with no
+/// change — keeps its slot and stored times; only a real change of times makes it custom hours. `openedTimes` is
+/// `OperativeCustomHoursSheet.openingTimes` for the same booking; nil keeps the earlier mapping (always custom hours).
 enum ScheduleBookingEditSave {
+    /// Whether the stored named slot stays: the booking is not custom hours and the times on Save are the ones the
+    /// sheet opened on.
+    static func keepsNamedSlot(
+        storedIsCustomHours: Bool,
+        start: String,
+        end: String,
+        openedTimes: (start: String, end: String)?
+    ) -> Bool {
+        guard !storedIsCustomHours, let openedTimes else { return false }
+        return openedTimes.start == start && openedTimes.end == end
+    }
+
     static func labour(
         _ booking: Booking,
         start: String,
         end: String,
         isBreakRemoved: Bool,
         otMultiplierOverride: Double?,
+        openedTimes: (start: String, end: String)? = nil,
         now: Date = Date()
     ) -> Booking {
         var updated = booking
-        updated.timeSlot = .customHours
-        updated.workStartTime = start
-        updated.workEndTime = end
+        if !keepsNamedSlot(storedIsCustomHours: booking.timeSlot == .customHours, start: start, end: end, openedTimes: openedTimes) {
+            updated.timeSlot = .customHours
+            updated.workStartTime = start
+            updated.workEndTime = end
+        }
         updated.isBreakRemoved = isBreakRemoved
         updated.otMultiplierOverride = otMultiplierOverride
         updated.updatedAt = now
@@ -2005,12 +2038,15 @@ enum ScheduleBookingEditSave {
         start: String,
         end: String,
         isBreakRemoved: Bool,
+        openedTimes: (start: String, end: String)? = nil,
         now: Date = Date()
     ) -> ManagerSiteBooking {
         var updated = booking
-        updated.timeSlot = .customHours
-        updated.workStartTime = start
-        updated.workEndTime = end
+        if !keepsNamedSlot(storedIsCustomHours: booking.timeSlot == .customHours, start: start, end: end, openedTimes: openedTimes) {
+            updated.timeSlot = .customHours
+            updated.workStartTime = start
+            updated.workEndTime = end
+        }
         updated.isBreakRemoved = isBreakRemoved
         updated.updatedAt = now
         return updated

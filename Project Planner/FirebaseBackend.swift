@@ -7582,7 +7582,11 @@ class FirebaseBackend: ObservableObject {
                 fields: fields
             )
             guard !next.isEmpty else { return }
-            let snapshot = try await ref.getDocument(source: .server)
+            // 1.33.1 review item 3: the server read is bounded too. On a weak signal it never answered and Edit booking
+            // kept spinning. A timeout throws `ReadTimedOut` (nothing handed to Firestore), so the store queues this as
+            // an ordinary offline edit — still only these fields, still refused on replay when the booking is gone
+            // (`editOfMissingDocumentIsRefused` / `bookingReplayRefusedIsFinal`); never a create.
+            let snapshot = try await Self.boundedServerRead(ref)
             guard snapshot.exists, let stored = snapshot.data() else {
                 throw NSError(
                     domain: "FIRFirestoreErrorDomain",
@@ -7615,6 +7619,31 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Booking saved successfully to Firebase")
     }
     
+    /// 1.33.1: `getDocument(source: .server)` that gives up after `FirestoreWriteAck.defaultTimeoutSeconds` with
+    /// `FirestoreWriteAck.ReadTimedOut` (a network problem, so the caller queues; nothing was written).
+    static func boundedServerRead(
+        _ ref: DocumentReference,
+        timeoutSeconds: Double = FirestoreWriteAck.defaultTimeoutSeconds
+    ) async throws -> DocumentSnapshot {
+        let box = ServerReadBox()
+        try await FirestoreWriteAck.run(timeoutSeconds: timeoutSeconds, timeoutError: FirestoreWriteAck.ReadTimedOut()) {
+            box.snapshot = try await ref.getDocument(source: .server)
+        }
+        guard let snapshot = box.snapshot else { throw FirestoreWriteAck.ReadTimedOut() }
+        return snapshot
+    }
+
+    /// Whether a booking document is on the server now (a bounded server read). Used before replaying a create that
+    /// Firestore may already have delivered (1.33.1 review items 1, 5).
+    func bookingDocumentExistsOnServer(collection: String, documentId: String, organizationId: String) async throws -> Bool {
+        // The same document the replayed create would write (`saveBooking` / `saveManagerSiteBooking`).
+        let orgId = collection == "bookings"
+            ? try await resolveWritableOrganizationId(preferred: organizationId)
+            : organizationId
+        let ref = db.collection("organizations").document(orgId).collection(collection).document(documentId)
+        return try await Self.boundedServerRead(ref).exists
+    }
+
     /// Earlier of the warning-scan start and the current week. Launch does not subscribe to older bookings.
     func launchScheduleLowerBound(now: Date = Date()) -> Date {
         let detection = currentOrganization?.settings.warningDetection ?? .default
@@ -8000,7 +8029,9 @@ class FirebaseBackend: ObservableObject {
             // `createdAt` or `organizationId`. An edit of a booking gone from the server is refused
             // (`editOfMissingDocumentIsRefused`), never re-created. Without a server read, the patch is sent with
             // `updateData` (which fails on a missing document).
-            if let snapshot = try? await ref.getDocument(source: .server) {
+            // 1.33.1 review item 3: bounded, so a read that never answers falls back to `updateData` below (which
+            // fails on a missing document) instead of spinning.
+            if let snapshot = try? await Self.boundedServerRead(ref) {
                 guard snapshot.exists, let stored = snapshot.data() else {
                     if CanonicalBusinessEngine.editOfMissingDocumentIsRefused(isCreate: false, exists: false) ?? true {
                         throw NSError(
@@ -11435,4 +11466,9 @@ enum JobManagerLabel {
         // unrelated edit; cross-platform contract iOS sample). A new job always carries its primary manager's name.
         return job.manager.rawValue
     }
+}
+
+/// Holds the snapshot a bounded read got (`FirebaseBackend.boundedServerRead`).
+private final class ServerReadBox: @unchecked Sendable {
+    var snapshot: DocumentSnapshot?
 }

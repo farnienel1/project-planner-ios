@@ -102,6 +102,11 @@ enum OfflineSyncCoordinator {
                     failed += 1
                 }
             } catch {
+                if FirestoreWriteAck.wasHandedToServer(error),
+                   entry.operation == .saveBooking || entry.operation == .saveManagerSiteBooking {
+                    // 1.33.1: the replayed write is now with Firestore, which keeps sending it.
+                    outbox.markSentToServer(entryId: entry.id)
+                }
                 if let writeError = error as? OfflinePartialUpdateWriter.WriteError {
                     // Another account is signed in, or the path is unusable: retrying cannot help.
                     outbox.removeRefused(id: entry.id, message: writeError.localizedDescription)
@@ -189,6 +194,14 @@ enum OfflineSyncCoordinator {
         switch entry.operation {
         case .saveBooking:
             let payload = try decoder.decode(OfflineSaveBookingPayload.self, from: entry.payload)
+            if try await sentCreateAlreadyOnServer(
+                isCreate: payload.changedFields == nil,
+                sentToServer: payload.sentToServer == true,
+                collection: "bookings",
+                documentId: payload.booking.documentKey,
+                organizationId: entry.organizationId,
+                firebaseBackend: firebaseBackend
+            ) { return }
             // An edit replays only its changed fields; only a create writes the whole booking.
             try await firebaseBackend.saveBooking(
                 payload.booking,
@@ -201,6 +214,14 @@ enum OfflineSyncCoordinator {
 
         case .saveManagerSiteBooking:
             let payload = try decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: entry.payload)
+            if try await sentCreateAlreadyOnServer(
+                isCreate: payload.changedFields == nil,
+                sentToServer: payload.sentToServer == true,
+                collection: "managerSiteBookings",
+                documentId: payload.booking.documentKey,
+                organizationId: entry.organizationId,
+                firebaseBackend: firebaseBackend
+            ) { return }
             try await firebaseBackend.saveManagerSiteBooking(
                 payload.booking,
                 organizationId: entry.organizationId,
@@ -256,6 +277,46 @@ enum OfflineSyncCoordinator {
         }
     }
 
+    /// What replaying a queued create does (1.33.1 review item 5). A create handed to Firestore before it was queued
+    /// (`sentToServer`) may have landed — and been edited on another device since — so it is written only when the
+    /// document is not on the server; rewriting it with `setData(merge:)` would put this phone's stale values back.
+    /// Any other create (never left this phone) and every edit replay as before.
+    nonisolated enum QueuedCreateReplay: Equatable {
+        case write
+        case skipAlreadyOnServer
+        /// Ask the server first (wait for this device's pending writes, then read the document).
+        case checkServer
+
+        static func decide(isCreate: Bool, sentToServer: Bool, existsOnServer: Bool?) -> QueuedCreateReplay {
+            guard isCreate, sentToServer else { return .write }
+            guard let existsOnServer else { return .checkServer }
+            return existsOnServer ? .skipAlreadyOnServer : .write
+        }
+    }
+
+    /// True when a queued create was handed to Firestore and is on the server now (nothing more to write). Waits for
+    /// this device's pending writes first, so a create still on its way is seen. Throws when the server cannot be
+    /// reached (the item stays queued).
+    private static func sentCreateAlreadyOnServer(
+        isCreate: Bool,
+        sentToServer: Bool,
+        collection: String,
+        documentId: String,
+        organizationId: String,
+        firebaseBackend: FirebaseBackend
+    ) async throws -> Bool {
+        guard QueuedCreateReplay.decide(isCreate: isCreate, sentToServer: sentToServer, existsOnServer: nil) == .checkServer else {
+            return false
+        }
+        try await FirestoreWriteAck.waitForPendingWrites(firebaseBackend.db)
+        let exists = try await firebaseBackend.bookingDocumentExistsOnServer(
+            collection: collection,
+            documentId: documentId,
+            organizationId: organizationId
+        )
+        return QueuedCreateReplay.decide(isCreate: isCreate, sentToServer: sentToServer, existsOnServer: exists) == .skipAlreadyOnServer
+    }
+
     /// RULEBOOK 1.33.0 §2: replays a queued delete (`offlineDeleteReplayDecision` in a transaction with its
     /// tombstone). The document id is the stored one (a lower-case manager schedule id stays lower case). A server
     /// refusal is read with `offlineDeleteRefusalDecision`: not-found is gone already, permission-denied is refused
@@ -264,6 +325,12 @@ enum OfflineSyncCoordinator {
         let payload = try JSONDecoder().decode(OfflineDeleteBookingPayload.self, from: entry.payload)
         let collection = payload.collection ?? (entry.operation == .deleteManagerSiteBooking ? "managerSiteBookings" : "bookings")
         let documentId = payload.documentId ?? payload.bookingId.uuidString
+        if payload.waitsForSentWrite == true {
+            // 1.33.1 review item 1: this booking's create or edit was handed to Firestore. Wait until it has landed (or
+            // been refused) so `offlineDeleteReplayDecision` reads what the server really has; a delete decided
+            // before it lands would see "already gone" and the create would then arrive with no tombstone.
+            try await FirestoreWriteAck.waitForPendingWrites(firebaseBackend.db)
+        }
         let decision: String
         do {
             decision = try await firebaseBackend.replayOfflineBookingDelete(

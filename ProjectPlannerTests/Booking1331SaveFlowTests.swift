@@ -40,22 +40,45 @@ final class Booking1331SaveFlowTests: XCTestCase {
     // MARK: (a) the screen finishes when the save is done
 
     func testOutcomeIsDecidedFromThisSaveOnly() {
-        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(savedCount: 3, problem: nil), .confirmed)
-        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(savedCount: 1, problem: "  "), .confirmed)
-        XCTAssertEqual(
-            ScheduleBookingSaveOutcome.decide(savedCount: 2, problem: "Some bookings saved locally and will sync when you're back online."),
-            .savedWithProblem("Some bookings saved locally and will sync when you're back online.")
-        )
-        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(savedCount: 0, problem: "Refused"), .notSaved("Refused"))
-        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(savedCount: 0, problem: nil), .nothingToSave)
+        let queued = BookingSaveResult.queued(BookingStore.pendingSyncMessage)
+        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(results: [.saved, .saved, .saved]), .confirmed)
+        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(results: []), .nothingToSave)
+        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(results: [.refused("Refused")]), .notSaved("Refused"))
+        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(results: [.refused("  ")]), .notSaved("This booking could not be saved."))
+        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(results: [.saved, .refused("Refused")]), .savedWithProblem("Refused"))
+        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(results: [queued, .refused("Refused")]), .savedWithProblem("Refused"))
 
         // Every outcome ends the spinner with something on screen; only a save that did nothing keeps the choices.
         XCTAssertTrue(ScheduleBookingSaveOutcome.confirmed.closesScreen)
+        XCTAssertTrue(ScheduleBookingSaveOutcome.pendingSync("x").closesScreen)
         XCTAssertTrue(ScheduleBookingSaveOutcome.savedWithProblem("x").closesScreen)
         XCTAssertTrue(ScheduleBookingSaveOutcome.nothingToSave.closesScreen)
         XCTAssertFalse(ScheduleBookingSaveOutcome.notSaved("x").closesScreen)
         XCTAssertFalse(ScheduleBookingSaveOutcome.notSaved("x").clearsSelection)
         XCTAssertTrue(ScheduleBookingSaveOutcome.savedWithProblem("x").clearsSelection)
+        XCTAssertTrue(ScheduleBookingSaveOutcome.pendingSync("x").clearsSelection)
+    }
+
+    /// Review item 4: a timed-out (queued) save counts as saved with "Pending sync" wording — never "not saved", which
+    /// made the booker retry — and only kept bookings send notices.
+    func testAQueuedSaveIsSavedPendingSyncNotNotSaved() throws {
+        let queued = BookingSaveResult.queued(BookingStore.pendingSyncMessage)
+        let outcome = ScheduleBookingSaveOutcome.decide(results: [queued])
+        XCTAssertEqual(outcome, .pendingSync(BookingStore.pendingSyncMessage))
+        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(results: [.saved, queued]), .pendingSync(BookingStore.pendingSyncMessage))
+        XCTAssertEqual(ScheduleBookingSaveAlert(outcome: outcome, message: "x").title, "Booking saved — Pending sync")
+        XCTAssertTrue(queued.keepsBooking)
+        XCTAssertTrue(BookingSaveResult.saved.keepsBooking)
+        XCTAssertFalse(BookingSaveResult.refused("x").keepsBooking)
+
+        let wizard = try source("Views/ScheduleOperativeView.swift")
+        let proceed = try body(of: "private func proceedWithBooking()", in: wizard)
+        XCTAssertTrue(proceed.contains("ScheduleBookingSaveOutcome.decide(results: saveResults)"))
+        XCTAssertEqual(
+            proceed.components(separatedBy: "createdDatesByOperative[").count - 1, 2,
+            "a booking is counted (and notified) only from its own kept outcome, for edits and for new bookings"
+        )
+        XCTAssertEqual(proceed.components(separatedBy: "if result.keepsBooking {").count - 1, 2)
     }
 
     func testAStaleStoreMessageIsNotReadAsThisEditFailing() async throws {
@@ -67,9 +90,10 @@ final class Booking1331SaveFlowTests: XCTestCase {
 
         var edited = booking
         edited.workEndTime = "17:00"
-        let problem = await store.updateBookingReportingProblem(edited)
+        let result = await store.updateBookingReportingProblem(edited)
 
-        XCTAssertNil(problem, "the edit saved; the earlier load's message is not this save's")
+        // No server here, so the edit is kept on this phone (queued); the earlier load's message is not this save's.
+        XCTAssertTrue(result.keepsBooking, "\(result)")
         XCTAssertEqual(store.bookings.first?.workEndTime, "17:00")
     }
 
@@ -98,9 +122,12 @@ final class Booking1331SaveFlowTests: XCTestCase {
         let store = BookingStore()
         let booking = LogicFixtures.booking(on: try day("2026-11-02"), projectId: job.id)
 
-        let problem = await store.addBookingsReportingProblem([booking])
+        let results = await store.addBookingsReportingProblem([booking])
 
-        XCTAssertNotNil(problem, "a manager is refused on a job they do not manage, and the screen says so")
+        guard case .refused(let message)? = results[booking.id] else {
+            return XCTFail("a manager is refused on a job they do not manage, and the screen says so: \(results)")
+        }
+        XCTAssertFalse(message.isEmpty)
         XCTAssertFalse(store.bookings.contains { $0.id == booking.id })
     }
 
@@ -114,8 +141,55 @@ final class Booking1331SaveFlowTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is FirestoreWriteAck.TimedOut)
             XCTAssertTrue(OfflineWriteSupport.shouldQueue(error: error, isOnline: true), "queued as Pending sync")
+            XCTAssertTrue(FirestoreWriteAck.wasHandedToServer(error), "the write is with Firestore: flagged sentToServer")
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+    }
+
+    // MARK: Review item 3: the read before an edit is bounded too
+
+    func testAServerReadThatNeverAnswersStopsWaitingAndQueuesAsAnUnsentEdit() async {
+        let started = Date()
+        do {
+            try await FirestoreWriteAck.run(timeoutSeconds: 0.2, timeoutError: FirestoreWriteAck.ReadTimedOut()) {
+                try await Task.sleep(nanoseconds: 30_000_000_000)
+            }
+            XCTFail("expected the bounded read to end")
+        } catch {
+            XCTAssertTrue(error is FirestoreWriteAck.ReadTimedOut)
+            XCTAssertTrue(OfflineWriteSupport.shouldQueue(error: error, isOnline: true), "queued as an offline edit")
+            XCTAssertFalse(FirestoreWriteAck.wasHandedToServer(error), "nothing was written: never flagged as sent")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+    }
+
+    func testEditsNeverReadTheServerWithoutABound() throws {
+        let backend = try source("FirebaseBackend.swift")
+        for marker in ["func saveBooking(_ booking: Booking,", "func saveManagerSiteBooking(_ booking: ManagerSiteBooking,"] {
+            let decl = try XCTUnwrap(AddUserSavedDataGuardTests.declaration(startingAt: marker, in: backend), marker)
+            XCTAssertFalse(decl.contains("ref.getDocument(source: .server)"), "\(marker): an unbounded read can spin for ever")
+            XCTAssertTrue(decl.contains("boundedServerRead(ref)"), marker)
+            // An edit of a missing booking stays refused, never a create (`bookingReplayRefusedIsFinal`, code 5).
+            XCTAssertTrue(decl.contains("code: 5"), marker)
+        }
+    }
+
+    // MARK: Review item 2: one timeout, then the rest queue without waiting
+
+    func testAfterATimeoutFurtherWritesQueueWithoutWaiting() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertFalse(FirestoreWriteAck.skipsWait(lastTimeout: nil, now: now))
+        XCTAssertTrue(FirestoreWriteAck.skipsWait(lastTimeout: now, now: now))
+        XCTAssertTrue(FirestoreWriteAck.skipsWait(lastTimeout: now.addingTimeInterval(-29), now: now))
+        XCTAssertFalse(FirestoreWriteAck.skipsWait(lastTimeout: now.addingTimeInterval(-31), now: now))
+        XCTAssertFalse(FirestoreWriteAck.skipsWait(lastTimeout: now.addingTimeInterval(60), now: now), "a clock change never latches")
+
+        let store = try source("Core/BookingStore.swift")
+        let save = try body(of: "private func saveData(writes: [BookingWrite] = []) async", in: store)
+        XCTAssertTrue(save.contains("FirestoreWriteAck.skipsWait(lastTimeout: lastAckTimeout)"))
+        XCTAssertTrue(save.contains("lastAckTimeout = Date()"))
+        // Same order and content: the loop still walks `writes` in order and queues each write as it is.
+        XCTAssertTrue(save.contains("for write in writes {"))
     }
 
     func testAConfirmedOrRefusedWriteIsPassedThrough() async {
@@ -231,5 +305,66 @@ final class Booking1331SaveFlowTests: XCTestCase {
             BookingWritePatch.changedManagerFields(from: stored, to: new),
             ["timeSlot", "workStartTime", "workEndTime", "isBreakRemoved"]
         )
+    }
+
+    // MARK: Review item 6: Save with no change keeps a Full day a Full day
+
+    func testSaveWithNoChangeKeepsTheStoredSlot() throws {
+        let monday = try day("2026-11-02")
+        let policy = OrgPayrollTimePolicy.default
+        let stored = LogicFixtures.booking(on: monday, slot: .fullDay)
+        let opened = OperativeCustomHoursSheet.openingTimes(
+            policy: policy,
+            referenceDay: monday,
+            initialChoice: OperativeDayBookingChoice(from: stored)
+        )
+
+        let unchanged = ScheduleBookingEditSave.labour(
+            stored, start: opened.start, end: opened.end,
+            isBreakRemoved: stored.isBreakRemoved, otMultiplierOverride: stored.otMultiplierOverride, openedTimes: opened
+        )
+        XCTAssertEqual(unchanged.timeSlot, .fullDay)
+        XCTAssertEqual(unchanged.workStartTime, stored.workStartTime)
+        XCTAssertEqual(unchanged.workEndTime, stored.workEndTime)
+        XCTAssertEqual(BookingWritePatch.changedLabourFields(from: stored, to: unchanged), [], "nothing is written")
+        XCTAssertEqual(
+            PayrollHoursEngine.compute(booking: unchanged, day: monday, policy: policy).totalPaidHours,
+            PayrollHoursEngine.compute(booking: stored, day: monday, policy: policy).totalPaidHours
+        )
+
+        let laterFinish = opened.end == "18:00" ? "17:00" : "18:00"
+        let changed = ScheduleBookingEditSave.labour(
+            stored, start: opened.start, end: laterFinish,
+            isBreakRemoved: stored.isBreakRemoved, otMultiplierOverride: nil, openedTimes: opened
+        )
+        XCTAssertEqual(changed.timeSlot, .customHours, "a real change of times is custom hours, as before")
+        XCTAssertEqual(changed.workStartTime, opened.start)
+        XCTAssertEqual(changed.workEndTime, laterFinish)
+
+        // Custom hours stay custom hours and take the times on screen.
+        let custom = LogicFixtures.booking(on: monday, slot: .customHours, start: "07:30", end: "16:00")
+        let customOpened = OperativeCustomHoursSheet.openingTimes(policy: policy, referenceDay: monday, initialChoice: OperativeDayBookingChoice(from: custom))
+        XCTAssertEqual(customOpened.start, "07:30")
+        XCTAssertEqual(customOpened.end, "16:00")
+        let customSaved = ScheduleBookingEditSave.labour(custom, start: "07:30", end: "16:00", isBreakRemoved: custom.isBreakRemoved, otMultiplierOverride: nil, openedTimes: customOpened)
+        XCTAssertEqual(BookingWritePatch.changedLabourFields(from: custom, to: customSaved), [])
+    }
+
+    func testManagerSaveWithNoChangeKeepsTheStoredSlot() throws {
+        let monday = try day("2026-11-02")
+        let policy = OrgPayrollTimePolicy.default
+        let stored = ManagerSiteBooking(userId: "TEST-manager", date: monday, timeSlot: .fullDay, locationType: .project, locationId: UUID())
+        let opened = OperativeCustomHoursSheet.openingTimes(policy: policy, referenceDay: monday, initialChoice: stored.hoursEditChoice(policy: policy))
+        let unchanged = ScheduleBookingEditSave.managerSite(stored, start: opened.start, end: opened.end, isBreakRemoved: stored.isBreakRemoved, openedTimes: opened)
+        XCTAssertEqual(unchanged.timeSlot, .fullDay)
+        XCTAssertEqual(BookingWritePatch.changedManagerFields(from: stored, to: unchanged), [])
+        let moved = ScheduleBookingEditSave.managerSite(stored, start: opened.start, end: "19:00", isBreakRemoved: stored.isBreakRemoved, openedTimes: opened)
+        XCTAssertEqual(moved.timeSlot, .customHours)
+    }
+
+    func testProjectDetailPassesTheOpenedTimesToTheSave() throws {
+        let detail = try source("Views/ProjectDetailView.swift")
+        XCTAssertTrue(detail.contains("openedTimes: labourOpened"))
+        XCTAssertTrue(detail.contains("openedTimes: managerOpened"))
     }
 }

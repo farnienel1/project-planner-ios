@@ -308,7 +308,14 @@ class BookingStore: ObservableObject {
 
     /// Append multiple bookings then sync only the new rows (much faster than repeated full saves).
     func addBookings(_ newBookings: [Booking]) async {
-        guard !newBookings.isEmpty else { return }
+        await addBookingsReturningResults(newBookings)
+    }
+
+    /// `addBookings`, returning each booking's outcome by id (1.33.1). A booking refused before anything is written
+    /// (`writeRefusal`) is `.refused` with that message.
+    @discardableResult
+    private func addBookingsReturningResults(_ newBookings: [Booking]) async -> [UUID: BookingSaveResult] {
+        guard !newBookings.isEmpty else { return [:] }
         // RULEBOOK §1: organisation-zone midnight of each booking's day (`BookingDay`).
         let newBookings = newBookings.map { booking -> Booking in
             var booking = booking
@@ -317,21 +324,27 @@ class BookingStore: ObservableObject {
         }
         if let refusal = writeRefusal(newBookings) {
             errorMessage = refusal
-            return
+            return Dictionary(newBookings.map { ($0.id, BookingSaveResult.refused(refusal)) }, uniquingKeysWith: { first, _ in first })
         }
         bookings.append(contentsOf: newBookings)
-        await saveData(writes: newBookings.map { BookingWrite(booking: $0, changedFields: nil) })
+        return await saveData(writes: newBookings.map { BookingWrite(booking: $0, changedFields: nil) })
     }
     
     /// Saves only the fields that changed against the copy on this device (RULEBOOK §1 partial writes).
     func updateBooking(_ booking: Booking) async {
+        await updateBookingReturningResult(booking)
+    }
+
+    /// `updateBooking`, returning what happened to this edit (1.33.1). An edit that changes nothing is `.saved`.
+    @discardableResult
+    private func updateBookingReturningResult(_ booking: Booking) async -> BookingSaveResult {
         var booking = booking
         booking.date = BookingDay.organizationMidnight(for: booking.date)
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
             // Both the job it was on and the job it moves to must be the viewer's.
             if let refusal = writeRefusal([bookings[index], booking]) {
                 errorMessage = refusal
-                return
+                return .refused(refusal)
             }
             let changed = BookingWritePatch.changedLabourFields(from: bookings[index], to: booking)
             // RULEBOOK 1.33.0: the copy before this edit, kept with a queued edit so a later offline delete stores the
@@ -339,26 +352,29 @@ class BookingStore: ObservableObject {
             let before = bookings[index]
             let baseline = changed.isEmpty ? nil : BookingWritePatch.deleteFingerprint(before)
             bookings[index] = booking
-            await saveData(writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline)])
+            let results = await saveData(writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline)])
             // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the write).
             if !changed.isEmpty { OvertimeReopenNotice.labour(before: before, after: booking) }
+            return results[booking.id] ?? .saved
         }
+        let message = "This booking is no longer on this phone. Close the screen and open it again."
+        errorMessage = message
+        return .refused(message)
     }
 
-    /// `updateBooking`, then the message this save left (refused, not synced, saved locally), else nil. The store's
-    /// `errorMessage` is cleared first, so a message left by an earlier load or save is never read as this save's —
-    /// Scheduling read a stale one as a failed edit and stayed on the screen with nothing shown (1.33.1).
-    func updateBookingReportingProblem(_ booking: Booking) async -> String? {
+    /// `updateBooking`, then this edit's own outcome: saved, queued as Pending sync, or refused (1.33.1). Read from
+    /// the write itself, never from the store's `errorMessage`, which an earlier load or save may have left (Scheduling
+    /// read a stale one as a failed edit, and a timed-out edit that was queued as "not saved").
+    func updateBookingReportingProblem(_ booking: Booking) async -> BookingSaveResult {
         errorMessage = nil
-        await updateBooking(booking)
-        return errorMessage
+        return await updateBookingReturningResult(booking)
     }
 
-    /// `addBookings`, then the message this save left, else nil (the same reading as `updateBookingReportingProblem`).
-    func addBookingsReportingProblem(_ newBookings: [Booking]) async -> String? {
+    /// `addBookings`, then each new booking's own outcome by id (1.33.1): a booking is counted as saved only once its
+    /// write is known, never before.
+    func addBookingsReportingProblem(_ newBookings: [Booking]) async -> [UUID: BookingSaveResult] {
         errorMessage = nil
-        await addBookings(newBookings)
-        return errorMessage
+        return await addBookingsReturningResults(newBookings)
     }
 
     /// RULEBOOK §2 "Pending sync": this booking has a change in the outbox the server has not confirmed.
@@ -698,9 +714,20 @@ class BookingStore: ObservableObject {
         var baselineFingerprint: String? = nil
     }
 
+    /// "Pending sync" wording for a write queued because the server did not confirm it in time (1.33.1).
+    static let pendingSyncMessage = "Saved on this phone. Pending sync — it will sync when the connection recovers."
+
+    /// When a write's bounded wait last timed out; writes soon after go straight to the outbox (1.33.1 review item 2).
+    private var lastAckTimeout: Date?
+
     /// Saves the list on this device, then writes only `writes` to Firestore (RULEBOOK §1 partial writes).
     /// Offline, each write goes to the outbox with its changed fields and shows "Pending sync" (§2).
-    private func saveData(writes: [BookingWrite] = []) async {
+    /// 1.33.1: returns what happened to each write (saved, queued as Pending sync, or refused), so a screen reports
+    /// this save's own outcome. Once one write's bounded wait times out (`FirestoreWriteAck`), the rest — and writes for
+    /// the next `FirestoreWriteAck.skipWaitWindowSeconds` — go to the outbox in the same order without waiting again.
+    @discardableResult
+    private func saveData(writes: [BookingWrite] = []) async -> [UUID: BookingSaveResult] {
+        var results: [UUID: BookingSaveResult] = [:]
         do {
             // Save to local storage
             try await persistenceService.saveBookingData(bookings: bookings)
@@ -708,7 +735,7 @@ class BookingStore: ObservableObject {
 
             guard !writes.isEmpty else {
                 ScheduleChangeNotifier.postBookingStoreDidChange()
-                return
+                return results
             }
 
             let organizationId = await DataPersistenceManager.shared.waitForOrganization(
@@ -725,13 +752,15 @@ class BookingStore: ObservableObject {
                             organizationId: organizationId,
                             baselineFingerprint: write.baselineFingerprint
                         )
+                        results[write.booking.id] = .queued(Self.pendingSyncMessage)
                     }
                     print("🔥🔥🔥 DEBUG: Queued \(writes.count) bookings for offline sync")
                 } else {
                     errorMessage = "Saved locally. Organization not available to queue cloud sync yet."
+                    for write in writes { results[write.booking.id] = .queued(errorMessage ?? Self.pendingSyncMessage) }
                 }
                 ScheduleChangeNotifier.postBookingStoreDidChange()
-                return
+                return results
             }
 
             if let organizationId,
@@ -741,26 +770,54 @@ class BookingStore: ObservableObject {
 
                 var failedCount = 0
                 var refusedIds = Set<UUID>()
+                var refusalMessage: String?
                 for write in writes {
+                    // 1.33.1 review item 2: after a timeout, queue without waiting (same order, same content).
+                    if FirestoreWriteAck.skipsWait(lastTimeout: lastAckTimeout),
+                       let orgId = firebaseBackend.resolvedOrganizationIdForOfflineWrites() {
+                        failedCount += 1
+                        OfflineOutboxStore.shared.enqueueSaveBooking(
+                            write.booking,
+                            changedFields: write.changedFields,
+                            organizationId: orgId,
+                            baselineFingerprint: write.baselineFingerprint
+                        )
+                        results[write.booking.id] = .queued(Self.pendingSyncMessage)
+                        continue
+                    }
                     do {
                         try await firebaseBackend.saveBooking(
                             write.booking,
                             organizationId: organizationId,
                             changedFields: write.changedFields
                         )
+                        lastAckTimeout = nil
+                        results[write.booking.id] = .saved
                     } catch {
                         failedCount += 1
+                        let handedOver = FirestoreWriteAck.wasHandedToServer(error)
+                        if handedOver || error is FirestoreWriteAck.ReadTimedOut {
+                            lastAckTimeout = Date()
+                        }
                         if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
                            let orgId = firebaseBackend.resolvedOrganizationIdForOfflineWrites() {
                             OfflineOutboxStore.shared.enqueueSaveBooking(
                                 write.booking,
                                 changedFields: write.changedFields,
                                 organizationId: orgId,
-                                baselineFingerprint: write.baselineFingerprint
+                                baselineFingerprint: write.baselineFingerprint,
+                                sentToServer: handedOver
                             )
+                            results[write.booking.id] = .queued(Self.pendingSyncMessage)
                         } else if BookingWritePatch.isRefusedFinal(error, isCreate: write.changedFields == nil) {
                             // Tombstoned (deleted elsewhere) or cancelled by someone who may reinstate it.
                             refusedIds.insert(write.booking.id)
+                            results[write.booking.id] = .refused(CanonicalBusinessEngine.bookingReplayRefusedMessage)
+                        } else {
+                            let message = error.localizedDescription
+                            refusalMessage = refusalMessage ?? message
+                            refusedIds.insert(write.booking.id)
+                            results[write.booking.id] = .refused(message)
                         }
                         print("🔥🔥🔥 DEBUG: Error saving booking \(write.booking.id.uuidString): \(error)")
                     }
@@ -775,7 +832,7 @@ class BookingStore: ObservableObject {
                         smartCache?.cacheBookings(bookings)
                         try? await persistenceService.saveBookingData(bookings: bookings)
                     }
-                    errorMessage = CanonicalBusinessEngine.bookingReplayRefusedMessage
+                    errorMessage = refusalMessage ?? CanonicalBusinessEngine.bookingReplayRefusedMessage
                 } else if failedCount > 0 {
                     if OfflineOutboxStore.shared.pendingCount > 0 {
                         errorMessage = "Some bookings saved locally and will sync when you're back online."
@@ -799,11 +856,16 @@ class BookingStore: ObservableObject {
                         )
                     }
                 }
+                for write in writes { results[write.booking.id] = .queued(Self.pendingSyncMessage) }
             }
         } catch {
             errorMessage = "Failed to save data: \(error.localizedDescription)"
+            for write in writes where results[write.booking.id] == nil {
+                results[write.booking.id] = .refused(errorMessage ?? error.localizedDescription)
+            }
         }
         ScheduleChangeNotifier.postBookingStoreDidChange()
+        return results
     }
 
     func discardInMemoryForOrganizationSwitch() {
@@ -929,3 +991,18 @@ class BookingStore: ObservableObject {
     }
 }
 
+/// What one booking write did (1.33.1 review item 4).
+nonisolated enum BookingSaveResult: Equatable {
+    /// Confirmed by the server.
+    case saved
+    /// Kept on this phone and queued as Pending sync (offline, or the server did not confirm in time).
+    case queued(String)
+    /// Refused or failed: not saved. The message says why.
+    case refused(String)
+
+    /// Saved or queued: the booking exists (or will) and its notices may go out.
+    var keepsBooking: Bool {
+        if case .refused = self { return false }
+        return true
+    }
+}

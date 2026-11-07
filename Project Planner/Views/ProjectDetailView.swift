@@ -1614,6 +1614,13 @@ struct ProjectDetailView: View {
             // Same controls as Daily Overview for every person; PAYE only adds its note. The sheet opens on the
             // booking's stored break (`OperativeCustomHoursSheet.initialBreakIncluded`), so Save keeps it.
             let options = LabourBookingEditOptions.forOperative(isPaye: isPayeOperativeBooking(booking))
+            let labourChoice = OperativeDayBookingChoice(from: booking)
+            // 1.33.1 review item 6: the times the sheet opens on, so Save with no change keeps a Full day a Full day.
+            let labourOpened = OperativeCustomHoursSheet.openingTimes(
+                policy: firebaseBackend.payrollPolicy(for: booking.date),
+                referenceDay: booking.date,
+                initialChoice: labourChoice
+            )
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
                 referenceDay: booking.date,
@@ -1629,14 +1636,15 @@ struct ProjectDetailView: View {
                 showsFooterNote: options.showsFooterNote,
                 showsPayeNote: options.showsPayeNote,
                 showsInlineWheels: true,
-                initialChoice: OperativeDayBookingChoice(from: booking),
+                initialChoice: labourChoice,
                 onSave: { start, end, isBreakRemoved, otMult in
                     let updated = ScheduleBookingEditSave.labour(
                         booking,
                         start: start,
                         end: end,
                         isBreakRemoved: isBreakRemoved,
-                        otMultiplierOverride: otMult
+                        otMultiplierOverride: otMult,
+                        openedTimes: labourOpened
                     )
                     // Leave is checked only when the slot or times change (RULEBOOK 1.16.0 §5, §9).
                     let timesChanged = updated.timeSlot != booking.timeSlot
@@ -1662,6 +1670,12 @@ struct ProjectDetailView: View {
                 deleteDisabledReason: labourBookingDeleteDisabledReason
             )
         case .manager(let booking, _, let personName):
+            let managerChoice = booking.hoursEditChoice(policy: firebaseBackend.payrollPolicy(for: booking.date))
+            let managerOpened = OperativeCustomHoursSheet.openingTimes(
+                policy: firebaseBackend.payrollPolicy(for: booking.date),
+                referenceDay: booking.date,
+                initialChoice: managerChoice
+            )
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
                 referenceDay: booking.date,
@@ -1671,13 +1685,14 @@ struct ProjectDetailView: View {
                 headerInitials: PlannerUIInitials.from(personName),
                 allowsOtMultiplierOverride: false,
                 showsInlineWheels: true,
-                initialChoice: booking.hoursEditChoice(policy: firebaseBackend.payrollPolicy(for: booking.date)),
+                initialChoice: managerChoice,
                 onSave: { start, end, isBreakRemoved, _ in
                     let updated = ScheduleBookingEditSave.managerSite(
                         booking,
                         start: start,
                         end: end,
-                        isBreakRemoved: isBreakRemoved
+                        isBreakRemoved: isBreakRemoved,
+                        openedTimes: managerOpened
                     )
                     let timesChanged = updated.timeSlot != booking.timeSlot
                         || updated.workStartTime != booking.workStartTime

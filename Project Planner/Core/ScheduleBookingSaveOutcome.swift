@@ -11,9 +11,11 @@
 import Foundation
 
 enum ScheduleBookingSaveOutcome: Equatable {
-    /// Saved with nothing to report: the "Booking Confirmed" sheet, then the screen closes.
+    /// Every booking confirmed by the server: the "Booking Confirmed" sheet, then the screen closes.
     case confirmed
-    /// At least one booking saved, but the store reported something (for example "saved locally, will sync").
+    /// Every booking kept, at least one queued as Pending sync (the server did not confirm in time, or offline).
+    case pendingSync(String)
+    /// Some bookings kept (saved or queued), some refused: the message says why.
     case savedWithProblem(String)
     /// Nothing saved and the store said why (for example a refusal): the screen stays with the choices kept.
     case notSaved(String)
@@ -22,12 +24,33 @@ enum ScheduleBookingSaveOutcome: Equatable {
 
     static let nothingToSaveMessage = "Nothing new to save. These people are already booked at these times."
 
-    static func decide(savedCount: Int, problem: String?) -> ScheduleBookingSaveOutcome {
-        let message = problem?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if savedCount > 0 {
-            return message.isEmpty ? .confirmed : .savedWithProblem(message)
+    /// 1.33.1 review item 4: decided from each booking's own outcome (`BookingSaveResult`), never from a count made
+    /// before the save ran. A queued booking counts as saved (Pending sync), never as "not saved".
+    static func decide(results: [BookingSaveResult]) -> ScheduleBookingSaveOutcome {
+        guard !results.isEmpty else { return .nothingToSave }
+        var refusal: String?
+        var queued: String?
+        var keptCount = 0
+        for result in results {
+            switch result {
+            case .saved:
+                keptCount += 1
+            case .queued(let message):
+                keptCount += 1
+                if queued == nil { queued = message }
+            case .refused(let message):
+                if refusal == nil { refusal = message }
+            }
         }
-        return message.isEmpty ? .nothingToSave : .notSaved(message)
+        let refusalMessage = (refusal?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+            ?? "This booking could not be saved."
+        if keptCount == 0 { return .notSaved(refusalMessage) }
+        if refusal != nil { return .savedWithProblem(refusalMessage) }
+        if let queued {
+            let text = queued.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .pendingSync(text.isEmpty ? BookingStore.pendingSyncMessage : text)
+        }
+        return .confirmed
     }
 
     /// Whether the screen's choices are cleared (they are kept only when nothing saved, so the booker can try again).
@@ -39,7 +62,7 @@ enum ScheduleBookingSaveOutcome: Equatable {
     /// Whether OK on the alert closes the screen.
     var closesScreen: Bool {
         switch self {
-        case .confirmed, .savedWithProblem, .nothingToSave: return true
+        case .confirmed, .pendingSync, .savedWithProblem, .nothingToSave: return true
         case .notSaved: return false
         }
     }
@@ -53,7 +76,8 @@ struct ScheduleBookingSaveAlert: Identifiable, Equatable {
     var title: String {
         switch outcome {
         case .confirmed: return "Booking confirmed"
-        case .savedWithProblem: return "Booking saved"
+        case .pendingSync: return "Booking saved — Pending sync"
+        case .savedWithProblem: return "Some bookings not saved"
         case .notSaved: return "Booking not saved"
         case .nothingToSave: return "Nothing to save"
         }

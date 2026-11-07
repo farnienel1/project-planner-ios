@@ -289,8 +289,14 @@ class ManagerScheduleStore: ObservableObject {
             loadData(force: true)
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
+                // 1.33.1: a timed-out write is already with Firestore (`sentToServer`): a later offline delete queues a
+                // real delete with its tombstone, and the replay never rewrites a create that has landed.
                 OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(
-                    normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline
+                    normalizedBooking,
+                    changedFields: changedFields,
+                    organizationId: orgId,
+                    baselineFingerprint: baseline,
+                    sentToServer: FirestoreWriteAck.wasHandedToServer(error)
                 )
                 errorMessage = "Saved locally. Will sync when you're back online."
             } else if BookingWritePatch.isRefusedFinal(error) {
