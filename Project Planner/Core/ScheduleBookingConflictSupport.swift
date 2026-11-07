@@ -113,7 +113,7 @@ enum ScheduleBookablePersonBuilder {
             guard !seenKeys.contains(GhostRulebook.dedupeKey(id: user.id, email: user.email)) else { continue }
             // A manager with no catalogue row is booked under their user id, like an operative.
             guard let op = operatives.first(where: {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
+                !email.isEmpty && $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
             }) ?? AccountLabourBooking.bookingOperativeId(for: user, operatives: sourceOperatives)
                 .map({ operativeRecord(from: user, id: $0) }) else { continue }
             let role = user.permissions.adminAccess || user.isSuperAdmin ? "Admin" : "Manager"
@@ -212,6 +212,11 @@ struct SchedulePersonConflictSummary {
 enum ScheduleBookingConflictEngine {
     static func linkedUserId(for operative: Operative, users: [AppUser]) -> String? {
         let email = operative.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        // A row with no email (a converted ghost, RULEBOOK 1.34.0) is the account it is kept under — its id or
+        // `linkedUserId` (`OperativeStore.operativeRow(for:in:)`) — never the first account with an empty email.
+        guard !email.isEmpty else {
+            return users.first { OperativeStore.operativeRow(for: $0, in: [operative]) != nil }?.id
+        }
         return users.first {
             $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
         }?.id

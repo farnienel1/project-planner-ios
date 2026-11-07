@@ -2169,11 +2169,8 @@ struct ProjectDetailView: View {
             return tasks
         }
         let email = userStore.currentUser?.email
-        let emNorm = email?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if userStore.isOperativeMode() {
-            if let operative = operativeStore.allOperatives.first(where: {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emNorm
-            }) {
+            if let operative = userStore.currentUser.flatMap({ operativeStore.operativeRow(for: $0) }) {
                 tasks = tasks.filter { task in
                     task.allAssignedOperativeIds.contains(operative.id)
                 }
@@ -4114,11 +4111,8 @@ private struct AddProjectTaskView: View {
     }
 
     private func operativeIdForCurrentUserEmail() -> UUID? {
-        guard let em = userStore.currentUser?.email else { return nil }
-        let n = em.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        return operativeStore.allOperatives.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == n
-        })?.id
+        guard let user = userStore.currentUser else { return nil }
+        return operativeStore.operativeRow(for: user)?.id
     }
 
     private func mergedAssignmentSets() -> (managers: Set<UUID>, operatives: Set<UUID>) {

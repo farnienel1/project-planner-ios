@@ -170,8 +170,10 @@ struct OperativesView: View {
     
     private func openUserProfile(for operative: Operative) {
         // Find the corresponding app user by email and open their profile
+        // `operativeRow(for:in:)` (`personDedupeKey`): a row with no email opens the ghost it is kept under, never
+        // the first account with an empty email (RULEBOOK 1.34.0).
         let matchingUser = userStore.organizationUsers.first { user in
-            user.email.lowercased() == operative.email.lowercased()
+            OperativeStore.operativeRow(for: user, in: [operative]) != nil
         }
         if let user = matchingUser, user.isStoredUserDocument {
             selectedUserForProfile = user
@@ -1084,9 +1086,13 @@ struct EditOperativeView: View {
         let previousAmount = rowIsHourly ? baseline.hourlyRate : baseline.dayRate
         let newAmount = parsedRate.amount
         let emailNorm = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let linkedUser = userStore.organizationUsers.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
-        })
+        // A row with no email (a converted ghost, RULEBOOK 1.34.0) belongs to the account it is kept under
+        // (`OperativeStore.operativeRow(for:in:)`), never the first account with an empty email.
+        let linkedUser = emailNorm.isEmpty
+            ? userStore.organizationUsers.first(where: { OperativeStore.operativeRow(for: $0, in: [operative]) != nil })
+            : userStore.organizationUsers.first(where: {
+                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
+            })
         // Compared in hundredths: the field shows two decimals, so an untouched field is not a change.
         let payChanged = previousAmount.map { ($0 * 100).rounded() } != newAmount.map { ($0 * 100).rounded() }
         if payChanged && !userStore.canChangePay(of: linkedUser) {

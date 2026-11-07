@@ -61,8 +61,8 @@ struct HolidayReportView: View {
     }
 
     private var joinDate: Date {
-        if !user.email.isEmpty,
-           let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+        // The person's own row (`personDedupeKey`): a ghost's row kept under its id, never another no-email row.
+        if let operative = operativeStore.operativeRow(for: user) {
             return operative.startDate
         }
         return user.createdAt

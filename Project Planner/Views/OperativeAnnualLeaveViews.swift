@@ -894,7 +894,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             // RULEBOOK 1.34.0 §11: a converted ghost's row has no email and keeps the ghost's id.
             let email = op.email.lowercased()
             return userStore.organizationUsers.first { !email.isEmpty && $0.email.lowercased() == email }
-                ?? userStore.organizationUsers.first { $0.id.caseInsensitiveCompare(op.documentId) == .orderedSame }
+                ?? userStore.organizationUsers.first { OperativeStore.operativeRow(for: $0, in: [op]) != nil }
         }
         return nil
     }
@@ -1425,6 +1425,19 @@ struct OperativeAnnualLeaveCalendarView: View {
     @MainActor
     private func saveBookingChange() async {
         guard var booking = approvedBooking(on: selectedDay) else { return }
+        // RULEBOOK 1.34.0 §9, §11 `ghostLeaveBooking`: changing a ghost's leave needs the same permission as booking it
+        // (its line manager or an admin, `canBookLeaveFor`), as `bookSelectedDay` checks.
+        if let ghost = leaveProfileUser, ghost.isGhost {
+            let allowed: Bool = {
+                guard let viewer = userStore.currentUser else { return false }
+                return GhostRulebook.leaveBooking(viewer: viewer, ghost: ghost, roster: userStore.organizationUsers)?.allowed ?? false
+            }()
+            guard allowed else {
+                errorMessage = "Only this person's line manager or an admin can book their annual leave."
+                showError = true
+                return
+            }
+        }
         isSaving = true
         defer { isSaving = false }
         do {

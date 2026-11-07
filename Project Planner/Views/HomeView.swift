@@ -1795,11 +1795,9 @@ struct OperativeQualificationsReadOnlyView: View {
     @State private var repairMessage: String?
     
     private var operative: Operative? {
-        guard let email = userStore.currentUser?.email else { return nil }
-        let e = email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        return operativeStore.allOperatives.first {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == e
-        }
+        // The person's own row (`personDedupeKey`); an empty email never matches another no-email row.
+        guard let user = userStore.currentUser else { return nil }
+        return operativeStore.operativeRow(for: user)
     }
     
     var body: some View {
@@ -1932,10 +1930,9 @@ private struct HomeProfileCardSheet: View {
     @State private var taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
 
     private var operative: Operative? {
-        guard let email = user?.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
-        return operativeStore.allOperatives.first {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
-        }
+        // The person's own row (`personDedupeKey`); an empty email never matches another no-email row.
+        guard let user else { return nil }
+        return operativeStore.operativeRow(for: user)
     }
 
     private var displayName: String {

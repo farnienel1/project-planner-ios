@@ -888,15 +888,22 @@ extension OperativeStore {
     /// `linkedUserId` = that id and its email cleared — so that row is the ghost, never a separate person. An empty
     /// email never matches another row.
     func operativeRow(for user: AppUser) -> Operative? {
+        Self.operativeRow(for: user, in: allOperatives)
+    }
+
+    /// `operativeRow(for:)` over a given list (the store's rows, or test rows). Shared by every lookup that must find
+    /// the person's own row — pay mirror, rate history `operativeId`, name sync — so an empty email never picks the
+    /// first no-email row in the list.
+    static func operativeRow(for user: AppUser, in rows: [Operative]) -> Operative? {
         // `personDedupeKey` (RULEBOOK 1.34.0): the email, else `id:` + the id — so a person with an email matches the
         // row on that email, and a ghost the row kept under its own id (email cleared), never another no-email row.
         let key = GhostRulebook.dedupeKey(id: user.id, email: user.email)
         guard !key.isEmpty else { return nil }
-        if let row = allOperatives.first(where: { GhostRulebook.dedupeKey(id: $0.documentId, email: $0.email) == key }) {
+        if let row = rows.first(where: { GhostRulebook.dedupeKey(id: $0.documentId, email: $0.email) == key }) {
             return row
         }
         guard user.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return allOperatives.first { $0.linkedUserId?.caseInsensitiveCompare(user.id) == .orderedSame }
+        return rows.first { $0.linkedUserId?.caseInsensitiveCompare(user.id) == .orderedSame }
     }
 
 }

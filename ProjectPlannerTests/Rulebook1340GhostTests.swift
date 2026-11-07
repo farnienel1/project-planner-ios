@@ -227,4 +227,53 @@ final class Rulebook1340GhostTests: XCTestCase {
         XCTAssertNil(privatePlan.user.fields["dayRate"])
         XCTAssertNotNil(privatePlan.payProfile)
     }
+
+    // MARK: Empty emails never name another person (review of #203)
+
+    private func row(_ docId: String, email: String = "", linkedUserId: String? = nil) -> Operative {
+        var op = Operative(firstName: "TEST-Row", lastName: docId, email: email, startDate: Date(timeIntervalSince1970: 0), dayRate: 200)
+        op.firestoreDocumentId = docId
+        op.linkedUserId = linkedUserId
+        return op
+    }
+
+    /// Two ghosts and a no-email row that belongs to neither: each ghost reaches only its own row (kept under its id or
+    /// `linkedUserId`), and a ghost with no row reaches none — never the first empty-email row.
+    func testOperativeRowNeverMatchesAnotherEmptyEmailRow() {
+        let stranger = row("TEST-ROW-STRANGER")
+        let converted = row("TEST-ROW-CONVERTED", linkedUserId: "TEST-GHOST-2")
+        let keptUnderId = row("TEST-GHOST-3")
+        let rows = [stranger, converted, keptUnderId]
+        XCTAssertNil(OperativeStore.operativeRow(for: ghost("TEST-GHOST-1"), in: rows))
+        XCTAssertEqual(OperativeStore.operativeRow(for: ghost("TEST-GHOST-2"), in: rows)?.documentId, "TEST-ROW-CONVERTED")
+        XCTAssertEqual(OperativeStore.operativeRow(for: ghost("TEST-GHOST-3"), in: rows)?.documentId, "TEST-GHOST-3")
+    }
+
+    /// A person with an email reaches the row on that email, never a no-email row.
+    func testOperativeRowWithEmailMatchesOnlyThatEmail() {
+        var person = admin()
+        person.role = .operative
+        let rows = [row("TEST-ROW-EMPTY"), row("TEST-ROW-ANN", email: "test-admin@example.com")]
+        XCTAssertEqual(OperativeStore.operativeRow(for: person, in: rows)?.documentId, "TEST-ROW-ANN")
+        XCTAssertNil(OperativeStore.operativeRow(for: person, in: [row("TEST-ROW-EMPTY")]))
+    }
+
+    /// `syncActiveOperativesWithUserAccounts` mirrors a ghost's rate, trade and active flag only onto its own row.
+    func testRosterSyncTargetForAGhostIsNeverAnotherEmptyEmailRow() {
+        let rows = [row("TEST-ROW-STRANGER"), row("TEST-ROW-OTHER")]
+        XCTAssertNil(UserStore.syncTargetOperativeRow(for: ghost("TEST-GHOST-1"), in: rows))
+        XCTAssertNil(UserStore.syncTargetOperativeRow(for: ghost("TEST-GHOST-2"), in: rows))
+        let own = row("TEST-ROW-OWN", linkedUserId: "TEST-GHOST-2")
+        XCTAssertEqual(UserStore.syncTargetOperativeRow(for: ghost("TEST-GHOST-2"), in: rows + [own])?.documentId, "TEST-ROW-OWN")
+    }
+
+    /// A no-email row links to the account it is kept under, never the first account with an empty email.
+    func testScheduleConflictLinkForANoEmailRowIsItsOwnGhost() {
+        let users = [ghost("TEST-GHOST-1"), ghost("TEST-GHOST-2")]
+        XCTAssertNil(ScheduleBookingConflictEngine.linkedUserId(for: row("TEST-ROW-STRANGER"), users: users))
+        XCTAssertEqual(
+            ScheduleBookingConflictEngine.linkedUserId(for: row("TEST-ROW-C", linkedUserId: "TEST-GHOST-2"), users: users),
+            "TEST-GHOST-2"
+        )
+    }
 }

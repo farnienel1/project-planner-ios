@@ -187,7 +187,7 @@ struct ManageUsersView: View {
                         } else if isOperative {
                             // Count bookings for this operative (by operativeId matching user email or name)
                             let operativeBookings = bookingStore.bookings.filter { booking in
-                                if let operative = operativeStore.allOperatives.first(where: { $0.email.lowercased() == user.email.lowercased() }) {
+                                if let operative = operativeStore.operativeRow(for: user) {
                                     return booking.operativeId == operative.id
                                 }
                                 return false
@@ -1816,7 +1816,7 @@ struct EditUserView: View {
         }
         // An empty email names nobody (ghosts have none); a converted ghost's row keeps the ghost's id (RULEBOOK 1.34.0).
         guard !key.isEmpty else {
-            return operativeStore.allOperatives.first { $0.documentId.caseInsensitiveCompare(displayedUser.id) == .orderedSame }
+            return operativeStore.operativeRow(for: displayedUser)
         }
         return operativeStore.allOperatives.first {
             $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == key
@@ -4297,10 +4297,9 @@ struct EditUserView: View {
 
         // RULEBOOK 1.26.1 §8 (`CanonicalBusinessEngine.payEditorStartingValues`): the baseline is the editor's record.
         let subjectUser = payBaselineUser
-        let linkedOpId = operativeStore.allOperatives.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
-            subjectUser.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        })?.id
+        // The person's own `operatives` row (`personDedupeKey`): a ghost's empty email never picks another
+        // no-email row, so its rate history is never filed under someone else's row (RULEBOOK 1.34.0).
+        let linkedOpId = operativeStore.operativeRow(for: subjectUser)?.id
 
         let dayRateEligible = permissions.operativeMode || permissions.manager || permissions.adminAccess
         let trimmedP = tradePresetRaw.trimmingCharacters(in: .whitespacesAndNewlines)
