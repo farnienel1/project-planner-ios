@@ -166,4 +166,26 @@ final class IOS136FixesTests: XCTestCase {
         let service = try? source("Project Planner/Core/BankHolidayService.swift")
         XCTAssertTrue(service?.contains("previouslyLoaded: loadedScope == scope ? loadedYears : []") == true)
     }
+
+    // MARK: 4. My Profile figures open their screens
+
+    /// Failure before: the figure rows were plain text (web links each one). Each row now opens its screen, and every
+    /// store those screens read reaches the card through both hosts (Settings → My Profile and the Home profile sheet,
+    /// which did not pass `SmartCacheService`, so My Schedule, Tasks and Annual leave would have had no cache service).
+    func testEveryLinkedFigureOpensItsScreenWithItsStores() throws {
+        XCTAssertEqual(MyProfileFiguresCard.Destination.allCases.map(\.rawValue), ["annualLeave", "mySchedule", "tasks", "qualifications"])
+        let card = try source("Project Planner/Views/MyProfileFiguresCard.swift")
+        for destination in MyProfileFiguresCard.Destination.allCases {
+            XCTAssertTrue(card.contains("opens: .\(destination.rawValue)"), "no row opens \(destination.rawValue)")
+        }
+        XCTAssertTrue(card.contains(".sheet(item: $destination)"))
+        let home = try source("Project Planner/Views/HomeView.swift")
+        let presentation = try XCTUnwrap(home.range(of: "HomeProfileCardSheet()\n"))
+        XCTAssertTrue(home[presentation.upperBound...].prefix(80).contains(".environmentObject(smartCache)"))
+        let sheetStart = try XCTUnwrap(home.range(of: "SettingsProfileDetailView(isSheetRoot: true)"))
+        let sheetInjections = home[sheetStart.upperBound...].prefix(900)
+        for store in ["projectStore", "appSettings", "notificationService", "smartCache"] {
+            XCTAssertTrue(sheetInjections.contains(".environmentObject(\(store))"), store)
+        }
+    }
 }
