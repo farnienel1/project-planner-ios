@@ -195,6 +195,11 @@ enum OfflineSyncCoordinator {
                 organizationId: entry.organizationId,
                 changedFields: payload.changedFields.map { Set($0) }
             )
+            // RULEBOOK 1.33.0 §25 reopen: the edit reached the server now, so the PAYE overtime line may reopen
+            // (web notifies after its online write; best effort).
+            if payload.changedFields != nil, let previous = payload.previousBooking {
+                OvertimeReopenNotice.labour(before: previous, after: payload.booking)
+            }
 
         case .deleteBooking, .deleteManagerSiteBooking:
             try await replayDelete(entry: entry, firebaseBackend: firebaseBackend)
@@ -206,6 +211,9 @@ enum OfflineSyncCoordinator {
                 organizationId: entry.organizationId,
                 changedFields: payload.changedFields.map { Set($0) }
             )
+            if payload.changedFields != nil, let previous = payload.previousBooking {
+                OvertimeReopenNotice.managerSite(before: previous, after: payload.booking)
+            }
 
         case .saveMaterialItem:
             let payload = try decoder.decode(OfflineSaveMaterialItemPayload.self, from: entry.payload)
@@ -291,6 +299,12 @@ enum OfflineSyncCoordinator {
         }
         switch decision {
         case "apply":
+            // RULEBOOK 1.33.0 §25 reopen: the queued delete was written now (best effort, after the write).
+            if let booking = payload.labourBooking {
+                OvertimeReopenNotice.labour(before: booking, after: nil)
+            } else if let booking = payload.managerBooking {
+                OvertimeReopenNotice.managerSite(before: booking, after: nil)
+            }
             return
         case "alreadyGone", "dropLocal":
             throw OfflineDeleteOutcome.resolved

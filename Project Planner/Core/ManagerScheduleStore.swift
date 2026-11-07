@@ -277,7 +277,8 @@ class ManagerScheduleStore: ObservableObject {
 
         if smartCache?.isOnline == false {
             OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(
-                normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline
+                normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline,
+                previous: previous
             )
             return
         }
@@ -290,7 +291,8 @@ class ManagerScheduleStore: ObservableObject {
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
                 OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(
-                    normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline
+                    normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline,
+                    previous: previous
                 )
                 errorMessage = "Saved locally. Will sync when you're back online."
             } else if BookingWritePatch.isRefusedFinal(error) {

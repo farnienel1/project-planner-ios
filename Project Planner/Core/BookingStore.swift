@@ -339,9 +339,13 @@ class BookingStore: ObservableObject {
             let before = bookings[index]
             let baseline = changed.isEmpty ? nil : BookingWritePatch.deleteFingerprint(before)
             bookings[index] = booking
-            await saveData(writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline)])
+            let written = await saveData(writes: changed.isEmpty ? [] : [
+                BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline, previous: before)
+            ])
             // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the write).
-            if !changed.isEmpty { OvertimeReopenNotice.labour(before: before, after: booking) }
+            // Only once the server has the edit: a refused edit changed nothing, and a queued one is told on replay
+            // (`OfflineSyncCoordinator`, from the copy queued with it).
+            if !changed.isEmpty, written { OvertimeReopenNotice.labour(before: before, after: booking) }
         }
     }
 
@@ -469,15 +473,12 @@ class BookingStore: ObservableObject {
         }
     }
     
+    /// Marks a booking Completed through `updateBooking`, so the status change is a partial write like any edit and the
+    /// PAYE overtime line it carried reopens (RULEBOOK 1.33.0 §25: the status is part of `overtimeBookingFingerprint`).
     func completeBooking(_ booking: Booking) async {
-        if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
-            if let refusal = writeRefusal([bookings[index]]) {
-                errorMessage = refusal
-                return
-            }
-            bookings[index].status = .completed
-            await saveData(writes: [BookingWrite(booking: bookings[index], changedFields: ["status"])])
-        }
+        guard var completed = bookings.first(where: { $0.id == booking.id }) else { return }
+        completed.status = .completed
+        await updateBooking(completed)
     }
     
     // MARK: - Booking Creation
@@ -680,11 +681,15 @@ class BookingStore: ObservableObject {
         let changedFields: Set<String>?
         /// RULEBOOK 1.33.0: `bookingDeleteFingerprint` of the copy before this edit (kept with a queued edit).
         var baselineFingerprint: String? = nil
+        /// RULEBOOK 1.33.0 §25: the copy before this edit, queued with it so the replay can send the reopen notice.
+        var previous: Booking? = nil
     }
 
     /// Saves the list on this device, then writes only `writes` to Firestore (RULEBOOK §1 partial writes).
     /// Offline, each write goes to the outbox with its changed fields and shows "Pending sync" (§2).
-    private func saveData(writes: [BookingWrite] = []) async {
+    /// Returns true only when every write in `writes` reached the server (none queued, failed or refused).
+    @discardableResult
+    private func saveData(writes: [BookingWrite] = []) async -> Bool {
         do {
             // Save to local storage
             try await persistenceService.saveBookingData(bookings: bookings)
@@ -692,7 +697,7 @@ class BookingStore: ObservableObject {
 
             guard !writes.isEmpty else {
                 ScheduleChangeNotifier.postBookingStoreDidChange()
-                return
+                return false
             }
 
             let organizationId = await DataPersistenceManager.shared.waitForOrganization(
@@ -707,7 +712,8 @@ class BookingStore: ObservableObject {
                             write.booking,
                             changedFields: write.changedFields,
                             organizationId: organizationId,
-                            baselineFingerprint: write.baselineFingerprint
+                            baselineFingerprint: write.baselineFingerprint,
+                            previous: write.previous
                         )
                     }
                     print("🔥🔥🔥 DEBUG: Queued \(writes.count) bookings for offline sync")
@@ -715,7 +721,7 @@ class BookingStore: ObservableObject {
                     errorMessage = "Saved locally. Organization not available to queue cloud sync yet."
                 }
                 ScheduleChangeNotifier.postBookingStoreDidChange()
-                return
+                return false
             }
 
             if let organizationId,
@@ -740,7 +746,8 @@ class BookingStore: ObservableObject {
                                 write.booking,
                                 changedFields: write.changedFields,
                                 organizationId: orgId,
-                                baselineFingerprint: write.baselineFingerprint
+                                baselineFingerprint: write.baselineFingerprint,
+                                previous: write.previous
                             )
                         } else if BookingWritePatch.isRefusedFinal(error, isCreate: write.changedFields == nil) {
                             // Tombstoned (deleted elsewhere) or cancelled by someone who may reinstate it.
@@ -770,6 +777,8 @@ class BookingStore: ObservableObject {
                 } else {
                     errorMessage = nil
                     print("🔥🔥🔥 DEBUG: Successfully saved \(writes.count) bookings to Firebase")
+                    ScheduleChangeNotifier.postBookingStoreDidChange()
+                    return true
                 }
             } else {
                 print("🔥🔥🔥 DEBUG: Saved \(bookings.count) bookings locally (Firebase not available or not authenticated)")
@@ -779,7 +788,8 @@ class BookingStore: ObservableObject {
                             write.booking,
                             changedFields: write.changedFields,
                             organizationId: organizationId,
-                            baselineFingerprint: write.baselineFingerprint
+                            baselineFingerprint: write.baselineFingerprint,
+                            previous: write.previous
                         )
                     }
                 }
@@ -788,6 +798,7 @@ class BookingStore: ObservableObject {
             errorMessage = "Failed to save data: \(error.localizedDescription)"
         }
         ScheduleChangeNotifier.postBookingStoreDidChange()
+        return false
     }
 
     func discardInMemoryForOrganizationSwitch() {
