@@ -7563,7 +7563,13 @@ class FirebaseBackend: ObservableObject {
     /// only what differs is written with `updateData`; `bookedBy` is never rewritten. An edit of a booking that is
     /// gone is refused as not-found (`bookingReplayRefusedIsFinal`), never turned into a create.
     /// Both carry `WriteMetadata`. A tombstoned or (for non-managers) cancelled booking is refused by the rules.
-    func saveBooking(_ booking: Booking, organizationId: String, changedFields: Set<String>? = nil) async throws {
+    /// 1.33.1: `ackTimeoutSeconds` bounds the wait for the server's confirmation (`FirestoreWriteAck`).
+    func saveBooking(
+        _ booking: Booking,
+        organizationId: String,
+        changedFields: Set<String>? = nil,
+        ackTimeoutSeconds: Double = FirestoreWriteAck.defaultTimeoutSeconds
+    ) async throws {
         print("🔥🔥🔥 DEBUG: saveBooking called with organizationId: \(organizationId), bookingId: \(booking.id.uuidString)")
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         let ref = db.collection("organizations").document(orgId).collection("bookings").document(booking.documentKey)
@@ -7582,28 +7588,35 @@ class FirebaseBackend: ObservableObject {
                 fields: fields
             )
             guard !next.isEmpty else { return }
-            // 1.33.1 review item 3: the server read is bounded too. On a weak signal it never answered and Edit booking
-            // kept spinning. A timeout throws `ReadTimedOut` (nothing handed to Firestore), so the store queues this as
-            // an ordinary offline edit — still only these fields, still refused on replay when the booking is gone
-            // (`editOfMissingDocumentIsRefused` / `bookingReplayRefusedIsFinal`); never a create.
-            let snapshot = try await Self.boundedServerRead(ref)
-            guard snapshot.exists, let stored = snapshot.data() else {
+            // 1.33.1: the read before an edit is bounded, and reads the local cache when this device has a write to this
+            // booking Firestore has not delivered yet (`readBeforeEdit`). Only a server answer of "not there" refuses
+            // the edit (`editOfMissingDocumentIsRefused` / `bookingReplayRefusedIsFinal`, code 5); never a create.
+            let read = try await Self.readBeforeEdit(ref)
+            if let snapshot = read.snapshot, snapshot.exists, let stored = snapshot.data() {
+                guard let write = CanonicalBusinessEngine.bookingUpdateWrite(before: stored, next: next) else {
+                    throw CanonicalWriteUnavailableError(function: "bookingUpdateWriteFields")
+                }
+                let patch = write.firestoreFields(from: next)
+                guard !patch.isEmpty else { return }
+                print("🔥🔥🔥 DEBUG: Updating booking fields \(patch.keys.sorted()) at organizations/\(orgId)/bookings/\(booking.documentKey)")
+                // 1.33.1: bounded wait for the server's confirmation (`FirestoreWriteAck`); the write itself is unchanged.
+                let stamped = WriteMetadata.stamped(patch, userId: uid)
+                try await FirestoreWriteAck.run(timeoutSeconds: ackTimeoutSeconds, pendingKey: ref.path) { try await ref.updateData(stamped) }
+                return
+            }
+            switch FirestoreWriteAck.editReadOutcome(answeredByServer: read.answeredByServer, exists: false) {
+            case .refuseMissing:
                 throw NSError(
                     domain: "FIRFirestoreErrorDomain",
                     code: 5,
                     userInfo: [NSLocalizedDescriptionKey: CanonicalBusinessEngine.bookingReplayRefusedMessage]
                 )
+            case .writeUnchecked, .diffAgainstStored:
+                // Only the edited fields, with `updateData` (fails on the server if the booking is really gone).
+                let stamped = WriteMetadata.stamped(next, userId: uid)
+                try await FirestoreWriteAck.run(timeoutSeconds: ackTimeoutSeconds, pendingKey: ref.path) { try await ref.updateData(stamped) }
+                return
             }
-            guard let write = CanonicalBusinessEngine.bookingUpdateWrite(before: stored, next: next) else {
-                throw CanonicalWriteUnavailableError(function: "bookingUpdateWriteFields")
-            }
-            let patch = write.firestoreFields(from: next)
-            guard !patch.isEmpty else { return }
-            print("🔥🔥🔥 DEBUG: Updating booking fields \(patch.keys.sorted()) at organizations/\(orgId)/bookings/\(booking.documentKey)")
-            // 1.33.1: bounded wait for the server's confirmation (`FirestoreWriteAck`); the write itself is unchanged.
-            let stamped = WriteMetadata.stamped(patch, userId: uid)
-            try await FirestoreWriteAck.run { try await ref.updateData(stamped) }
-            return
         }
 
         var bookingData = BookingWritePatch.labourValues(booking, deletesClearedFields: false)
@@ -7614,13 +7627,13 @@ class FirebaseBackend: ObservableObject {
 
         // 1.33.1: bounded wait for the server's confirmation (`FirestoreWriteAck`); the write itself is unchanged.
         let stampedCreate = WriteMetadata.stamped(bookingData, userId: uid)
-        try await FirestoreWriteAck.run { try await ref.setData(stampedCreate, merge: true) }
+        try await FirestoreWriteAck.run(timeoutSeconds: ackTimeoutSeconds, pendingKey: ref.path) { try await ref.setData(stampedCreate, merge: true) }
 
         print("🔥🔥🔥 DEBUG: Booking saved successfully to Firebase")
     }
     
     /// 1.33.1: `getDocument(source: .server)` that gives up after `FirestoreWriteAck.defaultTimeoutSeconds` with
-    /// `FirestoreWriteAck.ReadTimedOut` (a network problem, so the caller queues; nothing was written).
+    /// `FirestoreWriteAck.ReadTimedOut` (nothing was written; `readBeforeEdit` then reads the local cache).
     static func boundedServerRead(
         _ ref: DocumentReference,
         timeoutSeconds: Double = FirestoreWriteAck.defaultTimeoutSeconds
@@ -7633,15 +7646,20 @@ class FirebaseBackend: ObservableObject {
         return snapshot
     }
 
-    /// Whether a booking document is on the server now (a bounded server read). Used before replaying a create that
-    /// Firestore may already have delivered (1.33.1 review items 1, 5).
-    func bookingDocumentExistsOnServer(collection: String, documentId: String, organizationId: String) async throws -> Bool {
-        // The same document the replayed create would write (`saveBooking` / `saveManagerSiteBooking`).
-        let orgId = collection == "bookings"
-            ? try await resolveWritableOrganizationId(preferred: organizationId)
-            : organizationId
-        let ref = db.collection("organizations").document(orgId).collection(collection).document(documentId)
-        return try await Self.boundedServerRead(ref).exists
+    /// 1.33.1: the stored copy an edit is compared with. When this device has a write to the document Firestore has
+    /// not delivered yet (`SDKPendingWrites`), the local cache (which includes it); otherwise a bounded server read, and
+    /// the local cache when that read times out. `answeredByServer` is true only for a server answer.
+    static func readBeforeEdit(_ ref: DocumentReference) async throws -> (snapshot: DocumentSnapshot?, answeredByServer: Bool) {
+        switch FirestoreWriteAck.editReadSource(pendingOnThisDevice: SDKPendingWrites.shared.contains(path: ref.path)) {
+        case .localCache:
+            return (try? await ref.getDocument(source: .cache), false)
+        case .server:
+            do {
+                return (try await boundedServerRead(ref), true)
+            } catch is FirestoreWriteAck.ReadTimedOut {
+                return (try? await ref.getDocument(source: .cache), false)
+            }
+        }
     }
 
     /// Earlier of the warning-scan start and the current week. Launch does not subscribe to older bookings.
@@ -8029,19 +8047,11 @@ class FirebaseBackend: ObservableObject {
             // `createdAt` or `organizationId`. An edit of a booking gone from the server is refused
             // (`editOfMissingDocumentIsRefused`), never re-created. Without a server read, the patch is sent with
             // `updateData` (which fails on a missing document).
-            // 1.33.1 review item 3: bounded, so a read that never answers falls back to `updateData` below (which
-            // fails on a missing document) instead of spinning.
-            if let snapshot = try? await Self.boundedServerRead(ref) {
-                guard snapshot.exists, let stored = snapshot.data() else {
-                    if CanonicalBusinessEngine.editOfMissingDocumentIsRefused(isCreate: false, exists: false) ?? true {
-                        throw NSError(
-                            domain: "FIRFirestoreErrorDomain",
-                            code: 5,
-                            userInfo: [NSLocalizedDescriptionKey: CanonicalBusinessEngine.editOfMissingDocumentMessage]
-                        )
-                    }
-                    return
-                }
+            // 1.33.1: as `saveBooking` (`readBeforeEdit`): bounded, the local cache while this device's write to it is
+            // still on its way, and only a server "not there" refuses. Otherwise (a read that failed too) the patch goes
+            // with `updateData`, as before.
+            let read = (try? await Self.readBeforeEdit(ref)) ?? (snapshot: nil, answeredByServer: false)
+            if let snapshot = read.snapshot, snapshot.exists, let stored = snapshot.data() {
                 var next = stored
                 for (key, value) in patch { next[key] = value }
                 guard let write = CanonicalBusinessEngine.managerSiteBookingUpdateWriteFields(before: stored, next: next) else {
@@ -8052,11 +8062,21 @@ class FirebaseBackend: ObservableObject {
                 guard !changes.isEmpty else { return }
                 // 1.33.1: bounded wait for the server's confirmation (`FirestoreWriteAck`); the write is unchanged.
                 let stampedChanges = WriteMetadata.stamped(changes, userId: uid)
-                try await FirestoreWriteAck.run { try await ref.updateData(stampedChanges) }
+                try await FirestoreWriteAck.run(pendingKey: ref.path) { try await ref.updateData(stampedChanges) }
+                return
+            }
+            if FirestoreWriteAck.editReadOutcome(answeredByServer: read.answeredByServer, exists: false) == .refuseMissing {
+                if CanonicalBusinessEngine.editOfMissingDocumentIsRefused(isCreate: false, exists: false) ?? true {
+                    throw NSError(
+                        domain: "FIRFirestoreErrorDomain",
+                        code: 5,
+                        userInfo: [NSLocalizedDescriptionKey: CanonicalBusinessEngine.editOfMissingDocumentMessage]
+                    )
+                }
                 return
             }
             let stampedPatch = WriteMetadata.stamped(patch, userId: uid)
-            try await FirestoreWriteAck.run { try await ref.updateData(stampedPatch) }
+            try await FirestoreWriteAck.run(pendingKey: ref.path) { try await ref.updateData(stampedPatch) }
             return
         }
         var data = BookingWritePatch.managerValues(booking, deletesClearedFields: false)
@@ -8064,7 +8084,7 @@ class FirebaseBackend: ObservableObject {
         data["organizationId"] = organizationId
         data["createdAt"] = Timestamp(date: booking.createdAt)
         let stampedCreate = WriteMetadata.stamped(data, userId: uid)
-        try await FirestoreWriteAck.run { try await ref.setData(stampedCreate, merge: true) }
+        try await FirestoreWriteAck.run(pendingKey: ref.path) { try await ref.setData(stampedCreate, merge: true) }
     }
 
     func loadManagerSiteBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [ManagerSiteBooking] {

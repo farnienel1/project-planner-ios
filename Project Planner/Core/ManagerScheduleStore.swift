@@ -288,15 +288,13 @@ class ManagerScheduleStore: ObservableObject {
             if let previous { OvertimeReopenNotice.managerSite(before: previous, after: normalizedBooking) }
             loadData(force: true)
         } catch {
-            if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
-                // 1.33.1: a timed-out write is already with Firestore (`sentToServer`): a later offline delete queues a
-                // real delete with its tombstone, and the replay never rewrites a create that has landed.
+            if FirestoreWriteAck.isPendingInSDK(error) {
+                // 1.33.1: the server did not confirm in time. Firestore holds the write and delivers it (later writes to
+                // this booking go after it): Pending sync, and never a second copy in the app outbox.
+                errorMessage = BookingStore.pendingSyncMessage
+            } else if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
                 OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(
-                    normalizedBooking,
-                    changedFields: changedFields,
-                    organizationId: orgId,
-                    baselineFingerprint: baseline,
-                    sentToServer: FirestoreWriteAck.wasHandedToServer(error)
+                    normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline
                 )
                 errorMessage = "Saved locally. Will sync when you're back online."
             } else if BookingWritePatch.isRefusedFinal(error) {
@@ -332,14 +330,33 @@ class ManagerScheduleStore: ObservableObject {
         ScheduleChangeNotifier.postBookingStoreDidChange()
         warnIfOnSignedTimesheet(booking, organizationId: orgId)
 
-        if OfflinePolicy.queuesWhileOffline(action, isOnline: smartCache?.isOnline ?? true) {
+        // 1.33.1: a booking whose create is still in Firestore's queue is deleted through Firestore (after it), never
+        // through the app outbox (`BookingStore.deleteRoute`).
+        let pendingInFirestore = SDKPendingWrites.shared.contains(collection: "managerSiteBookings", documentId: booking.documentKey)
+        if BookingStore.deleteRoute(
+            queuesWhileOffline: OfflinePolicy.queuesWhileOffline(action, isOnline: smartCache?.isOnline ?? true),
+            pendingInFirestore: pendingInFirestore
+        ) == .outbox {
             OfflineOutboxStore.shared.enqueueDeleteManagerSiteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
             return
         }
 
         do {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
-            try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
+            if pendingInFirestore {
+                // Bounded: a delete not confirmed in time is still with Firestore (Pending sync).
+                do {
+                    try await FirestoreWriteAck.run(
+                        pendingKey: SDKPendingWrites.key(organizationId: orgId, collection: "managerSiteBookings", documentId: booking.documentKey)
+                    ) {
+                        try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
+                    }
+                } catch is FirestoreWriteAck.TimedOut {
+                    print("🔥🔥🔥 DEBUG: Manager schedule delete of \(booking.documentKey) is with Firestore, pending sync")
+                }
+            } else {
+                try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
+            }
             // RULEBOOK 1.33.0 §25 reopen (best effort, after the delete).
             OvertimeReopenNotice.managerSite(before: booking, after: nil)
             loadData(force: true)

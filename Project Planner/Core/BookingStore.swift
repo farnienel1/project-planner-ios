@@ -314,8 +314,15 @@ class BookingStore: ObservableObject {
     /// `addBookings`, returning each booking's outcome by id (1.33.1). A booking refused before anything is written
     /// (`writeRefusal`) is `.refused` with that message.
     @discardableResult
-    private func addBookingsReturningResults(_ newBookings: [Booking]) async -> [UUID: BookingSaveResult] {
+    private func addBookingsReturningResults(
+        _ newBookings: [Booking],
+        organizationId capturedOrganizationId: String? = nil
+    ) async -> [UUID: BookingSaveResult] {
         guard !newBookings.isEmpty else { return [:] }
+        if let refusal = organizationChangedRefusal(capturedOrganizationId) {
+            errorMessage = refusal
+            return Dictionary(newBookings.map { ($0.id, BookingSaveResult.refused(refusal)) }, uniquingKeysWith: { first, _ in first })
+        }
         // RULEBOOK §1: organisation-zone midnight of each booking's day (`BookingDay`).
         let newBookings = newBookings.map { booking -> Booking in
             var booking = booking
@@ -327,7 +334,10 @@ class BookingStore: ObservableObject {
             return Dictionary(newBookings.map { ($0.id, BookingSaveResult.refused(refusal)) }, uniquingKeysWith: { first, _ in first })
         }
         bookings.append(contentsOf: newBookings)
-        return await saveData(writes: newBookings.map { BookingWrite(booking: $0, changedFields: nil) })
+        return await saveData(
+            writes: newBookings.map { BookingWrite(booking: $0, changedFields: nil) },
+            organizationId: capturedOrganizationId
+        )
     }
     
     /// Saves only the fields that changed against the copy on this device (RULEBOOK §1 partial writes).
@@ -337,7 +347,14 @@ class BookingStore: ObservableObject {
 
     /// `updateBooking`, returning what happened to this edit (1.33.1). An edit that changes nothing is `.saved`.
     @discardableResult
-    private func updateBookingReturningResult(_ booking: Booking) async -> BookingSaveResult {
+    private func updateBookingReturningResult(
+        _ booking: Booking,
+        organizationId capturedOrganizationId: String? = nil
+    ) async -> BookingSaveResult {
+        if let refusal = organizationChangedRefusal(capturedOrganizationId) {
+            errorMessage = refusal
+            return .refused(refusal)
+        }
         var booking = booking
         booking.date = BookingDay.organizationMidnight(for: booking.date)
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
@@ -352,7 +369,10 @@ class BookingStore: ObservableObject {
             let before = bookings[index]
             let baseline = changed.isEmpty ? nil : BookingWritePatch.deleteFingerprint(before)
             bookings[index] = booking
-            let results = await saveData(writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline)])
+            let results = await saveData(
+                writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline)],
+                organizationId: capturedOrganizationId
+            )
             // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the write).
             if !changed.isEmpty { OvertimeReopenNotice.labour(before: before, after: booking) }
             return results[booking.id] ?? .saved
@@ -365,21 +385,57 @@ class BookingStore: ObservableObject {
     /// `updateBooking`, then this edit's own outcome: saved, queued as Pending sync, or refused (1.33.1). Read from
     /// the write itself, never from the store's `errorMessage`, which an earlier load or save may have left (Scheduling
     /// read a stale one as a failed edit, and a timed-out edit that was queued as "not saved").
-    func updateBookingReportingProblem(_ booking: Booking) async -> BookingSaveResult {
+    /// `organizationId`: the organisation the screen captured when Save was pressed. Every write of this save goes
+    /// there, and nothing is written once another organisation is open (`organizationChanged`).
+    func updateBookingReportingProblem(_ booking: Booking, organizationId: String? = nil) async -> BookingSaveResult {
         errorMessage = nil
-        return await updateBookingReturningResult(booking)
+        return await updateBookingReturningResult(booking, organizationId: organizationId)
     }
 
     /// `addBookings`, then each new booking's own outcome by id (1.33.1): a booking is counted as saved only once its
     /// write is known, never before.
-    func addBookingsReportingProblem(_ newBookings: [Booking]) async -> [UUID: BookingSaveResult] {
+    func addBookingsReportingProblem(_ newBookings: [Booking], organizationId: String? = nil) async -> [UUID: BookingSaveResult] {
         errorMessage = nil
-        return await addBookingsReturningResults(newBookings)
+        return await addBookingsReturningResults(newBookings, organizationId: organizationId)
     }
 
-    /// RULEBOOK §2 "Pending sync": this booking has a change in the outbox the server has not confirmed.
+    /// Shown when the organisation changed between Save and the write (1.33.1): nothing is written.
+    static let organizationChangedMessage = "You switched company while saving. Nothing was saved — open the booking again."
+
+    /// True when a save captured one organisation and another is open now (ids compare as stored, normalised).
+    static func organizationChanged(captured: String?, open: String?) -> Bool {
+        guard let captured, let open else { return false }
+        let a = normalizedOrganizationId(captured)
+        let b = normalizedOrganizationId(open)
+        return !a.isEmpty && !b.isEmpty && a != b
+    }
+
+    private func organizationChangedRefusal(_ captured: String?) -> String? {
+        Self.organizationChanged(captured: captured, open: firebaseBackend?.resolvedOrganizationIdForOfflineWrites())
+            ? Self.organizationChangedMessage
+            : nil
+    }
+
+    /// RULEBOOK §2 "Pending sync": this booking has a change the server has not confirmed — in the app outbox, or
+    /// (1.33.1) in Firestore's own queue after its confirmation wait timed out (`SDKPendingWrites`).
     func isPendingSync(_ booking: Booking) -> Bool {
         OfflineOutboxStore.shared.hasPendingSync(bookingId: booking.id)
+            || SDKPendingWrites.shared.contains(collection: "bookings", documentId: booking.documentKey)
+    }
+
+    /// How a delete is written (1.33.1).
+    enum DeleteRoute: Equatable {
+        /// Through Firestore now: the delete and its tombstone in one batch. Firestore writes it after any earlier write
+        /// to the booking it still holds (a create whose confirmation timed out), so it is never decided before that
+        /// create lands and never dropped locally.
+        case firestore
+        /// Queued in the app outbox (RULEBOOK 1.33.0 §2 offline delete; `dropLocal` for a create queued offline).
+        case outbox
+    }
+
+    static func deleteRoute(queuesWhileOffline: Bool, pendingInFirestore: Bool) -> DeleteRoute {
+        if pendingInFirestore { return .firestore }
+        return queuesWhileOffline ? .outbox : .firestore
     }
 
     /// A queued save the server refused for good (tombstone / cancelled elsewhere): the row goes.
@@ -464,14 +520,32 @@ class BookingStore: ObservableObject {
         guard let orgId else { return }
 
         warnIfOnSignedTimesheet(booking, organizationId: orgId)
-        if OfflinePolicy.queuesWhileOffline(action, isOnline: smartCache?.isOnline ?? true) {
+        let pendingInFirestore = SDKPendingWrites.shared.contains(collection: "bookings", documentId: booking.documentKey)
+        if Self.deleteRoute(
+            queuesWhileOffline: OfflinePolicy.queuesWhileOffline(action, isOnline: smartCache?.isOnline ?? true),
+            pendingInFirestore: pendingInFirestore
+        ) == .outbox {
             OfflineOutboxStore.shared.enqueueDeleteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
             return
         }
 
         do {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
-            try await fb.deleteBooking(booking, organizationId: orgId)
+            if pendingInFirestore {
+                // 1.33.1: its create is still on its way in Firestore's queue; the delete goes after it. Bounded, so
+                // the screen never waits for ever: a delete not confirmed in time is still with Firestore.
+                do {
+                    try await FirestoreWriteAck.run(
+                        pendingKey: SDKPendingWrites.key(organizationId: orgId, collection: "bookings", documentId: booking.documentKey)
+                    ) {
+                        try await fb.deleteBooking(booking, organizationId: orgId)
+                    }
+                } catch is FirestoreWriteAck.TimedOut {
+                    print("🔥🔥🔥 DEBUG: Delete of \(booking.documentKey) is with Firestore, pending sync")
+                }
+            } else {
+                try await fb.deleteBooking(booking, organizationId: orgId)
+            }
             // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the delete).
             OvertimeReopenNotice.labour(before: booking, after: nil)
         } catch {
@@ -714,19 +788,79 @@ class BookingStore: ObservableObject {
         var baselineFingerprint: String? = nil
     }
 
-    /// "Pending sync" wording for a write queued because the server did not confirm it in time (1.33.1).
+    /// "Pending sync" wording for a write kept on this phone that the server has not confirmed yet (1.33.1).
     static let pendingSyncMessage = "Saved on this phone. Pending sync — it will sync when the connection recovers."
 
-    /// When a write's bounded wait last timed out; writes soon after go straight to the outbox (1.33.1 review item 2).
-    private var lastAckTimeout: Date?
+    /// What `performWrites` did with one save's writes.
+    struct WriteRun {
+        var results: [UUID: BookingSaveResult] = [:]
+        var refusedIds = Set<UUID>()
+        var refusalMessage: String?
+        /// Kept on this phone, not yet confirmed (Firestore's queue, or the app outbox).
+        var pendingCount = 0
+    }
+
+    /// 1.33.1: writes each booking in order through `write` and reports each one's outcome.
+    /// - Confirmed: `.saved`.
+    /// - The server did not confirm in time (`FirestoreWriteAck.TimedOut`): Firestore already holds the write and
+    ///   delivers it (later writes to the same booking go after it), so it is `.queued` as Pending sync and **not** put
+    ///   in the app outbox — a second copy there was sent twice.
+    /// - A network failure before anything was handed to Firestore: queued in the app outbox as before (§2).
+    /// - Refused: `.refused` with the rulebook's message for a final refusal (`bookingReplayRefusedIsFinal`).
+    /// Every outbox entry uses `organizationId`, the organisation this save captured, never the one open now.
+    /// `write` gets the confirmation wait for that write: the full `FirestoreWriteAck.defaultTimeoutSeconds` until one
+    /// write of this save times out, then `afterTimeoutAckSeconds`, so a group save on a weak signal never waits 15 s
+    /// per booking (the later writes are still handed to Firestore in order and reported Pending sync).
+    static let afterTimeoutAckSeconds: Double = 1
+
+    static func performWrites(
+        _ writes: [BookingWrite],
+        organizationId: String,
+        isOnline: Bool,
+        write: (BookingWrite, _ ackTimeoutSeconds: Double) async throws -> Void
+    ) async -> WriteRun {
+        var run = WriteRun()
+        var ackTimeout = FirestoreWriteAck.defaultTimeoutSeconds
+        for item in writes {
+            do {
+                try await write(item, ackTimeout)
+                run.results[item.booking.id] = .saved
+            } catch {
+                if FirestoreWriteAck.isPendingInSDK(error) {
+                    ackTimeout = afterTimeoutAckSeconds
+                    run.pendingCount += 1
+                    run.results[item.booking.id] = .queued(pendingSyncMessage)
+                } else if OfflineWriteSupport.shouldQueue(error: error, isOnline: isOnline) {
+                    OfflineOutboxStore.shared.enqueueSaveBooking(
+                        item.booking,
+                        changedFields: item.changedFields,
+                        organizationId: organizationId,
+                        baselineFingerprint: item.baselineFingerprint
+                    )
+                    run.pendingCount += 1
+                    run.results[item.booking.id] = .queued(pendingSyncMessage)
+                } else if BookingWritePatch.isRefusedFinal(error, isCreate: item.changedFields == nil) {
+                    // Tombstoned (deleted elsewhere) or cancelled by someone who may reinstate it.
+                    run.refusedIds.insert(item.booking.id)
+                    run.results[item.booking.id] = .refused(CanonicalBusinessEngine.bookingReplayRefusedMessage)
+                } else {
+                    let message = error.localizedDescription
+                    run.refusalMessage = run.refusalMessage ?? message
+                    run.refusedIds.insert(item.booking.id)
+                    run.results[item.booking.id] = .refused(message)
+                }
+                print("🔥🔥🔥 DEBUG: Booking write \(item.booking.id.uuidString) not confirmed: \(error)")
+            }
+        }
+        return run
+    }
 
     /// Saves the list on this device, then writes only `writes` to Firestore (RULEBOOK §1 partial writes).
     /// Offline, each write goes to the outbox with its changed fields and shows "Pending sync" (§2).
-    /// 1.33.1: returns what happened to each write (saved, queued as Pending sync, or refused), so a screen reports
-    /// this save's own outcome. Once one write's bounded wait times out (`FirestoreWriteAck`), the rest — and writes for
-    /// the next `FirestoreWriteAck.skipWaitWindowSeconds` — go to the outbox in the same order without waiting again.
+    /// 1.33.1: returns what happened to each write (saved, Pending sync, or refused), so a screen reports this save's
+    /// own outcome (`performWrites`). The organisation is read once, at the start, and used for every write.
     @discardableResult
-    private func saveData(writes: [BookingWrite] = []) async -> [UUID: BookingSaveResult] {
+    private func saveData(writes: [BookingWrite] = [], organizationId capturedOrganizationId: String? = nil) async -> [UUID: BookingSaveResult] {
         var results: [UUID: BookingSaveResult] = [:]
         do {
             // Save to local storage
@@ -738,10 +872,16 @@ class BookingStore: ObservableObject {
                 return results
             }
 
-            let organizationId = await DataPersistenceManager.shared.waitForOrganization(
-                firebaseBackend: firebaseBackend,
-                maxWaitSeconds: smartCache?.isOnline == false ? 1 : 10
-            ) ?? firebaseBackend?.resolvedOrganizationIdForOfflineWrites()
+            let resolvedOrganizationId: String?
+            if let capturedOrganizationId {
+                resolvedOrganizationId = capturedOrganizationId
+            } else {
+                resolvedOrganizationId = await DataPersistenceManager.shared.waitForOrganization(
+                    firebaseBackend: firebaseBackend,
+                    maxWaitSeconds: smartCache?.isOnline == false ? 1 : 10
+                ) ?? firebaseBackend?.resolvedOrganizationIdForOfflineWrites()
+            }
+            let organizationId = resolvedOrganizationId
 
             if smartCache?.isOnline == false {
                 if let organizationId {
@@ -768,85 +908,40 @@ class BookingStore: ObservableObject {
 
                 print("🔥🔥🔥 DEBUG: Saving bookings to Firebase for organization: \(organizationId)")
 
-                var failedCount = 0
-                var refusedIds = Set<UUID>()
-                var refusalMessage: String?
-                for write in writes {
-                    // 1.33.1 review item 2: after a timeout, queue without waiting (same order, same content).
-                    if FirestoreWriteAck.skipsWait(lastTimeout: lastAckTimeout),
-                       let orgId = firebaseBackend.resolvedOrganizationIdForOfflineWrites() {
-                        failedCount += 1
-                        OfflineOutboxStore.shared.enqueueSaveBooking(
-                            write.booking,
-                            changedFields: write.changedFields,
-                            organizationId: orgId,
-                            baselineFingerprint: write.baselineFingerprint
-                        )
-                        results[write.booking.id] = .queued(Self.pendingSyncMessage)
-                        continue
-                    }
-                    do {
-                        try await firebaseBackend.saveBooking(
-                            write.booking,
-                            organizationId: organizationId,
-                            changedFields: write.changedFields
-                        )
-                        lastAckTimeout = nil
-                        results[write.booking.id] = .saved
-                    } catch {
-                        failedCount += 1
-                        let handedOver = FirestoreWriteAck.wasHandedToServer(error)
-                        if handedOver || error is FirestoreWriteAck.ReadTimedOut {
-                            lastAckTimeout = Date()
-                        }
-                        if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
-                           let orgId = firebaseBackend.resolvedOrganizationIdForOfflineWrites() {
-                            OfflineOutboxStore.shared.enqueueSaveBooking(
-                                write.booking,
-                                changedFields: write.changedFields,
-                                organizationId: orgId,
-                                baselineFingerprint: write.baselineFingerprint,
-                                sentToServer: handedOver
-                            )
-                            results[write.booking.id] = .queued(Self.pendingSyncMessage)
-                        } else if BookingWritePatch.isRefusedFinal(error, isCreate: write.changedFields == nil) {
-                            // Tombstoned (deleted elsewhere) or cancelled by someone who may reinstate it.
-                            refusedIds.insert(write.booking.id)
-                            results[write.booking.id] = .refused(CanonicalBusinessEngine.bookingReplayRefusedMessage)
-                        } else {
-                            let message = error.localizedDescription
-                            refusalMessage = refusalMessage ?? message
-                            refusedIds.insert(write.booking.id)
-                            results[write.booking.id] = .refused(message)
-                        }
-                        print("🔥🔥🔥 DEBUG: Error saving booking \(write.booking.id.uuidString): \(error)")
-                    }
+                let run = await Self.performWrites(
+                    writes,
+                    organizationId: organizationId,
+                    isOnline: smartCache?.isOnline ?? true
+                ) { write, ackTimeout in
+                    try await firebaseBackend.saveBooking(
+                        write.booking,
+                        organizationId: organizationId,
+                        changedFields: write.changedFields,
+                        ackTimeoutSeconds: ackTimeout
+                    )
                 }
+                results = run.results
 
-                if !refusedIds.isEmpty {
+                if !run.refusedIds.isEmpty {
                     // A refused create is never on the server: drop it. A refused edit comes back from the
                     // listener with the server's values.
-                    let refusedCreates = Set(writes.filter { $0.changedFields == nil && refusedIds.contains($0.booking.id) }.map(\.booking.id))
+                    let refusedCreates = Set(writes.filter { $0.changedFields == nil && run.refusedIds.contains($0.booking.id) }.map(\.booking.id))
                     if !refusedCreates.isEmpty {
                         bookings.removeAll { refusedCreates.contains($0.id) }
                         smartCache?.cacheBookings(bookings)
                         try? await persistenceService.saveBookingData(bookings: bookings)
                     }
-                    errorMessage = refusalMessage ?? CanonicalBusinessEngine.bookingReplayRefusedMessage
-                } else if failedCount > 0 {
-                    if OfflineOutboxStore.shared.pendingCount > 0 {
-                        errorMessage = "Some bookings saved locally and will sync when you're back online."
-                    } else {
-                        errorMessage = "Some bookings could not be synced to cloud (\(failedCount))."
-                    }
-                    print("🔥🔥🔥 DEBUG: Saved \(writes.count - failedCount)/\(writes.count) bookings to Firebase")
+                    errorMessage = run.refusalMessage ?? CanonicalBusinessEngine.bookingReplayRefusedMessage
+                } else if run.pendingCount > 0 {
+                    errorMessage = "Some bookings saved on this phone and will sync when the connection recovers."
+                    print("🔥🔥🔥 DEBUG: Saved \(writes.count - run.pendingCount)/\(writes.count) bookings to Firebase; the rest are pending sync")
                 } else {
                     errorMessage = nil
                     print("🔥🔥🔥 DEBUG: Successfully saved \(writes.count) bookings to Firebase")
                 }
             } else {
                 print("🔥🔥🔥 DEBUG: Saved \(bookings.count) bookings locally (Firebase not available or not authenticated)")
-                if let organizationId = firebaseBackend?.resolvedOrganizationIdForOfflineWrites() {
+                if let organizationId {
                     for write in writes {
                         OfflineOutboxStore.shared.enqueueSaveBooking(
                             write.booking,
