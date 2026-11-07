@@ -3593,7 +3593,7 @@ class UserStore: ObservableObject {
             // The person's own row only (`operativeRow(for:)`, `personDedupeKey`): an empty email (a ghost, RULEBOOK
             // 1.34.0) never matches the first no-email row, so a ghost's rate, trade and active flag never land on
             // another person's row. A ghost reaches only the row kept under its own id (converted ghosts).
-            guard let row = Self.syncTargetOperativeRow(for: user, in: operativeStore.allOperatives),
+            guard let row = Self.syncTargetOperativeRow(for: user, in: operativeStore.operatives),
                   let idx = operativeStore.operatives.firstIndex(where: { $0.documentId == row.documentId })
             else { continue }
             var op = operativeStore.operatives[idx]

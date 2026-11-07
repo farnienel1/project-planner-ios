@@ -1476,7 +1476,8 @@ struct OperativeAnnualLeaveCalendarView: View {
             return
         }
         let managerName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
-        if let ownerId = booking.userId ?? person.userId {
+        // A ghost has no app login and no inbox (RULEBOOK 1.34.0), as for a slot change above.
+        if leaveProfileUser?.isGhost != true, let ownerId = booking.userId ?? person.userId {
             await notificationService.notifyAnnualLeaveCancelledByManager(
                 userId: ownerId,
                 booking: booking,
