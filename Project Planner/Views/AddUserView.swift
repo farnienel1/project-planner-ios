@@ -84,7 +84,7 @@ struct AddUserView: View {
     private var finalReviewStep: Int { totalSteps }
     
     /// `startAsGhost`: opened from a "new operative" way in (Home, Operatives) with the Ghost account toggle on —
-    /// the toggle still shows only when `canCreateGhost` allows it.
+    /// the toggle still shows only when `ghostToggleVisible` allows it (`canCreateGhost` and the `ghostAccounts` switch).
     init(mode: AddUserMode = .admin, startAsGhost: Bool = false) {
         self.mode = mode
         if mode == .managerAddingOperative || startAsGhost {
@@ -100,12 +100,27 @@ struct AddUserView: View {
         GhostRulebook.canCreateGhost(userStore.currentUser)
     }
 
-    /// True while the toggle is on and the adder may add a ghost (`ghostAddFormRows` decides the same).
-    private var ghostMode: Bool { isGhost && canCreateGhost }
+    /// RULEBOOK 1.34.0 §18, owner decision 7 Nov "1b": the `platformConfig/app` switch `ghostAccounts` for the open
+    /// organisation (`ghostAccountsEnabled`), kept fresh by `ghostAccountsSwitchDidChange`. Off until the platform
+    /// owner turns it on after the iPhone 1.34 update is out, so the toggle stays hidden (existing ghosts unaffected).
+    @State private var ghostAccountsSwitchOn = SecuritySwitchContext.ghostAccounts
 
-    /// `ghostAddFormRows({ ghost, canCreateGhost })`.
+    /// `ghostToggleVisible({ canCreateGhost, ghostAccountsEnabled })`: the permission and the switch.
+    private var ghostToggleShown: Bool {
+        CanonicalBusinessEngine.ghostToggleVisible(canCreateGhost: canCreateGhost, ghostAccountsEnabled: ghostAccountsSwitchOn)
+    }
+
+    /// True while the toggle is on and shown (`ghostAddFormRows` decides the same). With the switch off a ghost flag
+    /// left on by `startAsGhost` never turns the form into the ghost form.
+    private var ghostMode: Bool { isGhost && ghostToggleShown }
+
+    /// `ghostAddFormRows({ ghost, canCreateGhost, ghostAccountsEnabled })`.
     private var ghostFormRows: [RulebookGhostFormRow] {
-        CanonicalBusinessEngine.ghostAddFormRows(ghost: isGhost, canCreateGhost: canCreateGhost) ?? []
+        CanonicalBusinessEngine.ghostAddFormRows(
+            ghost: isGhost,
+            canCreateGhost: canCreateGhost,
+            ghostAccountsEnabled: ghostAccountsSwitchOn
+        ) ?? []
     }
 
     /// Whether a form field shows. With no answer from the script every field shows except the toggle.
@@ -157,8 +172,15 @@ struct AddUserView: View {
     }
 
     /// The Ghost account toggle with its small expandable explanation (spec: the very top of Add user, operative).
-    @ViewBuilder
     private var ghostToggleCard: some View {
+        ghostToggleCardContent
+            .onReceive(NotificationCenter.default.publisher(for: .ghostAccountsSwitchDidChange)) { _ in
+                ghostAccountsSwitchOn = SecuritySwitchContext.ghostAccounts
+            }
+    }
+
+    @ViewBuilder
+    private var ghostToggleCardContent: some View {
         if formFieldVisible("ghostToggle") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {

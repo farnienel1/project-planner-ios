@@ -16,6 +16,9 @@ import FirebaseAuth
 extension Notification.Name {
     /// A security switch changed for the open organisation (`securitySwitches`): pay reads and the read plans re-plan.
     static let securitySwitchesDidChange = Notification.Name("securitySwitchesDidChange")
+    /// The `ghostAccounts` switch changed for the open organisation (RULEBOOK 1.34.0 §18, owner decision 7 Nov "1b"):
+    /// Add user shows or hides the Ghost account toggle.
+    static let ghostAccountsSwitchDidChange = Notification.Name("ghostAccountsSwitchDidChange")
     /// The live roster (`RulebookRosterSnapshot`) changed: the catalogue operatives' pay overlay re-plans (RULEBOOK 1.27.0 §8).
     static let rulebookRosterDidChange = Notification.Name("rulebookRosterDidChange")
 }
@@ -27,6 +30,7 @@ nonisolated enum SecuritySwitchContext {
     nonisolated(unsafe) private static var configKey = "none"
     private static let lock = NSLock()
     private static let memo = RulebookAnswerMemo<String, SecuritySwitchState>(limit: 32)
+    private static let ghostMemo = RulebookAnswerMemo<String, Bool>(limit: 32)
 
     /// Both switches for one organisation. `nil` config (not read yet, missing document, unanswered script) is off.
     static func switches(organizationId: String?) -> SecuritySwitchState {
@@ -45,16 +49,39 @@ nonisolated enum SecuritySwitchContext {
     static var enforcedReads: Bool { current.enforcedReads }
     static var privatePay: Bool { current.privatePay }
 
+    /// RULEBOOK 1.34.0 §18 (owner decision 7 Nov "1b"): `ghostAccountsEnabled(platformConfig/app, organizationId)` —
+    /// whether the Ghost account toggle may show. Not read yet, a missing document or an unanswered script is off.
+    /// A screen switch only: existing ghosts never depend on it.
+    static func ghostAccountsEnabled(organizationId: String?) -> Bool {
+        lock.lock()
+        let current = config
+        let key = configKey
+        lock.unlock()
+        let orgId = organizationId ?? ""
+        return ghostMemo.value(for: "\(key)|\(orgId)") {
+            CanonicalBusinessEngine.ghostAccountsEnabled(config: current, organizationId: orgId)
+        } ?? false
+    }
+
+    /// The open organisation's `ghostAccounts` switch.
+    static var ghostAccounts: Bool { ghostAccountsEnabled(organizationId: OrganizationRulebookContext.organizationId) }
+
     /// A new read of `platformConfig/app` (plain JSON; nil when the document is missing). When the open organisation's
     /// switches change, the read plans re-plan (`jobReadPlanDidChange`) and pay screens reload
     /// (`securitySwitchesDidChange`).
     static func update(config next: [String: Any]?) {
         let before = current
+        let ghostBefore = ghostAccounts
         let nextKey = next.flatMap { CanonicalBusinessEngine.rulebookMemoKey($0) } ?? "none"
         lock.lock()
         config = next
         configKey = nextKey
         lock.unlock()
+        if ghostAccounts != ghostBefore {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .ghostAccountsSwitchDidChange, object: nil)
+            }
+        }
         guard current != before else { return }
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .securitySwitchesDidChange, object: nil)

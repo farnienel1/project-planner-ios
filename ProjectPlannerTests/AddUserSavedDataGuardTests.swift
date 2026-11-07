@@ -12,6 +12,10 @@ import XCTest
 /// `lineManagerPickerFootnote`, `canProceed` and `createUser()` gain the ghost branches (`ghostCreateError`,
 /// `createGhostAccount()`); the account-type card's action moved into `selectAccountType(_:)` (also used when the
 /// toggle switches the type to operative), now guarded on its own. Every other recorded hash is unchanged.
+///
+/// Owner decision 7 Nov "1b" (RULEBOOK 1.34.0 §18, `ghostAccountsEnabled` / `ghostToggleVisible`): the Ghost account
+/// toggle shows only while `platformConfig/app.ghostAccounts` is on. Only unguarded properties changed (`ghostMode`,
+/// `ghostFormRows`, `ghostToggleCard`); every recorded hash is unchanged.
 final class AddUserSavedDataGuardTests: XCTestCase {
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

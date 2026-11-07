@@ -146,7 +146,7 @@ struct HomeView: View {
         }
         .sheet(isPresented: $showingCreateOperative) {
             // RULEBOOK 1.34.0 §11: a new operative with no login is a ghost (a users document), never an `operatives`
-            // row — Add user opens with the Ghost account toggle on (shown only when `canCreateGhost` allows it).
+            // row — Add user opens with the Ghost account toggle on (shown only when `ghostToggleVisible` allows it: `canCreateGhost` and the `ghostAccounts` switch, owner decision 7 Nov "1b").
             AddUserView(
                 mode: userStore.currentUser?.isRosterAdmin == true ? .admin : .managerAddingOperative,
                 startAsGhost: true

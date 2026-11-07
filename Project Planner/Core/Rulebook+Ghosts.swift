@@ -115,9 +115,24 @@ extension CanonicalBusinessEngine {
         callJSON("canCreateGhost", arguments: [viewer]) as? Bool ?? false
     }
 
-    /// `ghostAddFormRows({ ghost, canCreateGhost })`. Nil when the script did not answer.
-    nonisolated static func ghostAddFormRows(ghost: Bool, canCreateGhost: Bool) -> [RulebookGhostFormRow]? {
-        let input: [String: Any] = ["ghost": ghost, "canCreateGhost": canCreateGhost]
+    /// `ghostAccountsEnabled(config, organizationId)` (RULEBOOK 1.34.0 §18, owner decision 7 Nov "1b"): the
+    /// `platformConfig/app` switch `ghostAccounts` / `ghostAccountsOrganizationIds` that shows the Ghost account
+    /// toggle. Nil when the script did not answer (callers read nil as off).
+    nonisolated static func ghostAccountsEnabled(config: [String: Any]?, organizationId: String) -> Bool? {
+        callJSON("ghostAccountsEnabled", arguments: [config.map { $0 as Any } ?? NSNull(), organizationId]) as? Bool
+    }
+
+    /// `ghostToggleVisible({ canCreateGhost, ghostAccountsEnabled })`: the permission and the switch. False when the
+    /// script did not answer.
+    nonisolated static func ghostToggleVisible(canCreateGhost: Bool, ghostAccountsEnabled: Bool) -> Bool {
+        let input: [String: Any] = ["canCreateGhost": canCreateGhost, "ghostAccountsEnabled": ghostAccountsEnabled]
+        return callJSON("ghostToggleVisible", arguments: [input]) as? Bool ?? false
+    }
+
+    /// `ghostAddFormRows({ ghost, canCreateGhost, ghostAccountsEnabled })`. The toggle shows only with the permission
+    /// and the `ghostAccounts` switch on (owner decision 7 Nov "1b"). Nil when the script did not answer.
+    nonisolated static func ghostAddFormRows(ghost: Bool, canCreateGhost: Bool, ghostAccountsEnabled: Bool) -> [RulebookGhostFormRow]? {
+        let input: [String: Any] = ["ghost": ghost, "canCreateGhost": canCreateGhost, "ghostAccountsEnabled": ghostAccountsEnabled]
         guard let rows = callJSON("ghostAddFormRows", arguments: [input]) as? [[String: Any]] else { return nil }
         return rows.compactMap { row in
             guard let field = row["field"] as? String else { return nil }

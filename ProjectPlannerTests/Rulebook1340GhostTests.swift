@@ -166,7 +166,7 @@ final class Rulebook1340GhostTests: XCTestCase {
     }
 
     func testGhostFormRowsHideEverythingAGhostDoesNotNeed() throws {
-        let rows = try XCTUnwrap(CanonicalBusinessEngine.ghostAddFormRows(ghost: true, canCreateGhost: true))
+        let rows = try XCTUnwrap(CanonicalBusinessEngine.ghostAddFormRows(ghost: true, canCreateGhost: true, ghostAccountsEnabled: true))
         func row(_ field: String) -> RulebookGhostFormRow? { rows.first { $0.field == field } }
         XCTAssertEqual(row("ghostToggle")?.visible, true)
         XCTAssertEqual(row("email")?.visible, false)
@@ -176,9 +176,50 @@ final class Rulebook1340GhostTests: XCTestCase {
         XCTAssertEqual(row("pay")?.required, true)
         XCTAssertEqual(row("lineManagers")?.required, true)
         XCTAssertEqual(row("trade")?.required, false)
-        let refused = try XCTUnwrap(CanonicalBusinessEngine.ghostAddFormRows(ghost: true, canCreateGhost: false))
+        let refused = try XCTUnwrap(CanonicalBusinessEngine.ghostAddFormRows(ghost: true, canCreateGhost: false, ghostAccountsEnabled: true))
         XCTAssertEqual(refused.first { $0.field == "ghostToggle" }?.visible, false)
         XCTAssertEqual(refused.first { $0.field == "email" }?.visible, true)
+    }
+
+    // MARK: Ghost accounts switch (owner decision 7 Nov "1b")
+
+    /// The Ghost account toggle stays hidden until the platform owner sets `platformConfig/app.ghostAccounts` true
+    /// after the iPhone 1.34 update is out. A missing document or field is off; the permission alone never shows it.
+    func testGhostToggleHiddenUntilTheGhostAccountsSwitchIsOn() throws {
+        XCTAssertEqual(CanonicalBusinessEngine.ghostAccountsEnabled(config: nil, organizationId: "TEST-ORG"), false)
+        XCTAssertEqual(CanonicalBusinessEngine.ghostAccountsEnabled(config: [:], organizationId: "TEST-ORG"), false)
+        XCTAssertEqual(CanonicalBusinessEngine.ghostAccountsEnabled(config: ["ghostAccounts": "true"], organizationId: "TEST-ORG"), false)
+        XCTAssertEqual(CanonicalBusinessEngine.ghostAccountsEnabled(config: ["privatePay": true], organizationId: "TEST-ORG"), false)
+        XCTAssertEqual(CanonicalBusinessEngine.ghostAccountsEnabled(config: ["ghostAccounts": true], organizationId: "TEST-ORG"), true)
+        XCTAssertEqual(
+            CanonicalBusinessEngine.ghostAccountsEnabled(config: ["ghostAccountsOrganizationIds": ["TEST-ORG"]], organizationId: "TEST-ORG"),
+            true
+        )
+        XCTAssertEqual(
+            CanonicalBusinessEngine.ghostAccountsEnabled(config: ["ghostAccountsOrganizationIds": ["TEST-ORG"]], organizationId: "test-org"),
+            false
+        )
+
+        XCTAssertTrue(CanonicalBusinessEngine.ghostToggleVisible(canCreateGhost: true, ghostAccountsEnabled: true))
+        XCTAssertFalse(CanonicalBusinessEngine.ghostToggleVisible(canCreateGhost: true, ghostAccountsEnabled: false))
+        XCTAssertFalse(CanonicalBusinessEngine.ghostToggleVisible(canCreateGhost: false, ghostAccountsEnabled: true))
+
+        let off = try XCTUnwrap(CanonicalBusinessEngine.ghostAddFormRows(ghost: true, canCreateGhost: true, ghostAccountsEnabled: false))
+        XCTAssertEqual(off.first { $0.field == "ghostToggle" }?.visible, false)
+        // A ghost flag left on (`startAsGhost`) never turns the form into the ghost form while the switch is off.
+        XCTAssertEqual(off.first { $0.field == "email" }?.visible, true)
+        XCTAssertEqual(off.first { $0.field == "permissions" }?.visible, true)
+    }
+
+    /// `SecuritySwitchContext` reads the switch from the `platformConfig/app` document it already holds.
+    func testSecuritySwitchContextReadsTheGhostAccountsSwitch() {
+        defer { SecuritySwitchContext.reset() }
+        SecuritySwitchContext.update(config: nil)
+        XCTAssertFalse(SecuritySwitchContext.ghostAccountsEnabled(organizationId: "TEST-ORG"))
+        SecuritySwitchContext.update(config: ["ghostAccountsOrganizationIds": ["TEST-ORG"]])
+        XCTAssertTrue(SecuritySwitchContext.ghostAccountsEnabled(organizationId: "TEST-ORG"))
+        XCTAssertFalse(SecuritySwitchContext.ghostAccountsEnabled(organizationId: "TEST-OTHER"))
+        XCTAssertFalse(SecuritySwitchContext.switches(organizationId: "TEST-ORG").privatePay)
     }
 
     private var draft: [String: Any] {
