@@ -197,8 +197,9 @@ enum OfflineSyncCoordinator {
             )
             // RULEBOOK 1.33.0 §25 reopen: the edit reached the server now, so the PAYE overtime line may reopen
             // (web notifies after its online write; best effort).
+            // Only judged in the company it was written to (skipped when another company is open now).
             if payload.changedFields != nil, let previous = payload.previousBooking {
-                OvertimeReopenNotice.labour(before: previous, after: payload.booking)
+                OvertimeReopenNotice.labour(before: previous, after: payload.booking, organizationId: entry.organizationId)
             }
 
         case .deleteBooking, .deleteManagerSiteBooking:
@@ -212,7 +213,7 @@ enum OfflineSyncCoordinator {
                 changedFields: payload.changedFields.map { Set($0) }
             )
             if payload.changedFields != nil, let previous = payload.previousBooking {
-                OvertimeReopenNotice.managerSite(before: previous, after: payload.booking)
+                OvertimeReopenNotice.managerSite(before: previous, after: payload.booking, organizationId: entry.organizationId)
             }
 
         case .saveMaterialItem:
@@ -301,9 +302,9 @@ enum OfflineSyncCoordinator {
         case "apply":
             // RULEBOOK 1.33.0 §25 reopen: the queued delete was written now (best effort, after the write).
             if let booking = payload.labourBooking {
-                OvertimeReopenNotice.labour(before: booking, after: nil)
+                OvertimeReopenNotice.labour(before: booking, after: nil, organizationId: entry.organizationId)
             } else if let booking = payload.managerBooking {
-                OvertimeReopenNotice.managerSite(before: booking, after: nil)
+                OvertimeReopenNotice.managerSite(before: booking, after: nil, organizationId: entry.organizationId)
             }
             return
         case "alreadyGone", "dropLocal":

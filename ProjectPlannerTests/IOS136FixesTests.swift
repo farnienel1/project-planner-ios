@@ -80,19 +80,113 @@ final class IOS136FixesTests: XCTestCase {
         XCTAssertEqual(payload.changedFields, ["notes"])
     }
 
-    /// Failure before: `completeBooking` wrote the status itself and never sent the reopen notice, although the status
-    /// is part of `overtimeBookingFingerprint`. A refused edit also sent a notice for a change the server never took.
+    /// Failure before: a refused edit sent a notice for a change the server never took. (`completeBooking`, which wrote
+    /// the status without the notice, had no callers and is deleted.)
     func testEveryLabourEditGoesThroughTheNoticeAfterTheServerHasIt() throws {
         let store = try source("Project Planner/Core/BookingStore.swift")
-        let complete = try functionBody("completeBooking", in: store)
-        XCTAssertTrue(complete.contains("await updateBooking("), "completeBooking must reuse updateBooking (reopen notice)")
-        XCTAssertFalse(complete.contains("saveData("), "completeBooking must not write on its own")
+        XCTAssertNil(store.range(of: "func completeBooking("), "dead code: no caller")
+        XCTAssertNil(store.range(of: "var cancelledBookings"), "dead code: no caller")
         let update = try functionBody("updateBooking", in: store)
-        XCTAssertTrue(update.contains("written { OvertimeReopenNotice.labour"), "notice only once the edit reached the server")
+        XCTAssertTrue(update.contains("if !changed.isEmpty, written {"), "notice only once the edit reached the server")
+        XCTAssertTrue(update.contains("OvertimeReopenNotice.labour(before: before, after: booking)"))
         let coordinator = try source("Project Planner/Core/OfflineSyncCoordinator.swift")
-        XCTAssertTrue(coordinator.contains("OvertimeReopenNotice.labour(before: previous, after: payload.booking)"))
-        XCTAssertTrue(coordinator.contains("OvertimeReopenNotice.managerSite(before: previous, after: payload.booking)"))
-        XCTAssertTrue(coordinator.contains("OvertimeReopenNotice.labour(before: booking, after: nil)"), "a replayed delete tells them too")
+        XCTAssertTrue(coordinator.contains(
+            "OvertimeReopenNotice.labour(before: previous, after: payload.booking, organizationId: entry.organizationId)"
+        ))
+        XCTAssertTrue(coordinator.contains(
+            "OvertimeReopenNotice.managerSite(before: previous, after: payload.booking, organizationId: entry.organizationId)"
+        ))
+        XCTAssertTrue(
+            coordinator.contains("OvertimeReopenNotice.labour(before: booking, after: nil, organizationId: entry.organizationId)"),
+            "a replayed delete tells them too"
+        )
+    }
+
+    // MARK: 1a. A replayed notice is judged only in the company it was written to (review #209)
+
+    /// Failure before: an edit queued in company A replayed while company B was open; the write went to A but the notice
+    /// read B's roster, jobs, organisation and overtime records and wrote its rows in B.
+    func testANoticeForAnotherCompanysWriteIsSkipped() {
+        XCTAssertTrue(OvertimeReopenNotice.noticeMayBeSent(writtenOrganizationId: nil, openOrganizationId: "TEST-ORG-B"))
+        XCTAssertTrue(OvertimeReopenNotice.noticeMayBeSent(writtenOrganizationId: " test-org-a ", openOrganizationId: "TEST-ORG-A"))
+        XCTAssertFalse(OvertimeReopenNotice.noticeMayBeSent(writtenOrganizationId: "TEST-ORG-A", openOrganizationId: "TEST-ORG-B"))
+        XCTAssertFalse(OvertimeReopenNotice.noticeMayBeSent(writtenOrganizationId: "TEST-ORG-A", openOrganizationId: nil))
+    }
+
+    func testTheNoticeChecksTheWrittenCompanyBeforeReadingAnything() throws {
+        let service = try source("Project Planner/Core/NotificationService.swift")
+        let body = try functionBody("notifyOvertimeLineReopened", in: service)
+        let check = try XCTUnwrap(body.range(of: "OvertimeReopenNotice.noticeMayBeSent("))
+        let firstRead = try XCTUnwrap(body.range(of: "projectStore?.projects"))
+        XCTAssertLessThan(check.lowerBound, firstRead.lowerBound)
+    }
+
+    // MARK: 1b. One change, one notice (review #209)
+
+    /// Failure before: an edit was queued, then the booking was edited again online before the queue flushed. The online
+    /// write told the person; the older queued edit replayed later with its own "before" copy and told them again.
+    func testAnOnlineEditSilencesTheOlderQueuedEdit() throws {
+        let outbox = OfflineOutboxStore.shared
+        let synced = LogicFixtures.booking(on: Date(), slot: .customHours, start: "07:30", end: "18:00")
+        var queued = synced
+        queued.workEndTime = "17:00"
+        outbox.enqueueSaveBooking(queued, changedFields: ["workEndTime"], organizationId: "TEST-ORG", baselineFingerprint: "fp", previous: synced)
+        let before = try XCTUnwrap(outbox.entries.first)
+
+        outbox.clearReopenBaseline(bookingId: synced.id)
+
+        let after = try XCTUnwrap(outbox.entries.first)
+        XCTAssertEqual(outbox.entries.count, 1)
+        XCTAssertEqual(after.id, before.id, "the same entry, same place in the queue")
+        XCTAssertEqual(after.createdAt, before.createdAt)
+        XCTAssertEqual(after.organizationId, before.organizationId)
+        let payload = try JSONDecoder().decode(OfflineSaveBookingPayload.self, from: after.payload)
+        XCTAssertNil(payload.previousBooking, "the replay stays silent")
+        XCTAssertEqual(payload.booking.workEndTime, "17:00", "the queued write itself is unchanged")
+        XCTAssertEqual(payload.changedFields, ["workEndTime"])
+        XCTAssertEqual(payload.baselineFingerprint, "fp")
+
+        // A later offline edit keeps the copy before it as the new "before".
+        var later = queued
+        later.workEndTime = "16:00"
+        outbox.enqueueSaveBooking(later, changedFields: ["workEndTime"], organizationId: "TEST-ORG", previous: queued)
+        let merged = try JSONDecoder().decode(OfflineSaveBookingPayload.self, from: try XCTUnwrap(outbox.entries.first).payload)
+        XCTAssertEqual(merged.previousBooking?.workEndTime, "17:00")
+    }
+
+    func testAnOnlineEditSilencesTheOlderQueuedManagerScheduleEdit() throws {
+        let outbox = OfflineOutboxStore.shared
+        let synced = ManagerSiteBooking(id: UUID(), userId: "TEST-m1", date: Date(), timeSlot: .fullDay, locationType: .office)
+        var edited = synced
+        edited.timeSlot = .morning
+        outbox.enqueueSaveManagerSiteBooking(edited, changedFields: ["timeSlot"], organizationId: "TEST-ORG", previous: synced)
+        outbox.clearManagerSiteReopenBaseline(bookingId: synced.id)
+        let payload = try JSONDecoder().decode(
+            OfflineSaveManagerSiteBookingPayload.self, from: try XCTUnwrap(outbox.entries.first).payload
+        )
+        XCTAssertNil(payload.previousBooking)
+        XCTAssertEqual(payload.booking.timeSlot, .morning)
+    }
+
+    func testClearingTheBaselineLeavesOtherEntriesAlone() throws {
+        let outbox = OfflineOutboxStore.shared
+        let other = LogicFixtures.booking(on: Date())
+        var edited = other
+        edited.notes = "changed"
+        outbox.enqueueSaveBooking(edited, changedFields: ["notes"], organizationId: "TEST-ORG", previous: other)
+        outbox.clearReopenBaseline(bookingId: UUID())
+        let payload = try JSONDecoder().decode(OfflineSaveBookingPayload.self, from: try XCTUnwrap(outbox.entries.first).payload)
+        XCTAssertNotNil(payload.previousBooking)
+    }
+
+    func testTheOnlineEditPathsClearTheQueuedBaselineBeforeNotifying() throws {
+        let store = try source("Project Planner/Core/BookingStore.swift")
+        let update = try functionBody("updateBooking", in: store)
+        let clear = try XCTUnwrap(update.range(of: "OfflineOutboxStore.shared.clearReopenBaseline(bookingId: booking.id)"))
+        let notice = try XCTUnwrap(update.range(of: "OvertimeReopenNotice.labour(before: before, after: booking)"))
+        XCTAssertLessThan(clear.lowerBound, notice.lowerBound)
+        let manager = try source("Project Planner/Core/ManagerScheduleStore.swift")
+        XCTAssertTrue(manager.contains("OfflineOutboxStore.shared.clearManagerSiteReopenBaseline(bookingId: normalizedBooking.id)"))
     }
 
     // MARK: 2. `bookingOccupiesDay`, never a private Cancelled / Completed filter
@@ -187,6 +281,25 @@ final class IOS136FixesTests: XCTestCase {
         for store in ["projectStore", "appSettings", "notificationService", "smartCache"] {
             XCTAssertTrue(sheetInjections.contains(".environmentObject(\(store))"), store)
         }
+    }
+
+    /// Each screen a figure opens as a sheet has its own Done button (review #209 asked; they already had one):
+    /// My Schedule and Tasks own a NavigationStack with Done, Annual leave closes with its back button when
+    /// `presentedAsSheet`. Wrapping them in another NavigationStack would nest two.
+    func testEveryFigureSheetCanBeClosed() throws {
+        for (path, marker) in [
+            ("Project Planner/Views/MyScheduleView.swift", "accessibilityIdentifier(\"mySchedule.done\")"),
+            ("Project Planner/Views/TasksDetailView.swift", "accessibilityIdentifier(\"tasksDetail.done\")"),
+        ] {
+            let text = try source(path)
+            XCTAssertTrue(text.contains("Button(\"Done\") { dismiss() }"), path)
+            XCTAssertTrue(text.contains(marker), path)
+        }
+        XCTAssertTrue(try source("Project Planner/Views/MyProfileFiguresCard.swift").contains("HolidayView(showRequests: false, presentedAsSheet: true)"))
+    }
+
+    func testTheDeletedCoverageHelperStaysDeleted() throws {
+        XCTAssertNil(try source("Project Planner/Core/StaffEmailIdentity.swift").range(of: "static func coverage("))
     }
 
     // MARK: 5. Scheduling days are organisation-zone days (guardrail 2)

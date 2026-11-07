@@ -152,6 +152,21 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
         return owner.isEmpty || owner == signedIn
     }
 
+    /// The same entry (id, place in the queue, attempts, owner) with another payload.
+    func replacingPayload(_ payload: Data) -> OfflineOutboxEntry {
+        OfflineOutboxEntry(
+            id: id,
+            organizationId: organizationId,
+            operation: operation,
+            entityId: entityId,
+            payload: payload,
+            createdAt: createdAt,
+            attemptCount: attemptCount,
+            lastError: lastError,
+            userId: userId
+        )
+    }
+
     /// `userId`, else (older entries) the user stored in a partial-update payload.
     var queuedByUserId: String? {
         if let userId, !userId.isEmpty { return userId }
@@ -289,6 +304,31 @@ final class OfflineOutboxStore: ObservableObject {
             ),
             dedupeSameEntity: true
         )
+    }
+
+    /// RULEBOOK 1.33.0 §25 reopen, one notice per change: an online edit of this booking reached the server while an
+    /// older edit of it still waits in the outbox. The online write has already told the PAYE person, so the queued
+    /// entry forgets its "before" copy and replays silently (`OfflineSyncCoordinator` notifies only with one). The
+    /// entry itself — its booking, fields, baseline and place in the queue — is left exactly as it was.
+    func clearReopenBaseline(bookingId: UUID) {
+        guard let index = entries.firstIndex(where: { $0.entityId == bookingId.uuidString && $0.operation == .saveBooking }),
+              var payload = try? decoder.decode(OfflineSaveBookingPayload.self, from: entries[index].payload),
+              payload.previousBooking != nil else { return }
+        payload.previousBooking = nil
+        guard let data = try? encoder.encode(payload) else { return }
+        entries[index] = entries[index].replacingPayload(data)
+        persistToDisk()
+    }
+
+    /// As `clearReopenBaseline(bookingId:)` for a queued manager schedule booking edit.
+    func clearManagerSiteReopenBaseline(bookingId: UUID) {
+        guard let index = entries.firstIndex(where: { $0.entityId == bookingId.uuidString && $0.operation == .saveManagerSiteBooking }),
+              var payload = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: entries[index].payload),
+              payload.previousBooking != nil else { return }
+        payload.previousBooking = nil
+        guard let data = try? encoder.encode(payload) else { return }
+        entries[index] = entries[index].replacingPayload(data)
+        persistToDisk()
     }
 
     /// What queuing an offline delete did (RULEBOOK 1.33.0).

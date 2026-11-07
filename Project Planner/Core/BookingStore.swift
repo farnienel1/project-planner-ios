@@ -345,7 +345,11 @@ class BookingStore: ObservableObject {
             // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the write).
             // Only once the server has the edit: a refused edit changed nothing, and a queued one is told on replay
             // (`OfflineSyncCoordinator`, from the copy queued with it).
-            if !changed.isEmpty, written { OvertimeReopenNotice.labour(before: before, after: booking) }
+            if !changed.isEmpty, written {
+                // One notice per change: an older queued edit of this booking replays later, silently.
+                OfflineOutboxStore.shared.clearReopenBaseline(bookingId: booking.id)
+                OvertimeReopenNotice.labour(before: before, after: booking)
+            }
         }
     }
 
@@ -473,14 +477,6 @@ class BookingStore: ObservableObject {
         }
     }
     
-    /// Marks a booking Completed through `updateBooking`, so the status change is a partial write like any edit and the
-    /// PAYE overtime line it carried reopens (RULEBOOK 1.33.0 §25: the status is part of `overtimeBookingFingerprint`).
-    func completeBooking(_ booking: Booking) async {
-        guard var completed = bookings.first(where: { $0.id == booking.id }) else { return }
-        completed.status = .completed
-        await updateBooking(completed)
-    }
-    
     // MARK: - Booking Creation
     
     func bookOperative(
@@ -579,10 +575,6 @@ class BookingStore: ObservableObject {
     
     var tentativeBookings: [Booking] {
         bookings.filter { $0.status == .tentative }
-    }
-    
-    var cancelledBookings: [Booking] {
-        bookings.filter { $0.status == .cancelled }
     }
     
     var completedBookings: [Booking] {
