@@ -9,6 +9,7 @@
 import SwiftUI
 
 struct MyProfileFiguresCard: View {
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var holidayStore: HolidayStore
@@ -16,9 +17,49 @@ struct MyProfileFiguresCard: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
 
-    private var summary: RulebookMyProfileSummary? {
+    /// The last answer of `myProfileSummary`. Worked out in `.task(id:)` when a store the figures read changes or the
+    /// organisation day changes — never in `body`, so a redraw does not re-encode the stores or re-run the script.
+    @State private var summary: RulebookMyProfileSummary?
+    /// Bumped whenever one of the six stores announces a change.
+    @State private var storeRevision = 0
+    /// True once the bank holidays the leave figure needs have loaded (or failed): until then a bank holiday inside a
+    /// leave record could still count as leave, so no figures are shown.
+    @State private var bankHolidaysReady = false
+
+    private var viewer: AppUser? {
         guard let me = userStore.currentUser else { return nil }
-        let viewer = userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me
+        return userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me
+    }
+
+    /// RULEBOOK 1.35.0 `myProfileBankHolidayRange`: the region and the calendar years to load (previous leave year too).
+    private var bankHolidayKey: String {
+        let region = CanonicalBusinessEngine.resolvedBankHolidayRegion(for: firebaseBackend.currentOrganization)?.id ?? "-"
+        let years = CanonicalBusinessEngine.leaveBalanceBankHolidayYears(for: viewer).map(String.init).joined(separator: ",")
+        return "\(region)|\(years)"
+    }
+
+    private func loadBankHolidays() async {
+        // Offline the fetch can take a while (20 s per year): after 5 s show the figures with the bank holidays already
+        // cached; they are worked out again when the load finishes.
+        let waitCap = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled, !bankHolidaysReady else { return }
+            bankHolidaysReady = true
+            storeRevision &+= 1
+        }
+        defer { waitCap.cancel() }
+        if let region = CanonicalBusinessEngine.resolvedBankHolidayRegion(for: firebaseBackend.currentOrganization) {
+            await BankHolidayService.shared.ensureLoaded(
+                region: region,
+                alsoYears: CanonicalBusinessEngine.leaveBalanceBankHolidayYears(for: viewer)
+            )
+        }
+        bankHolidaysReady = true
+        storeRevision &+= 1
+    }
+
+    private func computeSummary() -> RulebookMyProfileSummary? {
+        guard bankHolidaysReady, let viewer else { return nil }
         let input = MyProfileSummaryInput.build(
             user: viewer,
             roster: userStore.organizationUsers,
@@ -32,7 +73,29 @@ struct MyProfileFiguresCard: View {
         return CanonicalBusinessEngine.myProfileSummary(input)
     }
 
+    /// Changes when a store changed or the organisation day moved on (checked on the next redraw).
+    private var recomputeKey: String {
+        "\(storeRevision)|\(OrganizationRulebookContext.dayKey(Date()))|\(OrganizationRulebookContext.timeZoneIdentifier)"
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Zero-height anchor so `.task` runs even before the first answer exists.
+            Color.clear.frame(height: 0)
+            figures
+        }
+        .task(id: bankHolidayKey) { await loadBankHolidays() }
+        .task(id: recomputeKey) { summary = computeSummary() }
+        .onReceive(userStore.objectWillChange) { _ in storeRevision &+= 1 }
+        .onReceive(operativeStore.objectWillChange) { _ in storeRevision &+= 1 }
+        .onReceive(holidayStore.objectWillChange) { _ in storeRevision &+= 1 }
+        .onReceive(taskStore.objectWillChange) { _ in storeRevision &+= 1 }
+        .onReceive(bookingStore.objectWillChange) { _ in storeRevision &+= 1 }
+        .onReceive(managerScheduleStore.objectWillChange) { _ in storeRevision &+= 1 }
+    }
+
+    @ViewBuilder
+    private var figures: some View {
         if let summary {
             VStack(alignment: .leading, spacing: 0) {
                 SettingsHubChrome.sectionTitle("Your figures")

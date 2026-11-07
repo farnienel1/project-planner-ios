@@ -138,7 +138,9 @@ struct HolidayView: View {
         await bankHolidayService.ensureLoaded(
             region: region,
             referenceDate: referenceDate,
-            forceRefresh: forceRefresh
+            forceRefresh: forceRefresh,
+            // RULEBOOK 1.35.0 `myProfileBankHolidayRange`: the previous leave year's bank holidays too (carry-over).
+            alsoYears: CanonicalBusinessEngine.leaveBalanceBankHolidayYears(for: holidayProfileUser)
         )
         bankHolidayCalendarTick += 1
     }

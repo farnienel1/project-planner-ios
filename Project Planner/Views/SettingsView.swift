@@ -248,7 +248,7 @@ struct SettingsView: View {
                 settingsHubRow(
                     icon: "person.fill",
                     family: .people,
-                    title: "My profile",
+                    title: "My Profile",
                     subtitle: "Name, photo, contact details"
                 )
             }

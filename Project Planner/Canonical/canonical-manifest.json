@@ -1,7 +1,7 @@
 {
   "rulebookVersion": "1.35.0",
-  "rulebookSha256": "3d6923e68b7c7bba1f9c1b3f48eedbbb4c6ed4f3f72155565c89cdf464d94d5d",
-  "bundleSha256": "6a3b683f1ec6f1cd82477b4c64e5c3a74d1590ac584e06f81b6980d38c7987e2",
+  "rulebookSha256": "285ff41de67c59c0f68436526033b9ec3ae96551a2d1723689dd6383e48270b9",
+  "bundleSha256": "bd974088eabd8d29261102b35e0af7b17fe78ac228982f958b2a85a6000ff965",
   "crossPlatformContractSha256": "59d6bc6123f250e1f57599240eb3190ab48f5cd2532f8281a99360d9e187d86b",
   "exports": [
     "ACCOUNT_DELETE_WITH_COMPANY_MESSAGE",
@@ -460,6 +460,7 @@
     "addedPushTokens",
     "allowedTimeSlotsOnDay",
     "annualLeaveBalance",
+    "annualLeaveBankHolidayRange",
     "annualLeavePendingOmitFields",
     "appUpdateRequired",
     "applyEmploymentTypeChange",
@@ -861,6 +862,7 @@
     "monthDayOffsetBefore",
     "monthDayOrdinal",
     "multipliedHoursText",
+    "myProfileBankHolidayRange",
     "myProfileSummary",
     "myWorksDefaultIds",
     "myWorksEmptyActionLabel",

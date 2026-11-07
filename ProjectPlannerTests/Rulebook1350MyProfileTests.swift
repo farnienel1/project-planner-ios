@@ -142,4 +142,62 @@ final class Rulebook1350MyProfileTests: XCTestCase {
         XCTAssertEqual(MyProfileFiguresCard.hoursText(19.5), "19.5h")
         XCTAssertEqual(MyProfileFiguresCard.hoursText(8), "8h")
     }
+
+    /// Review fix: `nowMs` is floored to the whole minute, so the memo key (the exact input) is the same on every
+    /// redraw within a minute and never runs ahead of the clock.
+    func testNowIsFlooredToTheMinute() {
+        let base = Date(timeIntervalSince1970: wednesdayMs / 1000)
+        XCTAssertEqual(MyProfileSummaryInput.nowMsFlooredToMinute(base.addingTimeInterval(59.9)), wednesdayMs)
+        XCTAssertEqual(MyProfileSummaryInput.nowMsFlooredToMinute(base.addingTimeInterval(60)), wednesdayMs + 60_000)
+        let me = person("TEST-ME", first: "TEST-Sam", last: "Smith")
+        let first = MyProfileSummaryInput.build(
+            user: me, roster: [me], operatives: [], managers: [], holidays: [], tasks: [], bookings: [], managerBookings: [],
+            now: base.addingTimeInterval(1)
+        )
+        let second = MyProfileSummaryInput.build(
+            user: me, roster: [me], operatives: [], managers: [], holidays: [], tasks: [], bookings: [], managerBookings: [],
+            now: base.addingTimeInterval(42)
+        )
+        XCTAssertEqual(CanonicalBusinessEngine.rulebookMemoKey(first), CanonicalBusinessEngine.rulebookMemoKey(second))
+    }
+
+    /// Review fix (RULEBOOK 1.35.0 `myProfileBankHolidayRange`): the bank-holiday years a leave balance needs include
+    /// the previous leave year, for carry-over. The range comes from the script, never Swift.
+    func testBankHolidayRangeIncludesThePreviousLeaveYear() throws {
+        var me = person("TEST-ME", first: "TEST-Sam", last: "Smith")
+        me.annualLeaveEnabled = true
+        me.annualLeaveYearStartMonth = 4
+        me.annualLeaveYearEndMonth = 3
+        let range = try XCTUnwrap(CanonicalBusinessEngine.myProfileBankHolidayRange([
+            "nowMs": wednesdayMs,
+            "timeZone": "Europe/London",
+            "user": MyProfileSummaryInput.userRow(me),
+            "leaveDefaults": ["daysPerYear": 25, "startMonth": 1, "endMonth": 12, "carriesOver": true],
+        ]))
+        XCTAssertEqual(range.startDayKey, "2025-04-01")
+        XCTAssertEqual(range.endDayKey, "2027-03-31")
+        XCTAssertEqual(range.years, [2025, 2026, 2027])
+    }
+
+    /// Carry-over with last year's Easter: Good Friday and Easter Monday 2025 inside a leave record are not leave.
+    func testCarryOverUsesLastYearsBankHolidays() throws {
+        let user: [String: Any] = [
+            "id": "TEST-ME", "email": "test-me@example.com", "annualLeaveEnabled": true, "annualLeaveDaysPerYear": 25,
+            "annualLeaveCarriesOver": true, "annualLeaveYearStartMonth": 4, "annualLeaveYearEndMonth": 3,
+        ]
+        let holidays: [[String: Any]] = [[
+            "userId": "TEST-ME", "startDayKey": "2025-04-17", "endDayKey": "2025-04-22", "timeSlot": "FULL DAY", "status": "approved",
+        ]]
+        let defaults: [String: Any] = ["daysPerYear": 25, "startMonth": 4, "endMonth": 3, "carriesOver": true]
+        let without = try XCTUnwrap(CanonicalBusinessEngine.myProfileSummary(
+            input(user: user, roster: [user], extra: ["holidays": holidays, "leaveDefaults": defaults])
+        ))
+        let with = try XCTUnwrap(CanonicalBusinessEngine.myProfileSummary(
+            input(user: user, roster: [user], extra: [
+                "holidays": holidays, "leaveDefaults": defaults, "nonWorkingDayKeys": ["2025-04-18", "2025-04-21"],
+            ])
+        ))
+        XCTAssertEqual(without.leave.remaining, 46)
+        XCTAssertEqual(with.leave.remaining, 48)
+    }
 }

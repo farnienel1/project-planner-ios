@@ -46,7 +46,44 @@ nonisolated struct RulebookMyProfileSummary: Hashable, Sendable {
     var lineManagers: [LineManager] = []
 }
 
+/// `annualLeaveBankHolidayRange` / `myProfileBankHolidayRange` (RULEBOOK 1.35.0 §12): the bank-holiday days a leave
+/// balance needs — the previous leave year's first day to the current one's last day — and their calendar years.
+nonisolated struct RulebookBankHolidayRange: Hashable, Sendable {
+    let startDayKey: String
+    let endDayKey: String
+    let years: [Int]
+}
+
 extension CanonicalBusinessEngine {
+    nonisolated private static let bankHolidayRangeMemo = RulebookAnswerMemo<String, RulebookBankHolidayRange>(limit: 64)
+
+    /// RULEBOOK 1.35.0 `myProfileBankHolidayRange({ nowMs, timeZone, user, leaveDefaults })`: the years of bank
+    /// holidays `annualLeaveBalance` needs for this person today (carry-over reads the previous leave year). Nil when
+    /// the script did not answer.
+    nonisolated static func myProfileBankHolidayRange(_ input: [String: Any]) -> RulebookBankHolidayRange? {
+        guard let key = rulebookMemoKey(input) else { return nil }
+        return bankHolidayRangeMemo.value(for: key) {
+            guard let row = callJSON("myProfileBankHolidayRange", arguments: [input]) as? [String: Any],
+                  let start = row["startDayKey"] as? String,
+                  let end = row["endDayKey"] as? String else { return nil }
+            let years = (row["years"] as? [Any] ?? []).compactMap { ($0 as? NSNumber)?.intValue }
+            return RulebookBankHolidayRange(startDayKey: start, endDayKey: end, years: years)
+        }
+    }
+
+    /// The calendar years of bank holidays a leave balance for `user` needs today (`myProfileBankHolidayRange` with the
+    /// organisation's `annualLeaveDefaults`). Empty when the script did not answer.
+    static func leaveBalanceBankHolidayYears(for user: AppUser?, now: Date = Date()) -> [Int] {
+        guard let user else { return [] }
+        let input: [String: Any] = [
+            "nowMs": MyProfileSummaryInput.nowMsFlooredToMinute(now),
+            "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
+            "user": MyProfileSummaryInput.userRow(user),
+            "leaveDefaults": MyProfileSummaryInput.leaveDefaultsRow(OrganizationRulebookContext.annualLeaveDefaults),
+        ]
+        return myProfileBankHolidayRange(input)?.years ?? []
+    }
+
     nonisolated private static let myProfileMemo = RulebookAnswerMemo<String, RulebookMyProfileSummary>(limit: 16)
 
     /// RULEBOOK 1.35.0 §12 `myProfileSummary(input)`. Nil when the script did not answer.
@@ -142,6 +179,12 @@ enum MyProfileSummaryInput {
         return row
     }
 
+    /// `now` floored to the whole minute, in epoch milliseconds. Never ahead of `now`, so a day boundary is never
+    /// reached early; at most 59 seconds late.
+    static func nowMsFlooredToMinute(_ now: Date) -> Double {
+        (now.timeIntervalSince1970 / 60).rounded(.down) * 60_000
+    }
+
     static func build(
         user: AppUser,
         roster: [AppUser],
@@ -155,7 +198,9 @@ enum MyProfileSummaryInput {
     ) -> [String: Any] {
         func optional(_ value: String?) -> Any { value.map { $0 as Any } ?? NSNull() }
         return [
-            "nowMs": (now.timeIntervalSince1970 * 1000).rounded(),
+            // Floored to the minute: every figure depends only on the organisation day, and a whole-minute instant
+            // keeps the memo key (the exact input) stable across redraws instead of changing every millisecond.
+            "nowMs": nowMsFlooredToMinute(now),
             "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
             "viewer": ["id": user.id, "email": user.email],
             "user": userRow(user),

@@ -1914,10 +1914,9 @@ struct OperativeQualificationsReadOnlyView: View {
 }
 
 /// RULEBOOK 1.35.0 §12: the Home avatar opens the one My Profile screen (`SettingsProfileDetailView`, the same screen as
-/// Settings → My Profile) in a sheet, with the Settings gear and Done. Before 1.35 this was a separate read-only card
+/// Settings → My Profile) in a sheet, with the Settings gear and Done (Done asks first when the VAT / UTR draft is unsaved). Before 1.35 this was a separate read-only card
 /// that labelled every rate "Day rate"; the merged screen reads the rate with `readStoredRates`.
 private struct HomeProfileCardSheet: View {
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -1931,7 +1930,10 @@ private struct HomeProfileCardSheet: View {
 
     var body: some View {
         NavigationStack {
-            SettingsProfileDetailView()
+            // `userStore.currentUser` inside: the signed-in person's own users document for the open organisation.
+            // `displayUser` (the old card) only adds the role-testing preset, which changes permissions, not personal
+            // data, so the figures, rate and billing details are the person's own either way.
+            SettingsProfileDetailView(isSheetRoot: true)
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
                 .environmentObject(operativeStore)
@@ -1958,10 +1960,6 @@ private struct HomeProfileCardSheet: View {
                         }
                         .accessibilityIdentifier("homeProfileCard.settings")
                         .accessibilityLabel("Settings")
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                            .accessibilityIdentifier("homeProfileCard.done")
                     }
                 }
         }
