@@ -87,6 +87,9 @@ struct ProjectDetailView: View {
     @State private var scheduleOperativeSeedBooking: Booking? = nil
     @State private var scheduleOperativeGroupId: String? = nil
     @State private var bookingEditTarget: DailyOverviewEditTarget?
+    /// 1.33.1: the save Edit booking asked for, run once its sheet has gone, so the leave check (when there is one) is
+    /// never presented while that sheet is still closing.
+    @State private var afterBookingEditDismiss: (() -> Void)?
     /// Why a labour booking delete did not happen (refused or offline), shown once the edit sheet has closed.
     @State private var labourDeleteRefusalMessage: String?
     @EnvironmentObject private var smartCache: SmartCacheService
@@ -226,7 +229,11 @@ struct ProjectDetailView: View {
                 .environmentObject(notificationService)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
-        .sheet(item: $bookingEditTarget) { target in
+        .sheet(item: $bookingEditTarget, onDismiss: {
+            let pending = afterBookingEditDismiss
+            afterBookingEditDismiss = nil
+            pending?()
+        }) { target in
             projectDetailBookingEditSheet(for: target)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
@@ -1339,15 +1346,9 @@ struct ProjectDetailView: View {
 
     private func handleSchedulingCellTap(row: SchedulingGridPersonRow, day: SchedulingGridDayCell) {
         if let booking = day.operativeBooking {
-            if let groupId = booking.bookingGroupId?.trimmingCharacters(in: .whitespacesAndNewlines), !groupId.isEmpty {
-                let peers = bookingsForDate(day.date).filter { $0.bookingGroupId == groupId }
-                if peers.count > 1 {
-                    scheduleOperativeSeedBooking = nil
-                    scheduleOperativeGroupId = groupId
-                    showingScheduleOperative = true
-                    return
-                }
-            }
+            // 1.33.1 (owner): tapping a person's booking always opens Edit booking for that booking — times on the
+            // wheels, Save on the same sheet — even when it was booked with others. Before, a group booking opened the
+            // whole Schedule booking screen. The day list's "Edit group" still edits the group.
             bookingEditTarget = .operative(
                 booking: booking,
                 project: project,
@@ -1435,13 +1436,22 @@ struct ProjectDetailView: View {
                 workEndTime: draft.workEnd
             )
             let bookedByName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
-            await notificationService.notifyBookedUsers(
-                projectName: project.siteName,
-                bookedBy: bookedByName,
-                recipients: [.init(operativeId: operative.id, dates: [request.day])],
-                projectId: project.id,
-                catalogue: project.jobType == .smallWorks ? "smallWorks" : "projects"
-            )
+            // 1.33.1: the notice follows on its own task, so "Saving…" ends when the booking is saved, not when every
+            // notice has been confirmed by the server.
+            let service = notificationService
+            let projectName = project.siteName
+            let projectId = project.id
+            let catalogue = project.jobType == .smallWorks ? "smallWorks" : "projects"
+            let recipients: [NotificationService.BookedUserRecipient] = [.init(operativeId: operative.id, dates: [request.day])]
+            Task {
+                await service.notifyBookedUsers(
+                    projectName: projectName,
+                    bookedBy: bookedByName,
+                    recipients: recipients,
+                    projectId: projectId,
+                    catalogue: catalogue
+                )
+            }
         case .managerSiteBookings(let userId, let locationType):
             let booking = ManagerSiteBooking(
                 userId: userId,
@@ -1618,16 +1628,16 @@ struct ProjectDetailView: View {
                 showsBreakdown: options.showsBreakdown,
                 showsFooterNote: options.showsFooterNote,
                 showsPayeNote: options.showsPayeNote,
+                showsInlineWheels: true,
                 initialChoice: OperativeDayBookingChoice(from: booking),
                 onSave: { start, end, isBreakRemoved, otMult in
-                    bookingEditTarget = nil
-                    var updated = booking
-                    updated.timeSlot = .customHours
-                    updated.workStartTime = start
-                    updated.workEndTime = end
-                    updated.isBreakRemoved = isBreakRemoved
-                    updated.otMultiplierOverride = otMult
-                    updated.updatedAt = Date()
+                    let updated = ScheduleBookingEditSave.labour(
+                        booking,
+                        start: start,
+                        end: end,
+                        isBreakRemoved: isBreakRemoved,
+                        otMultiplierOverride: otMult
+                    )
                     // Leave is checked only when the slot or times change (RULEBOOK 1.16.0 §5, §9).
                     let timesChanged = updated.timeSlot != booking.timeSlot
                         || updated.workStartTime != booking.workStartTime
@@ -1640,9 +1650,12 @@ struct ProjectDetailView: View {
                         users: userStore.organizationUsers,
                         policy: firebaseBackend.payrollPolicy(for: updated.date)
                     ) : []
-                    leaveGate.runSingle(rows: rows, afterDismiss: true) {
-                        Task { await bookingStore.updateBooking(updated) }
+                    afterBookingEditDismiss = {
+                        leaveGate.runSingle(rows: rows, afterDismiss: true) {
+                            Task { await bookingStore.updateBooking(updated) }
+                        }
                     }
+                    bookingEditTarget = nil
                 },
                 onCancel: { bookingEditTarget = nil },
                 onDelete: labourBookingDeleteAction(booking),
@@ -1657,15 +1670,15 @@ struct ProjectDetailView: View {
                 headerName: personName,
                 headerInitials: PlannerUIInitials.from(personName),
                 allowsOtMultiplierOverride: false,
+                showsInlineWheels: true,
                 initialChoice: booking.hoursEditChoice(policy: firebaseBackend.payrollPolicy(for: booking.date)),
                 onSave: { start, end, isBreakRemoved, _ in
-                    bookingEditTarget = nil
-                    var updated = booking
-                    updated.timeSlot = .customHours
-                    updated.workStartTime = start
-                    updated.workEndTime = end
-                    updated.isBreakRemoved = isBreakRemoved
-                    updated.updatedAt = Date()
+                    let updated = ScheduleBookingEditSave.managerSite(
+                        booking,
+                        start: start,
+                        end: end,
+                        isBreakRemoved: isBreakRemoved
+                    )
                     let timesChanged = updated.timeSlot != booking.timeSlot
                         || updated.workStartTime != booking.workStartTime
                         || updated.workEndTime != booking.workEndTime
@@ -1676,9 +1689,12 @@ struct ProjectDetailView: View {
                         users: userStore.organizationUsers,
                         policy: firebaseBackend.payrollPolicy(for: updated.date)
                     ) : []
-                    leaveGate.runSingle(rows: rows, afterDismiss: true) {
-                        Task { await managerScheduleStore.saveBooking(updated) }
+                    afterBookingEditDismiss = {
+                        leaveGate.runSingle(rows: rows, afterDismiss: true) {
+                            Task { await managerScheduleStore.saveBooking(updated) }
+                        }
                     }
+                    bookingEditTarget = nil
                 },
                 onCancel: { bookingEditTarget = nil },
                 // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete it.

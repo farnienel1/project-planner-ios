@@ -7596,7 +7596,9 @@ class FirebaseBackend: ObservableObject {
             let patch = write.firestoreFields(from: next)
             guard !patch.isEmpty else { return }
             print("🔥🔥🔥 DEBUG: Updating booking fields \(patch.keys.sorted()) at organizations/\(orgId)/bookings/\(booking.documentKey)")
-            try await ref.updateData(WriteMetadata.stamped(patch, userId: uid))
+            // 1.33.1: bounded wait for the server's confirmation (`FirestoreWriteAck`); the write itself is unchanged.
+            let stamped = WriteMetadata.stamped(patch, userId: uid)
+            try await FirestoreWriteAck.run { try await ref.updateData(stamped) }
             return
         }
 
@@ -7606,7 +7608,9 @@ class FirebaseBackend: ObservableObject {
 
         print("🔥🔥🔥 DEBUG: Creating booking at organizations/\(orgId)/bookings/\(booking.documentKey)")
 
-        try await ref.setData(WriteMetadata.stamped(bookingData, userId: uid), merge: true)
+        // 1.33.1: bounded wait for the server's confirmation (`FirestoreWriteAck`); the write itself is unchanged.
+        let stampedCreate = WriteMetadata.stamped(bookingData, userId: uid)
+        try await FirestoreWriteAck.run { try await ref.setData(stampedCreate, merge: true) }
 
         print("🔥🔥🔥 DEBUG: Booking saved successfully to Firebase")
     }
@@ -8015,17 +8019,21 @@ class FirebaseBackend: ObservableObject {
                 var changes = write.firestoreFields(from: next)
                 for key in ["updatedAt", "updatedBy", "updatedFrom"] { changes.removeValue(forKey: key) }
                 guard !changes.isEmpty else { return }
-                try await ref.updateData(WriteMetadata.stamped(changes, userId: uid))
+                // 1.33.1: bounded wait for the server's confirmation (`FirestoreWriteAck`); the write is unchanged.
+                let stampedChanges = WriteMetadata.stamped(changes, userId: uid)
+                try await FirestoreWriteAck.run { try await ref.updateData(stampedChanges) }
                 return
             }
-            try await ref.updateData(WriteMetadata.stamped(patch, userId: uid))
+            let stampedPatch = WriteMetadata.stamped(patch, userId: uid)
+            try await FirestoreWriteAck.run { try await ref.updateData(stampedPatch) }
             return
         }
         var data = BookingWritePatch.managerValues(booking, deletesClearedFields: false)
         data["id"] = booking.documentKey
         data["organizationId"] = organizationId
         data["createdAt"] = Timestamp(date: booking.createdAt)
-        try await ref.setData(WriteMetadata.stamped(data, userId: uid), merge: true)
+        let stampedCreate = WriteMetadata.stamped(data, userId: uid)
+        try await FirestoreWriteAck.run { try await ref.setData(stampedCreate, merge: true) }
     }
 
     func loadManagerSiteBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [ManagerSiteBooking] {

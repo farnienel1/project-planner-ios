@@ -345,6 +345,22 @@ class BookingStore: ObservableObject {
         }
     }
 
+    /// `updateBooking`, then the message this save left (refused, not synced, saved locally), else nil. The store's
+    /// `errorMessage` is cleared first, so a message left by an earlier load or save is never read as this save's —
+    /// Scheduling read a stale one as a failed edit and stayed on the screen with nothing shown (1.33.1).
+    func updateBookingReportingProblem(_ booking: Booking) async -> String? {
+        errorMessage = nil
+        await updateBooking(booking)
+        return errorMessage
+    }
+
+    /// `addBookings`, then the message this save left, else nil (the same reading as `updateBookingReportingProblem`).
+    func addBookingsReportingProblem(_ newBookings: [Booking]) async -> String? {
+        errorMessage = nil
+        await addBookings(newBookings)
+        return errorMessage
+    }
+
     /// RULEBOOK §2 "Pending sync": this booking has a change in the outbox the server has not confirmed.
     func isPendingSync(_ booking: Booking) -> Bool {
         OfflineOutboxStore.shared.hasPendingSync(bookingId: booking.id)

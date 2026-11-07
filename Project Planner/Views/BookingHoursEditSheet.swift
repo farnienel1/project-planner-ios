@@ -540,6 +540,9 @@ struct OperativeCustomHoursSheet: View {
     var forceSolidBlueTimeline: Bool
     /// When false, content is shown in the parent `NavigationStack` (avoids nested covers).
     var embedsNavigation: Bool
+    /// 1.33.1 (owner): the start and finish wheels sit open side by side in the sheet (edit a booking from Scheduling:
+    /// scroll the times, press Save). Off: the Start / End tiles open one wheel at a time, as before. Display only.
+    var showsInlineWheels: Bool
     let initialChoice: OperativeDayBookingChoice?
     let onSave: (String, String, Bool, Double?) -> Void
     let onCancel: () -> Void
@@ -601,6 +604,7 @@ struct OperativeCustomHoursSheet: View {
         showsPayeNote: Bool = false,
         forceSolidBlueTimeline: Bool = false,
         embedsNavigation: Bool = true,
+        showsInlineWheels: Bool = false,
         initialChoice: OperativeDayBookingChoice?,
         onSave: @escaping (String, String, Bool, Double?) -> Void,
         onCancel: @escaping () -> Void,
@@ -630,6 +634,7 @@ struct OperativeCustomHoursSheet: View {
         self.showsPayeNote = showsPayeNote
         self.forceSolidBlueTimeline = forceSolidBlueTimeline
         self.embedsNavigation = embedsNavigation
+        self.showsInlineWheels = showsInlineWheels
         self.initialChoice = initialChoice
         self.onSave = onSave
         self.onCancel = onCancel
@@ -1144,8 +1149,30 @@ struct OperativeCustomHoursSheet: View {
         }
     }
 
-    /// Start / End tiles open the existing quarter-hour wheel (same bindings, same start-before-end guard).
+    /// Start / End tiles open the existing quarter-hour wheel (same bindings, same start-before-end guard). With
+    /// `showsInlineWheels` both wheels are open side by side instead (the same bindings and guard).
+    @ViewBuilder
     private var hoursCard: some View {
+        if showsInlineWheels {
+            inlineWheelsCard
+        } else {
+            tileHoursCard
+        }
+    }
+
+    private var inlineWheelsCard: some View {
+        HStack(alignment: .top, spacing: 8) {
+            BookingHMTimePickerColumn(title: "START", hour: startHourBinding, minute: startMinuteBinding)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("operativeCustomHours.inlineStart")
+            BookingHMTimePickerColumn(title: "FINISH", hour: endHourBinding, minute: endMinuteBinding)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("operativeCustomHours.inlineEnd")
+        }
+        .ppBookingCard(padding: 12)
+    }
+
+    private var tileHoursCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 Button { toggleTimeField(.start) } label: {
@@ -1951,6 +1978,45 @@ private struct UnpaidBreakWarningSheet: View {
 /// controls, breakdown, footer and overtime rate for every person (RULEBOOK 1.29.0 §25: the rate applies to PAYE
 /// bookings too), with the PAYE note added for a PAYE operative. Hiding the controls for PAYE also opened the sheet
 /// with the break off, so Save rewrote `isBreakRemoved = true` on a booking nobody changed.
+/// 1.33.1: what Edit booking (Scheduling) writes onto the booking it opened, for the times, break and rate on the
+/// sheet — the mapping the inline save closures had, moved here unchanged so a test can hold it. The store then writes
+/// only the fields that differ (`BookingWritePatch.changedLabourFields` / `changedManagerFields`, RULEBOOK §1).
+enum ScheduleBookingEditSave {
+    static func labour(
+        _ booking: Booking,
+        start: String,
+        end: String,
+        isBreakRemoved: Bool,
+        otMultiplierOverride: Double?,
+        now: Date = Date()
+    ) -> Booking {
+        var updated = booking
+        updated.timeSlot = .customHours
+        updated.workStartTime = start
+        updated.workEndTime = end
+        updated.isBreakRemoved = isBreakRemoved
+        updated.otMultiplierOverride = otMultiplierOverride
+        updated.updatedAt = now
+        return updated
+    }
+
+    static func managerSite(
+        _ booking: ManagerSiteBooking,
+        start: String,
+        end: String,
+        isBreakRemoved: Bool,
+        now: Date = Date()
+    ) -> ManagerSiteBooking {
+        var updated = booking
+        updated.timeSlot = .customHours
+        updated.workStartTime = start
+        updated.workEndTime = end
+        updated.isBreakRemoved = isBreakRemoved
+        updated.updatedAt = now
+        return updated
+    }
+}
+
 struct LabourBookingEditOptions: Equatable {
     let showsBreakControls: Bool
     let showsBreakdown: Bool

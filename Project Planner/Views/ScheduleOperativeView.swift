@@ -39,6 +39,8 @@ struct ScheduleOperativeView: View {
     @State private var currentMonth: Date = Date()
     @State private var quickSelectDays: Int? = nil
     @State private var showingBookingConfirmation = false
+    /// 1.33.1: what Confirm left when it was not a clean save (a refusal, "saved locally", nothing new to save).
+    @State private var saveOutcomeAlert: ScheduleBookingSaveAlert?
     @State private var isBooking = false
     /// Operatives with a time overlap awaiting ✓ (add to list) or ✕ (remove).
     @State private var clashReviewOperativeIds: Set<UUID> = []
@@ -214,6 +216,15 @@ struct ScheduleOperativeView: View {
                     .accessibilityIdentifier("scheduleOperative.ok2")
             } message: {
                 Text("New hours have been selected, which has caused clashes with other bookings. Make your final change and then acknowledge each clash above before being able to Confirm booking.")
+            }
+            .alert(item: $saveOutcomeAlert) { alert in
+                Alert(
+                    title: Text(alert.title),
+                    message: Text(alert.message),
+                    dismissButton: .default(Text("OK")) {
+                        if alert.outcome.closesScreen { dismiss() }
+                    }
+                )
             }
             .alert("Date selection", isPresented: $showingDateSelectionAlert) {
                 Button("OK", role: .cancel) { }
@@ -1739,6 +1750,8 @@ struct ScheduleOperativeView: View {
             let operatives = selectableOperatives.filter { selectedOperatives.contains($0.id) }
             var newBookings: [Booking] = []
             var createdDatesByOperative: [UUID: Set<Date>] = [:]
+            /// 1.33.1: the message a save left (`BookingStore.*ReportingProblem`), shown instead of silently staying put.
+            var saveProblem: String? = nil
             let groupId: String? = operatives.count > 1 ? UUID().uuidString : nil
 
             for operative in operatives {
@@ -1757,7 +1770,8 @@ struct ScheduleOperativeView: View {
                     // leave none when the create failed (launch data audit #7). An update also queues offline.
                     if let rid = replaceBookingOnConfirmByOverrideKey[ovKey],
                        let existing = bookingStore.bookings.first(where: { $0.id == rid }) {
-                        replaceBookingOnConfirmByOverrideKey.removeValue(forKey: ovKey)
+                        // 1.33.1: the key is kept until the outcome is known, so a refused edit stays an edit when the
+                        // booker tries again (the whole map is cleared once something saved).
                         var replaced = existing
                         if replaced.projectId != project.id {
                             replaced.projectId = project.id
@@ -1772,8 +1786,10 @@ struct ScheduleOperativeView: View {
                         replaced.bookingGroupId = groupId
                         replaced.status = .confirmed
                         replaced.updatedAt = Date()
-                        await bookingStore.updateBooking(replaced)
-                        if bookingStore.errorMessage == nil {
+                        // 1.33.1: judged on this save's own message, never one an earlier load or save left behind.
+                        if let problem = await bookingStore.updateBookingReportingProblem(replaced) {
+                            saveProblem = problem
+                        } else {
                             createdDatesByOperative[operative.id, default: []].insert(replaced.date)
                         }
                         continue
@@ -1814,8 +1830,40 @@ struct ScheduleOperativeView: View {
             }
 
             if !newBookings.isEmpty {
-                await bookingStore.addBookings(newBookings)
+                if let problem = await bookingStore.addBookingsReportingProblem(newBookings) {
+                    saveProblem = problem
+                }
             }
+
+            // 1.33.1: the screen finishes as soon as the bookings are saved on this phone. The "You've been booked"
+            // notices follow on their own task: each one waits for the server, and awaiting them here left the
+            // Confirm spinner turning for ever although the booking had saved.
+            let outcome = ScheduleBookingSaveOutcome.decide(
+                savedCount: createdDatesByOperative.values.reduce(0) { $0 + $1.count },
+                problem: saveProblem
+            )
+            await MainActor.run {
+                isBooking = false
+                switch outcome {
+                case .confirmed:
+                    showingBookingConfirmation = true
+                case .savedWithProblem(let message), .notSaved(let message):
+                    saveOutcomeAlert = ScheduleBookingSaveAlert(outcome: outcome, message: message)
+                case .nothingToSave:
+                    saveOutcomeAlert = ScheduleBookingSaveAlert(outcome: outcome, message: ScheduleBookingSaveOutcome.nothingToSaveMessage)
+                }
+                if outcome.clearsSelection {
+                    acknowledgedConflictIds.removeAll()
+                    struckConflictIds.removeAll()
+                    selectedDates.removeAll()
+                    selectedOperatives.removeAll()
+                    dateSlotChoices.removeAll()
+                    operativeSlotOverrides.removeAll()
+                    operativeDefaultChoice.removeAll()
+                    replaceBookingOnConfirmByOverrideKey.removeAll()
+                }
+            }
+
             if !createdDatesByOperative.isEmpty {
                 ScheduleChangeNotifier.postBookingStoreDidChange()
                 let bookedRecipients = createdDatesByOperative.map { (operativeId, dates) in
@@ -1824,26 +1872,20 @@ struct ScheduleOperativeView: View {
                         dates: Array(dates)
                     )
                 }
-                await notificationService.notifyBookedUsers(
-                    projectName: project.siteName,
-                    bookedBy: loggedInUserName,
-                    recipients: bookedRecipients,
-                    projectId: project.id,
-                    catalogue: project.jobType == .smallWorks ? "smallWorks" : "projects"
-                )
-            }
-            
-            await MainActor.run {
-                isBooking = false
-                showingBookingConfirmation = !createdDatesByOperative.isEmpty
-                acknowledgedConflictIds.removeAll()
-                struckConflictIds.removeAll()
-                selectedDates.removeAll()
-                selectedOperatives.removeAll()
-                dateSlotChoices.removeAll()
-                operativeSlotOverrides.removeAll()
-                operativeDefaultChoice.removeAll()
-                replaceBookingOnConfirmByOverrideKey.removeAll()
+                let service = notificationService
+                let projectName = project.siteName
+                let bookedBy = loggedInUserName
+                let projectId = project.id
+                let catalogue = project.jobType == .smallWorks ? "smallWorks" : "projects"
+                Task {
+                    await service.notifyBookedUsers(
+                        projectName: projectName,
+                        bookedBy: bookedBy,
+                        recipients: bookedRecipients,
+                        projectId: projectId,
+                        catalogue: catalogue
+                    )
+                }
             }
         }
     }
