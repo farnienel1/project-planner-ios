@@ -219,4 +219,41 @@ final class IOS136FixesTests: XCTestCase {
         let subcontractor = try source("Project Planner/Views/ScheduleSubcontractorView.swift")
         XCTAssertFalse(subcontractor.contains("Calendar.current"))
     }
+
+    // MARK: 1.36.0 hand-off: rate history under every id of the person (§8)
+
+    /// Failure before: pay and Edit User's previous rates read history under one `operatives` row, so a rate saved
+    /// under the person's other row (a re-added person, a second catalogue row on their email) was missed.
+    func testRateHistoryIdsCoverEveryOperativesRowOfThePerson() {
+        let user = LogicFixtures.selfEmployedUser(id: "TEST-u1", email: "worker@example.com")
+        let rowA = LogicFixtures.operative(id: UUID(), email: "worker@example.com")
+        let rowB = LogicFixtures.operative(id: UUID(), email: "Worker@Example.com")
+        let other = LogicFixtures.operative(id: UUID(), email: "someone@example.com")
+        let ids = PayrollRateResolver.personOperativeIds(user: user, operative: nil, operatives: [rowA, rowB, other])
+        XCTAssertEqual(Set(ids), [rowA.id.uuidString, rowB.id.uuidString])
+        XCTAssertEqual(
+            PayrollRateResolver.personOperativeIds(user: nil, operative: other, operatives: [rowA]),
+            [other.id.uuidString]
+        )
+    }
+
+    func testRateHistoryEntriesMatchEveryIdWithoutCase() {
+        let rowId = UUID()
+        func entry(_ day: Double, user: String?, operative: UUID?) -> OperativeDayRateHistoryEntry {
+            OperativeDayRateHistoryEntry(
+                id: UUID(),
+                userId: user,
+                operativeId: operative,
+                dayRate: 200 + day,
+                effectiveAt: Date(timeIntervalSince1970: day * 86_400),
+                createdAt: Date(timeIntervalSince1970: day * 86_400)
+            )
+        }
+        let collection = OperativeDayRateHistoryCollection(
+            byUserId: ["test-u1": [entry(1, user: "test-u1", operative: nil)], "TEST-OLD": [entry(2, user: "TEST-OLD", operative: nil)]],
+            byOperativeId: [rowId.uuidString: [entry(3, user: nil, operative: rowId)], UUID().uuidString: [entry(4, user: nil, operative: nil)]]
+        )
+        let rows = collection.entries(userIds: ["TEST-U1", "test-old"], operativeIds: [rowId.uuidString.lowercased()])
+        XCTAssertEqual(rows.map(\.dayRate), [201, 202, 203])
+    }
 }

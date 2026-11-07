@@ -1515,7 +1515,11 @@ struct WeeklyReportView: View {
             operative: StaffEmailIdentity.operativeUsedForPay(user: user, operative: operative),
             on: date,
             history: dayRateHistoryCollection,
-            standardDayHours: standardDayHours
+            standardDayHours: standardDayHours,
+            // RULEBOOK 1.36.0 §8: history under every operatives row of the person counts (web `personRateHistoryIds`).
+            personOperativeIds: PayrollRateResolver.personOperativeIds(
+                user: user, operative: operative, operatives: operativeStore.allOperatives
+            )
         )
     }
 

@@ -3588,8 +3588,13 @@ struct EditUserView: View {
         }
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
+        // RULEBOOK 1.36.0 §8: previous rates under every id of the person (users ids from `personIdSet` through the
+        // stored former / same-email ids, and every `operatives` row `bookingIdsForAccount` matches), without case.
+        let operativeIds = PayrollRateResolver.personOperativeIds(
+            user: user, operative: linkedOperativeForUser, operatives: operativeStore.allOperatives
+        )
         dayRateHistory = collection
-            .mergedEntries(userId: user.id, operativeId: linkedOperativeForUser?.id)
+            .entries(userIds: [user.id] + user.formerUserIds + user.sameEmailUserIds, operativeIds: operativeIds)
             .sorted(by: { $0.effectiveAt > $1.effectiveAt })
     }
 
