@@ -673,14 +673,15 @@ final class Booking1331SaveFlowTests: XCTestCase {
         XCTAssertFalse(detail.contains("Task { await managerScheduleStore.saveBooking(updated) }"))
         XCTAssertTrue(detail.contains("bookingStore.updateBookingReportingProblem(\n                                    updated,\n                                    organizationId: savingOrganizationId"))
         XCTAssertTrue(detail.contains("managerScheduleStore.saveBookingReportingProblem(\n                                    updated,\n                                    organizationId: savingOrganizationId"))
-        XCTAssertEqual(detail.components(separatedBy: "bookingEditSaveAlert = ScheduleBookingSaveAlert.forEdit(result)").count - 1, 2)
+        XCTAssertEqual(detail.components(separatedBy: "queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))").count - 1, 2)
 
-        XCTAssertEqual(ScheduleBookingSaveAlert.forEdit(.saved).title, "Booking saved")
-        XCTAssertEqual(ScheduleBookingSaveAlert.forEdit(.saved).message, ScheduleBookingSaveAlert.editSavedMessage)
-        let pending = ScheduleBookingSaveAlert.forEdit(.queued(BookingStore.pendingSyncMessage))
+        let saved = try XCTUnwrap(ScheduleBookingSaveAlert.forEdit(.saved))
+        XCTAssertEqual(saved.title, "Booking saved")
+        XCTAssertEqual(saved.message, ScheduleBookingSaveAlert.editSavedMessage)
+        let pending = try XCTUnwrap(ScheduleBookingSaveAlert.forEdit(.queued(BookingStore.pendingSyncMessage)))
         XCTAssertEqual(pending.title, "Booking saved — Pending sync")
         XCTAssertEqual(pending.message, BookingStore.pendingSyncMessage)
-        let refused = ScheduleBookingSaveAlert.forEdit(.refused("Refused here"))
+        let refused = try XCTUnwrap(ScheduleBookingSaveAlert.forEdit(.refused("Refused here")))
         XCTAssertEqual(refused.title, "Booking not saved")
         XCTAssertEqual(refused.message, "Refused here")
 
@@ -770,7 +771,11 @@ final class Booking1331SaveFlowTests: XCTestCase {
         }
         try await Task.sleep(nanoseconds: 600_000_000)
         XCTAssertFalse(SDKPendingWrites.shared.contains(path: key))
-        XCTAssertEqual(OfflineOutboxStore.shared.lastRefusalMessage, CanonicalBusinessEngine.bookingReplayRefusedMessage)
+        // Review NIT 4: plain wording for a late refusal; the replay message stays for real outbox replay refusals.
+        XCTAssertEqual(OfflineOutboxStore.shared.lastRefusalMessage, SDKPendingWrites.lateRefusalMessage)
+        XCTAssertEqual(SDKPendingWrites.lateRefusalMessage, "This change couldn't be saved. Please check the booking and try again.")
+        XCTAssertNotEqual(SDKPendingWrites.lateRefusalMessage, CanonicalBusinessEngine.bookingReplayRefusedMessage)
+        XCTAssertTrue(try source("Core/OfflineSyncCoordinator.swift").contains("CanonicalBusinessEngine.bookingReplayRefusedMessage"))
         XCTAssertEqual(box.info["collection"], "bookings")
         XCTAssertEqual(box.info["documentId"]?.lowercased(), booking.documentKey.lowercased())
 
@@ -805,11 +810,11 @@ final class Booking1331SaveFlowTests: XCTestCase {
 
         let store = try source("Core/BookingStore.swift")
         let delete = try body(of: "    func deleteBooking(_ booking: Booking) async {", in: store)
-        XCTAssertTrue(delete.contains("OfflineOutboxStore.shared.discardQueuedBookingSaves(bookingId: booking.id)"))
+        XCTAssertTrue(delete.contains("outbox.takeQueuedBookingSaves(bookingId: booking.id)"))
         XCTAssertTrue(delete.contains("fingerprint: queuedFingerprint"))
         let managerStore = try source("Core/ManagerScheduleStore.swift")
         let managerDelete = try body(of: "    func deleteBooking(_ booking: ManagerSiteBooking) async {", in: managerStore)
-        XCTAssertTrue(managerDelete.contains("OfflineOutboxStore.shared.discardQueuedBookingSaves(bookingId: booking.id)"))
+        XCTAssertTrue(managerDelete.contains("outbox.takeQueuedBookingSaves(bookingId: booking.id)"))
     }
 
     /// Review NIT: a write that finishes early cancels its timer, so the timeout never fires after the fact.
@@ -823,5 +828,223 @@ final class Booking1331SaveFlowTests: XCTestCase {
         let ack = try source("Core/FirestoreWriteAck.swift")
         XCTAssertTrue(ack.contains("timer.cancel()"))
         XCTAssertTrue(ack.contains("guard !Task.isCancelled else { return }"))
+    }
+
+    // MARK: Review round 3 (1.33.1)
+
+    /// Fix 1: a delete through Firestore takes the booking's queued saves out of the queue and keeps them; a refused or
+    /// failed delete puts them back, so the edit the booking is restored with still syncs. They are thrown away only
+    /// once the delete went through.
+    func testARefusedDeletePutsTheQueuedEditBack() throws {
+        OfflineOutboxStore.shared.clearAll()
+        defer { OfflineOutboxStore.shared.clearAll() }
+        let outbox = OfflineOutboxStore.shared
+        let booking = LogicFixtures.booking(on: Date(), slot: .customHours, start: "07:30", end: "16:00")
+        outbox.enqueueSaveBooking(booking, changedFields: ["workEndTime"], organizationId: "TEST-ORG", baselineFingerprint: "TEST-baseline")
+
+        let taken = outbox.takeQueuedBookingSaves(bookingId: booking.id)
+        XCTAssertEqual(taken.kind, .edit(baseline: "TEST-baseline"))
+        XCTAssertEqual(taken.entries.count, 1)
+        XCTAssertFalse(outbox.hasPendingSync(bookingId: booking.id), "out of the queue while the delete runs")
+
+        outbox.requeueBookingSaves(taken.entries)
+        XCTAssertEqual(outbox.entries.map(\.id), taken.entries.map(\.id), "the same entry is back, in its place")
+        outbox.requeueBookingSaves(taken.entries)
+        XCTAssertEqual(outbox.entries.count, 1, "putting it back twice adds nothing")
+        let pending = outbox.pendingLabourBookings(organizationId: "TEST-ORG")
+        XCTAssertEqual(pending.saves.map(\.id), [booking.id])
+
+        // A save of the same booking queued while the delete ran is merged with it: fields added up, older baseline.
+        _ = outbox.takeQueuedBookingSaves(bookingId: booking.id)
+        var later = booking
+        later.workStartTime = "08:00"
+        outbox.enqueueSaveBooking(later, changedFields: ["workStartTime"], organizationId: "TEST-ORG", baselineFingerprint: "TEST-newer")
+        outbox.requeueBookingSaves(taken.entries)
+        XCTAssertEqual(outbox.entries.count, 1)
+        let merged = try JSONDecoder().decode(OfflineSaveBookingPayload.self, from: try XCTUnwrap(outbox.entries.first).payload)
+        XCTAssertEqual(merged.changedFields, ["workEndTime", "workStartTime"])
+        XCTAssertEqual(merged.baselineFingerprint, "TEST-baseline")
+        XCTAssertEqual(merged.booking.workStartTime, "08:00", "the newer copy is written")
+        XCTAssertEqual(outbox.entries.first?.id, taken.entries.first?.id)
+
+        // Never put back while a delete of that booking is queued (the delete replaces the edit, RULEBOOK §2).
+        outbox.clearAll()
+        outbox.enqueueDeleteBooking(booking, fingerprint: "TEST-fp", organizationId: "TEST-ORG")
+        outbox.requeueBookingSaves(taken.entries)
+        XCTAssertEqual(outbox.entries.map(\.operation), [.deleteBooking])
+
+        // Both stores: taken before the write, put back in the refusal branch, never discarded up front.
+        for (file, marker) in [
+            ("Core/BookingStore.swift", "    func deleteBooking(_ booking: Booking) async {"),
+            ("Core/ManagerScheduleStore.swift", "    func deleteBooking(_ booking: ManagerSiteBooking) async {"),
+        ] {
+            let delete = try body(of: marker, in: try source(file))
+            XCTAssertFalse(delete.contains("discardQueuedBookingSaves"), file)
+            let take = try XCTUnwrap(delete.range(of: "outbox.takeQueuedBookingSaves(bookingId: booking.id)"), file)
+            let requeue = try XCTUnwrap(delete.range(of: "outbox.requeueBookingSaves(taken.entries)"), file)
+            XCTAssertLessThan(take.lowerBound, requeue.lowerBound, file)
+            XCTAssertTrue(delete.contains("if error != nil { OfflineOutboxStore.shared.requeueBookingSaves(takenEntries) }"), file)
+        }
+    }
+
+    /// Fix 1: a write's late outcome reaches its caller only when its wait timed out, and before the stores hear of a
+    /// refusal.
+    func testTheLateOutcomeOfATimedOutWriteReachesItsCaller() async throws {
+        SDKPendingWrites.shared.removeAll()
+        defer { SDKPendingWrites.shared.removeAll() }
+        final class Outcomes: @unchecked Sendable {
+            var values: [String] = []
+        }
+        let outcomes = Outcomes()
+        struct Refused: Error {}
+        let key = SDKPendingWrites.key(organizationId: "TEST-ORG", collection: "bookings", documentId: "TEST-LATE")
+        do {
+            try await FirestoreWriteAck.run(timeoutSeconds: 0.1, pendingKey: key, onSettledAfterTimeout: { error in
+                outcomes.values.append(error == nil ? "ok" : "refused")
+            }) {
+                try await Task.sleep(nanoseconds: 300_000_000)
+                throw Refused()
+            }
+            XCTFail("expected the timeout")
+        } catch {
+            XCTAssertTrue(FirestoreWriteAck.isPendingInSDK(error))
+        }
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(outcomes.values, ["refused"])
+
+        do {
+            try await FirestoreWriteAck.run(timeoutSeconds: 0.1, pendingKey: key, onSettledAfterTimeout: { error in
+                outcomes.values.append(error == nil ? "ok" : "refused")
+            }) {
+                try await Task.sleep(nanoseconds: 300_000_000)
+            }
+            XCTFail("expected the timeout")
+        } catch {
+            XCTAssertTrue(FirestoreWriteAck.isPendingInSDK(error))
+        }
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(outcomes.values, ["refused", "ok"])
+
+        try await FirestoreWriteAck.run(timeoutSeconds: 1, pendingKey: key, onSettledAfterTimeout: { _ in
+            outcomes.values.append("early")
+        }) {}
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(outcomes.values, ["refused", "ok"], "a write confirmed in time is the caller's own outcome")
+
+        let ack = try source("Core/FirestoreWriteAck.swift")
+        let callback = try XCTUnwrap(ack.range(of: "onSettledAfterTimeout?(failure)"))
+        let settle = try XCTUnwrap(ack.range(of: "SDKPendingWrites.shared.settle(pendingKey, error: failure)"))
+        XCTAssertLessThan(callback.lowerBound, settle.lowerBound)
+    }
+
+    /// Fix 2: after a late refusal the local copy goes and the booking is read again, so it reappears when the server
+    /// has it even if the listener had already published it.
+    func testALateRefusalReadsTheBookingAgain() throws {
+        OfflineOutboxStore.shared.clearAll()
+        defer { OfflineOutboxStore.shared.clearAll() }
+        let booking = LogicFixtures.booking(on: Date(), slot: .customHours, start: "07:30", end: "16:00")
+        let store = BookingStore()
+        store.bookings = [booking]
+        XCTAssertTrue(store.dropLocalCopyAfterLateRefusal(documentId: booking.documentKey.lowercased()))
+        XCTAssertFalse(store.dropLocalCopyAfterLateRefusal(documentId: booking.documentKey), "nothing left to drop")
+
+        store.applyLateRefusalReread(.found(booking), organizationId: "TEST-ORG")
+        XCTAssertEqual(store.bookings.map(\.id), [booking.id], "the server's copy is back")
+        store.applyLateRefusalReread(.found(booking), organizationId: "TEST-ORG")
+        XCTAssertEqual(store.bookings.count, 1, "never twice")
+
+        store.bookings = []
+        store.applyLateRefusalReread(.missing, organizationId: "TEST-ORG")
+        XCTAssertTrue(store.bookings.isEmpty, "gone on the server: stays gone")
+
+        // A change still queued for it shows on top; a queued delete keeps it gone.
+        var edited = booking
+        edited.workEndTime = "17:00"
+        OfflineOutboxStore.shared.enqueueSaveBooking(edited, changedFields: ["workEndTime"], organizationId: "TEST-ORG")
+        store.applyLateRefusalReread(.found(booking), organizationId: "TEST-ORG")
+        XCTAssertEqual(store.bookings.first?.workEndTime, "17:00")
+        store.bookings = []
+        OfflineOutboxStore.shared.enqueueDeleteBooking(booking, fingerprint: "TEST-fp", organizationId: "TEST-ORG")
+        store.applyLateRefusalReread(.found(booking), organizationId: "TEST-ORG")
+        XCTAssertTrue(store.bookings.isEmpty)
+
+        let storeText = try source("Core/BookingStore.swift")
+        let apply = try body(of: "    func applyLateRefusalReread(", in: storeText)
+        XCTAssertTrue(apply.contains("case .unknown:\n            loadData()"), "no answer: a full reload")
+        let backend = try String(contentsOf: appRoot.appendingPathComponent("FirebaseBackend.swift"), encoding: .utf8)
+        let reread = try XCTUnwrap(AddUserSavedDataGuardTests.declaration(startingAt: "func rereadBookingAfterLateRefusal(", in: backend))
+        XCTAssertTrue(reread.contains("getDocumentWithServerTimeoutAndCacheFallback(ref, timeoutSeconds: 8)"), "bounded")
+        XCTAssertTrue(reread.contains("CanonicalBusinessEngine.parseBookingDocuments(payload)"), "the rulebook reader")
+    }
+
+    /// Fix 3: while the outbox replays a booking's queued create, a delete of that booking goes through Firestore after
+    /// it (never "nothing to send"), and the replay never runs an entry a delete took out of the queue meanwhile.
+    func testADeleteWaitsForAReplayInFlight() async throws {
+        OfflineOutboxStore.shared.clearAll()
+        defer { OfflineOutboxStore.shared.clearAll() }
+        let outbox = OfflineOutboxStore.shared
+        let booking = LogicFixtures.booking(on: Date())
+        XCTAssertFalse(outbox.isInFlight(bookingId: booking.id))
+        outbox.markInFlight(entityId: booking.id.uuidString.lowercased())
+        XCTAssertTrue(outbox.isInFlight(bookingId: booking.id), "ids without case")
+        XCTAssertEqual(BookingStore.deleteRoute(queuesWhileOffline: true, pendingInFirestore: outbox.isInFlight(bookingId: booking.id)), .firestore)
+
+        let started = Date()
+        await outbox.waitUntilNotInFlight(bookingId: booking.id, timeoutSeconds: 0.3)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(started), 0.25, "bounded wait")
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            outbox.clearInFlight(entityId: booking.id.uuidString)
+        }
+        let second = Date()
+        await outbox.waitUntilNotInFlight(bookingId: booking.id, timeoutSeconds: 5)
+        XCTAssertLessThan(Date().timeIntervalSince(second), 2, "returns once the replay finished")
+        XCTAssertFalse(outbox.isInFlight(bookingId: booking.id))
+
+        let coordinator = try source("Core/OfflineSyncCoordinator.swift")
+        let process = try XCTUnwrap(AddUserSavedDataGuardTests.declaration(startingAt: "static func processOutbox(", in: coordinator))
+        let skip = try XCTUnwrap(process.range(of: "guard outbox.entries.contains(where: { $0.id == entry.id }) else { continue }"))
+        let mark = try XCTUnwrap(process.range(of: "outbox.markInFlight(entityId: entry.entityId)"))
+        let execute = try XCTUnwrap(process.range(of: "try await execute(entry: entry, firebaseBackend: firebaseBackend)"))
+        XCTAssertLessThan(skip.lowerBound, mark.lowerBound)
+        XCTAssertLessThan(mark.lowerBound, execute.lowerBound)
+        XCTAssertTrue(process.contains("defer { outbox.clearInFlight(entityId: entry.entityId) }"))
+        for (file, marker) in [
+            ("Core/BookingStore.swift", "    func deleteBooking(_ booking: Booking) async {"),
+            ("Core/ManagerScheduleStore.swift", "    func deleteBooking(_ booking: ManagerSiteBooking) async {"),
+        ] {
+            let delete = try body(of: marker, in: try source(file))
+            XCTAssertTrue(delete.contains("let replayInFlight = outbox.isInFlight(bookingId: booking.id)"), file)
+            XCTAssertTrue(delete.contains("let pendingInFirestore = replayInFlight"), file)
+            let wait = try XCTUnwrap(delete.range(of: "await outbox.waitUntilNotInFlight(bookingId: booking.id"), file)
+            let take = try XCTUnwrap(delete.range(of: "outbox.takeQueuedBookingSaves(bookingId: booking.id)"), file)
+            XCTAssertLessThan(wait.lowerBound, take.lowerBound, "the replay finishes before the queue is read")
+        }
+    }
+
+    /// NIT 5: a double tap's second save is "already saving" — no alert and never reported as saved.
+    func testADoubleTapIsAlreadySavingNotSaved() throws {
+        XCTAssertNil(ScheduleBookingSaveAlert.forEdit(.alreadySaving))
+        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(results: [.alreadySaving]), .nothingToSave)
+        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(results: [.saved, .alreadySaving]), .confirmed)
+        XCTAssertEqual(ScheduleBookingSaveOutcome.decide(results: [.refused("No"), .alreadySaving]), .notSaved("No"))
+        let managerStore = try source("Core/ManagerScheduleStore.swift")
+        let save = try body(of: "    func saveBookingReportingProblem(", in: managerStore)
+        let guardRange = try XCTUnwrap(save.range(of: "if pendingSemanticKeys.contains(key) {"))
+        XCTAssertTrue(save[guardRange.upperBound...].prefix(300).contains("return .alreadySaving"))
+    }
+
+    /// NIT 6: an Edit booking outcome that arrives while another sheet is up waits and is shown once it closes.
+    func testAnEditOutcomeWaitsForOtherSheetsToClose() throws {
+        let detail = try source("Views/ProjectDetailView.swift")
+        let blocked = try body(of: "    private var bookingEditAlertBlocked: Bool {", in: detail)
+        for state in ["bookingEditTarget != nil", "leaveGate.pending != nil", "quickAddRequest != nil", "bookingEditSaveAlert != nil"] {
+            XCTAssertTrue(blocked.contains(state), state)
+        }
+        XCTAssertTrue(detail.contains(".onChange(of: bookingEditAlertBlocked) { _, blocked in\n            // 1.33.1 review NIT 6"))
+        XCTAssertTrue(detail.contains("if !blocked { deliverPendingBookingEditSaveAlert() }"))
+        let deliver = try body(of: "    private func deliverPendingBookingEditSaveAlert() {", in: detail)
+        XCTAssertTrue(deliver.contains("guard !bookingEditAlertBlocked, let alert = pendingBookingEditSaveAlert else { return }"))
+        XCTAssertFalse(detail.contains("bookingEditSaveAlert = ScheduleBookingSaveAlert.forEdit(result)"), "always through the queue")
     }
 }

@@ -27,6 +27,8 @@ enum ScheduleBookingSaveOutcome: Equatable {
     /// 1.33.1 review item 4: decided from each booking's own outcome (`BookingSaveResult`), never from a count made
     /// before the save ran. A queued booking counts as saved (Pending sync), never as "not saved".
     static func decide(results: [BookingSaveResult]) -> ScheduleBookingSaveOutcome {
+        // A double tap's second call (`alreadySaving`) is not an outcome: the save already running reports it.
+        let results = results.filter { $0 != .alreadySaving }
         guard !results.isEmpty else { return .nothingToSave }
         var refusal: String?
         var queued: String?
@@ -40,6 +42,8 @@ enum ScheduleBookingSaveOutcome: Equatable {
                 if queued == nil { queued = message }
             case .refused(let message):
                 if refusal == nil { refusal = message }
+            case .alreadySaving:
+                continue
             }
         }
         let refusalMessage = (refusal?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
@@ -79,7 +83,9 @@ struct ScheduleBookingSaveAlert: Identifiable, Equatable {
 
     /// 1.33.1 review item 2: what the Scheduling grid's Edit booking shows once its sheet has closed — saved, Pending
     /// sync, or not saved with why — from this save's own outcome.
-    static func forEdit(_ result: BookingSaveResult) -> ScheduleBookingSaveAlert {
+    /// Review NIT 5: nil for `alreadySaving` (a double tap): the save already running shows its own alert.
+    static func forEdit(_ result: BookingSaveResult) -> ScheduleBookingSaveAlert? {
+        if result == .alreadySaving { return nil }
         let outcome = ScheduleBookingSaveOutcome.decide(results: [result])
         switch outcome {
         case .confirmed, .nothingToSave:

@@ -298,8 +298,9 @@ class ManagerScheduleStore: ObservableObject {
             other.id != normalizedBooking.id && semanticKey(for: other) == key
         }
         if pendingSemanticKeys.contains(key) {
-            // The same booking is already being saved (a double tap): that save reports it.
-            return .saved
+            // The same booking is already being saved (a double tap): that save reports it. Review NIT 5: never
+            // `.saved`, which would report a save that may still fail as done.
+            return .alreadySaving
         }
         if clashesWithOther {
             // Said, never silent (launch data audit #12).
@@ -382,20 +383,29 @@ class ManagerScheduleStore: ObservableObject {
         warnIfOnSignedTimesheet(booking, organizationId: orgId)
 
         // 1.33.1: a booking whose create is still in Firestore's queue is deleted through Firestore (after it), never
-        // through the app outbox (`BookingStore.deleteRoute`).
-        let pendingInFirestore = SDKPendingWrites.shared.contains(collection: "managerSiteBookings", documentId: booking.documentKey)
+        // through the app outbox (`BookingStore.deleteRoute`). Review fix 3: so is one whose queued write the outbox is
+        // replaying right now.
+        let outbox = OfflineOutboxStore.shared
+        let replayInFlight = outbox.isInFlight(bookingId: booking.id)
+        let pendingInFirestore = replayInFlight
+            || SDKPendingWrites.shared.contains(collection: "managerSiteBookings", documentId: booking.documentKey)
         if BookingStore.deleteRoute(
             queuesWhileOffline: OfflinePolicy.queuesWhileOffline(action, isOnline: smartCache?.isOnline ?? true),
             pendingInFirestore: pendingInFirestore
         ) == .outbox {
-            OfflineOutboxStore.shared.enqueueDeleteManagerSiteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
+            outbox.enqueueDeleteManagerSiteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
             return
         }
+        if replayInFlight {
+            await outbox.waitUntilNotInFlight(bookingId: booking.id, timeoutSeconds: FirestoreWriteAck.defaultTimeoutSeconds)
+        }
 
-        // 1.33.1 review item 5: as `BookingStore.deleteBooking` — a queued change of this booking is replaced (RULEBOOK
-        // §2), so it never replays after the delete; a create queued offline means nothing is sent.
+        // 1.33.1 review item 5: as `BookingStore.deleteBooking` — a queued change of this booking is taken out (RULEBOOK
+        // §2), so it never replays after the delete; a create queued offline means nothing is sent. Review fix 1: a
+        // delete that is refused or fails puts the entries back (`requeueBookingSaves`).
+        let taken = outbox.takeQueuedBookingSaves(bookingId: booking.id)
         var queuedFingerprint = fingerprint
-        switch OfflineOutboxStore.shared.discardQueuedBookingSaves(bookingId: booking.id) {
+        switch taken.kind {
         case .create where !pendingInFirestore:
             return
         case .edit(let baseline):
@@ -407,10 +417,15 @@ class ManagerScheduleStore: ObservableObject {
         do {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             if pendingInFirestore {
-                // Bounded: a delete not confirmed in time is still with Firestore (Pending sync).
+                // Bounded: a delete not confirmed in time is still with Firestore (Pending sync). Refused after its
+                // wait timed out: the queued changes go back (review fix 1).
+                let takenEntries = taken.entries
                 do {
                     try await FirestoreWriteAck.run(
-                        pendingKey: SDKPendingWrites.key(organizationId: orgId, collection: "managerSiteBookings", documentId: booking.documentKey)
+                        pendingKey: SDKPendingWrites.key(organizationId: orgId, collection: "managerSiteBookings", documentId: booking.documentKey),
+                        onSettledAfterTimeout: { error in
+                            if error != nil { OfflineOutboxStore.shared.requeueBookingSaves(takenEntries) }
+                        }
                     ) {
                         try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
                     }
@@ -427,10 +442,11 @@ class ManagerScheduleStore: ObservableObject {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
                OfflinePolicy.availability(action) == .allowedOffline {
                 // The connection dropped: the delete waits in the outbox with its tombstone (§2).
-                OfflineOutboxStore.shared.enqueueDeleteManagerSiteBooking(booking, fingerprint: queuedFingerprint, organizationId: orgId)
+                outbox.enqueueDeleteManagerSiteBooking(booking, fingerprint: queuedFingerprint, organizationId: orgId)
                 return
             }
-            // Refused: the server still has it, so put it back on screen.
+            // Refused: the server still has it, so put it back on screen, with its queued edit (review fix 1).
+            outbox.requeueBookingSaves(taken.entries)
             errorMessage = error.localizedDescription
             applyLocalSave(booking, organizationId: orgId)
             ScheduleChangeNotifier.postBookingStoreDidChange()

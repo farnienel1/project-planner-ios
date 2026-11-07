@@ -305,12 +305,28 @@ final class OfflineOutboxStore: ObservableObject {
     /// (RULEBOOK §2): left in place, a queued edit would replay after the delete and be refused against its tombstone.
     @discardableResult
     func discardQueuedBookingSaves(bookingId: UUID) -> QueuedBookingSave {
+        takeQueuedBookingSaves(bookingId: bookingId).kind
+    }
+
+    /// What `takeQueuedBookingSaves` took out of the queue: what kind of change it was, and the entries themselves so
+    /// a delete that does not go through can put them back (`requeueBookingSaves`).
+    struct TakenBookingSaves: Equatable {
+        let kind: QueuedBookingSave
+        let entries: [OfflineOutboxEntry]
+
+        static let nothingTaken = TakenBookingSaves(kind: .nothing, entries: [])
+    }
+
+    /// 1.33.1 review fix 1: as `discardQueuedBookingSaves`, returning the removed entries. The delete through Firestore
+    /// keeps them until it knows the outcome: confirmed, they are dropped; refused or failed, they go back in the queue
+    /// (`requeueBookingSaves`) so the edit the booking is restored with still syncs.
+    func takeQueuedBookingSaves(bookingId: UUID) -> TakenBookingSaves {
         let entityId = bookingId.uuidString
         let saves = entries.filter {
             $0.entityId.caseInsensitiveCompare(entityId) == .orderedSame
                 && ($0.operation == .saveBooking || $0.operation == .saveManagerSiteBooking)
         }
-        guard !saves.isEmpty else { return .nothing }
+        guard !saves.isEmpty else { return .nothingTaken }
         var result = QueuedBookingSave.edit(baseline: nil)
         for entry in saves {
             var isCreate = false
@@ -332,7 +348,109 @@ final class OfflineOutboxStore: ObservableObject {
         let ids = Set(saves.map(\.id))
         entries.removeAll { ids.contains($0.id) }
         persistToDisk()
-        return result
+        return TakenBookingSaves(kind: result, entries: saves)
+    }
+
+    /// 1.33.1 review fix 1: puts back booking saves a delete took out (`takeQueuedBookingSaves`) when that delete was
+    /// refused or failed, so the booking's queued edit still syncs. An entry already back is skipped; a save queued for
+    /// the same booking since then is merged with the older one (fields added up, the older baseline and place in the
+    /// queue kept, the newer booking copy written). Nothing is put back while a delete of that booking is queued.
+    func requeueBookingSaves(_ taken: [OfflineOutboxEntry]) {
+        guard !taken.isEmpty else { return }
+        var changed = false
+        for old in taken.sorted(by: { $0.createdAt < $1.createdAt }) {
+            guard old.operation == .saveBooking || old.operation == .saveManagerSiteBooking else { continue }
+            if entries.contains(where: { $0.id == old.id }) { continue }
+            let deleteOperation: OfflineOutboxEntry.Operation = old.operation == .saveBooking ? .deleteBooking : .deleteManagerSiteBooking
+            if entries.contains(where: {
+                $0.operation == deleteOperation && $0.entityId.caseInsensitiveCompare(old.entityId) == .orderedSame
+            }) { continue }
+            if let index = entries.firstIndex(where: {
+                $0.operation == old.operation && $0.entityId.caseInsensitiveCompare(old.entityId) == .orderedSame
+            }) {
+                guard let mergedPayload = Self.mergedSavePayload(older: old, newer: entries[index], decoder: decoder, encoder: encoder) else {
+                    continue
+                }
+                let newer = entries[index]
+                entries[index] = OfflineOutboxEntry(
+                    id: old.id,
+                    organizationId: newer.organizationId,
+                    operation: newer.operation,
+                    entityId: newer.entityId,
+                    payload: mergedPayload,
+                    createdAt: old.createdAt,
+                    attemptCount: 0,
+                    lastError: nil,
+                    userId: newer.userId ?? old.userId
+                )
+            } else {
+                entries.append(old)
+            }
+            changed = true
+        }
+        guard changed else { return }
+        entries.sort { $0.createdAt < $1.createdAt }
+        persistToDisk()
+    }
+
+    /// The payload of an older and a newer queued save of one booking as one: the newer booking copy, the changed
+    /// fields added up (a create stays a create), the older baseline fingerprint.
+    private static func mergedSavePayload(
+        older: OfflineOutboxEntry,
+        newer: OfflineOutboxEntry,
+        decoder: JSONDecoder,
+        encoder: JSONEncoder
+    ) -> Data? {
+        switch newer.operation {
+        case .saveBooking:
+            guard let o = try? decoder.decode(OfflineSaveBookingPayload.self, from: older.payload),
+                  let n = try? decoder.decode(OfflineSaveBookingPayload.self, from: newer.payload) else { return nil }
+            let fields = mergedChangedFields(o.changedFields, n.changedFields)
+            return try? encoder.encode(OfflineSaveBookingPayload(
+                booking: n.booking,
+                changedFields: fields,
+                baselineFingerprint: fields == nil ? nil : (o.baselineFingerprint ?? n.baselineFingerprint)
+            ))
+        case .saveManagerSiteBooking:
+            guard let o = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: older.payload),
+                  let n = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: newer.payload) else { return nil }
+            let fields = mergedChangedFields(o.changedFields, n.changedFields)
+            return try? encoder.encode(OfflineSaveManagerSiteBookingPayload(
+                booking: n.booking,
+                changedFields: fields,
+                baselineFingerprint: fields == nil ? nil : (o.baselineFingerprint ?? n.baselineFingerprint)
+            ))
+        default:
+            return nil
+        }
+    }
+
+    // MARK: - In flight (1.33.1 review fix 3)
+
+    /// Entity ids (upper case) whose queued entry `OfflineSyncCoordinator.processOutbox` is replaying right now. Such
+    /// an entry is already out of the app's hands: a delete of that booking goes through Firestore after it, never
+    /// "nothing to send" (a replayed create would land afterwards and bring the booking back).
+    private(set) var inFlightEntityIds: Set<String> = []
+
+    func markInFlight(entityId: String) {
+        inFlightEntityIds.insert(entityId.uppercased())
+    }
+
+    func clearInFlight(entityId: String) {
+        inFlightEntityIds.remove(entityId.uppercased())
+    }
+
+    func isInFlight(bookingId: UUID) -> Bool {
+        inFlightEntityIds.contains(bookingId.uuidString.uppercased())
+    }
+
+    /// Waits (bounded) until the entry being replayed for `bookingId` has finished, so a delete is handed to Firestore
+    /// after the replayed write. Returns at once when nothing is in flight.
+    func waitUntilNotInFlight(bookingId: UUID, timeoutSeconds: Double) async {
+        let deadline = Date().addingTimeInterval(max(0, timeoutSeconds))
+        while isInFlight(bookingId: bookingId), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     /// RULEBOOK 1.33.0 (owner decision 4 Nov "Offline delete on iOS"): queues the delete of a labour booking with

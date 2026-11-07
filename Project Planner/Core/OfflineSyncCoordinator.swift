@@ -83,7 +83,16 @@ enum OfflineSyncCoordinator {
                 continue
             }
 
+            // 1.33.1 review fix 3: an entry taken out of the queue since this pass began (a delete through Firestore
+            // took that booking's queued save) is never replayed from the stale list.
+            guard outbox.entries.contains(where: { $0.id == entry.id }) else { continue }
+
             do {
+                // 1.33.1 review fix 3: while this entry replays, a delete of its booking goes through Firestore after
+                // it (`OfflineOutboxStore.isInFlight`), never "nothing to send". Cleared when this block ends, before
+                // any catch below runs.
+                outbox.markInFlight(entityId: entry.entityId)
+                defer { outbox.clearInFlight(entityId: entry.entityId) }
                 try await execute(entry: entry, firebaseBackend: firebaseBackend)
                 outbox.removeEntry(id: entry.id)
                 synced += 1

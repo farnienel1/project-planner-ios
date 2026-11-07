@@ -79,12 +79,14 @@ enum FirestoreWriteAck {
     /// Runs `write` and returns when it finishes or after `seconds`, whichever comes first (then throws
     /// `timeoutError`, `TimedOut` by default). The write is never cancelled: Firestore keeps it and sends it when it can.
     /// With `pendingKey` (the document path), a write that times out is remembered in `SDKPendingWrites` until it
-    /// finishes; a write the server later refuses is logged, never sent again.
+    /// finishes; a write the server later refuses is logged, never sent again. `onSettledAfterTimeout` is called once
+    /// with that write's late outcome (nil: confirmed) when, and only when, its wait timed out first.
     @MainActor
     static func run(
         timeoutSeconds seconds: Double = defaultTimeoutSeconds,
         timeoutError: Error = TimedOut(),
         pendingKey: String? = nil,
+        onSettledAfterTimeout: (@MainActor (Error?) -> Void)? = nil,
         _ write: @escaping () async throws -> Void
     ) async throws {
         let gate = ResumeOnce()
@@ -110,6 +112,9 @@ enum FirestoreWriteAck {
                 // The write finished: its timer has nothing left to do (review NIT).
                 timer.cancel()
                 if let pendingKey, token.marked {
+                    // 1.33.1 review fix 1: the caller hears this write's own late outcome first (a refused delete puts
+                    // its booking's queued edit back), then the stores hear of a refusal.
+                    onSettledAfterTimeout?(failure)
                     SDKPendingWrites.shared.settle(pendingKey, error: failure)
                 }
                 if let failure {
@@ -187,7 +192,7 @@ final class SDKPendingWrites: ObservableObject {
     }
 
     /// The write finished after its wait timed out. Refused by the server: never sent again. 1.33.1 review item 4: the
-    /// person is told (`BOOKING_REPLAY_REFUSED_MESSAGE`, the app-wide "Change not saved" alert) and the stores drop the
+    /// person is told (`lateRefusalMessage`, the app-wide "Change not saved" alert) and the stores drop the
     /// local optimistic copy, so the live listener's next snapshot (Firestore rolled the write back) is what shows.
     func settle(_ path: String, error: Error?) {
         let key = path.lowercased()
@@ -201,9 +206,15 @@ final class SDKPendingWrites: ObservableObject {
         ScheduleChangeNotifier.postBookingStoreDidChange()
     }
 
+    /// 1.33.1 review NIT 4: what the person is told when a write Firestore held (a create, an edit or a delete whose
+    /// wait timed out) is refused later. Not `BOOKING_REPLAY_REFUSED_MESSAGE` ("cancelled or deleted on another
+    /// device"), which stays for real outbox replay refusals: a late refusal is usually a permission or a rule, not
+    /// another device. (Owner choice pending; this is the recommended wording.)
+    static let lateRefusalMessage = "This change couldn't be saved. Please check the booking and try again."
+
     /// Tells the person and the stores that a write Firestore held was refused by the server.
     static func reportLateRefusal(path: String) {
-        OfflineOutboxStore.shared.lastRefusalMessage = CanonicalBusinessEngine.bookingReplayRefusedMessage
+        OfflineOutboxStore.shared.lastRefusalMessage = lateRefusalMessage
         guard let parts = pathParts(path) else { return }
         NotificationCenter.default.post(
             name: lateRefusalNotification,

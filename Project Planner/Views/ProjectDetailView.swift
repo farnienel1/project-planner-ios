@@ -95,6 +95,9 @@ struct ProjectDetailView: View {
     /// 1.33.1 review item 2: the outcome of an Edit booking save (saved, Pending sync, or not saved with why), shown
     /// once the sheet has closed.
     @State private var bookingEditSaveAlert: ScheduleBookingSaveAlert?
+    /// 1.33.1 review NIT 6: an Edit booking outcome that arrived while another sheet or alert of this screen was up.
+    /// It is held here and shown as soon as nothing else is presented, so it is never lost behind that sheet.
+    @State private var pendingBookingEditSaveAlert: ScheduleBookingSaveAlert?
     @EnvironmentObject private var smartCache: SmartCacheService
     @State private var lastSchedulingDataRefreshAt: Date?
     @State private var subcontractorEditBooking: SubcontractorBooking?
@@ -347,6 +350,10 @@ struct ProjectDetailView: View {
         }
         .onChange(of: navigationDepth) { _, _ in
             Task { await refreshOpenVariationCount() }
+        }
+        .onChange(of: bookingEditAlertBlocked) { _, blocked in
+            // 1.33.1 review NIT 6: the sheet or alert that held an Edit booking outcome back has closed.
+            if !blocked { deliverPendingBookingEditSaveAlert() }
         }
         .onChange(of: showingAddTask) { _, isOpen in
             if !isOpen {
@@ -1679,7 +1686,7 @@ struct ProjectDetailView: View {
                                     organizationId: savingOrganizationId,
                                     session: BookingWriteSession(organizationId: savingOrganizationId)
                                 )
-                                bookingEditSaveAlert = ScheduleBookingSaveAlert.forEdit(result)
+                                queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))
                             }
                         }
                     }
@@ -1733,7 +1740,7 @@ struct ProjectDetailView: View {
                                     organizationId: savingOrganizationId,
                                     session: BookingWriteSession(organizationId: savingOrganizationId)
                                 )
-                                bookingEditSaveAlert = ScheduleBookingSaveAlert.forEdit(result)
+                                queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))
                             }
                         }
                     }
@@ -1758,6 +1765,34 @@ struct ProjectDetailView: View {
             .environmentObject(firebaseBackend)
             .environmentObject(subcontractorStore)
         }
+    }
+
+    /// 1.33.1 review NIT 6: true while this screen presents something an alert cannot go on top of (SwiftUI defers or
+    /// drops an alert asked for while a sheet is up). An Edit booking outcome waits in `pendingBookingEditSaveAlert`.
+    private var bookingEditAlertBlocked: Bool {
+        bookingEditTarget != nil
+            || showingScheduleOperative
+            || showingScheduleSubcontractor
+            || leaveGate.pending != nil
+            || quickAddRequest != nil
+            || subcontractorEditBooking != nil
+            || showingEditProject
+            || labourDeleteRefusalMessage != nil
+            || bookingEditSaveAlert != nil
+    }
+
+    /// An Edit booking outcome to show: now when nothing else is presented, else once it has closed. Nil (a double tap
+    /// whose first save reports for it, review NIT 5) changes nothing, so it never dismisses an alert already up.
+    private func queueBookingEditSaveAlert(_ alert: ScheduleBookingSaveAlert?) {
+        guard let alert else { return }
+        pendingBookingEditSaveAlert = alert
+        deliverPendingBookingEditSaveAlert()
+    }
+
+    private func deliverPendingBookingEditSaveAlert() {
+        guard !bookingEditAlertBlocked, let alert = pendingBookingEditSaveAlert else { return }
+        pendingBookingEditSaveAlert = nil
+        bookingEditSaveAlert = alert
     }
 
     private func schedulingDayCard(for date: Date, isExpanded: Bool) -> some View {

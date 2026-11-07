@@ -7839,6 +7839,26 @@ class FirebaseBackend: ObservableObject {
         return bookings
     }
 
+    /// 1.33.1 review fix 2: one labour booking read again after the server refused a write Firestore held for it
+    /// (`BookingStore.dropLocalCopyAfterLateRefusal`). A server read bounded to 8 s, else this device's cache, read
+    /// through the rulebook's `parseBookingDocument` (`parseBookingDocuments`) like every booking.
+    func rereadBookingAfterLateRefusal(organizationId: String, documentId: String) async -> BookingLateRefusalReread {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty, !documentId.isEmpty else { return .unknown }
+        let ref = db.collection("organizations").document(orgId).collection("bookings").document(documentId)
+        guard let snapshot = try? await getDocumentWithServerTimeoutAndCacheFallback(ref, timeoutSeconds: 8) else {
+            return .unknown
+        }
+        guard snapshot.exists, let data = snapshot.data() else {
+            // Only the server can say it is gone; a cache that lacks it says nothing.
+            return snapshot.metadata.isFromCache ? .unknown : .missing
+        }
+        let payload: [[String: Any]] = [["id": snapshot.documentID, "data": Self.firestoreJSON(data)]]
+        guard let parsed = CanonicalBusinessEngine.parseBookingDocuments(payload),
+              let booking = parsed.compactMap(Self.booking(fromCanonical:)).first else { return .unknown }
+        return .found(booking)
+    }
+
     nonisolated static func booking(fromCanonical row: CanonicalBusinessEngine.CanonicalParsedBooking) -> Booking? {
         // RULEBOOK 1.7.0 §1: a job id is kept as stored (a lower-case or non-UUID job id no longer drops the booking).
         let storedProjectId = row.projectId.trimmingCharacters(in: .whitespacesAndNewlines)

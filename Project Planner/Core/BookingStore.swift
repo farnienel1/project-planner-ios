@@ -142,16 +142,63 @@ class BookingStore: ObservableObject {
     }
 
     /// 1.33.1 review item 4: the server refused a write Firestore held for this booking. The copy on this phone is
-    /// dropped (ids without case); the listener brings back the server's copy if there is one.
-    func dropLocalCopyAfterLateRefusal(documentId: String) {
+    /// dropped (ids without case). Review fix 2: the listener may already have published the server's copy before this
+    /// runs, and then no further snapshot comes, so the booking is read again (bounded) and put back when it exists.
+    /// Returns whether a copy was dropped (then the re-read runs).
+    @discardableResult
+    func dropLocalCopyAfterLateRefusal(documentId: String) -> Bool {
         let key = documentId.lowercased()
         let before = bookings.count
         bookings.removeAll { $0.documentKey.lowercased() == key || $0.id.uuidString.lowercased() == key }
-        guard bookings.count != before else { return }
+        guard bookings.count != before else { return false }
         smartCache?.cacheBookings(bookings)
         let snapshot = bookings
         Task { try? await persistenceService.saveBookingData(bookings: snapshot) }
         ScheduleChangeNotifier.postBookingStoreDidChange()
+        rereadAfterLateRefusal(documentId: documentId)
+        return true
+    }
+
+    /// Review fix 2: reads the refused booking again and applies what was found (`applyLateRefusalReread`).
+    private func rereadAfterLateRefusal(documentId: String) {
+        guard let fb = firebaseBackend, let organizationId = fb.currentOrganization?.firestoreDocumentId else { return }
+        Task { @MainActor [weak self] in
+            let result = await fb.rereadBookingAfterLateRefusal(organizationId: organizationId, documentId: documentId)
+            guard let self else { return }
+            // Another organisation opened meanwhile: nothing from this one goes on screen.
+            guard BookingPendingSync.sameOrganization(organizationId, self.firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "") else {
+                return
+            }
+            self.applyLateRefusalReread(result, organizationId: organizationId)
+        }
+    }
+
+    /// Review fix 2: the server's copy goes back on screen (with any change of it still queued in the outbox on top,
+    /// and never while a delete of it is queued); gone on the server, nothing; unknown (no answer, or the reader did
+    /// not answer), a full reload, so the booking reappears if it exists.
+    func applyLateRefusalReread(_ result: BookingLateRefusalReread, organizationId: String) {
+        switch result {
+        case .found(let server):
+            let pending = OfflineOutboxStore.shared.pendingLabourBookings(organizationId: organizationId)
+            guard let shown = Self.overlayingPendingOutbox(
+                [server],
+                pendingSaves: pending.saves.filter { $0.id == server.id },
+                pendingDeletes: pending.deletedIds
+            ).first else { return }
+            if let index = bookings.firstIndex(where: { $0.id == shown.id }) {
+                bookings[index] = shown
+            } else {
+                bookings.append(shown)
+            }
+            smartCache?.cacheBookings(bookings)
+            let snapshot = bookings
+            Task { try? await persistenceService.saveBookingData(bookings: snapshot) }
+            ScheduleChangeNotifier.postBookingStoreDidChange()
+        case .missing:
+            break
+        case .unknown:
+            loadData()
+        }
     }
 
     /// Puts back a booking whose queued delete was undone or refused (it is still on the server).
@@ -572,21 +619,33 @@ class BookingStore: ObservableObject {
         guard let orgId else { return }
 
         warnIfOnSignedTimesheet(booking, organizationId: orgId)
-        let pendingInFirestore = SDKPendingWrites.shared.contains(collection: "bookings", documentId: booking.documentKey)
+        let outbox = OfflineOutboxStore.shared
+        // 1.33.1 review fix 3: a queued write of this booking that the outbox is replaying right now is already out of
+        // the app's hands (a replayed create would land after "nothing to send" and bring the booking back). It counts
+        // as held by Firestore: the delete goes through Firestore, after it.
+        let replayInFlight = outbox.isInFlight(bookingId: booking.id)
+        let pendingInFirestore = replayInFlight
+            || SDKPendingWrites.shared.contains(collection: "bookings", documentId: booking.documentKey)
         if Self.deleteRoute(
             queuesWhileOffline: OfflinePolicy.queuesWhileOffline(action, isOnline: smartCache?.isOnline ?? true),
             pendingInFirestore: pendingInFirestore
         ) == .outbox {
-            OfflineOutboxStore.shared.enqueueDeleteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
+            outbox.enqueueDeleteBooking(booking, fingerprint: fingerprint, organizationId: orgId)
             return
+        }
+        if replayInFlight {
+            // Bounded: the replayed write is handed to Firestore first, so the delete and its tombstone follow it.
+            await outbox.waitUntilNotInFlight(bookingId: booking.id, timeoutSeconds: FirestoreWriteAck.defaultTimeoutSeconds)
         }
 
         // 1.33.1 review item 5: the delete goes through Firestore, so a change of this booking still queued in the
         // outbox would replay after it and be refused against the tombstone. As `enqueueDeleteBooking` does with a
-        // queued edit (RULEBOOK §2), it is replaced: removed here, its synced copy kept for a delete that has to queue
-        // after all. A create still queued offline was never sent: nothing is sent (§2 `dropLocal`).
+        // queued edit (RULEBOOK §2), it is taken out; a create still queued offline was never sent: nothing is sent
+        // (§2 `dropLocal`). Review fix 1: taken out, not thrown away — a delete that is refused or fails puts the
+        // entries back (`requeueBookingSaves`), so the edit the booking is restored with still syncs.
+        let taken = outbox.takeQueuedBookingSaves(bookingId: booking.id)
         var queuedFingerprint = fingerprint
-        switch OfflineOutboxStore.shared.discardQueuedBookingSaves(bookingId: booking.id) {
+        switch taken.kind {
         case .create where !pendingInFirestore:
             return
         case .edit(let baseline):
@@ -599,10 +658,16 @@ class BookingStore: ObservableObject {
             // Deletes and writes the `deletedBookings` tombstone in one batch (RULEBOOK §2).
             if pendingInFirestore {
                 // 1.33.1: its create is still on its way in Firestore's queue; the delete goes after it. Bounded, so
-                // the screen never waits for ever: a delete not confirmed in time is still with Firestore.
+                // the screen never waits for ever: a delete not confirmed in time is still with Firestore. Refused
+                // after its wait timed out: the queued changes go back (review fix 1), and the store re-reads the
+                // booking (`dropLocalCopyAfterLateRefusal`).
+                let takenEntries = taken.entries
                 do {
                     try await FirestoreWriteAck.run(
-                        pendingKey: SDKPendingWrites.key(organizationId: orgId, collection: "bookings", documentId: booking.documentKey)
+                        pendingKey: SDKPendingWrites.key(organizationId: orgId, collection: "bookings", documentId: booking.documentKey),
+                        onSettledAfterTimeout: { error in
+                            if error != nil { OfflineOutboxStore.shared.requeueBookingSaves(takenEntries) }
+                        }
                     ) {
                         try await fb.deleteBooking(booking, organizationId: orgId)
                     }
@@ -617,11 +682,14 @@ class BookingStore: ObservableObject {
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
                OfflinePolicy.availability(action) == .allowedOffline {
-                // The connection dropped: the delete waits in the outbox with its tombstone (§2).
-                OfflineOutboxStore.shared.enqueueDeleteBooking(booking, fingerprint: queuedFingerprint, organizationId: orgId)
+                // The connection dropped: the delete waits in the outbox with its tombstone (§2); it replaces the
+                // queued edit, as an offline delete always does.
+                outbox.enqueueDeleteBooking(booking, fingerprint: queuedFingerprint, organizationId: orgId)
                 return
             }
-            // Refused (only an admin or the job's manager may delete it): it is still on the server; put it back.
+            // Refused (only an admin or the job's manager may delete it): it is still on the server; put it back, with
+            // its queued edit (review fix 1).
+            outbox.requeueBookingSaves(taken.entries)
             restoreDeletedBooking(booking)
             errorMessage = error.localizedDescription
             print("🔥🔥🔥 DEBUG: Error deleting booking from Firebase: \(error)")
@@ -1170,12 +1238,25 @@ nonisolated enum BookingSaveResult: Equatable {
     case queued(String)
     /// Refused or failed: not saved. The message says why.
     case refused(String)
+    /// 1.33.1 review NIT 5: the same booking is already being saved (a double tap). Nothing was written by this call;
+    /// the save already running reports the outcome, so screens show nothing for this one (never "saved").
+    case alreadySaving
 
     /// Saved or queued: the booking exists (or will) and its notices may go out.
     var keepsBooking: Bool {
         if case .refused = self { return false }
         return true
     }
+}
+
+/// 1.33.1 review fix 2: what reading a booking again after a late refusal found.
+enum BookingLateRefusalReread: Equatable {
+    /// The server (or this device's cache) has it: it goes back on screen.
+    case found(Booking)
+    /// The server answered that it does not exist.
+    case missing
+    /// No reliable answer: the store reloads.
+    case unknown
 }
 
 /// RULEBOOK §2 "Pending sync" for a labour or manager schedule booking (1.33.1 review item 3): a change in the app
