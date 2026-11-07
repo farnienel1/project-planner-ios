@@ -1416,9 +1416,19 @@ class NotificationService: ObservableObject {
     /// their line managers when the line had been returned (`overtimeReopenedRecipients`) — hear
     /// `overtimeReopenedMessage`. The person's row opens their Overtime (`overtime_request_reviewed`); a line manager's
     /// opens Users' → that person (`overtime_request_submitted`), as web. Best effort: never blocks the booking edit.
-    func notifyOvertimeLineReopened(before rawBefore: OvertimeBookingInput, after rawAfter: OvertimeBookingInput?) async {
+    /// `organizationId` is the company the booking write went to (nil: the open one). A write to another company is
+    /// skipped (`OvertimeReopenNotice.noticeMayBeSent`): every input below is the open company's.
+    func notifyOvertimeLineReopened(
+        before rawBefore: OvertimeBookingInput,
+        after rawAfter: OvertimeBookingInput?,
+        organizationId writtenOrganizationId: String? = nil
+    ) async {
         guard let backend = firebaseBackend,
-              let organizationId = backend.currentOrganization?.firestoreDocumentId else { return }
+              let organizationId = backend.currentOrganization?.firestoreDocumentId,
+              OvertimeReopenNotice.noticeMayBeSent(
+                writtenOrganizationId: writtenOrganizationId,
+                openOrganizationId: organizationId
+              ) else { return }
         // Job number and name from the loaded jobs (the notice names the job).
         let jobs = (projectStore?.projects ?? []) + (projectStore?.smallWorks ?? [])
         let before = OvertimeBookingInputs.withJobs([rawBefore], jobs: jobs).first ?? rawBefore

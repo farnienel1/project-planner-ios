@@ -319,6 +319,22 @@ struct OperativeDayRateHistoryCollection: Sendable {
         return out.sorted(by: { $0.effectiveAt < $1.effectiveAt })
     }
 
+    /// RULEBOOK 1.36.0 §8: every row under any of the person's users ids and `operatives` rows, ids compared without
+    /// case, de-duplicated by entry id, oldest first (web `personRateHistoryIds`).
+    func entries(userIds: [String], operativeIds: [String]) -> [OperativeDayRateHistoryEntry] {
+        let userKeys = Set(userIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
+        let operativeKeys = Set(operativeIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
+        var seen = Set<UUID>()
+        var out: [OperativeDayRateHistoryEntry] = []
+        for (key, rows) in byUserId where userKeys.contains(key.lowercased()) {
+            for e in rows where seen.insert(e.id).inserted { out.append(e) }
+        }
+        for (key, rows) in byOperativeId where operativeKeys.contains(key.lowercased()) {
+            for e in rows where seen.insert(e.id).inserted { out.append(e) }
+        }
+        return out.sorted(by: { $0.effectiveAt < $1.effectiveAt })
+    }
+
     /// Merges history for a linked user account and/or operative roster row, de-duplicated by entry id.
     func mergedEntries(userId: String?, operativeId: UUID?) -> [OperativeDayRateHistoryEntry] {
         var seen = Set<UUID>()

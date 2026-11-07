@@ -132,16 +132,19 @@ final class SchedulePeriodTests: XCTestCase {
         XCTAssertEqual(calendar.component(.day, from: completed.end), 30)
     }
 
+    /// 1.36: quick select picks organisation-zone days (the days bookings are stored on), not the phone's days.
     func testQuickSelectSkipsWeekends() {
         var selected = Set<Date>()
-        let friday = LogicFixtures.day(2026, 10, 2)
+        let calendar = OrganizationRulebookContext.calendar
+        let friday = LogicFixtures.day(2026, 10, 2, calendar: calendar)
         ScheduleDateSelectionPolicy.quickSelect(count: 3, into: &selected, startingFrom: friday)
-        let calendar = Calendar.current
         let days = selected.sorted()
         XCTAssertEqual(days.count, 3)
         XCTAssertTrue(days.allSatisfy { PayrollTimePolicyCatalog.isWeekday($0, calendar: calendar) })
         XCTAssertTrue(calendar.isDate(days[0], inSameDayAs: friday))
-        XCTAssertTrue(calendar.isDate(days[1], inSameDayAs: LogicFixtures.day(2026, 10, 5)))
-        XCTAssertTrue(calendar.isDate(days[2], inSameDayAs: LogicFixtures.day(2026, 10, 6)))
+        XCTAssertTrue(calendar.isDate(days[1], inSameDayAs: LogicFixtures.day(2026, 10, 5, calendar: calendar)))
+        XCTAssertTrue(calendar.isDate(days[2], inSameDayAs: LogicFixtures.day(2026, 10, 6, calendar: calendar)))
+        XCTAssertEqual(days.map { OrganizationRulebookContext.dayKey($0) }, ["2026-10-02", "2026-10-05", "2026-10-06"])
+        XCTAssertTrue(days.allSatisfy { calendar.startOfDay(for: $0) == $0 }, "organisation-zone midnights")
     }
 }

@@ -92,6 +92,7 @@ enum TimesheetPayrollCollector {
         // Bookings under the person's uid, a former invite id, a same-email account or a catalogue row on their
         // email (`bookingIdsForAccount`), so a deleted and re-added person is paid for every booked day.
         let operativeIds = labourBookingIds(for: user, operatives: operatives).union(matchedOperatives.map(\.id))
+        let personOperativeIds = PayrollRateResolver.personOperativeIds(user: user, operative: nil, operatives: operatives)
 
         let projectsById = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let smallWorksById = Dictionary(smallWorks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -115,7 +116,9 @@ enum TimesheetPayrollCollector {
                 operative: operative,
                 on: day,
                 history: history,
-                standardDayHours: standardDayHours
+                standardDayHours: standardDayHours,
+                // RULEBOOK 1.36.0 §8: history under every operatives row of the person counts.
+                personOperativeIds: personOperativeIds
             )
             // One rulebook result (`payrollHoursResult`): the same fields web's collector reads.
             let hours = PayrollHoursEngine.canonicalResult(booking: probe, day: probe.date, policy: policy)

@@ -507,7 +507,7 @@ struct ScheduleSubcontractorView: View {
     }
 
     private func defaultSelectTodayOnCalendar() {
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         let today = cal.startOfDay(for: Date())
         selectedDates = [today]
         dateTimeSlots = [slotKey(for: today): .defaultPickerSlot(on: today)]
@@ -522,18 +522,19 @@ struct ScheduleSubcontractorView: View {
     }
     
     private func slotKey(for date: Date) -> String {
-        let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        let c = OrganizationRulebookContext.calendar.dateComponents([.year, .month, .day], from: date)
         return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
     }
     
     private var monthYearString: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMMM yyyy"
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         return formatter.string(from: currentMonth)
     }
     
     private func changeMonth(by months: Int) {
-        if let newMonth = Calendar.current.date(byAdding: .month, value: months, to: currentMonth) {
+        if let newMonth = OrganizationRulebookContext.calendar.date(byAdding: .month, value: months, to: currentMonth) {
             currentMonth = newMonth
         }
     }
@@ -549,7 +550,7 @@ struct ScheduleSubcontractorView: View {
                 }
             }
 
-            let calendar = Calendar.current
+            let calendar = OrganizationRulebookContext.calendar
             let range = MondayFirstCalendarSupport.gridRange(for: currentMonth, calendar: calendar)
             let days = MondayFirstCalendarSupport.days(from: range.start, through: range.end, calendar: calendar)
             let weeks = days.chunked(into: 7)
@@ -565,10 +566,10 @@ struct ScheduleSubcontractorView: View {
     }
 
     private func dayButton(for date: Date, isCurrentMonth: Bool) -> some View {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         let normalized = calendar.startOfDay(for: date)
         let isSelected = selectedDates.contains(normalized)
-        let isToday = calendar.isDateInToday(date)
+        let isToday = calendar.isDate(date, inSameDayAs: Date())
 
         return Button {
             if isSelected {
@@ -609,7 +610,7 @@ struct ScheduleSubcontractorView: View {
                 .contentShape(Rectangle())
         }
         .accessibilityIdentifier("scheduleSubcontractor.day")
-        .accessibilityLabel(date.formatted(date: .complete, time: .omitted))
+        .accessibilityLabel(date.formatted(Date.FormatStyle(date: .complete, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
@@ -619,7 +620,7 @@ struct ScheduleSubcontractorView: View {
     private func generateDays(start: Date, end: Date) -> [Date] {
         var days: [Date] = []
         var currentDate = start
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         while currentDate <= end {
             days.append(currentDate)
             guard let next = calendar.date(byAdding: .day, value: 1, to: currentDate) else { break }

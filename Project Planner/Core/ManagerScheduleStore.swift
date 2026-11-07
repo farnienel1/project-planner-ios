@@ -277,7 +277,8 @@ class ManagerScheduleStore: ObservableObject {
 
         if smartCache?.isOnline == false {
             OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(
-                normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline
+                normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline,
+                previous: previous
             )
             return
         }
@@ -285,12 +286,17 @@ class ManagerScheduleStore: ObservableObject {
         do {
             try await fb.saveManagerSiteBooking(normalizedBooking, organizationId: orgId, changedFields: changedFields)
             // RULEBOOK 1.33.0 §25 reopen: an edit may reopen the PAYE overtime line (best effort, after the write).
-            if let previous { OvertimeReopenNotice.managerSite(before: previous, after: normalizedBooking) }
+            if let previous {
+                // One notice per change: an older queued edit of this booking replays later, silently.
+                OfflineOutboxStore.shared.clearManagerSiteReopenBaseline(bookingId: normalizedBooking.id)
+                OvertimeReopenNotice.managerSite(before: previous, after: normalizedBooking)
+            }
             loadData(force: true)
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
                 OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(
-                    normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline
+                    normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline,
+                    previous: previous
                 )
                 errorMessage = "Saved locally. Will sync when you're back online."
             } else if BookingWritePatch.isRefusedFinal(error) {

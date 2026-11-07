@@ -1159,8 +1159,10 @@ struct ProjectHealthSafetyView: View {
 
     private func isIssueOverdue(_ issue: HSToolboxIssue) -> Bool {
         guard issue.status != .completed else { return false }
-        let weekStart = Calendar.current.startOfDay(for: issue.weekCommencing)
-        let weekEnd = Calendar.current.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart
+        // Guardrail 2 (rulebook 1.36.0 hand-off): the toolbox week is the organisation's, not the phone's.
+        let calendar = OrganizationRulebookContext.calendar
+        let weekStart = calendar.startOfDay(for: issue.weekCommencing)
+        let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart
         return weekEnd < Date()
     }
 
