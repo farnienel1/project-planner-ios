@@ -102,6 +102,14 @@ enum OfflineSyncCoordinator {
                     failed += 1
                 }
             } catch {
+                if FirestoreWriteAck.isPendingInSDK(error) {
+                    // 1.33.1: the replayed booking write was handed to Firestore but the server did not confirm it in
+                    // time. Firestore keeps it and delivers it in order, so it leaves the outbox (never sent twice).
+                    outbox.removeEntry(id: entry.id)
+                    synced += 1
+                    print("🔥🔥🔥 DEBUG: [OfflineSync] \(entry.operation.rawValue) \(entry.entityId) is with Firestore, pending sync")
+                    continue
+                }
                 if let writeError = error as? OfflinePartialUpdateWriter.WriteError {
                     // Another account is signed in, or the path is unusable: retrying cannot help.
                     outbox.removeRefused(id: entry.id, message: writeError.localizedDescription)

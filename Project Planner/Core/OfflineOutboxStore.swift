@@ -291,6 +291,50 @@ final class OfflineOutboxStore: ObservableObject {
         case droppedLocal
     }
 
+    /// What `discardQueuedBookingSaves` removed (1.33.1 review item 5).
+    enum QueuedBookingSave: Equatable {
+        case nothing
+        /// A create queued offline: it never reached the server.
+        case create
+        /// A queued edit, with the fingerprint of the copy last synced (its baseline) when it has one.
+        case edit(baseline: String?)
+    }
+
+    /// 1.33.1 review item 5: a labour or manager schedule booking deleted through Firestore (not the outbox). Its
+    /// queued changes are removed, as `enqueueDeleteBooking` / `enqueueDeleteManagerSiteBooking` replace a queued edit
+    /// (RULEBOOK §2): left in place, a queued edit would replay after the delete and be refused against its tombstone.
+    @discardableResult
+    func discardQueuedBookingSaves(bookingId: UUID) -> QueuedBookingSave {
+        let entityId = bookingId.uuidString
+        let saves = entries.filter {
+            $0.entityId.caseInsensitiveCompare(entityId) == .orderedSame
+                && ($0.operation == .saveBooking || $0.operation == .saveManagerSiteBooking)
+        }
+        guard !saves.isEmpty else { return .nothing }
+        var result = QueuedBookingSave.edit(baseline: nil)
+        for entry in saves {
+            var isCreate = false
+            var baseline: String?
+            if entry.operation == .saveBooking, let old = try? decoder.decode(OfflineSaveBookingPayload.self, from: entry.payload) {
+                isCreate = old.changedFields == nil
+                baseline = old.baselineFingerprint
+            } else if entry.operation == .saveManagerSiteBooking,
+                      let old = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: entry.payload) {
+                isCreate = old.changedFields == nil
+                baseline = old.baselineFingerprint
+            }
+            if isCreate {
+                result = .create
+                break
+            }
+            if case .edit(baseline: nil) = result, let baseline { result = .edit(baseline: baseline) }
+        }
+        let ids = Set(saves.map(\.id))
+        entries.removeAll { ids.contains($0.id) }
+        persistToDisk()
+        return result
+    }
+
     /// RULEBOOK 1.33.0 (owner decision 4 Nov "Offline delete on iOS"): queues the delete of a labour booking with
     /// `fingerprint` (`bookingDeleteFingerprint` of this device's copy). A queued create of the same booking is dropped
     /// instead (created and deleted offline sends nothing); a queued edit is replaced, and its baseline (the copy
