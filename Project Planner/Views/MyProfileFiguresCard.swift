@@ -6,6 +6,7 @@
 //  `CanonicalBusinessEngine.myProfileSummary` (`Core/Rulebook+MyProfile.swift`); this view only lays it out.
 //
 
+import Combine
 import SwiftUI
 
 struct MyProfileFiguresCard: View {
