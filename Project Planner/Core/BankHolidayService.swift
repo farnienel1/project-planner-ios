@@ -126,12 +126,16 @@ final class BankHolidayService: ObservableObject {
         }
     }
 
+    /// `alsoYears`: more calendar years to load and keep — a leave balance passes
+    /// `CanonicalBusinessEngine.leaveBalanceBankHolidayYears(for:)` (RULEBOOK 1.35.0 `myProfileBankHolidayRange`: the
+    /// previous leave year too, for carry-over), so paging the calendar never drops them.
     func ensureLoaded(
         region: BankHolidayRegion,
         referenceDate: Date = Date(),
-        forceRefresh: Bool = false
+        forceRefresh: Bool = false,
+        alsoYears: [Int] = []
     ) async {
-        let years = Self.prefetchYears(for: referenceDate, calendar: calendar)
+        let years = Array(Set(Self.prefetchYears(for: referenceDate, calendar: calendar) + alsoYears)).sorted()
 
         if forceRefresh {
             invalidateCache(for: region.id)
