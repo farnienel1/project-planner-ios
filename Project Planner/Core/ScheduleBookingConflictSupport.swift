@@ -398,7 +398,7 @@ enum ScheduleBookingConflictEngine {
                     return "\(p.jobNumber) \(p.siteName)"
                 }()
                 let kind: ScheduleConflictKind = {
-                    if let p = existingProject, p.jobType == .smallWorks { return .smallWorksBooking }
+                    if let p = existingProject, p.isSmallWorksDocument { return .smallWorksBooking }
                     return .projectBooking
                 }()
                 let timeLabel = existing.scheduleLabel(policy: policy)

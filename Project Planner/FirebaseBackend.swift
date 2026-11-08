@@ -2389,6 +2389,8 @@ class FirebaseBackend: ObservableObject {
         if let createdAt = row.date("createdAtMs") { job.createdAt = createdAt }
         if let updatedAt = row.date("updatedAtMs") { job.updatedAt = updatedAt }
         job.firestoreDocumentId = row.id
+        // The collection this document was read from: the kind for every list, picker, slice and write.
+        job.sourceCollection = smallWorks ? .smallWorks : .projects
         job.storedManagerIds = storedManagerIds + (storedPrimary.map { primary in
             storedManagerIds.contains(primary) ? [] : [primary]
         } ?? [])
@@ -10787,14 +10789,14 @@ extension FirebaseBackend {
     }
 
     private func hsCollectionName(for project: Project) -> String {
-        project.jobType == .smallWorks ? "smallWorks" : "projects"
+        project.isSmallWorksDocument ? "smallWorks" : "projects"
     }
 
     /// RULEBOOK 1.8.0 §1 "Job keys": `settings/healthSafetyDocumentId(job, isSmallWorks)` —
     /// `healthSafety_{projects|smallWorks}_{KEY}`, KEY the job's stored document id upper-cased (what iOS has always
     /// written for a UUID job); never built from the in-app UUID, so a non-UUID job id works.
     private func hsStateDocumentRef(organizationId: String, project: Project) -> DocumentReference {
-        let isSmallWorks = project.jobType == .smallWorks
+        let isSmallWorks = project.isSmallWorksDocument
         let docId = CanonicalBusinessEngine.healthSafetyDocumentId(jobId: project.documentId, isSmallWorks: isSmallWorks)
             ?? "healthSafety_\(hsCollectionName(for: project))_\(project.documentId.uppercased())"
         return db.collection("organizations")
@@ -10808,7 +10810,7 @@ extension FirebaseBackend {
     private func hsStateDocumentRefs(organizationId: String, project: Project) -> [DocumentReference] {
         let ids = CanonicalBusinessEngine.healthSafetyDocumentIds(
             jobId: project.documentId,
-            isSmallWorks: project.jobType == .smallWorks
+            isSmallWorks: project.isSmallWorksDocument
         ) ?? []
         let settings = db.collection("organizations").document(organizationId).collection("settings")
         let refs = ids.map { settings.document($0) }
@@ -11206,7 +11208,7 @@ extension FirebaseBackend {
     // MARK: - Deadlines (Project / Small Works)
 
     private func deadlinesStateDocumentRef(organizationId: String, project: Project) -> DocumentReference {
-        deadlinesStateDocumentRef(organizationId: organizationId, projectKey: project.documentId, isSmallWorks: project.jobType == .smallWorks)
+        deadlinesStateDocumentRef(organizationId: organizationId, projectKey: project.documentId, isSmallWorks: project.isSmallWorksDocument)
     }
 
     /// `settings/deadlinesDocumentId(projectId, isSmallWorks)` (RULEBOOK 1.7.0): `deadlines_{collection}_{KEY}` with
@@ -11408,7 +11410,7 @@ extension FirebaseBackend {
             items,
             projectId: project.id,
             projectKey: project.documentId,
-            isSmallWorks: project.jobType == .smallWorks,
+            isSmallWorks: project.isSmallWorksDocument,
             organizationId: organizationId,
             baseUpdatedAt: baseUpdatedAt
         )

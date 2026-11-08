@@ -215,7 +215,7 @@ struct ScheduleSubcontractorView: View {
             name: project.siteName,
             detail: project.client.name,
             address: project.siteAddress,
-            isSmallWorks: project.jobType == .smallWorks
+            isSmallWorks: project.isSmallWorksDocument
         )
         .padding(.horizontal, PPMetrics.screenGutter)
         .padding(.top, 12)

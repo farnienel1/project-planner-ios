@@ -20,7 +20,13 @@ struct Project: Identifiable, Codable, Hashable {
     var client: Client
     var startDate: Date
     var endDate: Date
-    var jobType: JobType // Used only for determining collection (smallWorks vs projects)
+    var jobType: JobType // The picker type (`customJobType` is shown). Never decides the collection: see `sourceCollection`.
+    /// RULEBOOK §17 / §21 `jobKind`: the Firestore collection this document was read from (`projects` / `smallWorks`).
+    /// The collection decides the kind, never `jobType`: list membership, the My Projects / My Small works picker
+    /// (`worksListJSON` `collection`), store slices, and every write and delete go to this collection. Set by the
+    /// reader (`job(fromCanonical:smallWorks:)`) and by creates; an on-device copy saved before this field existed
+    /// decodes it from `jobType` (the old guess).
+    var sourceCollection: JobKind
     var customJobType: String? // Optional custom job type for display (e.g., "CAT A", "CAT B", "Small Works", etc.)
     var manager: ManagerLegacy
     /// The stored `manager` label as a name (web writes the primary manager's name; `parseJobDocument` `managerName`,
@@ -76,6 +82,14 @@ struct Project: Identifiable, Codable, Hashable {
         return output
     }
 
+    /// True when this job is a `smallWorks` document (`sourceCollection`).
+    var isSmallWorksDocument: Bool { sourceCollection == .smallWorks }
+
+    /// The collection a job with this picker type is created in, when nothing else says (new jobs, old cached copies).
+    static func defaultCollection(for jobType: JobType) -> JobKind {
+        jobType == .smallWorks ? .smallWorks : .projects
+    }
+
     // Legacy support - computed property for backward compatibility
     var siteAddress: String {
         var parts: [String] = []
@@ -114,7 +128,8 @@ struct Project: Identifiable, Codable, Hashable {
         hiddenOperativeUserIds: Set<String> = [],
         usesMapPinForLocation: Bool = false,
         latitude: Double? = nil,
-        longitude: Double? = nil
+        longitude: Double? = nil,
+        sourceCollection: JobKind? = nil
     ) {
         self.id = id
         self.jobNumber = jobNumber
@@ -127,6 +142,7 @@ struct Project: Identifiable, Codable, Hashable {
         self.startDate = startDate
         self.endDate = endDate
         self.jobType = jobType
+        self.sourceCollection = sourceCollection ?? Project.defaultCollection(for: jobType)
         self.customJobType = customJobType
         self.manager = manager
         self.managerId = managerId
@@ -156,7 +172,8 @@ struct Project: Identifiable, Codable, Hashable {
         isLive: Bool = true,
         description: String? = nil,
         notes: String? = nil,
-        hiddenOperativeUserIds: Set<String> = []
+        hiddenOperativeUserIds: Set<String> = [],
+        sourceCollection: JobKind? = nil
     ) {
         self.id = id
         self.jobNumber = jobNumber
@@ -194,6 +211,7 @@ struct Project: Identifiable, Codable, Hashable {
         self.startDate = startDate
         self.endDate = endDate
         self.jobType = jobType
+        self.sourceCollection = sourceCollection ?? Project.defaultCollection(for: jobType)
         self.customJobType = nil // Legacy projects don't have customJobType
         self.manager = manager
         self.managerId = nil // Legacy projects don't have managerId
@@ -237,6 +255,7 @@ struct Project: Identifiable, Codable, Hashable {
         case hiddenOperativeUserIds
         case usesMapPinForLocation, latitude, longitude
         case firestoreDocumentId, storedManagerIds, storedManagerUserIds
+        case sourceCollection
     }
     
     init(from decoder: Decoder) throws {
@@ -252,6 +271,9 @@ struct Project: Identifiable, Codable, Hashable {
         startDate = try c.decode(Date.self, forKey: .startDate)
         endDate = try c.decode(Date.self, forKey: .endDate)
         jobType = try c.decode(JobType.self, forKey: .jobType)
+        // A copy saved before `sourceCollection` existed (or with an unknown value) falls back to the old guess.
+        sourceCollection = (try? c.decodeIfPresent(JobKind.self, forKey: .sourceCollection))
+            ?? Project.defaultCollection(for: jobType)
         customJobType = try c.decodeIfPresent(String.self, forKey: .customJobType)
         manager = try c.decode(ManagerLegacy.self, forKey: .manager)
         managerId = try c.decodeIfPresent(UUID.self, forKey: .managerId)
@@ -302,6 +324,7 @@ struct Project: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(firestoreDocumentId, forKey: .firestoreDocumentId)
         try c.encode(storedManagerIds, forKey: .storedManagerIds)
         try c.encode(storedManagerUserIds, forKey: .storedManagerUserIds)
+        try c.encode(sourceCollection, forKey: .sourceCollection)
     }
 }
 

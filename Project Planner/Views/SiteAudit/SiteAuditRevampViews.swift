@@ -326,7 +326,7 @@ struct SiteAuditDetailsStepView: View {
         } else {
             Button(action: onPickProject) {
                 detailRow(icon: "folder.fill", iconTint: SiteAuditColors.success, iconBg: SiteAuditColors.successTint, label: "Project or Small works", value: selectedProject.map { job in
-                    let kind = job.jobType == .smallWorks ? "Small works" : "Project"
+                    let kind = job.isSmallWorksDocument ? "Small works" : "Project"
                     return "\(kind) · \(job.jobNumber) · \(job.siteName)"
                 } ?? "Select Project/Small Works", showChevron: true) { EmptyView() }
             }

@@ -67,7 +67,7 @@ struct ProjectDetailView: View {
 
     /// Admins and managers with project/small-works management access can configure View visibility and see all tasks on the job.
     private var canConfigureProjectVisibility: Bool {
-        let catalogue: WorkAccess.JobCatalogue = project.jobType == .smallWorks ? .smallWorks : .projects
+        let catalogue: WorkAccess.JobCatalogue = project.isSmallWorksDocument ? .smallWorks : .projects
         return userStore.canManageWorkCatalogue(catalogue)
     }
 
@@ -380,7 +380,7 @@ struct ProjectDetailView: View {
     // MARK: - Detail layout (revamp)
 
     private var detailRootTitle: String {
-        project.jobType == .smallWorks ? "Small work" : "Project"
+        project.isSmallWorksDocument ? "Small work" : "Project"
     }
 
     /// Home-style navy header: job number, type, status, site, and timeline progress.
@@ -436,7 +436,7 @@ struct ProjectDetailView: View {
     }
 
     private var heroJobTypePillText: String? {
-        if project.jobType == .smallWorks { return nil }
+        if project.isSmallWorksDocument { return nil }
         if let c = project.customJobType, !c.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return c.uppercased()
         }
@@ -799,7 +799,7 @@ struct ProjectDetailView: View {
     }
 
     private var schedulingCategoryBadgeText: String {
-        if project.jobType == .smallWorks { return "SMALL WORKS" }
+        if project.isSmallWorksDocument { return "SMALL WORKS" }
         if let pill = heroJobTypePillText { return pill.uppercased() }
         return project.jobType.rawValue.uppercased()
     }
@@ -1425,7 +1425,7 @@ struct ProjectDetailView: View {
         ) {
             return message
         }
-        guard let target = ScheduleWeekGrid.saveTarget(for: request.person, jobType: project.jobType) else {
+        guard let target = ScheduleWeekGrid.saveTarget(for: request.person, jobType: project.isSmallWorksDocument ? .smallWorks : .catA) else {
             return "This person cannot be booked from here."
         }
         switch target {
@@ -1458,7 +1458,7 @@ struct ProjectDetailView: View {
             let service = notificationService
             let projectName = project.siteName
             let projectId = project.id
-            let catalogue = project.jobType == .smallWorks ? "smallWorks" : "projects"
+            let catalogue = project.isSmallWorksDocument ? "smallWorks" : "projects"
             let recipients: [NotificationService.BookedUserRecipient] = [.init(operativeId: operative.id, dates: [request.day])]
             Task {
                 await service.notifyBookedUsers(

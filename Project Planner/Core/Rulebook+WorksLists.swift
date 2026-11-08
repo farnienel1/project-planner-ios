@@ -55,7 +55,8 @@ extension Project {
     func worksListJSON(index: Int) -> [String: Any] {
         var row: [String: Any] = jobAccessFields
         row["id"] = documentId
-        row["collection"] = jobType == .smallWorks ? "smallWorks" : "projects"
+        // The collection the document was read from decides the kind (`jobKind`), never `jobType`.
+        row["collection"] = sourceCollection.rawValue
         row["isLive"] = isLive
         row["startDayKey"] = OrganizationRulebookContext.dayKey(startDate)
         row["endDayKey"] = OrganizationRulebookContext.dayKey(endDate)

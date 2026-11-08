@@ -734,7 +734,7 @@ struct ScheduleOperativeView: View {
     }
 
     private var bookingJobTypeLabel: String {
-        project.jobType == .smallWorks ? "Small works" : (project.customJobType ?? "Project")
+        project.isSmallWorksDocument ? "Small works" : (project.customJobType ?? "Project")
     }
 
     private var scheduleBookingHeader: some View {
@@ -744,7 +744,7 @@ struct ScheduleOperativeView: View {
                 name: project.siteName,
                 detail: "\(project.client.name) · \(bookingJobTypeLabel)",
                 address: project.siteAddress,
-                isSmallWorks: project.jobType == .smallWorks
+                isSmallWorks: project.isSmallWorksDocument
             )
             if isReadyToReview {
                 // Derived display arithmetic on existing values: total = `totalPlannedHours` (each person's
@@ -1894,7 +1894,7 @@ struct ScheduleOperativeView: View {
                 let projectName = project.siteName
                 let bookedBy = loggedInUserName
                 let projectId = project.id
-                let catalogue = project.jobType == .smallWorks ? "smallWorks" : "projects"
+                let catalogue = project.isSmallWorksDocument ? "smallWorks" : "projects"
                 Task {
                     await service.notifyBookedUsers(
                         projectName: projectName,

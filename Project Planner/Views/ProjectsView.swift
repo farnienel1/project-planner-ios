@@ -286,7 +286,7 @@ struct ProjectsView: View {
 
     private var showsBlockingLoader: Bool {
         if stoppedBlockingLoader { return false }
-        let storeHasProjects = projectStore.projects.contains { $0.jobType != .smallWorks }
+        let storeHasProjects = projectStore.projects.contains { !$0.isSmallWorksDocument }
         if projectStore.isLoading && !storeHasProjects && projectsBeforeStatusFilter.isEmpty {
             return true
         }
@@ -557,7 +557,7 @@ struct ProjectsView: View {
     private var isUnmatchedOperativeWithJobs: Bool {
         userStore.isOperativeMode()
             && resolvedCurrentOperative == nil
-            && projectStore.projects.contains { $0.jobType != .smallWorks }
+            && projectStore.projects.contains { !$0.isSmallWorksDocument }
     }
     
     /// Regular projects (not small works), with operative visibility applied but without status chip filter.
@@ -591,7 +591,7 @@ struct ProjectsView: View {
 
     @ViewBuilder
     private func projectDetailDestination(_ projectId: UUID) -> some View {
-        if let project = projectStore.projects.first(where: { $0.id == projectId && $0.jobType != .smallWorks })
+        if let project = projectStore.projects.first(where: { $0.id == projectId && !$0.isSmallWorksDocument })
             ?? projectStore.projects.first(where: { $0.id == projectId }) {
             ProjectDetailView(project: project)
                 .environmentObject(bookingStore)

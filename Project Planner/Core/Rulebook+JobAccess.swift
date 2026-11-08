@@ -40,14 +40,15 @@ nonisolated struct JobAccessViewer: Equatable, Sendable {
 }
 
 /// The job kind a job belongs to (`WorkCatalogue`): the collection it is stored in.
-nonisolated enum JobKind: String, Sendable {
+nonisolated enum JobKind: String, Sendable, Codable {
     case projects
     case smallWorks
 }
 
 extension Project {
-    /// `projects` or `smallWorks` (`JobKind`), as `canSeeJob` / `canEditJob` take it.
-    var jobKind: JobKind { jobType == .smallWorks ? .smallWorks : .projects }
+    /// `projects` or `smallWorks` (`JobKind`), as `canSeeJob` / `canEditJob` take it: the collection the document
+    /// was read from (`sourceCollection`), never a guess from `jobType` (RULEBOOK §17 `jobKind`).
+    var jobKind: JobKind { sourceCollection }
 
     /// The stored manager fields of this job (`JobManagerFields`): `managerIds` and `managerId` in their stored
     /// spelling, and the stored `managerUserIds`.
