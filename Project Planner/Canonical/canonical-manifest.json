@@ -1,7 +1,7 @@
 {
   "rulebookVersion": "1.37.0",
-  "rulebookSha256": "75b3a0ddbc4b3ea0257f91391af63a9aef507e56456171886726625f84373a42",
-  "bundleSha256": "77b911f3289b7bd146b09d8bed54ad33f86b26e484ade29fa40c4b0388f2fbe3",
+  "rulebookSha256": "5f509dec036791c69bc9a0eb17aff2390da8a83468ba01b012d344cf92277f6d",
+  "bundleSha256": "0f746c809fe7f1948f37edc9600829a592ea8efbabc141c655744bde99685e3e",
   "crossPlatformContractSha256": "59d6bc6123f250e1f57599240eb3190ab48f5cd2532f8281a99360d9e187d86b",
   "exports": [
     "ACCOUNT_DELETE_WITH_COMPANY_MESSAGE",
@@ -1266,6 +1266,8 @@
     "rulebookStamp",
     "rulebookVersionLabel",
     "sameNamePersonContactLabel",
+    "scheduleCellHours",
+    "scheduleCellKind",
     "scheduleOptionsWriteFields",
     "screenMustListen",
     "securitySwitchOn",

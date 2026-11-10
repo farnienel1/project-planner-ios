@@ -65,12 +65,53 @@ final class ScheduleLeaveMarksTests: XCTestCase {
         XCTAssertNil(answer["row-a"]?.first ?? nil)
     }
 
+    /// Review #211 (1): leave an older iOS build stored under the account's email matches the person's grid row,
+    /// though the row passes only ids — the rulebook adds the emails of the person's roster rows itself.
+    func testLeaveStoredUnderTheEmailMatchesWithoutPassingTheEmail() throws {
+        let mon = try day(2026, 11, 23)
+        let user = LogicFixtures.selfEmployedUser(id: "user-a", email: "ann@example.com")
+        let input = ScheduleLeaveMarksInput.build(
+            people: [ScheduleLeaveMarksInput.Person(key: "row-a", operativeIds: [], userIds: ["user-a"])],
+            days: [mon],
+            holidays: [leave("Ann@Example.com", mon)],
+            users: [user],
+            operatives: []
+        )
+        let marks = try XCTUnwrap(CanonicalBusinessEngine.jobScheduleLeaveMarks(input)?["row-a"])
+        XCTAssertEqual(marks.first??.label, "AL")
+    }
+
+    /// Review #211 (6): AM and PM approved on one day are the whole day.
+    func testAmAndPmOnOneDayAreAFullDay() throws {
+        let mon = try day(2026, 11, 23)
+        let input = ScheduleLeaveMarksInput.build(
+            people: [ScheduleLeaveMarksInput.Person(key: "row-a", operativeIds: [], userIds: ["user-a"])],
+            days: [mon],
+            holidays: [leave("user-a", mon, slot: .morning), leave("user-a", mon, slot: .afternoon)],
+            users: [],
+            operatives: []
+        )
+        let mark = try XCTUnwrap(CanonicalBusinessEngine.jobScheduleLeaveMarks(input)?["row-a"]?.first ?? nil)
+        XCTAssertEqual(mark.label, "AL")
+        XCTAssertFalse(mark.isHalfDay)
+    }
+
+    /// Review #211 (3): the chip colour is the rulebook's `scheduleCellKind`; a 0h booking is a Standard 0h chip.
+    func testChipColourComesFromTheRulebookAndZeroHoursIsNeverHidden() {
+        XCTAssertEqual(SchedulingV2CellKindBuilder.fromBooking(paidHours: 8.5, overtimeHours: 0, timeSlot: .fullDay), .standard(hours: 8.5))
+        XCTAssertEqual(SchedulingV2CellKindBuilder.fromBooking(paidHours: 11.875, overtimeHours: 3.375, timeSlot: .customHours), .split(stdHours: 8.5, otHours: 3.38))
+        XCTAssertEqual(SchedulingV2CellKindBuilder.fromBooking(paidHours: 4.5, overtimeHours: 4.5, timeSlot: .customHours), .overtimeOnly(hours: 4.5))
+        XCTAssertEqual(SchedulingV2CellKindBuilder.fromBooking(paidHours: 4, overtimeHours: 0, timeSlot: .morning), .halfDay(hours: 4, label: "AM"))
+        XCTAssertEqual(SchedulingV2CellKindBuilder.fromBooking(paidHours: 0, overtimeHours: 0, timeSlot: .customHours), .standard(hours: 0))
+    }
+
     /// The grid asks the rulebook; the exact-id Swift match is gone.
     func testSchedulingGridUsesTheRulebookForLeave() throws {
         let text = try String(contentsOf: repoRoot.appendingPathComponent("Project Planner/Views/ProjectDetailView.swift"), encoding: .utf8)
         XCTAssertTrue(text.contains("CanonicalBusinessEngine.jobScheduleLeaveMarks"))
         XCTAssertFalse(text.contains("isPersonOnAnnualLeave"))
         XCTAssertFalse(text.contains("approvedBookings(covering"))
+        XCTAssertEqual(text.components(separatedBy: "CanonicalBusinessEngine.jobScheduleLeaveMarks(").count - 1, 1, "one call per grid render")
         let support = try String(contentsOf: repoRoot.appendingPathComponent("Project Planner/Views/ProjectSchedulingV2Support.swift"), encoding: .utf8)
         for label in ["\"Standard\"", "\"Std + OT\"", "\"OT only\"", "\"Ann. leave\"", "\"Half day\""] {
             XCTAssertTrue(support.contains("legendItem(\(label))"), "legend keeps \(label) (JOB_SCHEDULE_LEGEND)")

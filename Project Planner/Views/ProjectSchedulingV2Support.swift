@@ -52,48 +52,30 @@ enum SchedulingV2CellKind: Equatable {
 }
 
 enum SchedulingV2CellKindBuilder {
-    /// Maps existing booking hours / slot into a display cell. Display-only — does not change booking logic.
-    /// `paidHours` is `payrollHoursResult.totalPaidHours` and `overtimeHours` the paid hours of its multiplied segments
-    /// (`PayrollHoursResult.paidOvertimeHours`), so a cell shows the pay rule's hours for the day, never the clock
-    /// duration (Sunday 07:30–14:00 every hour ×2 → 13h OT; a Saturday window counting 8h → 8h).
+    /// RULEBOOK 1.37.0 §21 `scheduleCellKind`: maps existing booking hours / slot into a display cell — the rule both
+    /// apps call (no Swift thresholds). `paidHours` is `payrollHoursResult.totalPaidHours` and `overtimeHours` the paid
+    /// hours of its multiplied segments (`PayrollHoursResult.paidOvertimeHours`, the script's `scheduleCellHours`), so a
+    /// cell shows the pay rule's hours for the day, never the clock duration. A 0h booking is a Standard 0h chip, never
+    /// the empty one. Display only — does not change booking logic.
     static func fromBooking(
         paidHours: Double,
         overtimeHours: Double,
         timeSlot: TimeSlot?
     ) -> SchedulingV2CellKind {
-        let ot = max(0, overtimeHours)
-        let total = max(0, paidHours)
-        let std = max(0, total - ot)
-
-        if let slot = timeSlot {
-            switch slot {
-            case .morning:
-                return .halfDay(hours: total > 0 ? total : 4, label: "AM")
-            case .afternoon:
-                return .halfDay(hours: total > 0 ? total : 4, label: "PM")
-            case .overtime:
-                return .overtimeOnly(hours: total > 0 ? total : ot)
-            default:
-                break
-            }
+        guard let cell = CanonicalBusinessEngine.scheduleCellKind(
+            paidHours: paidHours,
+            overtimeHours: overtimeHours,
+            timeSlot: timeSlot?.rawValue
+        ) else {
+            // The script did not answer: show the booking (its hours unclassified) rather than hide it.
+            return .standard(hours: max(0, paidHours))
         }
-
-        if ot > 0.05 && std > 0.05 {
-            return .split(stdHours: roundHalf(std), otHours: roundHalf(ot))
+        switch cell.tone {
+        case "split": return .split(stdHours: cell.standardHours, otHours: cell.overtimeHours)
+        case "otOnly": return .overtimeOnly(hours: cell.overtimeHours)
+        case "halfDay": return .halfDay(hours: cell.standardHours, label: cell.halfLabel ?? "Half day")
+        default: return .standard(hours: cell.standardHours)
         }
-        if ot > 0.05 && std <= 0.05 {
-            return .overtimeOnly(hours: roundHalf(ot > 0 ? ot : total))
-        }
-        if total > 0.05 {
-            return .standard(hours: roundHalf(total))
-        }
-        return .empty
-    }
-
-    /// RULEBOOK 1.20.0: hours as the pay rule gives them (to the hundredth), never snapped to a half hour — a derived
-    /// weekday day is often a quarter hour (owner example 7.25h).
-    private static func roundHalf(_ value: Double) -> Double {
-        (value * 100).rounded() / 100
     }
 
     static func hoursLabel(_ value: Double) -> String {

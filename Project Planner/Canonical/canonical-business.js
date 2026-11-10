@@ -1283,6 +1283,8 @@ var ProjectPlannerCanonical = (() => {
     rulebookStamp: () => rulebookStamp,
     rulebookVersionLabel: () => rulebookVersionLabel,
     sameNamePersonContactLabel: () => sameNamePersonContactLabel,
+    scheduleCellHours: () => scheduleCellHours,
+    scheduleCellKind: () => scheduleCellKind,
     scheduleOptionsWriteFields: () => scheduleOptionsWriteFields,
     screenMustListen: () => screenMustListen,
     securitySwitchOn: () => securitySwitchOn,
@@ -10962,7 +10964,7 @@ var ProjectPlannerCanonical = (() => {
   function rulebookStamp() {
     return {
       version: true ? "1.37.0" : "",
-      sha256: true ? "75b3a0ddbc4b3ea0257f91391af63a9aef507e56456171886726625f84373a42" : ""
+      sha256: true ? "5f509dec036791c69bc9a0eb17aff2390da8a83468ba01b012d344cf92277f6d" : ""
     };
   }
   function rulebookVersionLabel(version) {
@@ -17243,6 +17245,12 @@ var ProjectPlannerCanonical = (() => {
         ids.add(email);
         for (const id2 of personIdSet({ id: email, email }, roster)) ids.add(key3(id2));
       }
+      for (const row2 of roster) {
+        const rowEmail = key3(row2?.email);
+        if (!rowEmail || ids.has(rowEmail)) continue;
+        const rowIds = [row2?.id, ...row2?.formerUserIds || [], ...row2?.sameEmailUserIds || [], ...row2?.formerIds || [], ...row2?.aliasIds || []];
+        if (rowIds.some((id2) => ids.has(key3(id2)))) ids.add(rowEmail);
+      }
       const has2 = (value) => {
         const k = key3(value);
         return k !== "" && ids.has(k);
@@ -17252,28 +17260,76 @@ var ProjectPlannerCanonical = (() => {
         if (mine.length === 0) return noneMark(dayKey);
         const result2 = leaveDayKind(mine, dayKey, input?.timeZone, input?.nonWorkingDayKeys);
         if (result2.kind === "none") return noneMark(dayKey);
-        const pending = result2.kind === "pendingFull" || result2.kind === "pendingHalf";
-        const half = result2.kind === "approvedHalf" || result2.kind === "pendingHalf";
+        let kind = result2.kind;
+        let mixedLabel = null;
+        let mixedSlot = null;
+        if (kind === "approvedHalf" || kind === "pendingHalf") {
+          const halfState = (slot2) => {
+            let state = null;
+            for (const h of mine) {
+              if (normalizeHolidayTimeSlot(h.timeSlot) !== slot2) continue;
+              const one = leaveDayKind([h], dayKey, input?.timeZone, input?.nonWorkingDayKeys).kind;
+              if (one === "approvedHalf") state = "approved";
+              else if (one === "pendingHalf" && state === null) state = "pending";
+            }
+            return state;
+          };
+          const am = halfState("AM");
+          const pm = halfState("PM");
+          if (am && pm) {
+            if (am === "approved" && pm === "approved") kind = "approvedFull";
+            else if (am === "pending" && pm === "pending") kind = "pendingFull";
+            else {
+              kind = "approvedHalf";
+              mixedSlot = am === "approved" ? "AM" : "PM";
+              mixedLabel = `${am === "approved" ? JOB_SCHEDULE_LEAVE_LABEL : JOB_SCHEDULE_LEAVE_PENDING_LABEL} AM \xB7 ${pm === "approved" ? JOB_SCHEDULE_LEAVE_LABEL : JOB_SCHEDULE_LEAVE_PENDING_LABEL} PM`;
+            }
+          }
+        }
+        const pending = kind === "pendingFull" || kind === "pendingHalf";
+        const half = kind === "approvedHalf" || kind === "pendingHalf";
         const record14 = (result2.recordId ? mine.find((h) => String(h.id ?? "").trim() === result2.recordId) : void 0) ?? mine.find((h) => {
           const slot2 = normalizeHolidayTimeSlot(h.timeSlot);
           return half ? slot2 !== "FULL DAY" : slot2 === "FULL DAY";
         });
-        const slot = half ? normalizeHolidayTimeSlot(record14?.timeSlot) === "PM" ? "PM" : "AM" : "FULL DAY";
+        const slot = mixedSlot ?? (half ? normalizeHolidayTimeSlot(record14?.timeSlot) === "PM" ? "PM" : "AM" : "FULL DAY");
         const base = pending ? JOB_SCHEDULE_LEAVE_PENDING_LABEL : JOB_SCHEDULE_LEAVE_LABEL;
         const dayInput2 = standardDayOn(input?.day, dayKey);
+        const title = mixedLabel ? `${JOB_SCHEDULE_LEAVE_TITLE} \xB7 ${mixedLabel}` : `${pending ? JOB_SCHEDULE_LEAVE_PENDING_TITLE : JOB_SCHEDULE_LEAVE_TITLE} \xB7 ${leaveHalfDayLabel(slot, dayInput2)}`;
         return {
           dayKey,
-          kind: result2.kind,
+          kind,
           onLeave: true,
           pending,
           slot,
-          label: half ? `${base} ${slot}` : base,
-          title: `${pending ? JOB_SCHEDULE_LEAVE_PENDING_TITLE : JOB_SCHEDULE_LEAVE_TITLE} \xB7 ${leaveHalfDayLabel(slot, dayInput2)}`,
+          label: mixedLabel ?? (half ? `${base} ${slot}` : base),
+          title,
           recordId: result2.recordId
         };
       });
       return { key: String(person?.key ?? ""), days };
     });
+  }
+  function scheduleCellHours(result2) {
+    const paidHours = Math.max(0, Number(result2?.totalPaidHours) || 0);
+    const overtimeHours = Math.max(
+      0,
+      (result2?.segments || []).filter((s) => s && s.kind !== "standardWindow").reduce((sum, s) => sum + (Number(s.paidHours) || 0), 0)
+    );
+    return { paidHours, overtimeHours };
+  }
+  var CELL_EPSILON = 0.05;
+  var hundredths = (value) => Math.round(value * 100) / 100;
+  function scheduleCellKind(input) {
+    const total = Math.max(0, Number(input?.paidHours) || 0);
+    const ot = Math.max(0, Number(input?.overtimeHours) || 0);
+    const std = Math.max(0, total - ot);
+    const slot = namedSlotKind(input?.timeSlot);
+    if (slot === "AM" || slot === "PM") return { tone: "halfDay", standardHours: hundredths(total), overtimeHours: 0, halfLabel: slot };
+    if (slot === "OVERTIME") return { tone: "otOnly", standardHours: 0, overtimeHours: hundredths(total > 0 ? total : ot), halfLabel: null };
+    if (ot > CELL_EPSILON && std > CELL_EPSILON) return { tone: "split", standardHours: hundredths(std), overtimeHours: hundredths(ot), halfLabel: null };
+    if (ot > CELL_EPSILON) return { tone: "otOnly", standardHours: 0, overtimeHours: hundredths(ot), halfLabel: null };
+    return { tone: "standard", standardHours: hundredths(total), overtimeHours: 0, halfLabel: null };
   }
 
   // lib/canonical/jobBadges.ts

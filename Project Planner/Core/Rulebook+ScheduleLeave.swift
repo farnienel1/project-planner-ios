@@ -113,3 +113,39 @@ enum ScheduleLeaveMarksInput {
         ]
     }
 }
+
+// MARK: - Tile colour (RULEBOOK 1.37.0 §21, `scheduleCellKind`)
+
+/// The answer of `scheduleCellKind`: which of the five legend looks a booking chip takes, and its hours.
+nonisolated struct RulebookScheduleCellKind: Hashable, Sendable {
+    /// standard, split, otOnly or halfDay.
+    let tone: String
+    let standardHours: Double
+    let overtimeHours: Double
+    let halfLabel: String?
+}
+
+extension CanonicalBusinessEngine {
+    nonisolated private static let scheduleCellMemo = RulebookAnswerMemo<String, RulebookScheduleCellKind>(limit: 512)
+
+    /// RULEBOOK 1.37.0 `scheduleCellKind({ paidHours, overtimeHours, timeSlot })`: the chip colour both apps use (a 0h
+    /// booking is a Standard 0h chip, never hidden). Nil when the script did not answer.
+    nonisolated static func scheduleCellKind(paidHours: Double, overtimeHours: Double, timeSlot: String?) -> RulebookScheduleCellKind? {
+        let input: [String: Any] = [
+            "paidHours": paidHours.isFinite ? paidHours : 0,
+            "overtimeHours": overtimeHours.isFinite ? overtimeHours : 0,
+            "timeSlot": timeSlot.map { $0 as Any } ?? NSNull(),
+        ]
+        guard let key = rulebookMemoKey(input) else { return nil }
+        return scheduleCellMemo.value(for: key) {
+            guard let row = callJSON("scheduleCellKind", arguments: [input]) as? [String: Any],
+                  let tone = row["tone"] as? String else { return nil }
+            return RulebookScheduleCellKind(
+                tone: tone,
+                standardHours: (row["standardHours"] as? NSNumber)?.doubleValue ?? 0,
+                overtimeHours: (row["overtimeHours"] as? NSNumber)?.doubleValue ?? 0,
+                halfLabel: row["halfLabel"] as? String
+            )
+        }
+    }
+}

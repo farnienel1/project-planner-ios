@@ -980,16 +980,21 @@ struct ProjectDetailView: View {
             for b in bookingsForDate(day) { opIds.insert(b.operativeId) }
             for b in managerBookingsForDate(day) { mgrIds.insert(b.userId) }
         }
-        return ScheduleWeekGrid.staffRows(
+        let people = ScheduleWeekGrid.staffRows(
             operativeIds: opIds,
             userIds: mgrIds,
             operatives: operativeStore.allOperatives,
             users: userStore.organizationUsers
-        ).map { person in
+        ).map { person -> (ScheduleWeekPerson, SchedulingGridPersonKind) in
             let kind: SchedulingGridPersonKind = person.role == .operative
                 ? .operative(person.saveOperativeId ?? person.operativeIds.first ?? UUID())
                 : .manager(person.saveUserId ?? person.id)
-            return makeSchedulingPersonRow(person: person, kind: kind)
+            return (person, kind)
+        }
+        // RULEBOOK 1.37.0: one `jobScheduleLeaveMarks` call for every person and day on the grid (review #211, 4).
+        let leave = schedulingLeaveMarks(people: people)
+        return people.map { person, kind in
+            makeSchedulingPersonRow(person: person, kind: kind, leaveMarks: leave[person.id] ?? [])
         }
     }
 
@@ -1003,7 +1008,8 @@ struct ProjectDetailView: View {
         }.map { person in
             makeSchedulingPersonRow(
                 person: person,
-                kind: .subcontractor(person.subcontractorId ?? UUID())
+                kind: .subcontractor(person.subcontractorId ?? UUID()),
+                leaveMarks: []
             )
         }
     }
@@ -1086,11 +1092,11 @@ struct ProjectDetailView: View {
 
     private func makeSchedulingPersonRow(
         person: ScheduleWeekPerson,
-        kind: SchedulingGridPersonKind
+        kind: SchedulingGridPersonKind,
+        leaveMarks: [RulebookScheduleLeaveMark?]
     ) -> SchedulingGridPersonRow {
         let resolvedOperativeIds = person.operativeIds
         let resolvedUserIds = person.userIds
-        let leaveMarks = schedulingLeaveMarks(person: person, kind: kind)
         let days: [SchedulingGridDayCell] = weekDays.enumerated().map { index, day in
             let dayId = OrganizationRulebookContext.calendar.startOfDay(for: day).timeIntervalSince1970
             let leave = index < leaveMarks.count ? leaveMarks[index] : nil
@@ -1204,23 +1210,29 @@ struct ProjectDetailView: View {
     /// `weekDays`; nil when none). Matched under every id they go by, without case, on the organisation day; pending
     /// leave included, rejected never. Subcontractors have none. Only people already on the grid are asked — leave
     /// never adds a row.
-    private func schedulingLeaveMarks(person: ScheduleWeekPerson, kind: SchedulingGridPersonKind) -> [RulebookScheduleLeaveMark?] {
-        var operativeIds = person.operativeIds
-        var userIds = person.userIds
-        switch kind {
-        case .operative(let id): if operativeIds.isEmpty { operativeIds = [id] }
-        case .manager(let id): if userIds.isEmpty { userIds = [id] }
-        case .subcontractor: return []
+    private func schedulingLeaveMarks(
+        people: [(ScheduleWeekPerson, SchedulingGridPersonKind)]
+    ) -> [String: [RulebookScheduleLeaveMark?]] {
+        let rows: [ScheduleLeaveMarksInput.Person] = people.compactMap { person, kind in
+            var operativeIds = person.operativeIds
+            var userIds = person.userIds
+            switch kind {
+            case .operative(let id): if operativeIds.isEmpty { operativeIds = [id] }
+            case .manager(let id): if userIds.isEmpty { userIds = [id] }
+            case .subcontractor: return nil
+            }
+            guard !operativeIds.isEmpty || !userIds.isEmpty else { return nil }
+            return ScheduleLeaveMarksInput.Person(key: person.id, operativeIds: operativeIds, userIds: userIds)
         }
-        guard !operativeIds.isEmpty || !userIds.isEmpty else { return [] }
+        guard !rows.isEmpty else { return [:] }
         let input = ScheduleLeaveMarksInput.build(
-            people: [ScheduleLeaveMarksInput.Person(key: person.id, operativeIds: operativeIds, userIds: userIds)],
+            people: rows,
             days: weekDays,
             holidays: holidayStore.bookings,
             users: userStore.organizationUsers,
             operatives: operativeStore.allOperatives
         )
-        return CanonicalBusinessEngine.jobScheduleLeaveMarks(input)?[person.id] ?? []
+        return CanonicalBusinessEngine.jobScheduleLeaveMarks(input) ?? [:]
     }
 
     /// Day strip: weekday, date and a count pill per day ("–" when none). Today filled navy, weekends muted.
