@@ -86,6 +86,117 @@ final class MyWorksPicksSaveTests: XCTestCase {
         XCTAssertNil(model.saveError, "the newer save won")
     }
 
+    // MARK: #210 review fix 1 — a save that went Pending sync settles later
+
+    func testALateConfirmationClearsPendingSync() async throws {
+        let model = MyWorksPicksModel()
+        let outcome = await model.start(timeoutSeconds: 0.1) {
+            try await Task.sleep(nanoseconds: 300_000_000)
+        }.value
+        XCTAssertEqual(outcome, .pendingSync)
+        XCTAssertTrue(model.pendingSync)
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertFalse(model.pendingSync, "the server confirmed it after the wait: Pending sync goes")
+        XCTAssertNil(model.saveError)
+    }
+
+    func testALateRefusalIsShownAndClearsPendingSync() async throws {
+        let model = MyWorksPicksModel()
+        let outcome = await model.start(timeoutSeconds: 0.1) {
+            try await Task.sleep(nanoseconds: 300_000_000)
+            throw NSError(domain: "FIRFirestoreErrorDomain", code: 7, userInfo: [NSLocalizedDescriptionKey: "Missing or insufficient permissions."])
+        }.value
+        XCTAssertEqual(outcome, .pendingSync)
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertFalse(model.pendingSync, "never \"Saved on this phone\" after a refusal")
+        let message = try XCTUnwrap(model.saveError)
+        XCTAssertTrue(message.hasPrefix(MyWorksPicksModel.saveFailedMessage))
+    }
+
+    func testALateOutcomeOfAnOlderSaveIsIgnored() async throws {
+        let model = MyWorksPicksModel()
+        _ = await model.start(timeoutSeconds: 0.1) {
+            try await Task.sleep(nanoseconds: 300_000_000)
+            throw NSError(domain: "x", code: 1, userInfo: [NSLocalizedDescriptionKey: "late"])
+        }.value
+        _ = await model.start(timeoutSeconds: 5) {}.value
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertNil(model.saveError, "the newer save won")
+        XCTAssertFalse(model.pendingSync)
+    }
+
+    func testTheLateOutcomeReachesACallerWithoutAPendingKey() async throws {
+        final class Outcomes: @unchecked Sendable { var values: [String] = [] }
+        let outcomes = Outcomes()
+        do {
+            try await FirestoreWriteAck.run(timeoutSeconds: 0.1, onSettledAfterTimeout: { error in
+                outcomes.values.append(error == nil ? "ok" : "refused")
+            }) {
+                try await Task.sleep(nanoseconds: 300_000_000)
+            }
+            XCTFail("expected the timeout")
+        } catch {
+            XCTAssertTrue(FirestoreWriteAck.isPendingInSDK(error))
+        }
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(outcomes.values, ["ok"])
+    }
+
+    // MARK: #210 review fix 2 — the pre-fill never overwrites a list saved elsewhere
+
+    func testTheGearWaitsForTheServerWhenNothingIsCached() {
+        let model = MyWorksPicksModel()
+        // A phone that never read the list: the listener's first answer is a cached "missing" snapshot.
+        model.receive(picks: .neverSaved, error: nil, fromCache: true, exists: false)
+        XCTAssertTrue(model.loaded, "the list still paints at once")
+        XCTAssertFalse(model.pickerReady, "Save waits for the server")
+        let server = MyWorksPicks(projects: ["P2"], smallWorks: nil)
+        model.receive(picks: server, error: nil, fromCache: false, exists: true)
+        XCTAssertTrue(model.pickerReady)
+        XCTAssertFalse(model.pickerStartsFromPrefill)
+        XCTAssertEqual(model.picks, server)
+    }
+
+    func testACachedCopyIsReadyAtOnce() {
+        let model = MyWorksPicksModel()
+        model.receive(picks: MyWorksPicks(projects: ["P1"], smallWorks: nil), error: nil, fromCache: true, exists: true)
+        XCTAssertTrue(model.pickerReady)
+        XCTAssertFalse(model.pickerStartsFromPrefill)
+    }
+
+    func testOfflineWithNothingCachedMaySaveAfterTheWait() async throws {
+        let model = MyWorksPicksModel()
+        model.serverWaitSeconds = 0.1
+        model.receive(picks: .neverSaved, error: nil, fromCache: true, exists: false)
+        model.startServerWait()
+        XCTAssertFalse(model.pickerReady)
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertTrue(model.pickerReady, "Save is never blocked for ever")
+        XCTAssertTrue(model.pickerStartsFromPrefill, "the sheet notes it starts from the pre-fill")
+        XCTAssertFalse(MyWorksPickerGate.saveEnabled(serverAnswered: false, cachedCopy: false, waitElapsed: false))
+    }
+
+    func testServerPicksArrivingAfterOpenReplaceThePrefill() {
+        // Opened on the pre-fill (the job they manage, P1); the server holds P2 and P3 saved on web.
+        let server = ["P2", "P3"]
+        XCTAssertEqual(MyWorksPickerGate.ids(base: server, toggles: []), server, "untouched: exactly the server's list")
+        // The person ticked P4 and unticked P1 before the answer came: their ticks on top of the server's list.
+        let replayed = MyWorksPickerGate.ids(base: server, toggles: [(jobId: "P4", picked: true), (jobId: "P1", picked: false)])
+        XCTAssertEqual(Set(replayed), ["P2", "P3", "P4"], "never the pre-fill over the saved list")
+    }
+
+    func testTheGearIsWiredToTheServerAnswer() throws {
+        let sheet = try String(contentsOf: appRoot.appendingPathComponent("Views/MyWorksPickerSheet.swift"), encoding: .utf8)
+        XCTAssertTrue(sheet.contains(".disabled(!ready)"), "Save waits until ready")
+        XCTAssertTrue(sheet.contains("MyWorksPickerGate.ids(base: base, toggles: toggles)"), "rows re-taken with the ticks replayed")
+        XCTAssertFalse(sheet.contains("Button(\"Cancel\") { dismiss() }\n                        .disabled(!ready)"))
+        for view in ["Views/ProjectsView.swift", "Views/SmallWorksView.swift"] {
+            let source = try String(contentsOf: appRoot.appendingPathComponent(view), encoding: .utf8)
+            XCTAssertTrue(source.contains("ready: myWorks.pickerReady"), view)
+            XCTAssertTrue(source.contains(".onChange(of: myWorks.confirmedByServer)"), view)
+        }
+    }
+
     // MARK: Listener answers
 
     func testSnapshotsOnlyPublishWhatChangedAndAnErrorKeepsTheList() {

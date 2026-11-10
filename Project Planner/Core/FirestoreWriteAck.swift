@@ -80,7 +80,8 @@ enum FirestoreWriteAck {
     /// `timeoutError`, `TimedOut` by default). The write is never cancelled: Firestore keeps it and sends it when it can.
     /// With `pendingKey` (the document path), a write that times out is remembered in `SDKPendingWrites` until it
     /// finishes; a write the server later refuses is logged, never sent again. `onSettledAfterTimeout` is called once
-    /// with that write's late outcome (nil: confirmed) when, and only when, its wait timed out first.
+    /// with that write's late outcome (nil: confirmed) when, and only when, its wait timed out first (with `TimedOut`),
+    /// with or without `pendingKey` (#210 review: a My list save has no booking path to mark but must hear it too).
     @MainActor
     static func run(
         timeoutSeconds seconds: Double = defaultTimeoutSeconds,
@@ -97,9 +98,12 @@ enum FirestoreWriteAck {
                 try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
                 // Cancelled: the write finished first (review NIT), nothing to do.
                 guard !Task.isCancelled else { return }
-                if gate.resume(with: .failure(timeoutError)), let pendingKey, timeoutError is TimedOut {
-                    token.marked = true
-                    SDKPendingWrites.shared.mark(pendingKey)
+                if gate.resume(with: .failure(timeoutError)), timeoutError is TimedOut {
+                    token.timedOut = true
+                    if let pendingKey {
+                        token.marked = true
+                        SDKPendingWrites.shared.mark(pendingKey)
+                    }
                 }
             }
             Task { @MainActor in
@@ -111,10 +115,12 @@ enum FirestoreWriteAck {
                 }
                 // The write finished: its timer has nothing left to do (review NIT).
                 timer.cancel()
-                if let pendingKey, token.marked {
-                    // 1.33.1 review fix 1: the caller hears this write's own late outcome first (a refused delete puts
-                    // its booking's queued edit back), then the stores hear of a refusal.
+                // 1.33.1 review fix 1: the caller hears this write's own late outcome first (a refused delete puts
+                // its booking's queued edit back), then the stores hear of a refusal.
+                if token.timedOut {
                     onSettledAfterTimeout?(failure)
+                }
+                if let pendingKey, token.marked {
                     SDKPendingWrites.shared.settle(pendingKey, error: failure)
                 }
                 if let failure {
@@ -129,6 +135,8 @@ enum FirestoreWriteAck {
     /// Whether this write's timeout marked it pending (so its late finish clears exactly that mark).
     @MainActor
     private final class PendingToken {
+        /// The wait timed out with `TimedOut` (the late outcome goes to `onSettledAfterTimeout`).
+        var timedOut = false
         var marked = false
     }
 

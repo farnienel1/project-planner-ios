@@ -82,9 +82,15 @@ enum MyWorksPickerFilter {
 struct MyWorksPickerSheet: View {
     let kind: JobKind
     /// `myWorksPickerRows` for the viewer, taken once when the ⚙ was opened (1.33.1: a snapshot, so a listener
-    /// update while the sheet is open never recomputes the rows or resets the ticks).
+    /// update while the sheet is open never recomputes the rows). #210 review fix 2: the list screen takes them once
+    /// more when the server's first answer arrives after the ⚙ opened; the person's ticks are then replayed on it.
     let rows: [MyWorksPickerRow]
     let accent: Color
+    /// #210 review fix 2: false until the picks are known (server answer or cached copy) or the wait is over
+    /// (`MyWorksPicksModel.pickerReady`). Save waits for it; Cancel never does.
+    var ready: Bool = true
+    /// Ready only because the wait for the server is over: the ticks start from the pre-fill.
+    var startsFromPrefill: Bool = false
     /// Hands the list to Firestore (`MyWorksPicksModel.save`). Returns at once: Firestore applies it on this phone and
     /// the server's answer is awaited in the background. Throws only when nothing could be written.
     let onSave: @MainActor ([String]) throws -> Void
@@ -99,6 +105,11 @@ struct MyWorksPickerSheet: View {
     /// `worksTabCounts` and `worksInTab` for the rows, asked once on open (never per render).
     @State private var counts = WorksListStatusCounts(all: 0, active: 0, upcoming: 0, completed: 0)
     @State private var membership: [String: Set<String>] = [:]
+    /// The person's own ticks, in order, so they can be replayed on the server's list (`MyWorksPickerGate.ids`).
+    @State private var toggles: [(jobId: String, picked: Bool)] = []
+
+    static let loadingMessage = "Loading your list…"
+    static let prefillMessage = "Couldn't reach the server. Your list starts from the jobs you manage; saving replaces a list saved on another device."
 
     /// 1.33.1 (owner report: Cancel did nothing while the save spun): Cancel always closes the sheet. Save never waits for
     /// the server, so there is no saving state to lock it; a write already handed to Firestore carries on.
@@ -140,6 +151,20 @@ struct MyWorksPickerSheet: View {
                     Text("Tick the \(noun) you want on your list. Your list is the same on the web and on iPhone.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                    if !ready {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text(Self.loadingMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityIdentifier("myWorksPicker.loading")
+                    } else if startsFromPrefill {
+                        Text(Self.prefillMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("myWorksPicker.prefillNote")
+                    }
                     if let errorMessage {
                         Text(errorMessage)
                             .font(.footnote)
@@ -159,6 +184,7 @@ struct MyWorksPickerSheet: View {
                         ForEach(shown) { job in
                             let on = pickedKeys.contains(job.documentId.lowercased())
                             Button {
+                                toggles.append((jobId: job.documentId, picked: !on))
                                 ids = CanonicalBusinessEngine.myWorksPicksAfterToggle(ids, jobId: job.documentId, picked: !on)
                             } label: {
                                 HStack(spacing: 12) {
@@ -198,6 +224,7 @@ struct MyWorksPickerSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
                         .fontWeight(.semibold)
+                        .disabled(!ready)
                         .accessibilityIdentifier("myWorksPicker.save")
                 }
             }
@@ -208,10 +235,21 @@ struct MyWorksPickerSheet: View {
                 counts = WorksListStatusCounts.from(jobs)
                 membership = MyWorksPickerFilter.tabMembership(jobs)
             }
+            .onChange(of: rows) { _, newRows in
+                // The server's first answer arrived after the ⚙ opened: tick what the server holds, then the
+                // person's own ticks on top, so Save never writes the pre-fill over a list saved elsewhere.
+                guard started else { return }
+                let base = newRows.filter(\.picked).map { $0.job.documentId }
+                ids = MyWorksPickerGate.ids(base: base, toggles: toggles)
+                let newJobs = newRows.map(\.job)
+                counts = WorksListStatusCounts.from(newJobs)
+                membership = MyWorksPickerFilter.tabMembership(newJobs)
+            }
         }
     }
 
     private func save() {
+        guard ready else { return }
         errorMessage = nil
         do {
             try onSave(ids)

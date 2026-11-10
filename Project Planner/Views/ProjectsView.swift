@@ -93,7 +93,9 @@ struct ProjectsView: View {
         MyWorksPickerSheet(
             kind: .projects,
             rows: myWorksPickerRows,
-            accent: WorksDashboardListStyle.projects.accent
+            accent: WorksDashboardListStyle.projects.accent,
+            ready: myWorks.pickerReady,
+            startsFromPrefill: myWorks.pickerStartsFromPrefill
         ) { ids in
             guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
                   let uid = firebaseBackend.currentUser?.uid else {
@@ -109,6 +111,13 @@ struct ProjectsView: View {
     private func openMyWorksPicker() {
         myWorksPickerRows = listCache.pickerRows(listInputs, picks: myWorks.picks)
         showingMyWorksPicker = true
+    }
+
+    /// #210 review fix 2: the server's first answer arrived while the ⚙ is open — take its rows once more (the sheet
+    /// replays the person's ticks on them), so Save never writes the pre-fill over a list saved on another device.
+    private func myWorksServerAnswered(_ answered: Bool) {
+        guard answered, showingMyWorksPicker else { return }
+        myWorksPickerRows = listCache.pickerRows(listInputs, picks: myWorks.picks)
     }
 
     /// After a save: Pending sync while the server has not confirmed it, or the refusal (the stored list comes back).
@@ -286,6 +295,9 @@ struct ProjectsView: View {
             }
             .sheet(isPresented: $showingMyWorksPicker) {
                 myWorksPickerSheet
+            }
+            .onChange(of: myWorks.confirmedByServer) { _, answered in
+                myWorksServerAnswered(answered)
             }
             .sheet(isPresented: $showingCreateProject) {
                 CreateProjectView()
