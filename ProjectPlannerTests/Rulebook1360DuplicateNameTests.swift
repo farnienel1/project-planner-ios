@@ -140,4 +140,38 @@ final class Rulebook1360DuplicateNameTests: XCTestCase {
         }
         XCTAssertTrue(view.contains("case .refuse(let message):"), "the refusal must stop the save with its message")
     }
+
+    // MARK: Review 10 Nov
+
+    func testContactLabelNoAppLoginOnlyForGhosts() {
+        XCTAssertEqual(CanonicalBusinessEngine.sameNamePersonContactLabel(email: "test-sam@example.com", ghost: false), "test-sam@example.com")
+        XCTAssertEqual(CanonicalBusinessEngine.sameNamePersonContactLabel(email: "", ghost: true), "No app login")
+        XCTAssertEqual(CanonicalBusinessEngine.sameNamePersonContactLabel(email: "", ghost: false), "No email")
+    }
+
+    /// Add anyway's confirmation never outlives the alert: set only around its one synchronous `createUser()` call,
+    /// cleared right after it, on Cancel and when a name field changes; the check consumes it.
+    func testNameConfirmationNeverOutlivesTheAlert() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let view = AddUserSavedDataGuardTests.normalized(try String(
+            contentsOf: root.appendingPathComponent("Project Planner/Views/AddUserView.swift"),
+            encoding: .utf8
+        ))
+        for snippet in [
+            "role: .cancel) { duplicateNameConfirmed = false }",
+            "duplicateNameConfirmed = true createUser() duplicateNameConfirmed = false }",
+            ".onChange(of: firstName) { _, _ in duplicateNameConfirmed = false }",
+            ".onChange(of: surname) { _, _ in duplicateNameConfirmed = false }",
+            "let nameConfirmed = duplicateNameConfirmed duplicateNameConfirmed = false",
+        ] {
+            XCTAssertTrue(view.contains(AddUserSavedDataGuardTests.normalized(snippet)), snippet)
+        }
+        // Set in exactly one place.
+        XCTAssertEqual(view.components(separatedBy: "duplicateNameConfirmed = true").count - 1, 1)
+        // `createUser()` starts no Task before the check, so the flag is read synchronously within that call.
+        let full = try String(contentsOf: root.appendingPathComponent("Project Planner/Views/AddUserView.swift"), encoding: .utf8)
+        let body = try XCTUnwrap(AddUserSavedDataGuardTests.declaration(startingAt: "private func createUser() {", in: full))
+        let check = try XCTUnwrap(body.range(of: "if stopForDuplicateName() { return }"))
+        XCTAssertNil(body[..<check.lowerBound].range(of: "Task {"))
+    }
 }

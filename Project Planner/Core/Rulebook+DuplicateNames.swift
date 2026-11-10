@@ -46,6 +46,14 @@ extension CanonicalBusinessEngine {
         constant("DUPLICATE_NAME_CANCEL_LABEL", as: String.self) ?? "Cancel"
     }
 
+    /// `sameNamePersonContactLabel({ email, ghost })`: the email; else "No app login" for a ghost only; else
+    /// `DUPLICATE_NAME_NO_EMAIL_LABEL` ("No email"). '' when the script did not answer (the warning is never shown
+    /// then: Add user refuses the save, `DuplicateNameRulebook.decision`).
+    nonisolated static func sameNamePersonContactLabel(email: String, ghost: Bool) -> String {
+        let person: [String: Any] = ["email": email, "ghost": ghost]
+        return callJSON("sameNamePersonContactLabel", arguments: [person]) as? String ?? ""
+    }
+
     /// `usersWithSameName(roster, { firstName, lastName }, { claimedEmails })`. `roster` is every users document of the
     /// organisation (`DuplicateNameRulebook.roster`); `claimedEmails` nil = the `userEmails` claims did not load. Nil
     /// when the script did not answer.

@@ -75,7 +75,9 @@ struct AddUserView: View {
     }
     @State private var isCreating = false
     /// RULEBOOK 1.36.0 §11 (owner decision 10 Nov): the people with the same first and last name
-    /// (`usersWithSameName`) shown in the duplicate-name warning; Add anyway sets `duplicateNameConfirmed` and saves.
+    /// (`usersWithSameName`) shown in the duplicate-name warning. `duplicateNameConfirmed` is true only for the one
+    /// synchronous `createUser()` call Add anyway makes (its checks run before any `Task` starts); it is cleared right
+    /// after that call, on Cancel and whenever a name field changes, so it never outlives the alert (review 10 Nov).
     @State private var duplicateNameMatches: [RulebookSameNamePerson] = []
     @State private var showingDuplicateNameWarning = false
     @State private var duplicateNameConfirmed = false
@@ -310,15 +312,20 @@ struct AddUserView: View {
                 isPresented: $showingDuplicateNameWarning,
                 presenting: duplicateNameMatches
             ) { _ in
-                Button(CanonicalBusinessEngine.duplicateNameCancelLabel, role: .cancel) {}
+                Button(CanonicalBusinessEngine.duplicateNameCancelLabel, role: .cancel) {
+                    duplicateNameConfirmed = false
+                }
                 Button(CanonicalBusinessEngine.duplicateNameConfirmLabel) {
                     duplicateNameConfirmed = true
                     createUser()
+                    duplicateNameConfirmed = false
                 }
                 .accessibilityIdentifier("addUser.duplicateName.confirm")
             } message: { matches in
                 Text(duplicateNameAlertMessage(matches))
             }
+            .onChange(of: firstName) { _, _ in duplicateNameConfirmed = false }
+            .onChange(of: surname) { _, _ in duplicateNameConfirmed = false }
             .onAppear {
                 resetAnnualLeaveInviteDefaults()
                 if mode == .managerAddingOperative {
@@ -1555,13 +1562,12 @@ struct AddUserView: View {
         }
     }
 
-    /// The warning text and one line per matching person: their email, or "No app login" for a ghost.
+    /// The warning text and one line per matching person: `sameNamePersonContactLabel` (their email; "No app login"
+    /// for a ghost only; else "No email").
     private func duplicateNameAlertMessage(_ matches: [RulebookSameNamePerson]) -> String {
         let lines = matches.map { person -> String in
             var line = person.displayName
-            let contact = person.email.isEmpty
-                ? CanonicalBusinessEngine.ghostBadgeLabel(ghost: true, email: "")
-                : person.email
+            let contact = CanonicalBusinessEngine.sameNamePersonContactLabel(email: person.email, ghost: person.ghost)
             if !contact.isEmpty { line += " · \(contact)" }
             if person.segment == "inactive" { line += " · Inactive" }
             if person.segment == "pending" { line += " · Pending" }
