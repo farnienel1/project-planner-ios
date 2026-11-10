@@ -1081,7 +1081,7 @@ class BookingStore: ObservableObject {
                     errorMessage = nil
                     print("🔥🔥🔥 DEBUG: Successfully saved \(writes.count) bookings to Firebase")
                     ScheduleChangeNotifier.postBookingStoreDidChange()
-                    return true
+                    return results
                 }
             } else {
                 print("🔥🔥🔥 DEBUG: Saved \(bookings.count) bookings locally (Firebase not available or not authenticated)")
