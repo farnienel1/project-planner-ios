@@ -10964,7 +10964,7 @@ var ProjectPlannerCanonical = (() => {
   function rulebookStamp() {
     return {
       version: true ? "1.37.0" : "",
-      sha256: true ? "5f509dec036791c69bc9a0eb17aff2390da8a83468ba01b012d344cf92277f6d" : ""
+      sha256: true ? "cf9e33ac071da9dd1f8309c1ce90da347d8a4ad088a90a27f43055372651943e" : ""
     };
   }
   function rulebookVersionLabel(version) {
@@ -17223,7 +17223,7 @@ var ProjectPlannerCanonical = (() => {
     return typeof value === "string" ? value.trim().toLowerCase() : "";
   }
   function noneMark(dayKey) {
-    return { dayKey, kind: "none", onLeave: false, pending: false, slot: null, label: "", title: "", recordId: null };
+    return { dayKey, kind: "none", onLeave: false, pending: false, slot: null, label: "", title: "", recordId: null, am: null, pm: null };
   }
   function jobScheduleLeaveMarks(input) {
     const dayKeys = (input?.dayKeys || []).filter((d) => typeof d === "string" && d.trim() !== "").map((d) => d.trim());
@@ -17261,27 +17261,37 @@ var ProjectPlannerCanonical = (() => {
         const result2 = leaveDayKind(mine, dayKey, input?.timeZone, input?.nonWorkingDayKeys);
         if (result2.kind === "none") return noneMark(dayKey);
         let kind = result2.kind;
+        let recordId = result2.recordId;
         let mixedLabel = null;
         let mixedSlot = null;
         if (kind === "approvedHalf" || kind === "pendingHalf") {
           const halfState = (slot2) => {
-            let state = null;
+            let state2 = null;
+            let id2 = null;
             for (const h of mine) {
               if (normalizeHolidayTimeSlot(h.timeSlot) !== slot2) continue;
               const one = leaveDayKind([h], dayKey, input?.timeZone, input?.nonWorkingDayKeys).kind;
-              if (one === "approvedHalf") state = "approved";
-              else if (one === "pendingHalf" && state === null) state = "pending";
+              if (one === "approvedHalf" && state2 !== "approved") {
+                state2 = "approved";
+                id2 = String(h.id ?? "").trim() || null;
+              } else if (one === "pendingHalf" && state2 === null) {
+                state2 = "pending";
+                id2 = String(h.id ?? "").trim() || null;
+              }
             }
-            return state;
+            return { state: state2, id: id2 };
           };
-          const am = halfState("AM");
-          const pm = halfState("PM");
+          const amHalf = halfState("AM");
+          const pmHalf = halfState("PM");
+          const am = amHalf.state;
+          const pm = pmHalf.state;
           if (am && pm) {
             if (am === "approved" && pm === "approved") kind = "approvedFull";
             else if (am === "pending" && pm === "pending") kind = "pendingFull";
             else {
               kind = "approvedHalf";
               mixedSlot = am === "approved" ? "AM" : "PM";
+              recordId = am === "approved" ? amHalf.id : pmHalf.id;
               mixedLabel = `${am === "approved" ? JOB_SCHEDULE_LEAVE_LABEL : JOB_SCHEDULE_LEAVE_PENDING_LABEL} AM \xB7 ${pm === "approved" ? JOB_SCHEDULE_LEAVE_LABEL : JOB_SCHEDULE_LEAVE_PENDING_LABEL} PM`;
             }
           }
@@ -17295,6 +17305,15 @@ var ProjectPlannerCanonical = (() => {
         const slot = mixedSlot ?? (half ? normalizeHolidayTimeSlot(record14?.timeSlot) === "PM" ? "PM" : "AM" : "FULL DAY");
         const base = pending ? JOB_SCHEDULE_LEAVE_PENDING_LABEL : JOB_SCHEDULE_LEAVE_LABEL;
         const dayInput2 = standardDayOn(input?.day, dayKey);
+        const state = pending ? "pending" : "approved";
+        const halvesOf = () => {
+          if (mixedLabel) {
+            const amState = mixedSlot === "AM" ? "approved" : "pending";
+            return { am: amState, pm: amState === "approved" ? "pending" : "approved" };
+          }
+          if (!half) return { am: state, pm: state };
+          return slot === "AM" ? { am: state, pm: null } : { am: null, pm: state };
+        };
         const title = mixedLabel ? `${JOB_SCHEDULE_LEAVE_TITLE} \xB7 ${mixedLabel}` : `${pending ? JOB_SCHEDULE_LEAVE_PENDING_TITLE : JOB_SCHEDULE_LEAVE_TITLE} \xB7 ${leaveHalfDayLabel(slot, dayInput2)}`;
         return {
           dayKey,
@@ -17304,7 +17323,8 @@ var ProjectPlannerCanonical = (() => {
           slot,
           label: mixedLabel ?? (half ? `${base} ${slot}` : base),
           title,
-          recordId: result2.recordId
+          recordId,
+          ...halvesOf()
         };
       });
       return { key: String(person?.key ?? ""), days };

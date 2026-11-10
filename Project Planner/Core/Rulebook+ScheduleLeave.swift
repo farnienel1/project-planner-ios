@@ -23,8 +23,14 @@ nonisolated struct RulebookScheduleLeaveMark: Hashable, Sendable {
     let label: String
     /// "Annual leave · Full day", "Annual leave requested · AM 06:30–10:30".
     let title: String
+    /// The record that decided the mark (for a mixed day, the approved half's).
+    var recordId: String? = nil
+    /// How each half of the day is shaded: "approved", "pending" or nil (not leave). A full day has both alike.
+    var am: String? = nil
+    var pm: String? = nil
 
-    var isHalfDay: Bool { slot == "AM" || slot == "PM" }
+    /// Whether the two halves look different (a half day, or one approved half and one pending half).
+    var isHalfDay: Bool { am != pm }
 }
 
 extension CanonicalBusinessEngine {
@@ -53,7 +59,10 @@ extension CanonicalBusinessEngine {
                     pending: day["pending"] as? Bool ?? false,
                     slot: day["slot"] as? String ?? "FULL DAY",
                     label: day["label"] as? String ?? "",
-                    title: day["title"] as? String ?? ""
+                    title: day["title"] as? String ?? "",
+                    recordId: day["recordId"] as? String,
+                    am: day["am"] as? String,
+                    pm: day["pm"] as? String
                 )
             }
             out[key] = days

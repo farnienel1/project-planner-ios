@@ -96,6 +96,33 @@ final class ScheduleLeaveMarksTests: XCTestCase {
         XCTAssertFalse(mark.isHalfDay)
     }
 
+    /// Re-review (2): one approved half and one pending half are both shaded, each in its own style, and the mark's
+    /// record is the approved half's.
+    func testMixedHalvesShadeBothWithTheApprovedRecord() throws {
+        let mon = try day(2026, 11, 23)
+        let am = HolidayBooking(documentId: "am-rec", organizationId: "org-test", userId: "user-a", startDate: mon, endDate: mon, status: .approved, timeSlot: .morning)
+        let pm = HolidayBooking(documentId: "pm-rec", organizationId: "org-test", userId: "user-a", startDate: mon, endDate: mon, status: .pending, timeSlot: .afternoon)
+        let input = ScheduleLeaveMarksInput.build(
+            people: [ScheduleLeaveMarksInput.Person(key: "row-a", operativeIds: [], userIds: ["user-a"])],
+            days: [mon],
+            holidays: [am, pm],
+            users: [],
+            operatives: []
+        )
+        let mark = try XCTUnwrap(CanonicalBusinessEngine.jobScheduleLeaveMarks(input)?["row-a"]?.first ?? nil)
+        XCTAssertEqual(mark.label, "AL AM · AL? PM")
+        XCTAssertEqual(mark.am, "approved")
+        XCTAssertEqual(mark.pm, "pending")
+        XCTAssertEqual(mark.recordId, "am-rec")
+        XCTAssertTrue(mark.isHalfDay)
+    }
+
+    /// Re-review (3): a 0h AM booking is a Half day 0h chip — the shared rule's figure, the same web asserts in
+    /// `canonical.test.ts` (`scheduleCellKind({ paidHours: 0, timeSlot: 'AM' })`).
+    func testZeroHourHalfDayChipMatchesWeb() {
+        XCTAssertEqual(SchedulingV2CellKindBuilder.fromBooking(paidHours: 0, overtimeHours: 0, timeSlot: .morning), .halfDay(hours: 0, label: "AM"))
+    }
+
     /// Review #211 (3): the chip colour is the rulebook's `scheduleCellKind`; a 0h booking is a Standard 0h chip.
     func testChipColourComesFromTheRulebookAndZeroHoursIsNeverHidden() {
         XCTAssertEqual(SchedulingV2CellKindBuilder.fromBooking(paidHours: 8.5, overtimeHours: 0, timeSlot: .fullDay), .standard(hours: 8.5))

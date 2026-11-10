@@ -140,6 +140,14 @@ struct SchedulingV2BookingCell: View {
         mark.pending ? PPBookingColor.leave.opacity(0.45) : PPBookingColor.leave
     }
 
+    static func halfColor(_ state: String?) -> Color {
+        switch state {
+        case "approved": return PPBookingColor.leave
+        case "pending": return PPBookingColor.leave.opacity(0.45)
+        default: return PPBookingColor.field.opacity(0.7)
+        }
+    }
+
     private var accessibilityText: String {
         let what: String
         switch kind {
@@ -174,10 +182,10 @@ struct SchedulingV2BookingCell: View {
             PPOvertimeFill()
         case .annualLeave(let mark):
             if mark.isHalfDay {
-                // Half-day leave: the leave half in brown, the other half open (the "Half day" split style).
+                // Each half in its own style (the "Half day" split): approved brown, pending paler, not leave open.
                 HStack(spacing: 0) {
-                    if mark.slot == "AM" { Self.leaveColor(mark) } else { PPBookingColor.field.opacity(0.7) }
-                    if mark.slot == "PM" { Self.leaveColor(mark) } else { PPBookingColor.field.opacity(0.7) }
+                    Self.halfColor(mark.am)
+                    Self.halfColor(mark.pm)
                 }
             } else {
                 Self.leaveColor(mark)
