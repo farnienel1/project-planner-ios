@@ -24,8 +24,28 @@ class HolidayStore: ObservableObject {
     private var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
     private var isLoadingInFlight = false
+    private var pendingWritesObserver: AnyCancellable?
+    private var lateRefusalObserver: NSObjectProtocol?
+    /// 1.33.1: the last save was kept on this phone and the server has not confirmed it yet (Pending sync).
+    @Published private(set) var lastSaveWasPendingSync = false
 
     init() {
+        // 1.33.1: rows re-draw "Pending sync" when a leave write Firestore holds is confirmed or refused.
+        pendingWritesObserver = SDKPendingWrites.shared.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        // A leave write refused after its wait: Firestore rolled it back; the server's copy is read again.
+        lateRefusalObserver = NotificationCenter.default.addObserver(
+            forName: SDKPendingWrites.lateRefusalNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let collection = note.userInfo?["collection"] as? String
+            guard collection == LeaveWriteAck.collection else { return }
+            Task { @MainActor [weak self] in
+                await self?.loadData()
+            }
+        }
         NotificationCenter.default.addObserver(
             forName: .organizationDidLoad,
             object: nil,
@@ -75,9 +95,15 @@ class HolidayStore: ObservableObject {
 
     private var isOffline: Bool { smartCache?.isOnline == false }
 
-    /// "Pending sync": this request has a queued change the server has not confirmed.
+    /// "Pending sync": this request has a change the server has not confirmed — queued in the outbox (offline), or
+    /// (1.33.1) held by Firestore after the save's short wait (`LeaveWriteAck`).
     func isPendingSync(_ booking: HolidayBooking) -> Bool {
-        OfflineOutboxStore.shared.hasPendingSync(entityId: booking.documentId)
+        LeaveWriteAck.isPending(documentId: booking.documentId)
+    }
+
+    /// One leave save's waits (`BookingWriteSession`): the organisation is checked once, every wait is short.
+    private func writeSession(_ orgId: String) -> BookingWriteSession {
+        BookingWriteSession(organizationId: orgId)
     }
 
     /// The signed-in person's own request: only those are queued offline. Deciding or booking leave for someone
@@ -239,17 +265,24 @@ class HolidayStore: ObservableObject {
             return
         }
         let orgId = try await resolveOrganizationId()
+        let session = writeSession(orgId)
         if let previous = bookings.first(where: { $0.id == booking.id }) {
             let fields = Self.changedFields(from: previous, to: booking)
-            try await fb.updateHolidayBookingFields(documentId: booking.documentId, fields: fields, organizationId: orgId)
+            lastSaveWasPendingSync = try await fb.updateHolidayBookingFields(
+                documentId: booking.documentId,
+                fields: fields,
+                organizationId: orgId,
+                session: session
+            )
             if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
                 bookings[index] = booking
             }
             return
         }
-        let stored = try await fb.saveHolidayBooking(booking, organizationId: orgId)
-        bookings.removeAll { $0.id == stored.id }
-        bookings.append(stored)
+        let result = try await fb.saveHolidayBooking(booking, organizationId: orgId, session: session)
+        lastSaveWasPendingSync = result.pendingSync
+        bookings.removeAll { $0.id == result.stored.id }
+        bookings.append(result.stored)
     }
 
     /// One document per request range (`holidayRequestRanges` → `holidayRequestWriteFields`, §9).
@@ -280,6 +313,8 @@ class HolidayStore: ObservableObject {
             throw NSError(domain: "HolidayStore", code: 500, userInfo: [NSLocalizedDescriptionKey: "Annual leave could not be prepared. Please try again."])
         }
         var saved: [HolidayBooking] = []
+        var anyPending = false
+        let session = writeSession(orgId)
         for range in ranges {
             guard let start = OrganizationRulebookContext.date(fromDayKey: range.startDayKey),
                   let end = OrganizationRulebookContext.date(fromDayKey: range.endDayKey) else { continue }
@@ -298,11 +333,13 @@ class HolidayStore: ObservableObject {
                 saved.append(try queueCreate(draft))
                 continue
             }
-            let stored = try await fb.saveHolidayBooking(draft, organizationId: orgId)
-            bookings.removeAll { $0.id == stored.id }
-            bookings.append(stored)
-            saved.append(stored)
+            let result = try await fb.saveHolidayBooking(draft, organizationId: orgId, session: session)
+            anyPending = anyPending || result.pendingSync
+            bookings.removeAll { $0.id == result.stored.id }
+            bookings.append(result.stored)
+            saved.append(result.stored)
         }
+        lastSaveWasPendingSync = anyPending
         return saved.sorted { $0.startDate < $1.startDate }
     }
 
@@ -336,7 +373,7 @@ class HolidayStore: ObservableObject {
         guard let fb = firebaseBackend else { return }
         do {
             let orgId = try await resolveOrganizationId()
-            try await fb.deleteHolidayBooking(booking, organizationId: orgId)
+            lastSaveWasPendingSync = try await fb.deleteHolidayBooking(booking, organizationId: orgId, session: writeSession(orgId))
             bookings.removeAll { $0.id == booking.id }
         } catch {
             errorMessage = error.localizedDescription
@@ -361,13 +398,16 @@ class HolidayStore: ObservableObject {
         guard let fb = firebaseBackend else { return }
         do {
             let orgId = try await resolveOrganizationId()
-            let decision = try await fb.decideHolidayBooking(
+            let result = try await fb.decideHolidayBooking(
                 booking,
                 status: status,
                 approverUid: approverUid,
                 decisionNote: note,
-                organizationId: orgId
+                organizationId: orgId,
+                session: writeSession(orgId)
             )
+            lastSaveWasPendingSync = result.pendingSync
+            let decision = result.decision
             var updated = booking
             updated.status = HolidayStatus(rawValue: decision.status) ?? status
             updated.approvedByUserId = decision.approvedByUserId

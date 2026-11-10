@@ -92,6 +92,11 @@ struct PendingSyncIndicator: View {
         self.init(entityId: booking.id.uuidString, collection: "bookings", documentKey: booking.documentKey)
     }
 
+    /// An annual leave row (1.33.1): queued offline, or held by Firestore after its short wait (`LeaveWriteAck`).
+    init(leave: HolidayBooking) {
+        self.init(entityId: leave.documentId, collection: LeaveWriteAck.collection, documentKey: leave.documentId)
+    }
+
     /// A manager schedule booking row.
     init(managerBooking: ManagerSiteBooking) {
         self.init(entityId: managerBooking.id.uuidString, collection: "managerSiteBookings", documentKey: managerBooking.documentKey)

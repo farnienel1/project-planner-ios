@@ -8285,16 +8285,25 @@ class FirebaseBackend: ObservableObject {
     /// Creates ONE leave request document covering `startDate`–`endDate` (§9, `holidayRequestWriteFields`).
     /// Use `updateHolidayBookingFields` / `decideHolidayBooking` for an existing document.
     /// Returns the booking as stored (organisation-zone midnights, normalised slot and status).
+    /// 1.33.1: `pendingSync` is true when the server did not confirm within the save's short wait (`LeaveWriteAck`):
+    /// Firestore holds the write and sends it; a later refusal is announced (`SDKPendingWrites.settle`).
     @discardableResult
-    func saveHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws -> HolidayBooking {
-        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
+    func saveHolidayBooking(
+        _ booking: HolidayBooking,
+        organizationId: String,
+        session: BookingWriteSession? = nil
+    ) async throws -> (stored: HolidayBooking, pendingSync: Bool) {
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId, session: session)
         let create = try Self.holidayRequestCreate(booking, organizationId: orgId)
         let data: [String: Any] = WriteMetadata.stamped(
             create.fields.mapValues(\.firestoreValue),
             userId: auth.currentUser?.uid
         )
-        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(create.documentId).setData(data)
-        return create.stored
+        let ref = db.collection("organizations").document(orgId).collection("holidayBookings").document(create.documentId)
+        let pending = try await LeaveWriteAck.run(ref: ref, organizationId: orgId, session: session) {
+            try await ref.setData(data)
+        }
+        return (create.stored, pending)
     }
 
     /// The new leave request document (`holidayRequestWriteFields`, §9) as outbox values, so the online write and an
@@ -8349,12 +8358,21 @@ class FirebaseBackend: ObservableObject {
 
     /// Partial update of an existing leave document: only `fields` plus `WriteMetadata` (§1).
     /// `documentId` is the stored document id (`HolidayBooking.documentId`), never the in-memory UUID.
-    func updateHolidayBookingFields(documentId: String, fields: [String: Any], organizationId: String) async throws {
-        guard !fields.isEmpty else { return }
-        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
-        try await db.collection("organizations").document(orgId).collection("holidayBookings")
-            .document(documentId)
-            .updateData(WriteMetadata.stamped(fields, userId: auth.currentUser?.uid))
+    /// 1.33.1: returns true when the write is Pending sync (not confirmed within the save's short wait).
+    @discardableResult
+    func updateHolidayBookingFields(
+        documentId: String,
+        fields: [String: Any],
+        organizationId: String,
+        session: BookingWriteSession? = nil
+    ) async throws -> Bool {
+        guard !fields.isEmpty else { return false }
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId, session: session)
+        let ref = db.collection("organizations").document(orgId).collection("holidayBookings").document(documentId)
+        let stamped = WriteMetadata.stamped(fields, userId: auth.currentUser?.uid)
+        return try await LeaveWriteAck.run(ref: ref, organizationId: orgId, session: session) {
+            try await ref.updateData(stamped)
+        }
     }
 
     /// Approve or decline in one partial update (`holidayDecisionWriteFields`): status, approver,
@@ -8365,8 +8383,9 @@ class FirebaseBackend: ObservableObject {
         status: HolidayStatus,
         approverUid: String,
         decisionNote: String?,
-        organizationId: String
-    ) async throws -> CanonicalHolidayDecisionFields {
+        organizationId: String,
+        session: BookingWriteSession? = nil
+    ) async throws -> (decision: CanonicalHolidayDecisionFields, pendingSync: Bool) {
         guard let decision = CanonicalBusinessEngine.holidayDecisionWriteFields(
             status: status.rawValue,
             approverUid: approverUid,
@@ -8374,7 +8393,7 @@ class FirebaseBackend: ObservableObject {
         ) else {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "That decision is not valid."])
         }
-        try await updateHolidayBookingFields(
+        let pending = try await updateHolidayBookingFields(
             documentId: booking.documentId,
             fields: [
                 "status": decision.status,
@@ -8382,9 +8401,10 @@ class FirebaseBackend: ObservableObject {
                 "decisionNote": decision.decisionNote.map { $0 as Any } ?? NSNull(),
                 "approvedAt": FieldValue.serverTimestamp(),
             ],
-            organizationId: organizationId
+            organizationId: organizationId,
+            session: session
         )
-        return decision
+        return (decision, pending)
     }
 
     /// Document ids in `organizations/{orgId}/dismissedWarnings`. Empty when the read fails,
@@ -8549,9 +8569,18 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Deletes the document the record was read from (`documentId`, stored case; web ids need not be UUIDs).
-    func deleteHolidayBooking(_ booking: HolidayBooking, organizationId: String) async throws {
-        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
-        try await db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.documentId).delete()
+    /// 1.33.1: returns true when the delete is Pending sync (not confirmed within the save's short wait).
+    @discardableResult
+    func deleteHolidayBooking(
+        _ booking: HolidayBooking,
+        organizationId: String,
+        session: BookingWriteSession? = nil
+    ) async throws -> Bool {
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId, session: session)
+        let ref = db.collection("organizations").document(orgId).collection("holidayBookings").document(booking.documentId)
+        return try await LeaveWriteAck.run(ref: ref, organizationId: orgId, session: session) {
+            try await ref.delete()
+        }
     }
 
     func recordOperativeDayRateChange(
