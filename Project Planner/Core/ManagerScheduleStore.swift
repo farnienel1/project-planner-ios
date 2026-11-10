@@ -338,7 +338,7 @@ class ManagerScheduleStore: ObservableObject {
             if let previous {
                 // One notice per change: an older queued edit of this booking replays later, silently.
                 OfflineOutboxStore.shared.clearManagerSiteReopenBaseline(bookingId: normalizedBooking.id)
-                OvertimeReopenNotice.managerSite(before: previous, after: normalizedBooking)
+                OvertimeReopenNotice.managerSite(before: previous, after: normalizedBooking, organizationId: orgId)
             }
             loadData(force: true)
             return .saved
@@ -350,9 +350,7 @@ class ManagerScheduleStore: ObservableObject {
                 // RULEBOOK 1.33.0 §25 reopen: told when the server confirms the edit (also late), never if it refuses.
                 if let previous, changedFields != nil {
                     let after = normalizedBooking
-                    SDKPendingWrites.shared.whenConfirmed(
-                        SDKPendingWrites.key(organizationId: orgId, collection: "managerSiteBookings", documentId: after.documentKey)
-                    ) {
+                    SDKPendingWrites.shared.whenConfirmed(ticket: FirestoreWriteAck.pendingTicket(error)) {
                         OfflineOutboxStore.shared.clearManagerSiteReopenBaseline(bookingId: after.id)
                         OvertimeReopenNotice.managerSite(before: previous, after: after, organizationId: orgId)
                     }
@@ -443,19 +441,26 @@ class ManagerScheduleStore: ObservableObject {
                     try await FirestoreWriteAck.run(
                         pendingKey: SDKPendingWrites.key(organizationId: orgId, collection: "managerSiteBookings", documentId: booking.documentKey),
                         onSettledAfterTimeout: { error in
-                            if error != nil { OfflineOutboxStore.shared.requeueBookingSaves(takenEntries) }
+                            if error != nil {
+                                OfflineOutboxStore.shared.requeueBookingSaves(takenEntries)
+                            } else {
+                                // #209 review item 2: a delete Firestore held is announced only once the server has it.
+                                OvertimeReopenNotice.managerSite(before: booking, after: nil, organizationId: orgId)
+                            }
                         }
                     ) {
                         try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
                     }
                 } catch is FirestoreWriteAck.TimedOut {
                     print("🔥🔥🔥 DEBUG: Manager schedule delete of \(booking.documentKey) is with Firestore, pending sync")
+                    loadData(force: true)
+                    return
                 }
             } else {
                 try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
             }
             // RULEBOOK 1.33.0 §25 reopen (best effort, after the delete).
-            OvertimeReopenNotice.managerSite(before: booking, after: nil)
+            OvertimeReopenNotice.managerSite(before: booking, after: nil, organizationId: orgId)
             loadData(force: true)
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),

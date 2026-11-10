@@ -26,6 +26,10 @@ enum FirestoreWriteAck {
     /// sync and never queues it again in the app outbox. The wording avoids "network" / "offline" on purpose, so
     /// `OfflineWriteSupport.shouldQueue` never reads it as a reason to queue a second copy.
     nonisolated struct TimedOut: LocalizedError, Equatable {
+        /// The `SDKPendingWrites` ticket of the write Firestore now holds (nil when the write had no `pendingKey`).
+        /// Pass it to `SDKPendingWrites.whenConfirmed(ticket:)` to act on that write's own late confirmation.
+        var ticket: UInt64? = nil
+
         var errorDescription: String? {
             "Saved on this phone. Pending sync — the server has not confirmed it yet."
         }
@@ -42,6 +46,11 @@ enum FirestoreWriteAck {
     /// True when `error` is the bounded wait on a write Firestore already holds: report Pending sync, write nothing more.
     nonisolated static func isPendingInSDK(_ error: Error) -> Bool {
         error is TimedOut
+    }
+
+    /// The ticket of the write a `TimedOut` stands for (nil for any other error or an unmarked write).
+    nonisolated static func pendingTicket(_ error: Error) -> UInt64? {
+        (error as? TimedOut)?.ticket
     }
 
     /// How an edit checks that the booking still exists before writing.
@@ -97,14 +106,21 @@ enum FirestoreWriteAck {
             let timer = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
                 // Cancelled: the write finished first (review NIT), nothing to do.
-                guard !Task.isCancelled else { return }
-                if gate.resume(with: .failure(timeoutError)), timeoutError is TimedOut {
+                guard !Task.isCancelled, gate.isOpen else { return }
+                var error = timeoutError
+                if timeoutError is TimedOut {
                     token.timedOut = true
                     if let pendingKey {
+                        // Marked before the caller resumes, and the ticket travels with the error, so the caller can
+                        // hold work for exactly this write (#209 review item 3). Both tasks run on the main actor, so
+                        // the write cannot finish between `isOpen` and `resume`.
+                        let ticket = SDKPendingWrites.shared.mark(pendingKey)
                         token.marked = true
-                        SDKPendingWrites.shared.mark(pendingKey)
+                        token.ticket = ticket
+                        error = TimedOut(ticket: ticket)
                     }
                 }
+                gate.resume(with: .failure(error))
             }
             Task { @MainActor in
                 var failure: Error?
@@ -121,7 +137,7 @@ enum FirestoreWriteAck {
                     onSettledAfterTimeout?(failure)
                 }
                 if let pendingKey, token.marked {
-                    SDKPendingWrites.shared.settle(pendingKey, error: failure)
+                    SDKPendingWrites.shared.settle(pendingKey, error: failure, ticket: token.ticket)
                 }
                 if let failure {
                     gate.resume(with: .failure(failure))
@@ -138,12 +154,19 @@ enum FirestoreWriteAck {
         /// The wait timed out with `TimedOut` (the late outcome goes to `onSettledAfterTimeout`).
         var timedOut = false
         var marked = false
+        /// The `SDKPendingWrites` ticket this write was marked with.
+        var ticket: UInt64?
     }
 
     /// Resumes the continuation once; the later of the write and the timer is ignored.
     private nonisolated final class ResumeOnce: @unchecked Sendable {
         private let lock = NSLock()
         private var stored: CheckedContinuation<Void, Error>?
+
+        /// Not resumed yet.
+        var isOpen: Bool {
+            lock.lock(); defer { lock.unlock() }; return stored != nil
+        }
 
         var continuation: CheckedContinuation<Void, Error>? {
             get { lock.lock(); defer { lock.unlock() }; return stored }
@@ -191,78 +214,70 @@ final class SDKPendingWrites: ObservableObject {
 
     /// The document path, lower-cased (ids compare without case, RULEBOOK §1).
     nonisolated static func key(organizationId: String, collection: String, documentId: String) -> String {
-        "organizations/\(organizationId)/\(collection)/\(documentId)".lowercased()
+        let parts = [organizationId, collection, documentId].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return "organizations/\(parts[0])/\(parts[1])/\(parts[2])".lowercased()
     }
 
-    // 1.36 (#209 review): actions held for a timed-out write — run when the server confirms it later, dropped when it
-    // refuses it (the leave pattern, `LeaveWriteAck` / `DeferredLeaveNoticeQueue`). Writes to one document settle in
-    // the order they were marked (Firestore delivers them in order), so each mark gets an ordinal per document.
-    private var markedOrdinal: [String: Int] = [:]
-    private var settledOrdinal: [String: Int] = [:]
-    private var held: [String: [Int: @MainActor () -> Void]] = [:]
-    /// Outcomes (true: confirmed) of writes that settled before anything was held for them.
-    private var unclaimed: [String: [Int: Bool]] = [:]
-    /// The last outcome of a document whose writes have all settled, for a `whenConfirmed` that arrives just after it.
-    private var lastOutcome: [String: Bool] = [:]
+    // 1.36 (#209 review): work held for one timed-out write — run when the server confirms that write later, dropped
+    // when it refuses it (the leave pattern, `LeaveWriteAck` / `DeferredLeaveNoticeQueue`). Each timed-out write gets
+    // its own ticket (`mark`), carried by its `TimedOut` error and settled by `FirestoreWriteAck.run` itself, so work is
+    // never attached to another write to the same document.
+    private var lastTicket: UInt64 = 0
+    private var held: [UInt64: [@MainActor () -> Void]] = [:]
+    /// Outcomes (true: confirmed) of tickets that settled before anything was held for them. Bounded.
+    private var settledOutcomes: [UInt64: Bool] = [:]
+    nonisolated static let settledOutcomeLimit = 256
 
-    func mark(_ path: String) {
-        let key = path.lowercased()
-        counts[key, default: 0] += 1
-        markedOrdinal[key, default: 0] += 1
-        lastOutcome.removeValue(forKey: key)
+    /// Marks a write Firestore holds after its wait timed out; returns its ticket.
+    @discardableResult
+    func mark(_ path: String) -> UInt64 {
+        counts[path.lowercased(), default: 0] += 1
+        lastTicket += 1
         ScheduleChangeNotifier.postBookingStoreDidChange()
+        return lastTicket
     }
 
-    /// Runs `action` once the server confirms the most recent timed-out write to `path` (at once if it already has),
-    /// and never if the server refuses it. Call it right after that write's wait timed out (`FirestoreWriteAck.TimedOut`).
-    /// Used for the PAYE overtime reopen notice of a booking edit reported Pending sync (RULEBOOK 1.33.0 §25): the
-    /// person is told once the change is on the server, never for a change the server refused.
-    func whenConfirmed(_ path: String, _ action: @escaping @MainActor () -> Void) {
-        let key = path.lowercased()
-        if (counts[key] ?? 0) > 0, let ordinal = markedOrdinal[key] {
-            if let confirmed = unclaimed[key]?.removeValue(forKey: ordinal) {
-                if confirmed { action() }
-            } else {
-                held[key, default: [:]][ordinal] = action
-            }
-        } else if let confirmed = lastOutcome.removeValue(forKey: key) {
+    /// Runs `action` once the server confirms the write `ticket` stands for (at once if it already has), and never
+    /// if the server refuses it. Several actions held for one ticket all run, in order; none replaces another.
+    /// Used for the PAYE overtime reopen notice of a booking edit or delete reported Pending sync (RULEBOOK 1.33.0
+    /// §25): the person is told once the change is on the server, never for a change the server refused.
+    func whenConfirmed(ticket: UInt64?, _ action: @escaping @MainActor () -> Void) {
+        guard let ticket else {
+            print("🔥🔥🔥 DEBUG: [SDKPendingWrites] No ticket for a timed-out write; held action dropped")
+            return
+        }
+        if let confirmed = settledOutcomes.removeValue(forKey: ticket) {
             if confirmed { action() }
-        } else {
-            print("🔥🔥🔥 DEBUG: [SDKPendingWrites] No timed-out write to \(path); held action dropped")
+            return
+        }
+        held[ticket, default: []].append(action)
+    }
+
+    /// Runs (confirmed) or drops (refused) what was held for `ticket`, else remembers its outcome for a late hold.
+    private func release(ticket: UInt64, confirmed: Bool) {
+        if let actions = held.removeValue(forKey: ticket) {
+            if confirmed { actions.forEach { $0() } }
+            return
+        }
+        settledOutcomes[ticket] = confirmed
+        if settledOutcomes.count > Self.settledOutcomeLimit, let oldest = settledOutcomes.keys.min() {
+            settledOutcomes.removeValue(forKey: oldest)
         }
     }
 
-    /// Runs (confirmed) or drops (refused) what was held for the write that just settled.
-    private func releaseHeld(_ key: String, confirmed: Bool) {
-        let ordinal = settledOrdinal[key, default: 0] + 1
-        settledOrdinal[key] = ordinal
-        if let action = held[key]?.removeValue(forKey: ordinal) {
-            if confirmed { action() }
-        } else {
-            unclaimed[key, default: [:]][ordinal] = confirmed
-        }
-        if (counts[key] ?? 0) == 0 {
-            // Every write to this document has settled: keep only the last outcome for a late `whenConfirmed`.
-            if let latest = markedOrdinal[key], let outcome = unclaimed[key]?[latest] {
-                lastOutcome[key] = outcome
-            }
-            markedOrdinal.removeValue(forKey: key)
-            settledOrdinal.removeValue(forKey: key)
-            held.removeValue(forKey: key)
-            unclaimed.removeValue(forKey: key)
-        }
-    }
+    /// Tests only: how many settled outcomes are kept for a late hold.
+    var settledOutcomeCount: Int { settledOutcomes.count }
 
     /// The write finished after its wait timed out. Refused by the server: never sent again. 1.33.1 review item 4: the
     /// person is told (`lateRefusalMessage`, the app-wide "Change not saved" alert) and the stores drop the
     /// local optimistic copy, so the live listener's next snapshot (Firestore rolled the write back) is what shows.
-    func settle(_ path: String, error: Error?) {
+    func settle(_ path: String, error: Error?, ticket: UInt64? = nil) {
         let key = path.lowercased()
         if let count = counts[key] {
             if count <= 1 { counts.removeValue(forKey: key) } else { counts[key] = count - 1 }
         }
-        if markedOrdinal[key] != nil {
-            releaseHeld(key, confirmed: error == nil)
+        if let ticket {
+            release(ticket: ticket, confirmed: error == nil)
         }
         if let error {
             print("🔥🔥🔥 DEBUG: [SDKPendingWrites] Write to \(path) was refused after its wait timed out (not resent): \(error.localizedDescription)")
@@ -301,11 +316,8 @@ final class SDKPendingWrites: ObservableObject {
     /// Tests only.
     func removeAll() {
         counts.removeAll()
-        markedOrdinal.removeAll()
-        settledOrdinal.removeAll()
         held.removeAll()
-        unclaimed.removeAll()
-        lastOutcome.removeAll()
+        settledOutcomes.removeAll()
     }
 }
 

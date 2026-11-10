@@ -207,11 +207,24 @@ enum OfflineSyncCoordinator {
         case .saveBooking:
             let payload = try decoder.decode(OfflineSaveBookingPayload.self, from: entry.payload)
             // An edit replays only its changed fields; only a create writes the whole booking.
-            try await firebaseBackend.saveBooking(
-                payload.booking,
-                organizationId: entry.organizationId,
-                changedFields: payload.changedFields.map { Set($0) }
-            )
+            do {
+                try await firebaseBackend.saveBooking(
+                    payload.booking,
+                    organizationId: entry.organizationId,
+                    changedFields: payload.changedFields.map { Set($0) }
+                )
+            } catch {
+                // #209 review item 1: a replay Firestore holds after its wait timed out tells the person once the
+                // server confirms it (never if it refuses); the entry then leaves the outbox (`replayPending`).
+                if FirestoreWriteAck.isPendingInSDK(error), payload.changedFields != nil, let previous = payload.previousBooking {
+                    let after = payload.booking
+                    let organizationId = entry.organizationId
+                    SDKPendingWrites.shared.whenConfirmed(ticket: FirestoreWriteAck.pendingTicket(error)) {
+                        OvertimeReopenNotice.labour(before: previous, after: after, organizationId: organizationId)
+                    }
+                }
+                throw error
+            }
             // RULEBOOK 1.33.0 §25 reopen: the edit reached the server now, so the PAYE overtime line may reopen
             // (web notifies after its online write; best effort).
             // Only judged in the company it was written to (skipped when another company is open now).
@@ -224,11 +237,23 @@ enum OfflineSyncCoordinator {
 
         case .saveManagerSiteBooking:
             let payload = try decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: entry.payload)
-            try await firebaseBackend.saveManagerSiteBooking(
-                payload.booking,
-                organizationId: entry.organizationId,
-                changedFields: payload.changedFields.map { Set($0) }
-            )
+            do {
+                try await firebaseBackend.saveManagerSiteBooking(
+                    payload.booking,
+                    organizationId: entry.organizationId,
+                    changedFields: payload.changedFields.map { Set($0) }
+                )
+            } catch {
+                // #209 review item 1: as for a labour booking replay.
+                if FirestoreWriteAck.isPendingInSDK(error), payload.changedFields != nil, let previous = payload.previousBooking {
+                    let after = payload.booking
+                    let organizationId = entry.organizationId
+                    SDKPendingWrites.shared.whenConfirmed(ticket: FirestoreWriteAck.pendingTicket(error)) {
+                        OvertimeReopenNotice.managerSite(before: previous, after: after, organizationId: organizationId)
+                    }
+                }
+                throw error
+            }
             if payload.changedFields != nil, let previous = payload.previousBooking {
                 OvertimeReopenNotice.managerSite(before: previous, after: payload.booking, organizationId: entry.organizationId)
             }

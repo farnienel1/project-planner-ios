@@ -465,7 +465,9 @@ class BookingStore: ObservableObject {
             if !changed.isEmpty, result == .saved {
                 // One notice per change: an older queued edit of this booking replays later, silently.
                 OfflineOutboxStore.shared.clearReopenBaseline(bookingId: booking.id)
-                OvertimeReopenNotice.labour(before: before, after: booking)
+                // The company this edit was written to (#209 review item 4), never nil when it is known.
+                let writtenOrganizationId = capturedOrganizationId ?? firebaseBackend?.resolvedOrganizationIdForOfflineWrites()
+                OvertimeReopenNotice.labour(before: before, after: booking, organizationId: writtenOrganizationId)
             }
             return result
         }
@@ -676,19 +678,25 @@ class BookingStore: ObservableObject {
                     try await FirestoreWriteAck.run(
                         pendingKey: SDKPendingWrites.key(organizationId: orgId, collection: "bookings", documentId: booking.documentKey),
                         onSettledAfterTimeout: { error in
-                            if error != nil { OfflineOutboxStore.shared.requeueBookingSaves(takenEntries) }
+                            if error != nil {
+                                OfflineOutboxStore.shared.requeueBookingSaves(takenEntries)
+                            } else {
+                                // #209 review item 2: a delete Firestore held is announced only once the server has it.
+                                OvertimeReopenNotice.labour(before: booking, after: nil, organizationId: orgId)
+                            }
                         }
                     ) {
                         try await fb.deleteBooking(booking, organizationId: orgId)
                     }
                 } catch is FirestoreWriteAck.TimedOut {
                     print("🔥🔥🔥 DEBUG: Delete of \(booking.documentKey) is with Firestore, pending sync")
+                    return
                 }
             } else {
                 try await fb.deleteBooking(booking, organizationId: orgId)
             }
             // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the delete).
-            OvertimeReopenNotice.labour(before: booking, after: nil)
+            OvertimeReopenNotice.labour(before: booking, after: nil, organizationId: orgId)
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
                OfflinePolicy.availability(action) == .allowedOffline {
@@ -929,8 +937,9 @@ class BookingStore: ObservableObject {
         var refusalMessage: String?
         /// Kept on this phone, not yet confirmed (Firestore's queue, or the app outbox).
         var pendingCount = 0
-        /// Held by Firestore after its wait timed out (not the app outbox): the server's answer comes later.
-        var sdkPendingIds = Set<UUID>()
+        /// Held by Firestore after its wait timed out (not the app outbox): the server's answer comes later. The value
+        /// is that write's `SDKPendingWrites` ticket (nil when it was not marked).
+        var sdkPending: [UUID: UInt64?] = [:]
     }
 
     /// 1.33.1: writes each booking in order through `write` and reports each one's outcome.
@@ -965,7 +974,7 @@ class BookingStore: ObservableObject {
                 session.note(error)
                 if FirestoreWriteAck.isPendingInSDK(error) {
                     run.pendingCount += 1
-                    run.sdkPendingIds.insert(item.booking.id)
+                    run.sdkPending[item.booking.id] = FirestoreWriteAck.pendingTicket(error)
                     run.results[item.booking.id] = .queued(pendingSyncMessage)
                 } else if OfflineWriteSupport.shouldQueue(error: error, isOnline: isOnline) {
                     OfflineOutboxStore.shared.enqueueSaveBooking(
@@ -998,12 +1007,11 @@ class BookingStore: ObservableObject {
     /// refuses it (`SDKPendingWrites.whenConfirmed`; the leave pattern). An edit queued in the app outbox is told on
     /// replay instead (`OfflineSyncCoordinator`), and a confirmed one at once (`updateBookingReturningResult`).
     static func holdReopenNoticesUntilConfirmed(_ writes: [BookingWrite], run: WriteRun, organizationId: String) {
-        for write in writes where run.sdkPendingIds.contains(write.booking.id) {
-            guard write.changedFields != nil, let before = write.previous else { continue }
+        for write in writes {
+            guard let ticket = run.sdkPending[write.booking.id],
+                  write.changedFields != nil, let before = write.previous else { continue }
             let after = write.booking
-            SDKPendingWrites.shared.whenConfirmed(
-                SDKPendingWrites.key(organizationId: organizationId, collection: "bookings", documentId: after.documentKey)
-            ) {
+            SDKPendingWrites.shared.whenConfirmed(ticket: ticket) {
                 // One notice per change: an older queued edit of this booking replays later, silently.
                 OfflineOutboxStore.shared.clearReopenBaseline(bookingId: after.id)
                 OvertimeReopenNotice.labour(before: before, after: after, organizationId: organizationId)

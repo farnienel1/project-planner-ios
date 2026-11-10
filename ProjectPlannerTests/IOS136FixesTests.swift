@@ -88,7 +88,7 @@ final class IOS136FixesTests: XCTestCase {
         XCTAssertNil(store.range(of: "var cancelledBookings"), "dead code: no caller")
         let update = try functionBody("updateBooking", in: store)
         XCTAssertTrue(update.contains("if !changed.isEmpty, result == .saved {"), "notice only once the edit reached the server")
-        XCTAssertTrue(update.contains("OvertimeReopenNotice.labour(before: before, after: booking)"))
+        XCTAssertTrue(update.contains("OvertimeReopenNotice.labour(before: before, after: booking, organizationId: writtenOrganizationId)"))
         let coordinator = try source("Project Planner/Core/OfflineSyncCoordinator.swift")
         XCTAssertTrue(coordinator.contains(
             "OvertimeReopenNotice.labour(before: previous, after: payload.booking, organizationId: entry.organizationId)"
@@ -183,7 +183,7 @@ final class IOS136FixesTests: XCTestCase {
         let store = try source("Project Planner/Core/BookingStore.swift")
         let update = try functionBody("updateBooking", in: store)
         let clear = try XCTUnwrap(update.range(of: "OfflineOutboxStore.shared.clearReopenBaseline(bookingId: booking.id)"))
-        let notice = try XCTUnwrap(update.range(of: "OvertimeReopenNotice.labour(before: before, after: booking)"))
+        let notice = try XCTUnwrap(update.range(of: "OvertimeReopenNotice.labour(before: before, after: booking, organizationId: writtenOrganizationId)"))
         XCTAssertLessThan(clear.lowerBound, notice.lowerBound)
         let manager = try source("Project Planner/Core/ManagerScheduleStore.swift")
         XCTAssertTrue(manager.contains("OfflineOutboxStore.shared.clearManagerSiteReopenBaseline(bookingId: normalizedBooking.id)"))
@@ -381,25 +381,37 @@ final class IOS136FixesTests: XCTestCase {
 
     private let reopenPath = "organizations/TEST-ORG/bookings/BOOKING-1"
 
+    /// Runs one write whose wait times out; `finish` decides when (and how) it lands. Returns its ticket.
+    private func timedOutWrite(_ finish: @escaping () async throws -> Void) async throws -> UInt64? {
+        do {
+            try await FirestoreWriteAck.run(timeoutSeconds: shortWaitSession().ackSeconds, pendingKey: reopenPath, finish)
+            XCTFail("the wait must time out first")
+            return nil
+        } catch {
+            XCTAssertTrue(FirestoreWriteAck.isPendingInSDK(error))
+            let ticket = FirestoreWriteAck.pendingTicket(error)
+            XCTAssertNotNil(ticket, "the timeout carries the ticket of this write")
+            return ticket
+        }
+    }
+
     /// Failure before: an edit whose confirmation wait timed out came back Pending sync, and the reopen notice was
     /// never sent, although Firestore delivered the edit a moment later. Now it is sent when the server confirms.
     func testAPendingEditSendsItsReopenNoticeWhenTheServerConfirmsLate() async throws {
         SDKPendingWrites.shared.removeAll()
         defer { SDKPendingWrites.shared.removeAll() }
-        let session = shortWaitSession()
-        var sent = 0
-        do {
-            try await FirestoreWriteAck.run(timeoutSeconds: session.ackSeconds, pendingKey: reopenPath) {
-                try await Task.sleep(nanoseconds: 1_800_000_000)
-            }
-            XCTFail("the wait must time out first")
-        } catch {
-            XCTAssertTrue(FirestoreWriteAck.isPendingInSDK(error))
-        }
-        SDKPendingWrites.shared.whenConfirmed(reopenPath) { sent += 1 }
-        XCTAssertEqual(sent, 0, "not before the server has the edit")
-        try await Task.sleep(nanoseconds: 2_000_000_000)
-        XCTAssertEqual(sent, 1, "sent once the late confirmation arrives")
+        let release = ReopenTestGate()
+        let ticket = try await timedOutWrite { await release.wait() }
+        let sent = expectation(description: "notice sent on the late confirmation")
+        sent.expectedFulfillmentCount = 1
+        sent.assertForOverFulfill = true
+        var count = 0
+        SDKPendingWrites.shared.whenConfirmed(ticket: ticket) { count += 1; sent.fulfill() }
+        XCTAssertEqual(count, 0, "not before the server has the edit")
+        XCTAssertTrue(SDKPendingWrites.shared.contains(path: reopenPath))
+        await release.open()
+        await fulfillment(of: [sent], timeout: 5)
+        XCTAssertEqual(count, 1)
         XCTAssertFalse(SDKPendingWrites.shared.contains(path: reopenPath))
     }
 
@@ -408,43 +420,85 @@ final class IOS136FixesTests: XCTestCase {
         SDKPendingWrites.shared.removeAll()
         defer { SDKPendingWrites.shared.removeAll() }
         OfflineOutboxStore.shared.lastRefusalMessage = nil
-        let session = shortWaitSession()
-        var sent = 0
-        do {
-            try await FirestoreWriteAck.run(timeoutSeconds: session.ackSeconds, pendingKey: reopenPath) {
-                try await Task.sleep(nanoseconds: 1_800_000_000)
-                throw NSError(domain: "FIRFirestoreErrorDomain", code: 7, userInfo: [NSLocalizedDescriptionKey: "Missing or insufficient permissions."])
-            }
-        } catch {
-            XCTAssertTrue(FirestoreWriteAck.isPendingInSDK(error))
+        let release = ReopenTestGate()
+        let ticket = try await timedOutWrite {
+            await release.wait()
+            throw NSError(domain: "FIRFirestoreErrorDomain", code: 7, userInfo: [NSLocalizedDescriptionKey: "Missing or insufficient permissions."])
         }
-        SDKPendingWrites.shared.whenConfirmed(reopenPath) { sent += 1 }
-        try await Task.sleep(nanoseconds: 2_000_000_000)
-        XCTAssertEqual(sent, 0, "a refused change is never announced")
+        let refused = expectation(forNotification: SDKPendingWrites.lateRefusalNotification, object: nil)
+        var count = 0
+        SDKPendingWrites.shared.whenConfirmed(ticket: ticket) { count += 1 }
+        await release.open()
+        await fulfillment(of: [refused], timeout: 5)
+        XCTAssertEqual(count, 0, "a refused change is never announced")
     }
 
-    /// The confirmation landed before the action was held (the caller resumed late): it still runs, once.
+    /// The confirmation landed before the action was held (the caller resumed late): it still runs, once, and the
+    /// kept outcome is consumed.
     func testAConfirmationThatArrivedFirstStillReleasesTheNotice() {
         SDKPendingWrites.shared.removeAll()
         defer { SDKPendingWrites.shared.removeAll() }
         var sent = 0
-        SDKPendingWrites.shared.mark(reopenPath)
-        SDKPendingWrites.shared.settle(reopenPath, error: nil)
-        SDKPendingWrites.shared.whenConfirmed(reopenPath) { sent += 1 }
+        let ticket = SDKPendingWrites.shared.mark(reopenPath)
+        SDKPendingWrites.shared.settle(reopenPath, error: nil, ticket: ticket)
+        XCTAssertEqual(SDKPendingWrites.shared.settledOutcomeCount, 1)
+        SDKPendingWrites.shared.whenConfirmed(ticket: ticket) { sent += 1 }
         XCTAssertEqual(sent, 1)
-        SDKPendingWrites.shared.whenConfirmed(reopenPath) { sent += 1 }
+        XCTAssertEqual(SDKPendingWrites.shared.settledOutcomeCount, 0, "consumed")
+        SDKPendingWrites.shared.whenConfirmed(ticket: ticket) { sent += 1 }
         XCTAssertEqual(sent, 1, "one confirmation releases one notice")
     }
 
-    /// The labour store holds the notice for exactly the edits Firestore holds, and the manager schedule store does too.
-    func testBothStoresHoldTheReopenNoticeForAPendingEdit() throws {
-        let store = try source("Project Planner/Core/BookingStore.swift")
-        XCTAssertTrue(store.contains("Self.holdReopenNoticesUntilConfirmed(writes, run: run, organizationId: organizationId)"))
-        XCTAssertTrue(store.contains("run.sdkPendingIds.insert(item.booking.id)"))
-        let manager = try source("Project Planner/Core/ManagerScheduleStore.swift")
-        XCTAssertTrue(manager.contains("SDKPendingWrites.shared.whenConfirmed("))
+    /// A refusal that landed before the hold drops the notice.
+    func testARefusalThatArrivedFirstDropsTheNotice() {
+        SDKPendingWrites.shared.removeAll()
+        defer { SDKPendingWrites.shared.removeAll() }
+        var sent = 0
+        let ticket = SDKPendingWrites.shared.mark(reopenPath)
+        SDKPendingWrites.shared.settle(reopenPath, error: NSError(domain: "FIRFirestoreErrorDomain", code: 7), ticket: ticket)
+        SDKPendingWrites.shared.whenConfirmed(ticket: ticket) { sent += 1 }
+        XCTAssertEqual(sent, 0)
+        XCTAssertEqual(SDKPendingWrites.shared.settledOutcomeCount, 0)
     }
 
+    /// Two pending writes to one booking: each notice follows its own write, whatever order they settle in, and a
+    /// second hold on a ticket never replaces the first.
+    func testTwoPendingWritesToOneBookingEachReleaseTheirOwnNotice() {
+        SDKPendingWrites.shared.removeAll()
+        defer { SDKPendingWrites.shared.removeAll() }
+        var released: [String] = []
+        let first = SDKPendingWrites.shared.mark(reopenPath)
+        let second = SDKPendingWrites.shared.mark(reopenPath)
+        SDKPendingWrites.shared.whenConfirmed(ticket: first) { released.append("first") }
+        SDKPendingWrites.shared.whenConfirmed(ticket: second) { released.append("second") }
+        SDKPendingWrites.shared.whenConfirmed(ticket: second) { released.append("second again") }
+        SDKPendingWrites.shared.settle(reopenPath, error: NSError(domain: "FIRFirestoreErrorDomain", code: 7), ticket: second)
+        XCTAssertEqual(released, [], "the refused second write tells nobody")
+        XCTAssertTrue(SDKPendingWrites.shared.contains(path: reopenPath), "the first write is still on its way")
+        SDKPendingWrites.shared.settle(reopenPath, error: nil, ticket: first)
+        XCTAssertEqual(released, ["first"])
+        XCTAssertFalse(SDKPendingWrites.shared.contains(path: reopenPath))
+    }
+
+    func testKeptOutcomesAreBounded() {
+        SDKPendingWrites.shared.removeAll()
+        defer { SDKPendingWrites.shared.removeAll() }
+        for _ in 0..<(SDKPendingWrites.settledOutcomeLimit + 20) {
+            let ticket = SDKPendingWrites.shared.mark(reopenPath)
+            SDKPendingWrites.shared.settle(reopenPath, error: nil, ticket: ticket)
+        }
+        XCTAssertEqual(SDKPendingWrites.shared.settledOutcomeCount, SDKPendingWrites.settledOutcomeLimit)
+    }
+
+    func testTheDocumentKeyIsTrimmed() {
+        XCTAssertEqual(
+            SDKPendingWrites.key(organizationId: " TEST-ORG ", collection: "bookings", documentId: " B-1\n"),
+            "organizations/test-org/bookings/b-1"
+        )
+    }
+
+    /// The labour store holds the notice only for the edits Firestore holds (with a "before" copy), against each
+    /// write's own ticket; creates never get one.
     func testOnlyEditsFirestoreHoldsGetAHeldNotice() {
         SDKPendingWrites.shared.removeAll()
         defer { SDKPendingWrites.shared.removeAll() }
@@ -452,15 +506,54 @@ final class IOS136FixesTests: XCTestCase {
         var edited = synced
         edited.workEndTime = "18:00"
         let create = LogicFixtures.booking(on: Date())
+        let editTicket = SDKPendingWrites.shared.mark(reopenPath)
+        let createTicket = SDKPendingWrites.shared.mark(reopenPath)
         var run = BookingStore.WriteRun()
-        run.sdkPendingIds = [edited.id]
+        run.sdkPending = [edited.id: editTicket, create.id: createTicket]
         let writes = [
             BookingStore.BookingWrite(booking: edited, changedFields: ["workEndTime"], previous: synced),
             BookingStore.BookingWrite(booking: create, changedFields: nil),
         ]
-        let path = SDKPendingWrites.key(organizationId: "TEST-ORG", collection: "bookings", documentId: edited.documentKey)
-        SDKPendingWrites.shared.mark(path)
         BookingStore.holdReopenNoticesUntilConfirmed(writes, run: run, organizationId: "TEST-ORG")
-        XCTAssertTrue(SDKPendingWrites.shared.contains(path: path))
+        // Settle both: the edit's held notice is released (consumes nothing kept); the create had nothing held, so its
+        // outcome is kept for a late hold.
+        SDKPendingWrites.shared.settle(reopenPath, error: nil, ticket: editTicket)
+        SDKPendingWrites.shared.settle(reopenPath, error: nil, ticket: createTicket)
+        XCTAssertEqual(SDKPendingWrites.shared.settledOutcomeCount, 1, "only the create's outcome was unclaimed")
+    }
+
+    /// Every way a booking change or delete can come back Pending sync holds its reopen notice for the confirmation:
+    /// the online edit (both stores), the online delete through Firestore (both stores) and the outbox replay.
+    func testEveryPendingPathHoldsTheReopenNotice() throws {
+        let store = try source("Project Planner/Core/BookingStore.swift")
+        XCTAssertTrue(store.contains("Self.holdReopenNoticesUntilConfirmed(writes, run: run, organizationId: organizationId)"))
+        XCTAssertTrue(store.contains("run.sdkPending[item.booking.id] = FirestoreWriteAck.pendingTicket(error)"))
+        XCTAssertTrue(store.contains("OvertimeReopenNotice.labour(before: booking, after: nil, organizationId: orgId)"))
+        let manager = try source("Project Planner/Core/ManagerScheduleStore.swift")
+        XCTAssertTrue(manager.contains("SDKPendingWrites.shared.whenConfirmed(ticket: FirestoreWriteAck.pendingTicket(error))"))
+        XCTAssertTrue(manager.contains("OvertimeReopenNotice.managerSite(before: booking, after: nil, organizationId: orgId)"))
+        let coordinator = try source("Project Planner/Core/OfflineSyncCoordinator.swift")
+        XCTAssertEqual(
+            coordinator.components(separatedBy: "SDKPendingWrites.shared.whenConfirmed(ticket: FirestoreWriteAck.pendingTicket(error))").count - 1,
+            2,
+            "labour and manager schedule replays both hold the notice"
+        )
+    }
+}
+
+/// Holds a test write until the test opens it, so a late confirmation is driven by the test, not by a timer.
+private actor ReopenTestGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
     }
 }
