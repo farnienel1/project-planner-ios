@@ -1012,7 +1012,7 @@ struct DailyOverviewView: View {
                 openCataloguePage(for: project)
             } label: {
                 HStack(spacing: 6) {
-                    Text(project.jobType == .smallWorks ? "Open small works" : "Open project")
+                    Text(project.isSmallWorksDocument ? "Open small works" : "Open project")
                         .font(.subheadline.weight(.semibold))
                     Image(systemName: "arrow.right")
                         .font(.footnote.weight(.semibold))
@@ -1080,7 +1080,7 @@ struct DailyOverviewView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     // RULEBOOK §2: queued offline change not yet confirmed by the server.
-                    PendingSyncIndicator(entityId: booking.id.uuidString)
+                    PendingSyncIndicator(managerBooking: booking)
                 }
             }
             Spacer(minLength: 0)
@@ -1179,7 +1179,7 @@ struct DailyOverviewView: View {
     }
 
     private func openCataloguePage(for project: Project) {
-        let isSmallWorks = project.jobType == .smallWorks
+        let isSmallWorks = project.isSmallWorksDocument
         dismiss()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             NotificationCenter.default.post(
@@ -1652,7 +1652,7 @@ struct ProjectBookingCard: View {
         firebaseBackend.payrollPolicy(for: day)
     }
 
-    private var smallWorksFlow: Bool { project.jobType == .smallWorks }
+    private var smallWorksFlow: Bool { project.isSmallWorksDocument }
 
     private var sortedBookings: [Booking] {
         bookings.sorted { booking1, booking2 in
@@ -1899,9 +1899,9 @@ struct ProjectBookingCard: View {
                     .lineLimit(2)
                 // RULEBOOK §2: queued offline change not yet confirmed by the server.
                 if let b = row.operativeBooking {
-                    PendingSyncIndicator(entityId: b.id.uuidString)
+                    PendingSyncIndicator(booking: b)
                 } else if let b = row.managerBooking {
-                    PendingSyncIndicator(entityId: b.id.uuidString)
+                    PendingSyncIndicator(managerBooking: b)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

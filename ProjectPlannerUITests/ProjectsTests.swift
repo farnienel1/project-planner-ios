@@ -61,6 +61,24 @@ final class ProjectsTests: PPUITestCase {
         tap(PPID.projectDetailHealthSafety)
     }
 
+    /// Owner request 10 Nov: the My Projects ⚙ picker filters its rows by All / Active / Upcoming / Completed
+    /// (`worksInTab`), and Cancel leaves the list unchanged.
+    func test_PROJ06_myProjectsPickerFilters() {
+        launch(role: "manager")
+        assertSignedInHome(role: "manager")
+        openTab("Projects")
+        projects.assertVisible()
+        tap("projects.filter.mine")
+        tap("projects.myList.picker")
+        assertExists("myWorksPicker.filter.all")
+        for tab in ["active", "upcoming", "completed", "all"] {
+            tap("myWorksPicker.filter.\(tab)")
+            XCTAssertTrue(element("myWorksPicker.filter.\(tab)").isSelected, "\(tab) chip is selected")
+        }
+        tap("myWorksPicker.cancel")
+        projects.assertVisible()
+    }
+
     private static func stamp() -> String {
         String(Int(Date().timeIntervalSince1970) % 100000)
     }
