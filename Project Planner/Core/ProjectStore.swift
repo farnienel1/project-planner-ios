@@ -232,7 +232,7 @@ class ProjectStore: ObservableObject {
                                 let items = try await withTimeout(seconds: 10) {
                                     try await firebaseBackend.loadProjects(organizationId: organizationId)
                                 }
-                                return .success(items.filter { $0.jobType != .smallWorks })
+                                return .success(items.filter { !$0.isSmallWorksDocument })
                             } catch {
                                 return .failure(error)
                             }
@@ -262,7 +262,7 @@ class ProjectStore: ObservableObject {
                                     let items = try await withTimeout(seconds: 10) {
                                         try await firebaseBackend.loadProjects(organizationId: organizationId)
                                     }
-                                    return .success(items.filter { $0.jobType != .smallWorks })
+                                    return .success(items.filter { !$0.isSmallWorksDocument })
                                 } catch {
                                     return .failure(error)
                                 }
@@ -305,8 +305,8 @@ class ProjectStore: ObservableObject {
                             print("🔥🔥🔥 DEBUG: ❌❌❌ ERROR loading small works: \(error.localizedDescription)")
                         }
 
-                        let cachedProjects = diskCache.projects.filter { $0.jobType != .smallWorks }
-                        let cachedSmallWorks = diskCache.projects.filter { $0.jobType == .smallWorks }
+                        let cachedProjects = diskCache.projects.filter { !$0.isSmallWorksDocument }
+                        let cachedSmallWorks = diskCache.projects.filter { $0.isSmallWorksDocument }
                         guard loadGeneration == generation else { return }
                         var merged = existingProjectsBeforeLoad
                         merged = ProjectWorksMerge.mergeWorkSlice(
@@ -324,8 +324,8 @@ class ProjectStore: ObservableObject {
                         if smallWorksLoaded { self.smallWorksDocuments = firebaseSmallWorks }
                         self.projects = merged
                         let usedFallback =
-                            (!projectsLoaded || (firebaseProjects.isEmpty && merged.contains { $0.jobType != .smallWorks })) ||
-                            (!smallWorksLoaded || (firebaseSmallWorks.isEmpty && merged.contains { $0.jobType == .smallWorks }))
+                            (!projectsLoaded || (firebaseProjects.isEmpty && merged.contains { !$0.isSmallWorksDocument })) ||
+                            (!smallWorksLoaded || (firebaseSmallWorks.isEmpty && merged.contains { $0.isSmallWorksDocument }))
                         lastWorkLoadUnreliable = (usedFallback && !merged.isEmpty) || (!projectsLoaded && !smallWorksLoaded)
                         if !projectsLoaded && !smallWorksLoaded {
                             errorMessage = projectsError?.localizedDescription
@@ -499,7 +499,7 @@ class ProjectStore: ObservableObject {
                 // `projects` document a project (one typed "Small Works" reads as CAT A), so this filter keeps the
                 // whole snapshot and only guards the slice the listener owns.
                 let incoming = FirebaseBackend.jobs(fromDocuments: rows, smallWorks: smallWorks)
-                    .filter { ($0.jobType == .smallWorks) == smallWorks }
+                    .filter { ($0.isSmallWorksDocument) == smallWorks }
                 self.applyLiveWorkSlice(
                     incoming,
                     smallWorks: smallWorks,
@@ -560,7 +560,7 @@ class ProjectStore: ObservableObject {
 
     /// One collection's slice of `projects` (projects or small works) from a listener snapshot.
     private func applyLiveWorkSlice(_ incoming: [Project], smallWorks: Bool, fromCache: Bool, rowCount: Int) {
-        let existingSlice = projects.filter { ($0.jobType == .smallWorks) == smallWorks }
+        let existingSlice = projects.filter { ($0.isSmallWorksDocument) == smallWorks }
         guard var nextSlice = LiveSnapshotMerge.apply(
             existing: existingSlice,
             incoming: incoming,
@@ -572,7 +572,7 @@ class ProjectStore: ObservableObject {
         let incomingIds = Set(nextSlice.map(\.id))
         nextSlice += existingSlice.filter { pendingCreateIds.contains($0.id) && !incomingIds.contains($0.id) }
         guard nextSlice != existingSlice else { return }
-        let others = projects.filter { ($0.jobType == .smallWorks) != smallWorks }
+        let others = projects.filter { ($0.isSmallWorksDocument) != smallWorks }
         projects = ProjectWorksMerge.uniqueWorks(others + nextSlice)
         if !fromCache { lastWorkLoadUnreliable = false }
         persistLiveSnapshotLocally()
@@ -876,20 +876,27 @@ class ProjectStore: ObservableObject {
     /// another device saved meanwhile to a field this editor did not touch is not overwritten (launch data audit #5).
     /// Without it, the store copy at save time is the base (as before).
     func updateProject(_ project: Project, editedFrom base: Project? = nil) async {
-        if let index = projects.firstIndex(where: { $0.id == project.id }) {
+        // A `projects` and a `smallWorks` document may share an id: the row edited is the one of the same collection.
+        let sameRecord: (Project) -> Bool = { $0.id == project.id && $0.sourceCollection == project.sourceCollection }
+        if let index = projects.firstIndex(where: sameRecord) {
             let previous = base ?? projects[index]
             projects[index] = project
             // Saves only this job, and only the fields changed from the copy it was edited from
-            // (routed to projects or smallWorks by jobType).
-            _ = await saveDataWithRetry(.updateWork(project, previous: previous), description: "updating \(project.jobType == .smallWorks ? "small works" : "project") \(project.siteName)")
+            // (to the collection it was read from, `sourceCollection`).
+            _ = await saveDataWithRetry(.updateWork(project, previous: previous), description: "updating \(project.isSmallWorksDocument ? "small works" : "project") \(project.siteName)")
+        } else if project.isSmallWorksDocument, let index = smallWorksDocuments.firstIndex(where: sameRecord) {
+            // A small works document whose id a project also holds is listed from `smallWorksDocuments` only.
+            let previous = base ?? smallWorksDocuments[index]
+            smallWorksDocuments[index] = project
+            _ = await saveDataWithRetry(.updateWork(project, previous: previous), description: "updating small works \(project.siteName)")
         }
     }
     
     func deleteProject(_ project: Project) async {
         let projectName = project.siteName
         // Only this collection's row: a project and a small works document may share an id (`smallWorksList`).
-        let isSmallWorks = project.jobType == .smallWorks
-        projects.removeAll { $0.id == project.id && ($0.jobType == .smallWorks) == isSmallWorks }
+        let isSmallWorks = project.isSmallWorksDocument
+        projects.removeAll { $0.id == project.id && ($0.isSmallWorksDocument) == isSmallWorks }
         if isSmallWorks { smallWorksDocuments.removeAll { $0.id == project.id } }
         
         // Delete from Firebase if available
@@ -899,32 +906,37 @@ class ProjectStore: ObservableObject {
             _ = await DataPersistenceManager.shared.saveWithRetry(
                 operation: {
                     // Delete from appropriate collection based on job type
-                    if project.jobType == .smallWorks {
+                    if project.isSmallWorksDocument {
                         try await firebaseBackend.deleteSmallWorks(project, organizationId: organizationId)
                     } else {
                         try await firebaseBackend.deleteProject(project, organizationId: organizationId)
                     }
                 },
-                description: "deleting \(project.jobType == .smallWorks ? "small works" : "project") \(projectName)",
+                description: "deleting \(project.isSmallWorksDocument ? "small works" : "project") \(projectName)",
                 onSuccess: { _ in
-                    print("🔥🔥🔥 DEBUG: ✅ \(project.jobType == .smallWorks ? "Small Works" : "Project") \(projectName) deleted from Firebase")
+                    print("🔥🔥🔥 DEBUG: ✅ \(project.isSmallWorksDocument ? "Small Works" : "Project") \(projectName) deleted from Firebase")
                 },
                 onFailure: { error in
-                    print("🔥🔥🔥 DEBUG: ❌ Failed to delete \(project.jobType == .smallWorks ? "small works" : "project") \(projectName) from Firebase: \(error.localizedDescription)")
+                    print("🔥🔥🔥 DEBUG: ❌ Failed to delete \(project.isSmallWorksDocument ? "small works" : "project") \(projectName) from Firebase: \(error.localizedDescription)")
                 }
             )
         }
         
         // CRITICAL: Save state immediately
-        _ = await saveDataWithRetry(.localOnly, description: "saving state after deleting \(project.jobType == .smallWorks ? "small works" : "project") \(projectName)")
+        _ = await saveDataWithRetry(.localOnly, description: "saving state after deleting \(project.isSmallWorksDocument ? "small works" : "project") \(projectName)")
     }
     
     func toggleProjectStatus(_ project: Project) async {
-        if let index = projects.firstIndex(where: { $0.id == project.id }) {
+        let sameRecord: (Project) -> Bool = { $0.id == project.id && $0.sourceCollection == project.sourceCollection }
+        if let index = projects.firstIndex(where: sameRecord) {
             let previous = projects[index]
             projects[index].isLive.toggle()
             // Writes only `isLive` (+ metadata) on this job.
             _ = await saveDataWithRetry(.updateWork(projects[index], previous: previous), description: "toggling project status for \(project.siteName)")
+        } else if project.isSmallWorksDocument, let index = smallWorksDocuments.firstIndex(where: sameRecord) {
+            let previous = smallWorksDocuments[index]
+            smallWorksDocuments[index].isLive.toggle()
+            _ = await saveDataWithRetry(.updateWork(smallWorksDocuments[index], previous: previous), description: "toggling small works status for \(project.siteName)")
         }
     }
     
@@ -999,7 +1011,7 @@ class ProjectStore: ObservableObject {
     /// Stored job documents this device holds, for the Settings footer (`Projects N · Small works M`), so the
     /// counts can be compared with web at a glance.
     var jobDocumentCountsLine: String {
-        let projectCount = projects.filter { $0.jobType != .smallWorks }.count
+        let projectCount = projects.filter { !$0.isSmallWorksDocument }.count
         return "Projects \(projectCount) · Small works \(smallWorks.count)"
     }
 
@@ -1085,18 +1097,21 @@ class ProjectStore: ObservableObject {
             var saveErrors: [String] = []
             var deletedElsewhere = false
 
-            for item in changes.worksToSave(from: projects) {
+            // `smallWorksDocuments` too: a small works document whose id a project holds is only there. Each change
+            // names its collection, so the row saved is the one of that collection.
+            for item in changes.worksToSave(from: projects + smallWorksDocuments) {
                 let work = item.work
                 do {
-                    if work.jobType == .smallWorks {
+                    if work.isSmallWorksDocument {
                         // Small works have their own collection.
                         try await firebaseBackend.saveSmallWorks(work, organizationId: organizationId, mode: item.mode, previous: item.previous)
                     } else {
                         try await firebaseBackend.saveProject(work, organizationId: organizationId, mode: item.mode, previous: item.previous)
                     }
                 } catch is RecordDeletedElsewhereError {
-                    // Never re-created: drop the local row and say why.
-                    projects.removeAll { $0.id == work.id }
+                    // Never re-created: drop the local row (that collection's only) and say why.
+                    projects.removeAll { $0.id == work.id && $0.sourceCollection == work.sourceCollection }
+                    smallWorksDocuments.removeAll { $0.id == work.id && $0.sourceCollection == work.sourceCollection }
                     deletedElsewhere = true
                 } catch {
                     saveErrors.append("Error saving \(work.siteName): \(error.localizedDescription)")

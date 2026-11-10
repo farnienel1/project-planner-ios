@@ -60,7 +60,7 @@ struct EditProjectView: View {
     @State private var editBaseline: EditProjectSnapshot?
 
     private var screenTitle: String {
-        project.jobType == .smallWorks ? "Edit small work" : "Edit project"
+        project.isSmallWorksDocument ? "Edit small work" : "Edit project"
     }
 
     private var heroGradient: LinearGradient {
@@ -279,8 +279,8 @@ struct EditProjectView: View {
     private var heroHeader: some View {
         VStack(spacing: 12) {
             PPIconTile(
-                symbol: project.jobType == .smallWorks ? "hammer.fill" : "folder.fill",
-                family: project.jobType == .smallWorks ? PPFamily.trade : PPFamily.sites,
+                symbol: project.isSmallWorksDocument ? "hammer.fill" : "folder.fill",
+                family: project.isSmallWorksDocument ? PPFamily.trade : PPFamily.sites,
                 size: 64,
                 lifted: true
             )
@@ -550,7 +550,7 @@ struct EditProjectView: View {
                 Text(selectedManagers.isEmpty ? "No managers assigned" : selectedManagers.map(readOnlyManagerLabel).joined(separator: ", "))
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                Text("Only an admin, or a manager with the \(project.jobType == .smallWorks ? "Small works" : "Projects") permission, can change a job's managers.")
+                Text("Only an admin, or a manager with the \(project.isSmallWorksDocument ? "Small works" : "Projects") permission, can change a job's managers.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -670,7 +670,7 @@ struct EditProjectView: View {
 
         let mappedWorksType = jobTypeFromString(projectWorksType)
         let finalJobType: JobType = {
-            if project.jobType == .smallWorks { return .smallWorks }
+            if project.isSmallWorksDocument { return .smallWorks }
             if projectWorksType.isEmpty { return .catA }
             return mappedWorksType == .smallWorks ? .catA : mappedWorksType
         }()
@@ -742,6 +742,8 @@ struct EditProjectView: View {
             longitude: usesPin ? form.pinLongitude : nil
         )
         job.createdAt = project.createdAt
+        // The edit stays in the collection the job was read from (never routed by the picker type).
+        job.sourceCollection = project.sourceCollection
         job.firestoreDocumentId = project.firestoreDocumentId
         job.storedManagerIds = project.storedManagerIds
         // The stored `manager` label (a name web wrote) is kept as read, never rewritten or removed by an edit.

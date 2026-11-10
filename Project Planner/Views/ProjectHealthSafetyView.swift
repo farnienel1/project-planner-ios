@@ -765,7 +765,7 @@ struct ProjectHealthSafetyView: View {
     }
 
     private var contextKind: String {
-        project.jobType == .smallWorks ? "Small Work" : "Project"
+        project.isSmallWorksDocument ? "Small Work" : "Project"
     }
 
     private var pendingSignatureCount: Int {
@@ -846,7 +846,7 @@ struct ProjectHealthSafetyView: View {
                           query: { org in
                               let ids = CanonicalBusinessEngine.healthSafetyDocumentIds(
                                   jobId: project.documentId,
-                                  isSmallWorks: project.jobType == .smallWorks
+                                  isSmallWorks: project.isSmallWorksDocument
                               ) ?? []
                               return org.collection("settings").whereField(FieldPath.documentID(), in: ids.isEmpty ? ["-"] : ids)
                           }) {

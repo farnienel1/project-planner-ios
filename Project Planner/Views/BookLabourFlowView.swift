@@ -345,7 +345,7 @@ struct BookLabourFlowView: View {
                 phase = .pickProject(p, smallWorks: smallWorks)
             }
         case .pickSlotOperative(let p, let project):
-            phase = .pickProject(p, smallWorks: project.jobType == .smallWorks)
+            phase = .pickProject(p, smallWorks: project.isSmallWorksDocument)
         case .pickCustomManager(let p, let locType, let locId, let customName, let back):
             phase = .pickSlotManager(
                 p,
@@ -1186,7 +1186,7 @@ struct BookLabourFlowView: View {
         breakRemoved: Bool = false,
         otMultiplierOverride: Double? = nil
     ) {
-        let locationType: ManagerLocationType = project.jobType == .smallWorks ? .smallWork : .project
+        let locationType: ManagerLocationType = project.isSmallWorksDocument ? .smallWork : .project
         savePartyBookings(
             fallbackPerson: person,
             slot: managerSlot(from: slot),
@@ -1815,7 +1815,7 @@ struct BookLabourFlowView: View {
                         bookedBy: bookedByName,
                         recipients: [.init(operativeId: op.id, dates: [day])],
                         projectId: project.id,
-                        catalogue: project.jobType == .smallWorks ? "smallWorks" : "projects"
+                        catalogue: project.isSmallWorksDocument ? "smallWorks" : "projects"
                     )
                 } else {
                     if duplicateManagerBooking(

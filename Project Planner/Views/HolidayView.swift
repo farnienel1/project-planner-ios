@@ -2089,7 +2089,7 @@ struct HolidayRowView: View {
                     .font(.caption.weight(.bold))
                     .foregroundStyle(statusColor)
                 // RULEBOOK §2: a request made offline shows Pending sync until the server confirms it.
-                PendingSyncIndicator(entityId: booking.documentId)
+                PendingSyncIndicator(leave: booking)
                 if booking.status != .pending,
                    let note = CanonicalBusinessEngine.parseHolidayDecisionNote(booking.decisionNote) {
                     Text("Note: \(note)")

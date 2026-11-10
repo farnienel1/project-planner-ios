@@ -18,12 +18,12 @@ struct VariationsListView: View {
     @State private var materialNames: [String] = []
 
     private var parentType: VariationParentType {
-        project.jobType == .smallWorks ? .smallWork : .project
+        project.isSmallWorksDocument ? .smallWork : .project
     }
 
     init(project: Project) {
         self.project = project
-        let type: VariationParentType = project.jobType == .smallWorks ? .smallWork : .project
+        let type: VariationParentType = project.isSmallWorksDocument ? .smallWork : .project
         _store = StateObject(wrappedValue: VariationStore(parentId: project.documentId, parentType: type))
     }
 
