@@ -36,17 +36,26 @@ enum MyWorksPickerFilter {
         }
     }
 
-    /// The rows shown: `worksInTab(jobs, tab, now, timeZone)` for the chip (All keeps every job, in order), then the
-    /// search text on job number, site name, address and client.
-    @MainActor static func shownJobs(
+    /// The ids (lower case) of the jobs under each status tab — `worksInTab(jobs, tab, now, timeZone)` — asked once when
+    /// the picker opens (1.33.1: never per render; the rows are a snapshot while the sheet is open).
+    @MainActor static func tabMembership(
         _ jobs: [Project],
-        chip: ProjectStatus?,
-        search: String,
         now: Date = Date(),
         timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
-    ) -> [Project] {
+    ) -> [String: Set<String>] {
+        var out: [String: Set<String>] = [:]
+        for tab in ["active", "upcoming", "completed"] {
+            let inTab = CanonicalBusinessEngine.worksInTab(jobs, tab: tab, now: now, timeZone: timeZone)
+            out[tab] = Set(inTab.map { $0.documentId.lowercased() })
+        }
+        return out
+    }
+
+    /// The rows shown for a chip from `tabMembership` (All keeps every job, in order), then the search text on job
+    /// number, site name, address and client. Pure Swift filtering of the rulebook's answer.
+    static func shownJobs(_ jobs: [Project], chip: ProjectStatus?, search: String, membership: [String: Set<String>]) -> [Project] {
         let tab = WorksListStatusCounts.tab(for: chip)
-        let inTab = tab == "all" ? jobs : CanonicalBusinessEngine.worksInTab(jobs, tab: tab, now: now, timeZone: timeZone)
+        let inTab = tab == "all" ? jobs : jobs.filter { membership[tab]?.contains($0.documentId.lowercased()) == true }
         let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return inTab }
         return inTab.filter { job in
@@ -56,34 +65,48 @@ enum MyWorksPickerFilter {
                 || job.client.name.lowercased().contains(q)
         }
     }
+
+    /// The rows shown: `worksInTab(jobs, tab, now, timeZone)` for the chip (All keeps every job, in order), then the
+    /// search text on job number, site name, address and client.
+    @MainActor static func shownJobs(
+        _ jobs: [Project],
+        chip: ProjectStatus?,
+        search: String,
+        now: Date = Date(),
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> [Project] {
+        shownJobs(jobs, chip: chip, search: search, membership: tabMembership(jobs, now: now, timeZone: timeZone))
+    }
 }
 
 struct MyWorksPickerSheet: View {
     let kind: JobKind
-    /// `myWorksPickerRows` for the viewer.
-    let rows: [(job: Project, picked: Bool)]
+    /// `myWorksPickerRows` for the viewer, taken once when the ⚙ was opened (1.33.1: a snapshot, so a listener
+    /// update while the sheet is open never recomputes the rows or resets the ticks).
+    let rows: [MyWorksPickerRow]
     let accent: Color
-    let onSave: ([String]) async throws -> Void
+    /// Hands the list to Firestore (`MyWorksPicksModel.save`). Returns at once: Firestore applies it on this phone and
+    /// the server's answer is awaited in the background. Throws only when nothing could be written.
+    let onSave: @MainActor ([String]) throws -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var ids: [String] = []
     @State private var search = ""
-    @State private var saving = false
     @State private var errorMessage: String?
     @State private var started = false
     /// The status filter; All by default. Changing it never changes `ids`.
     @State private var chip: ProjectStatus?
+    /// `worksTabCounts` and `worksInTab` for the rows, asked once on open (never per render).
+    @State private var counts = WorksListStatusCounts(all: 0, active: 0, upcoming: 0, completed: 0)
+    @State private var membership: [String: Set<String>] = [:]
+
+    /// 1.33.1 (owner report: Cancel did nothing while the save spun): Cancel always closes the sheet. Save never waits for
+    /// the server, so there is no saving state to lock it; a write already handed to Firestore carries on.
+    static let cancelAlwaysEnabled = true
 
     private var noun: String { kind == .smallWorks ? "small works" : "projects" }
 
-    private var pickedKeys: Set<String> { Set(ids.map { $0.lowercased() }) }
-
-    private var shownJobs: [Project] {
-        MyWorksPickerFilter.shownJobs(rows.map(\.job), chip: chip, search: search)
-    }
-
-    /// `worksTabCounts` over every job the picker lists (not narrowed by the search).
-    private var counts: WorksListStatusCounts { WorksListStatusCounts.from(rows.map(\.job)) }
+    private var jobs: [Project] { rows.map(\.job) }
 
     private var filterChips: some View {
         let tabCounts = counts
@@ -109,7 +132,9 @@ struct MyWorksPickerSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        let shown = MyWorksPickerFilter.shownJobs(jobs, chip: chip, search: search, membership: membership)
+        let pickedKeys = Set(ids.map { $0.lowercased() })
+        return NavigationStack {
             List {
                 Section {
                     Text("Tick the \(noun) you want on your list. Your list is the same on the web and on iPhone.")
@@ -124,14 +149,14 @@ struct MyWorksPickerSheet: View {
                 Section {
                     filterChips
                         .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
-                    if shownJobs.isEmpty {
+                    if shown.isEmpty {
                         Text("No \(noun) found.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 12)
                     } else {
-                        ForEach(shownJobs) { job in
+                        ForEach(shown) { job in
                             let on = pickedKeys.contains(job.documentId.lowercased())
                             Button {
                                 ids = CanonicalBusinessEngine.myWorksPicksAfterToggle(ids, jobId: job.documentId, picked: !on)
@@ -167,12 +192,11 @@ struct MyWorksPickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
-                        .disabled(saving)
+                        .disabled(!Self.cancelAlwaysEnabled)
                         .accessibilityIdentifier("myWorksPicker.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(saving ? "Saving…" : "Save") { save() }
-                        .disabled(saving)
+                    Button("Save") { save() }
                         .fontWeight(.semibold)
                         .accessibilityIdentifier("myWorksPicker.save")
                 }
@@ -181,23 +205,19 @@ struct MyWorksPickerSheet: View {
                 guard !started else { return }
                 started = true
                 ids = rows.filter(\.picked).map { $0.job.documentId }
+                counts = WorksListStatusCounts.from(jobs)
+                membership = MyWorksPickerFilter.tabMembership(jobs)
             }
         }
     }
 
     private func save() {
-        saving = true
         errorMessage = nil
-        let chosen = ids
-        Task {
-            do {
-                try await onSave(chosen)
-                saving = false
-                dismiss()
-            } catch {
-                errorMessage = error.localizedDescription.isEmpty ? "Could not save your list." : error.localizedDescription
-                saving = false
-            }
+        do {
+            try onSave(ids)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription.isEmpty ? MyWorksPicksModel.saveFailedMessage : error.localizedDescription
         }
     }
 }
