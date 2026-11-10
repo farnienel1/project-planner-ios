@@ -1626,7 +1626,7 @@ struct BookLabourFlowView: View {
         return bookingStore.bookings.contains {
             personIds.contains($0.operativeId) &&
                 calendar.isDate($0.date, inSameDayAs: day) &&
-                $0.status != .cancelled &&
+                $0.status.occupiesDay &&  // RULEBOOK `bookingOccupiesDay`
                 $0.otMultiplierOverride == otMultiplierOverride &&
                 CanonicalBusinessEngine.isSameBookingRequest($0.bookingRequest(personId: person), request)
         }
@@ -1881,7 +1881,7 @@ struct BookLabourFlowView: View {
                 $0.workEndTime == workEnd &&
                 $0.isBreakRemoved == breakRemoved &&
                 $0.otMultiplierOverride == otMultiplierOverride &&
-                $0.status != .cancelled
+                $0.status.occupiesDay  // RULEBOOK `bookingOccupiesDay`
         }) {
             errorBanner = "That booking already exists."
             return

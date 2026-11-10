@@ -153,45 +153,6 @@ enum StaffEmailIdentity {
         }
     }
 
-    /// RULEBOOK 1.22.0 §6 `CanonicalBusinessEngine.managerCoverageHours`: the person's booked cover on `day` — every
-    /// labour booking that occupies the day and every manager site booking, under each id that shares the email (web
-    /// `lib/book-labour/candidates.ts` `coversStandardDay`). `covered` is `standardDayCoverage`, the Daily Overview rule.
-    /// Nil when the script did not answer.
-    static func coverage(
-        email: String?,
-        users: [AppUser],
-        operatives: [Operative],
-        operativeBookings: [Booking],
-        managerBookings: [ManagerSiteBooking],
-        day: Date,
-        policy: OrgPayrollTimePolicy,
-        calendar: Calendar = .current
-    ) -> RulebookManagerCoverage? {
-        let key = emailKey(email)
-        var operativeIds = key.isEmpty ? Set<UUID>() : self.operativeIds(sharing: key, in: operatives)
-        // Bookings may name the user id itself, or an invite placeholder id it replaced (web #189).
-        for user in users where !key.isEmpty && emailKey(user.email) == key {
-            for id in [user.id] + user.formerUserIds {
-                operativeIds.insert(Booking.internalOperativeId(for: id))
-            }
-        }
-        var slots: [RulebookCoverageBooking] = []
-        for booking in operativeBookings where operativeIds.contains(booking.operativeId) {
-            guard calendar.isDate(booking.date, inSameDayAs: day) else { continue }
-            guard CanonicalBusinessEngine.bookingOccupiesDay(booking.status.rawValue) == true else { continue }
-            slots.append(booking.rulebookCoverageBooking)
-        }
-        let ids = key.isEmpty ? Set<String>() : userIds(sharing: key, in: users)
-        for booking in managerBookings where ids.contains(booking.userId) && calendar.isDate(booking.date, inSameDayAs: day) {
-            slots.append(booking.rulebookCoverageBooking)
-        }
-        return CanonicalBusinessEngine.managerCoverageHours(
-            bookings: slots,
-            dayKey: OrganizationRulebookContext.dayKey(day),
-            policy: policy
-        )
-    }
-
     static func distinctPersonKeys(
         operativeIds: [UUID],
         userIds: [String],

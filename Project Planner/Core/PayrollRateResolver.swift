@@ -124,18 +124,36 @@ enum PayrollRateResolver {
         }
     }
 
+    /// RULEBOOK 1.36.0 §8 (web `personRateHistoryIds`): every `operatives` row of the person — the row given plus each
+    /// row `bookingIdsForAccount` matches to the account (email, former and same-email ids, without case) — so rate
+    /// history saved under any of them counts. Before 1.36 only one row was read, and a rate saved under the person's
+    /// other row was missed.
+    static func personOperativeIds(user: AppUser?, operative: Operative?, operatives: [Operative]) -> [String] {
+        var ids = Set<UUID>()
+        if let operative { ids.insert(operative.id) }
+        if let user, !operatives.isEmpty {
+            let mine = labourBookingIds(for: user, operatives: operatives)
+            for row in operatives where mine.contains(row.id) { ids.insert(row.id) }
+        }
+        return ids.map(\.uuidString).sorted()
+    }
+
     /// `payRateOnDay` for the person on the organisation-zone day of `day`.
     /// `includeEmployment` false leaves out the PAYE check (the caller decides PAYE itself).
+    /// `personOperativeIds`: every `operatives` row of the person (`personOperativeIds`), so their history counts too.
     static func rateOnDay(
         user: AppUser?,
         operative: Operative?,
         on day: Date,
         history: OperativeDayRateHistoryCollection,
-        includeEmployment: Bool
+        includeEmployment: Bool,
+        personOperativeIds: [String] = []
     ) -> CanonicalBusinessEngine.CanonicalPayRateOnDay? {
         let userIds = ([user?.id].compactMap { $0 } + (user?.formerUserIds ?? []) + (user?.sameEmailUserIds ?? []))
             .filter { !$0.isEmpty }
-        let operativeIds = [operative?.id.uuidString].compactMap { $0 }
+        var seenOperativeIds = Set<String>()
+        let operativeIds = ([operative?.id.uuidString].compactMap { $0 } + personOperativeIds)
+            .filter { !$0.isEmpty && seenOperativeIds.insert($0.lowercased()).inserted }
         var employment: (type: String?, transitionFrom: String?, effectiveAt: Date?)? = nil
         if includeEmployment, let user {
             employment = (
@@ -202,9 +220,13 @@ enum PayrollRateResolver {
         operative: Operative?,
         on day: Date,
         history: OperativeDayRateHistoryCollection,
-        standardDayHours: Double = 8
+        standardDayHours: Double = 8,
+        personOperativeIds: [String] = []
     ) -> ResolvedPayrollRate {
-        let rate = rateOnDay(user: user, operative: operative, on: day, history: history, includeEmployment: true)
+        let rate = rateOnDay(
+            user: user, operative: operative, on: day, history: history, includeEmployment: true,
+            personOperativeIds: personOperativeIds
+        )
         if let rate, rate.isPaye {
             // Same shape as before: no amount, so the line keeps its hours and pays nothing.
             let basis: PayrollRateBasis = rate.payBasis == "hourly" ? .hourly : .dayRate

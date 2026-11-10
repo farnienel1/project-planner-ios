@@ -1470,7 +1470,7 @@ struct WeeklyReportView: View {
             let day = cal.startOfDay(for: $0.date)
             return day >= reportStartDay
                 && day <= reportEndDay
-                && $0.status != .cancelled
+                && $0.status.occupiesDay  // RULEBOOK `bookingOccupiesDay`
         }
         return filtered.compactMap { booking in
             let project = projectStore.projects.first(where: { $0.id == booking.projectId })
@@ -1515,7 +1515,11 @@ struct WeeklyReportView: View {
             operative: StaffEmailIdentity.operativeUsedForPay(user: user, operative: operative),
             on: date,
             history: dayRateHistoryCollection,
-            standardDayHours: standardDayHours
+            standardDayHours: standardDayHours,
+            // RULEBOOK 1.36.0 §8: history under every operatives row of the person counts (web `personRateHistoryIds`).
+            personOperativeIds: PayrollRateResolver.personOperativeIds(
+                user: user, operative: operative, operatives: operativeStore.allOperatives
+            )
         )
     }
 

@@ -827,7 +827,8 @@ final class Booking1331SaveFlowTests: XCTestCase {
         XCTAssertFalse(SDKPendingWrites.shared.contains(path: key))
         let ack = try source("Core/FirestoreWriteAck.swift")
         XCTAssertTrue(ack.contains("timer.cancel()"))
-        XCTAssertTrue(ack.contains("guard !Task.isCancelled else { return }"))
+        // 1.36 (#209): the timer also stops when the write already resumed the caller (`gate.isOpen`).
+        XCTAssertTrue(ack.contains("guard !Task.isCancelled, gate.isOpen else { return }"))
     }
 
     // MARK: Review round 3 (1.33.1)
@@ -883,7 +884,16 @@ final class Booking1331SaveFlowTests: XCTestCase {
             let take = try XCTUnwrap(delete.range(of: "outbox.takeQueuedBookingSaves(bookingId: booking.id)"), file)
             let requeue = try XCTUnwrap(delete.range(of: "outbox.requeueBookingSaves(taken.entries)"), file)
             XCTAssertLessThan(take.lowerBound, requeue.lowerBound, file)
-            XCTAssertTrue(delete.contains("if error != nil { OfflineOutboxStore.shared.requeueBookingSaves(takenEntries) }"), file)
+            // A refusal after the wait timed out puts the queued changes back (1.36: the confirmed branch sends the
+            // delete's reopen notice, #209 review item 2).
+            let late = try XCTUnwrap(delete.range(of: "onSettledAfterTimeout: { error in"), file)
+            let refusedBranch = try XCTUnwrap(delete.range(of: "if error != nil {", range: late.upperBound..<delete.endIndex), file)
+            let lateRequeue = try XCTUnwrap(
+                delete.range(of: "OfflineOutboxStore.shared.requeueBookingSaves(takenEntries)", range: refusedBranch.upperBound..<delete.endIndex),
+                file
+            )
+            let confirmedBranch = try XCTUnwrap(delete.range(of: "} else {", range: refusedBranch.upperBound..<delete.endIndex), file)
+            XCTAssertLessThan(lateRequeue.lowerBound, confirmedBranch.lowerBound, "\(file): requeued in the refused branch")
         }
     }
 
@@ -933,7 +943,7 @@ final class Booking1331SaveFlowTests: XCTestCase {
 
         let ack = try source("Core/FirestoreWriteAck.swift")
         let callback = try XCTUnwrap(ack.range(of: "onSettledAfterTimeout?(failure)"))
-        let settle = try XCTUnwrap(ack.range(of: "SDKPendingWrites.shared.settle(pendingKey, error: failure)"))
+        let settle = try XCTUnwrap(ack.range(of: "SDKPendingWrites.shared.settle(pendingKey, error: failure, ticket: token.ticket)"))
         XCTAssertLessThan(callback.lowerBound, settle.lowerBound)
     }
 

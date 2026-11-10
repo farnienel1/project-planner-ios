@@ -17,6 +17,20 @@ struct MyProfileFiguresCard: View {
     @EnvironmentObject var taskStore: ProjectTaskStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    // The screens each figure opens need these too (as web links each row to its page).
+    @EnvironmentObject var projectStore: ProjectStore
+    @EnvironmentObject var appSettings: AppSettingsStore
+    @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var smartCache: SmartCacheService
+
+    /// The screen a figure row opens: web `MyProfileFigures.tsx` links Annual leave, My Schedule, Tasks and
+    /// My Qualifications; the line manager row opens nothing.
+    enum Destination: String, Identifiable, CaseIterable {
+        case annualLeave, mySchedule, tasks, qualifications
+        var id: String { rawValue }
+    }
+
+    @State private var destination: Destination?
 
     /// The last answer of `myProfileSummary`. Worked out in `.task(id:)` when a store the figures read changes or the
     /// organisation day changes — never in `body`, so a redraw does not re-encode the stores or re-run the script.
@@ -93,6 +107,53 @@ struct MyProfileFiguresCard: View {
         .onReceive(taskStore.objectWillChange) { _ in storeRevision &+= 1 }
         .onReceive(bookingStore.objectWillChange) { _ in storeRevision &+= 1 }
         .onReceive(managerScheduleStore.objectWillChange) { _ in storeRevision &+= 1 }
+        .sheet(item: $destination) { destinationView($0) }
+    }
+
+    /// Each destination with every store it reads, injected explicitly (the card is also shown inside the Home sheet).
+    @ViewBuilder
+    private func destinationView(_ destination: Destination) -> some View {
+        switch destination {
+        case .annualLeave:
+            HolidayView(showRequests: false, presentedAsSheet: true)
+                .environmentObject(holidayStore)
+                .environmentObject(userStore)
+                .environmentObject(operativeStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+                .environmentObject(appSettings)
+                .environmentObject(smartCache)
+        case .mySchedule:
+            MyScheduleView()
+                .environmentObject(firebaseBackend)
+                .environmentObject(bookingStore)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(managerScheduleStore)
+                .environmentObject(holidayStore)
+                .environmentObject(appSettings)
+                .environmentObject(notificationService)
+                .environmentObject(smartCache)
+        case .tasks:
+            TasksDetailView()
+                .environmentObject(taskStore)
+                .environmentObject(projectStore)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(holidayStore)
+                .environmentObject(notificationService)
+                .environmentObject(firebaseBackend)
+                .environmentObject(bookingStore)
+                .environmentObject(smartCache)
+        case .qualifications:
+            OperativeQualificationsReadOnlyView()
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+                .environmentObject(smartCache)
+        }
     }
 
     @ViewBuilder
@@ -101,18 +162,25 @@ struct MyProfileFiguresCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 SettingsHubChrome.sectionTitle("Your figures")
                 SettingsHubChrome.card {
-                    figureRow("Annual leave this year", leaveValue(summary), leaveDetail(summary), id: "myProfileFigures.leave")
+                    figureRow("Annual leave this year", leaveValue(summary), leaveDetail(summary), id: "myProfileFigures.leave", opens: .annualLeave)
                     SettingsHubChrome.divider()
-                    figureRow("Hours booked this week", Self.hoursText(summary.hoursThisWeek), "Mon–Sun, unpaid breaks taken off", id: "myProfileFigures.hours")
+                    figureRow(
+                        "Hours booked this week",
+                        Self.hoursText(summary.hoursThisWeek),
+                        "Mon–Sun, unpaid breaks taken off",
+                        id: "myProfileFigures.hours",
+                        opens: .mySchedule
+                    )
                     SettingsHubChrome.divider()
                     figureRow(
                         "Open tasks",
                         "\(summary.openTasks)",
                         "\(summary.overdueTasks) overdue · \(summary.tasksDueThisWeek) due this week",
-                        id: "myProfileFigures.tasks"
+                        id: "myProfileFigures.tasks",
+                        opens: .tasks
                     )
                     SettingsHubChrome.divider()
-                    figureRow("Qualifications", qualificationsValue(summary), nil, id: "myProfileFigures.qualifications")
+                    figureRow("Qualifications", qualificationsValue(summary), nil, id: "myProfileFigures.qualifications", opens: .qualifications)
                     SettingsHubChrome.divider()
                     lineManagerRow(summary)
                 }
@@ -157,7 +225,19 @@ struct MyProfileFiguresCard: View {
 
     // MARK: Rows
 
-    private func figureRow(_ title: String, _ value: String, _ detail: String?, id: String) -> some View {
+    private func figureRow(_ title: String, _ value: String, _ detail: String?, id: String, opens: Destination) -> some View {
+        Button {
+            destination = opens
+        } label: {
+            figureRowContent(title, value, detail)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier(id)
+    }
+
+    private func figureRowContent(_ title: String, _ value: String, _ detail: String?) -> some View {
         HStack(alignment: .top) {
             Text(title)
                 .font(.subheadline.weight(.medium))
@@ -175,10 +255,14 @@ struct MyProfileFiguresCard: View {
                         .multilineTextAlignment(.trailing)
                 }
             }
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.secondary)
+                .padding(.top, 3)
+                .accessibilityHidden(true)
         }
         .padding(.vertical, 12)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier(id)
+        .contentShape(Rectangle())
     }
 
     private func lineManagerRow(_ summary: RulebookMyProfileSummary) -> some View {

@@ -723,7 +723,7 @@ struct ProjectDetailView: View {
         if let key = WorkCatalogueDeepLink.pendingDayKey,
            let date = CanonicalBusinessEngine.date(fromDayKey: key) {
             selectedWeek = date
-            expandedSchedulingDayKeys = [Calendar.current.startOfDay(for: date).timeIntervalSince1970]
+            expandedSchedulingDayKeys = [OrganizationRulebookContext.calendar.startOfDay(for: date).timeIntervalSince1970]
         }
         if WorkCatalogueDeepLink.pendingSection == "healthSafety" {
             openedManageTile = .healthSafety
@@ -737,7 +737,7 @@ struct ProjectDetailView: View {
     }
 
     private func ensureTodaySchedulingDayExpanded() {
-        let todayKey = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+        let todayKey = OrganizationRulebookContext.calendar.startOfDay(for: Date()).timeIntervalSince1970
         if expandedSchedulingDayKeys.isEmpty {
             expandedSchedulingDayKeys = [todayKey]
         } else if !expandedSchedulingDayKeys.contains(todayKey) {
@@ -746,11 +746,11 @@ struct ProjectDetailView: View {
     }
 
     private func isSchedulingDayExpanded(_ date: Date) -> Bool {
-        expandedSchedulingDayKeys.contains(Calendar.current.startOfDay(for: date).timeIntervalSince1970)
+        expandedSchedulingDayKeys.contains(OrganizationRulebookContext.calendar.startOfDay(for: date).timeIntervalSince1970)
     }
 
     private func toggleSchedulingDayExpanded(_ date: Date) {
-        let key = Calendar.current.startOfDay(for: date).timeIntervalSince1970
+        let key = OrganizationRulebookContext.calendar.startOfDay(for: date).timeIntervalSince1970
         if expandedSchedulingDayKeys.contains(key) {
             expandedSchedulingDayKeys.remove(key)
         } else {
@@ -844,12 +844,14 @@ struct ProjectDetailView: View {
 
     private var schedulingWeekDateText: String {
         let f = DateFormatter()
+        f.timeZone = OrganizationRulebookContext.timeZone
         f.dateFormat = "d MMM yyyy"
         return f.string(from: weekStartDate)
     }
 
     private var schedulingWeekOfTitle: String {
         let f = DateFormatter()
+        f.timeZone = OrganizationRulebookContext.timeZone
         f.dateFormat = "d MMM yyyy"
         return "Week of \(f.string(from: weekStartDate))"
     }
@@ -1108,7 +1110,7 @@ struct ProjectDetailView: View {
         let resolvedOperativeIds = person.operativeIds
         let resolvedUserIds = person.userIds
         let days: [SchedulingGridDayCell] = weekDays.map { day in
-            let dayId = Calendar.current.startOfDay(for: day).timeIntervalSince1970
+            let dayId = OrganizationRulebookContext.calendar.startOfDay(for: day).timeIntervalSince1970
             if !resolvedOperativeIds.isEmpty || !resolvedUserIds.isEmpty {
                 return schedulingCombinedDayCell(
                     day: day,
@@ -1234,7 +1236,7 @@ struct ProjectDetailView: View {
         let counts = schedulingDayHeadcounts
         return HStack(spacing: 4) {
             ForEach(Array(weekDays.enumerated()), id: \.offset) { index, day in
-                let isToday = Calendar.current.isDateInToday(day)
+                let isToday = OrganizationRulebookContext.calendar.isDate(day, inSameDayAs: Date())
                 let isWeekend = index >= 5
                 let count = index < counts.count ? counts[index] : 0
                 VStack(spacing: 3) {
@@ -1242,7 +1244,7 @@ struct ProjectDetailView: View {
                         .font(.caption2.weight(.bold))
                         .textCase(.uppercase)
                         .foregroundStyle(isToday ? Color.white.opacity(0.8) : (isWeekend ? Color.secondary.opacity(0.6) : Color.secondary))
-                    Text("\(Calendar.current.component(.day, from: day))")
+                    Text("\(OrganizationRulebookContext.calendar.component(.day, from: day))")
                         .font(.headline)
                         .monospacedDigit()
                         .foregroundStyle(isToday ? Color.white : (isWeekend ? Color.secondary : Color.primary))
@@ -1266,7 +1268,7 @@ struct ProjectDetailView: View {
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                 )
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(day.formatted(date: .complete, time: .omitted)), \(count) booked\(isToday ? ", today" : "")")
+                .accessibilityLabel("\(day.formatted(Date.FormatStyle(date: .complete, time: .omitted, timeZone: OrganizationRulebookContext.timeZone))), \(count) booked\(isToday ? ", today" : "")")
             }
         }
         .padding(.bottom, 6)
@@ -1348,9 +1350,9 @@ struct ProjectDetailView: View {
                 ForEach(Array(row.days.enumerated()), id: \.element.id) { index, day in
                     SchedulingV2BookingCell(
                         kind: day.kind,
-                        isToday: Calendar.current.isDateInToday(day.date),
+                        isToday: OrganizationRulebookContext.calendar.isDate(day.date, inSameDayAs: Date()),
                         isWeekend: index >= 5,
-                        accessibilityDay: day.date.formatted(date: .abbreviated, time: .omitted),
+                        accessibilityDay: day.date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)),
                         accessibilityPerson: row.name
                     ) {
                         handleSchedulingCellTap(row: row, day: day)
@@ -1512,10 +1514,11 @@ struct ProjectDetailView: View {
 
     private func schedulingShortDayTitle(_ date: Date) -> String {
         let df = DateFormatter()
+        df.timeZone = OrganizationRulebookContext.timeZone
         df.locale = Locale.current
         df.dateFormat = "EEE · d MMM"
         var s = df.string(from: date)
-        if Calendar.current.isDateInToday(date) {
+        if OrganizationRulebookContext.calendar.isDate(date, inSameDayAs: Date()) {
             s += " · Today"
         }
         return s
@@ -1594,6 +1597,7 @@ struct ProjectDetailView: View {
 
     private static let bookingEditDateFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.timeZone = OrganizationRulebookContext.timeZone
         f.dateFormat = "EEE d MMM"
         return f
     }()
@@ -1796,7 +1800,7 @@ struct ProjectDetailView: View {
     }
 
     private func schedulingDayCard(for date: Date, isExpanded: Bool) -> some View {
-        let isToday = Calendar.current.isDateInToday(date)
+        let isToday = OrganizationRulebookContext.calendar.isDate(date, inSameDayAs: Date())
         let count = schedulingDayBookedCount(date)
         let dayOT = schedulingDayOvertimeTotal(date)
         let opBookings = bookingsForDate(date)
@@ -2055,9 +2059,10 @@ struct ProjectDetailView: View {
     }
 
     private func schedulingCompactDayCell(for date: Date) -> some View {
-        let isToday = Calendar.current.isDateInToday(date)
+        let isToday = OrganizationRulebookContext.calendar.isDate(date, inSameDayAs: Date())
         let count = schedulingDayBookedCount(date)
         let df = DateFormatter()
+        df.timeZone = OrganizationRulebookContext.timeZone
         df.dateFormat = "EEE d"
         return VStack(alignment: .leading, spacing: 4) {
             Text(df.string(from: date))
@@ -2221,13 +2226,13 @@ struct ProjectDetailView: View {
     }
     
     private var weekStartDate: Date {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: selectedWeek)
         return calendar.date(from: components) ?? selectedWeek
     }
     
     private var weekDays: [Date] {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         let start = weekStartDate
         return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
     }
@@ -2485,7 +2490,7 @@ struct ProjectDetailView: View {
     private func bookingsForDate(_ date: Date) -> [Booking] {
         let policy = firebaseBackend.payrollPolicy(for: date)
         return bookingStore.bookings.filter { booking in
-            Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+            OrganizationRulebookContext.calendar.isDate(booking.date, inSameDayAs: date) &&
             booking.projectId == project.id &&
             (booking.status.occupiesDay)
         }.sorted { $0.minutesSortKey(policy: policy) < $1.minutesSortKey(policy: policy) }
@@ -2493,7 +2498,7 @@ struct ProjectDetailView: View {
     
     private func subcontractorBookingsForDate(_ date: Date) -> [SubcontractorBooking] {
         subcontractorStore.bookings.filter { booking in
-            Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+            OrganizationRulebookContext.calendar.isDate(booking.date, inSameDayAs: date) &&
             booking.projectId == project.id &&
             (booking.status.occupiesDay)
         }.sorted { $0.timeSlot.rawValue < $1.timeSlot.rawValue }
@@ -2502,7 +2507,7 @@ struct ProjectDetailView: View {
     private func managerBookingsForDate(_ date: Date) -> [ManagerSiteBooking] {
         let policy = firebaseBackend.payrollPolicy(for: date)
         return managerScheduleStore.managerSiteBookings.filter { booking in
-            Calendar.current.isDate(booking.date, inSameDayAs: date) &&
+            OrganizationRulebookContext.calendar.isDate(booking.date, inSameDayAs: date) &&
             booking.locationId == project.id &&
             (booking.locationType == .project || booking.locationType == .smallWork)
         }.sorted { $0.minutesSortKey(policy: policy) < $1.minutesSortKey(policy: policy) }
@@ -2511,7 +2516,7 @@ struct ProjectDetailView: View {
     // MARK: - Helper Methods
     
     private func changeWeek(by weeks: Int) {
-        if let newWeek = Calendar.current.date(byAdding: .weekOfYear, value: weeks, to: selectedWeek) {
+        if let newWeek = OrganizationRulebookContext.calendar.date(byAdding: .weekOfYear, value: weeks, to: selectedWeek) {
             selectedWeek = newWeek
         }
     }

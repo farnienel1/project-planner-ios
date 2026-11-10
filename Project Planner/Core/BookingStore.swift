@@ -450,14 +450,28 @@ class BookingStore: ObservableObject {
             let before = bookings[index]
             let baseline = changed.isEmpty ? nil : BookingWritePatch.deleteFingerprint(before)
             bookings[index] = booking
+            // The company this save actually wrote to, as `saveData` resolved it (#209 re-review).
+            var writtenOrganizationId: String?
             let results = await saveData(
-                writes: changed.isEmpty ? [] : [BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline)],
+                writes: changed.isEmpty ? [] : [
+                    BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline, previous: before)
+                ],
                 organizationId: capturedOrganizationId,
-                session: session
+                session: session,
+                writtenTo: { writtenOrganizationId = $0 }
             )
+            let result = results[booking.id] ?? .saved
             // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the write).
-            if !changed.isEmpty { OvertimeReopenNotice.labour(before: before, after: booking) }
-            return results[booking.id] ?? .saved
+            // Only once the server has the edit: a refused edit changed nothing; one queued in the app outbox is told on
+            // replay (`OfflineSyncCoordinator`, from the copy queued with it); one Firestore holds after its wait timed
+            // out is told when the server confirms it (`holdReopenNoticesUntilConfirmed`).
+            if !changed.isEmpty, result == .saved {
+                // One notice per change: an older queued edit of this booking replays later, silently.
+                OfflineOutboxStore.shared.clearReopenBaseline(bookingId: booking.id)
+                // The company this edit was written to (#209 review item 4), never nil when it is known.
+                OvertimeReopenNotice.labour(before: before, after: booking, organizationId: writtenOrganizationId)
+            }
+            return result
         }
         let message = "This booking is no longer on this phone. Close the screen and open it again."
         errorMessage = message
@@ -666,19 +680,25 @@ class BookingStore: ObservableObject {
                     try await FirestoreWriteAck.run(
                         pendingKey: SDKPendingWrites.key(organizationId: orgId, collection: "bookings", documentId: booking.documentKey),
                         onSettledAfterTimeout: { error in
-                            if error != nil { OfflineOutboxStore.shared.requeueBookingSaves(takenEntries) }
+                            if error != nil {
+                                OfflineOutboxStore.shared.requeueBookingSaves(takenEntries)
+                            } else {
+                                // #209 review item 2: a delete Firestore held is announced only once the server has it.
+                                OvertimeReopenNotice.labour(before: booking, after: nil, organizationId: orgId)
+                            }
                         }
                     ) {
                         try await fb.deleteBooking(booking, organizationId: orgId)
                     }
                 } catch is FirestoreWriteAck.TimedOut {
                     print("🔥🔥🔥 DEBUG: Delete of \(booking.documentKey) is with Firestore, pending sync")
+                    return
                 }
             } else {
                 try await fb.deleteBooking(booking, organizationId: orgId)
             }
             // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the delete).
-            OvertimeReopenNotice.labour(before: booking, after: nil)
+            OvertimeReopenNotice.labour(before: booking, after: nil, organizationId: orgId)
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),
                OfflinePolicy.availability(action) == .allowedOffline {
@@ -706,17 +726,6 @@ class BookingStore: ObservableObject {
             if let warning = CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning(dayKey: dayKey, sheets: sheets) {
                 OfflineOutboxStore.shared.lastNoticeMessage = warning
             }
-        }
-    }
-    
-    func completeBooking(_ booking: Booking) async {
-        if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
-            if let refusal = writeRefusal([bookings[index]]) {
-                errorMessage = refusal
-                return
-            }
-            bookings[index].status = .completed
-            await saveData(writes: [BookingWrite(booking: bookings[index], changedFields: ["status"])])
         }
     }
     
@@ -820,10 +829,6 @@ class BookingStore: ObservableObject {
         bookings.filter { $0.status == .tentative }
     }
     
-    var cancelledBookings: [Booking] {
-        bookings.filter { $0.status == .cancelled }
-    }
-    
     var completedBookings: [Booking] {
         bookings.filter { $0.status == .completed }
     }
@@ -920,6 +925,8 @@ class BookingStore: ObservableObject {
         let changedFields: Set<String>?
         /// RULEBOOK 1.33.0: `bookingDeleteFingerprint` of the copy before this edit (kept with a queued edit).
         var baselineFingerprint: String? = nil
+        /// RULEBOOK 1.33.0 §25: the copy before this edit, queued with it so the replay can send the reopen notice.
+        var previous: Booking? = nil
     }
 
     /// "Pending sync" wording for a write kept on this phone that the server has not confirmed yet (1.33.1).
@@ -932,6 +939,9 @@ class BookingStore: ObservableObject {
         var refusalMessage: String?
         /// Kept on this phone, not yet confirmed (Firestore's queue, or the app outbox).
         var pendingCount = 0
+        /// Held by Firestore after its wait timed out (not the app outbox): the server's answer comes later. The value
+        /// is that write's `SDKPendingWrites` ticket (nil when it was not marked).
+        var sdkPending: [UUID: UInt64?] = [:]
     }
 
     /// 1.33.1: writes each booking in order through `write` and reports each one's outcome.
@@ -966,13 +976,15 @@ class BookingStore: ObservableObject {
                 session.note(error)
                 if FirestoreWriteAck.isPendingInSDK(error) {
                     run.pendingCount += 1
+                    run.sdkPending[item.booking.id] = FirestoreWriteAck.pendingTicket(error)
                     run.results[item.booking.id] = .queued(pendingSyncMessage)
                 } else if OfflineWriteSupport.shouldQueue(error: error, isOnline: isOnline) {
                     OfflineOutboxStore.shared.enqueueSaveBooking(
                         item.booking,
                         changedFields: item.changedFields,
                         organizationId: organizationId,
-                        baselineFingerprint: item.baselineFingerprint
+                        baselineFingerprint: item.baselineFingerprint,
+                        previous: item.previous
                     )
                     run.pendingCount += 1
                     run.results[item.booking.id] = .queued(pendingSyncMessage)
@@ -992,6 +1004,23 @@ class BookingStore: ObservableObject {
         return run
     }
 
+    /// RULEBOOK 1.33.0 §25 reopen for an edit reported Pending sync because the server did not confirm it in time
+    /// (Firestore holds it): the notice is sent when the server confirms it, also late, and never when the server
+    /// refuses it (`SDKPendingWrites.whenConfirmed`; the leave pattern). An edit queued in the app outbox is told on
+    /// replay instead (`OfflineSyncCoordinator`), and a confirmed one at once (`updateBookingReturningResult`).
+    static func holdReopenNoticesUntilConfirmed(_ writes: [BookingWrite], run: WriteRun, organizationId: String) {
+        for write in writes {
+            guard let ticket = run.sdkPending[write.booking.id],
+                  write.changedFields != nil, let before = write.previous else { continue }
+            let after = write.booking
+            SDKPendingWrites.shared.whenConfirmed(ticket: ticket) {
+                // One notice per change: an older queued edit of this booking replays later, silently.
+                OfflineOutboxStore.shared.clearReopenBaseline(bookingId: after.id)
+                OvertimeReopenNotice.labour(before: before, after: after, organizationId: organizationId)
+            }
+        }
+    }
+
     /// Saves the list on this device, then writes only `writes` to Firestore (RULEBOOK §1 partial writes).
     /// Offline, each write goes to the outbox with its changed fields and shows "Pending sync" (§2).
     /// 1.33.1: returns what happened to each write (saved, Pending sync, or refused), so a screen reports this save's
@@ -1000,7 +1029,8 @@ class BookingStore: ObservableObject {
     private func saveData(
         writes: [BookingWrite] = [],
         organizationId capturedOrganizationId: String? = nil,
-        session: BookingWriteSession? = nil
+        session: BookingWriteSession? = nil,
+        writtenTo: ((String) -> Void)? = nil
     ) async -> [UUID: BookingSaveResult] {
         var results: [UUID: BookingSaveResult] = [:]
         do {
@@ -1023,6 +1053,9 @@ class BookingStore: ObservableObject {
                 ) ?? firebaseBackend?.resolvedOrganizationIdForOfflineWrites()
             }
             let organizationId = resolvedOrganizationId
+            // The organisation every write of this save goes to: the caller's notices name it, never the one open
+            // when they are sent.
+            if let organizationId { writtenTo?(organizationId) }
 
             if smartCache?.isOnline == false {
                 if let organizationId {
@@ -1031,7 +1064,8 @@ class BookingStore: ObservableObject {
                             write.booking,
                             changedFields: write.changedFields,
                             organizationId: organizationId,
-                            baselineFingerprint: write.baselineFingerprint
+                            baselineFingerprint: write.baselineFingerprint,
+                            previous: write.previous
                         )
                         results[write.booking.id] = .queued(Self.pendingSyncMessage)
                     }
@@ -1065,6 +1099,7 @@ class BookingStore: ObservableObject {
                     )
                 }
                 results = run.results
+                Self.holdReopenNoticesUntilConfirmed(writes, run: run, organizationId: organizationId)
 
                 if !run.refusedIds.isEmpty {
                     // A refused create is never on the server: drop it. A refused edit comes back from the
@@ -1082,6 +1117,8 @@ class BookingStore: ObservableObject {
                 } else {
                     errorMessage = nil
                     print("🔥🔥🔥 DEBUG: Successfully saved \(writes.count) bookings to Firebase")
+                    ScheduleChangeNotifier.postBookingStoreDidChange()
+                    return results
                 }
             } else {
                 print("🔥🔥🔥 DEBUG: Saved \(bookings.count) bookings locally (Firebase not available or not authenticated)")
@@ -1091,7 +1128,8 @@ class BookingStore: ObservableObject {
                             write.booking,
                             changedFields: write.changedFields,
                             organizationId: organizationId,
-                            baselineFingerprint: write.baselineFingerprint
+                            baselineFingerprint: write.baselineFingerprint,
+                            previous: write.previous
                         )
                     }
                 }

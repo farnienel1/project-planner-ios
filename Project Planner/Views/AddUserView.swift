@@ -74,6 +74,13 @@ struct AddUserView: View {
         userStore.canViewSensitiveProfile(of: "")
     }
     @State private var isCreating = false
+    /// RULEBOOK 1.36.0 §11 (owner decision 10 Nov): the people with the same first and last name
+    /// (`usersWithSameName`) shown in the duplicate-name warning. `duplicateNameConfirmed` is true only for the one
+    /// synchronous `createUser()` call Add anyway makes (its checks run before any `Task` starts); it is cleared right
+    /// after that call, on Cancel and whenever a name field changes, so it never outlives the alert (review 10 Nov).
+    @State private var duplicateNameMatches: [RulebookSameNamePerson] = []
+    @State private var showingDuplicateNameWarning = false
+    @State private var duplicateNameConfirmed = false
     @State private var showSuccess = false
     @State private var errorMessage: String?
     /// RULEBOOK 1.14.0 `payRateRequiredError`, shown under the rate field after a refused create.
@@ -298,6 +305,27 @@ struct AddUserView: View {
             }
             .background(PPNavyBackdrop().ignoresSafeArea())
             .navigationBarHidden(true)
+            // RULEBOOK 1.36.0 §11 (owner decision 10 Nov): the duplicate-name warning. A warning only — Add anyway
+            // saves as before, Cancel returns to the form.
+            .alert(
+                CanonicalBusinessEngine.duplicateNameWarningTitle,
+                isPresented: $showingDuplicateNameWarning,
+                presenting: duplicateNameMatches
+            ) { _ in
+                Button(CanonicalBusinessEngine.duplicateNameCancelLabel, role: .cancel) {
+                    duplicateNameConfirmed = false
+                }
+                Button(CanonicalBusinessEngine.duplicateNameConfirmLabel) {
+                    duplicateNameConfirmed = true
+                    createUser()
+                    duplicateNameConfirmed = false
+                }
+                .accessibilityIdentifier("addUser.duplicateName.confirm")
+            } message: { matches in
+                Text(duplicateNameAlertMessage(matches))
+            }
+            .onChange(of: firstName) { _, _ in duplicateNameConfirmed = false }
+            .onChange(of: surname) { _, _ in duplicateNameConfirmed = false }
             .onAppear {
                 resetAnnualLeaveInviteDefaults()
                 if mode == .managerAddingOperative {
@@ -1489,6 +1517,7 @@ struct AddUserView: View {
             errorMessage = message
             return
         }
+        if stopForDuplicateName() { return }
         guard !isCreating else { return }
         isCreating = true
         errorMessage = nil
@@ -1505,6 +1534,46 @@ struct AddUserView: View {
                 }
             }
         }
+    }
+
+    /// RULEBOOK 1.36.0 §11 `usersWithSameName(roster, { firstName, lastName }, { claimedEmails })`: true when the save
+    /// stops — for the duplicate-name warning, or (owner decision 10 Nov, judgement call 4) because the rules could not
+    /// run on this phone, when nothing is saved and `DuplicateNameRulebook.unavailableMessage` is shown, invite and
+    /// ghost alike. After Add anyway the next save goes through (once), still only when the rules answer.
+    private func stopForDuplicateName() -> Bool {
+        let nameConfirmed = duplicateNameConfirmed
+        duplicateNameConfirmed = false
+        let answer = CanonicalBusinessEngine.usersWithSameName(
+            roster: DuplicateNameRulebook.roster(userStore.organizationUsers),
+            firstName: firstName,
+            lastName: surname,
+            claimedEmails: userStore.organizationUserEmailClaims.map { Array($0) }
+        )
+        switch DuplicateNameRulebook.decision(answer: answer, nameConfirmed: nameConfirmed) {
+        case .save:
+            return false
+        case .warn(let matches):
+            duplicateNameMatches = matches
+            showingDuplicateNameWarning = true
+            return true
+        case .refuse(let message):
+            errorMessage = message
+            return true
+        }
+    }
+
+    /// The warning text and one line per matching person: `sameNamePersonContactLabel` (their email; "No app login"
+    /// for a ghost only; else "No email").
+    private func duplicateNameAlertMessage(_ matches: [RulebookSameNamePerson]) -> String {
+        let lines = matches.map { person -> String in
+            var line = person.displayName
+            let contact = CanonicalBusinessEngine.sameNamePersonContactLabel(email: person.email, ghost: person.ghost)
+            if !contact.isEmpty { line += " · \(contact)" }
+            if person.segment == "inactive" { line += " · Inactive" }
+            if person.segment == "pending" { line += " · Pending" }
+            return line
+        }
+        return ([CanonicalBusinessEngine.duplicateNameWarningMessage] + lines).joined(separator: "\n")
     }
 
     private func createUser() {
@@ -1541,6 +1610,9 @@ struct AddUserView: View {
             errorMessage = leaveYearError
             return
         }
+
+        // RULEBOOK 1.36.0 §11 (owner decision 10 Nov): the duplicate-name warning, after the form's own checks.
+        if stopForDuplicateName() { return }
 
         guard !isCreating else { return }
         

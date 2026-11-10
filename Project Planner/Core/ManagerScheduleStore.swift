@@ -326,7 +326,8 @@ class ManagerScheduleStore: ObservableObject {
 
         if smartCache?.isOnline == false {
             OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(
-                normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline
+                normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline,
+                previous: previous
             )
             return .queued(BookingStore.pendingSyncMessage)
         }
@@ -334,7 +335,11 @@ class ManagerScheduleStore: ObservableObject {
         do {
             try await fb.saveManagerSiteBooking(normalizedBooking, organizationId: orgId, changedFields: changedFields, session: session)
             // RULEBOOK 1.33.0 §25 reopen: an edit may reopen the PAYE overtime line (best effort, after the write).
-            if let previous { OvertimeReopenNotice.managerSite(before: previous, after: normalizedBooking) }
+            if let previous {
+                // One notice per change: an older queued edit of this booking replays later, silently.
+                OfflineOutboxStore.shared.clearManagerSiteReopenBaseline(bookingId: normalizedBooking.id)
+                OvertimeReopenNotice.managerSite(before: previous, after: normalizedBooking, organizationId: orgId)
+            }
             loadData(force: true)
             return .saved
         } catch {
@@ -342,11 +347,20 @@ class ManagerScheduleStore: ObservableObject {
             if FirestoreWriteAck.isPendingInSDK(error) {
                 // 1.33.1: the server did not confirm in time. Firestore holds the write and delivers it (later writes to
                 // this booking go after it): Pending sync, and never a second copy in the app outbox.
+                // RULEBOOK 1.33.0 §25 reopen: told when the server confirms the edit (also late), never if it refuses.
+                if let previous, changedFields != nil {
+                    let after = normalizedBooking
+                    SDKPendingWrites.shared.whenConfirmed(ticket: FirestoreWriteAck.pendingTicket(error)) {
+                        OfflineOutboxStore.shared.clearManagerSiteReopenBaseline(bookingId: after.id)
+                        OvertimeReopenNotice.managerSite(before: previous, after: after, organizationId: orgId)
+                    }
+                }
                 errorMessage = BookingStore.pendingSyncMessage
                 return .queued(BookingStore.pendingSyncMessage)
             } else if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {
                 OfflineOutboxStore.shared.enqueueSaveManagerSiteBooking(
-                    normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline
+                    normalizedBooking, changedFields: changedFields, organizationId: orgId, baselineFingerprint: baseline,
+                    previous: previous
                 )
                 errorMessage = "Saved locally. Will sync when you're back online."
                 return .queued(BookingStore.pendingSyncMessage)
@@ -427,19 +441,26 @@ class ManagerScheduleStore: ObservableObject {
                     try await FirestoreWriteAck.run(
                         pendingKey: SDKPendingWrites.key(organizationId: orgId, collection: "managerSiteBookings", documentId: booking.documentKey),
                         onSettledAfterTimeout: { error in
-                            if error != nil { OfflineOutboxStore.shared.requeueBookingSaves(takenEntries) }
+                            if error != nil {
+                                OfflineOutboxStore.shared.requeueBookingSaves(takenEntries)
+                            } else {
+                                // #209 review item 2: a delete Firestore held is announced only once the server has it.
+                                OvertimeReopenNotice.managerSite(before: booking, after: nil, organizationId: orgId)
+                            }
                         }
                     ) {
                         try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
                     }
                 } catch is FirestoreWriteAck.TimedOut {
                     print("🔥🔥🔥 DEBUG: Manager schedule delete of \(booking.documentKey) is with Firestore, pending sync")
+                    loadData(force: true)
+                    return
                 }
             } else {
                 try await fb.deleteManagerSiteBooking(booking, organizationId: orgId)
             }
             // RULEBOOK 1.33.0 §25 reopen (best effort, after the delete).
-            OvertimeReopenNotice.managerSite(before: booking, after: nil)
+            OvertimeReopenNotice.managerSite(before: booking, after: nil, organizationId: orgId)
             loadData(force: true)
         } catch {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true),

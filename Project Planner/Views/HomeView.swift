@@ -296,6 +296,7 @@ struct HomeView: View {
         }
         .sheet(isPresented: $showingHomeProfileCard) {
             HomeProfileCardSheet()
+                .environmentObject(smartCache)
                 .environmentObject(firebaseBackend)
                 .environmentObject(userStore)
                 .environmentObject(operativeStore)
@@ -1927,6 +1928,7 @@ private struct HomeProfileCardSheet: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var smartCache: SmartCacheService
 
     var body: some View {
         NavigationStack {
@@ -1941,6 +1943,11 @@ private struct HomeProfileCardSheet: View {
                 .environmentObject(taskStore)
                 .environmentObject(bookingStore)
                 .environmentObject(managerScheduleStore)
+                // The figures card opens Annual leave, My Schedule, Tasks and My Qualifications, which read these.
+                .environmentObject(projectStore)
+                .environmentObject(appSettings)
+                .environmentObject(notificationService)
+                .environmentObject(smartCache)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         NavigationLink {

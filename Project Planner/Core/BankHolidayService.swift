@@ -63,6 +63,10 @@ final class BankHolidayService: ObservableObject {
     @Published private(set) var lastErrorMessage: String?
 
     private var activeRegionId: String?
+    /// The years loaded so far for `loadedScope` (organisation id | region id). A later load without `alsoYears`
+    /// (Company details, leave defaults) keeps them instead of narrowing the set a leave screen asked for.
+    private var loadedYears: Set<Int> = []
+    private var loadedScope: String?
     /// Bank holidays are organisation business days: organisation zone, not the device zone.
     private var calendar: Calendar { OrganizationRulebookContext.calendar }
     private let cacheSchemaVersion = 4
@@ -121,6 +125,8 @@ final class BankHolidayService: ObservableObject {
         try? FileManager.default.removeItem(at: url)
         if activeRegionId == regionId {
             activeRegionId = nil
+            loadedYears = []
+            loadedScope = nil
             holidaysByDayKey = [:]
             OrganizationBankHolidays.update([])
         }
@@ -135,7 +141,15 @@ final class BankHolidayService: ObservableObject {
         forceRefresh: Bool = false,
         alsoYears: [Int] = []
     ) async {
-        let years = Array(Set(Self.prefetchYears(for: referenceDate, calendar: calendar) + alsoYears)).sorted()
+        let scope = Self.loadScope(organizationId: OrganizationRulebookContext.organizationId, regionId: region.id)
+        let years = Self.yearsToLoad(
+            requested: Self.prefetchYears(for: referenceDate, calendar: calendar) + alsoYears,
+            previouslyLoaded: loadedScope == scope ? loadedYears : []
+        )
+        defer {
+            loadedScope = scope
+            loadedYears = Set(years)
+        }
 
         if forceRefresh {
             invalidateCache(for: region.id)
@@ -184,6 +198,17 @@ final class BankHolidayService: ObservableObject {
         if holidaysByDayKey.isEmpty, lastErrorMessage == nil {
             lastErrorMessage = "No bank holidays could be loaded for \(region.title). Check your connection and try again."
         }
+    }
+
+    /// Which loaded years a load keeps: organisation and region together. Another organisation or region starts afresh.
+    nonisolated static func loadScope(organizationId: String?, regionId: String) -> String {
+        "\((organizationId ?? "").lowercased())|\(regionId)"
+    }
+
+    /// The years to load: those asked for now plus those already loaded for the same organisation and region (a union,
+    /// so one screen never drops the years another asked for).
+    nonisolated static func yearsToLoad(requested: [Int], previouslyLoaded: Set<Int>) -> [Int] {
+        Array(Set(requested).union(previouslyLoaded)).sorted()
     }
 
     /// Prior year plus current and two years ahead (leave years often span calendar years).

@@ -16,6 +16,11 @@ import XCTest
 /// Owner decision 7 Nov "1b" (RULEBOOK 1.34.0 §18, `ghostAccountsEnabled` / `ghostToggleVisible`): the Ghost account
 /// toggle shows only while `platformConfig/app.ghostAccounts` is on. Only unguarded properties changed (`ghostMode`,
 /// `ghostFormRows`, `ghostToggleCard`); every recorded hash is unchanged.
+///
+/// New baseline (RULEBOOK 1.36.0 §11, owner decision 10 Nov "warn about a duplicate name when adding a user" — a
+/// deliberate behaviour change): `createUser()` gains one line after the form's own checks, `if stopForDuplicateName()
+/// { return }` (`usersWithSameName`; Add anyway saves as before). Its hash was recomputed with this test's own
+/// extraction (marker through the closing brace, whitespace collapsed, SHA-256). Every other recorded hash is unchanged.
 final class AddUserSavedDataGuardTests: XCTestCase {
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -43,7 +48,7 @@ final class AddUserSavedDataGuardTests: XCTestCase {
         ("Project Planner/Views/AddUserView.swift", "private var tradeRequiredAndValid: Bool {", "daefbd43eb0126d1b33bae743904a37098bd1fa98fed61a7027fd4f7a71c3c5c"),
         ("Project Planner/Views/AddUserView.swift", "private var canProceed: Bool {", "f761028506ed7bc29bc0fd97fc2a9c2b601288218e751ce7fb51659aab2d6edb"),
         ("Project Planner/Views/AddUserView.swift", "private var permissionItems: [(title: String, isEnabled: Bool)] {", "5f76ebc97e2930051e69ce0887f282e12163a915c3790fd5e91506a4244fa8de"),
-        ("Project Planner/Views/AddUserView.swift", "private func createUser() {", "8af875ea6441b952ec582572bed7b99e9791c99826c677f3a6d214bb747876a9"),
+        ("Project Planner/Views/AddUserView.swift", "private func createUser() {", "2a1793230f0b66215eb5723ed8c27a843ef5fdd3a342ad837e2ef33114b0036d"),
         ("Project Planner/Views/AddUserView.swift", "private func selectAccountType(_ type: InvitedAccountType) {", "a846baaaebb8e47e6ec8c2bedc84cb80b245c804d8ac41033a4a47324a5b7f46"),
         ("Project Planner/Views/AddUserView.swift", "private func isValidEmail(_ email: String) -> Bool {", "ac5ea654949375615d90976779a1e2f18161b42a663942ca9619b587cb7dd855"),
         ("Project Planner/Views/AddUserView.swift", "private var dayRateBindingForSelectedType: Binding<String> {", "1f7fc10c322c040b92c27ab0caeb97182b6f0a1456cdb6f2a7928f32d8f6cffa"),

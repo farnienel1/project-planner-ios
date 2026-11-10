@@ -223,7 +223,7 @@ struct DailyOverviewView: View {
             guard b.locationType == .project || b.locationType == .smallWork else { continue }
             keys.insert(overviewPersonKey(userId: b.userId))
         }
-        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status.occupiesDay {
             keys.insert("sub:\(b.subcontractorId.uuidString)")
         }
         return keys.count
@@ -278,7 +278,7 @@ struct DailyOverviewView: View {
                 keys.insert(overviewPersonKey(userId: b.userId))
             }
         }
-        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status.occupiesDay {
             keys.insert("sub:\(b.subcontractorId.uuidString)")
         }
         return keys.count
@@ -299,7 +299,7 @@ struct DailyOverviewView: View {
             guard b.locationType == .project || b.locationType == .smallWork else { continue }
             if let split = b.workedHoursSplit(policy: p) { splits.append(split) }
         }
-        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status.occupiesDay {
             if let split = b.payrollMirrorBooking().workedHoursSplit(policy: p) { splits.append(split) }
         }
         return splits
@@ -321,7 +321,7 @@ struct DailyOverviewView: View {
         where cal.isDate(b.date, inSameDayAs: overviewDate) && (b.locationType == .project || b.locationType == .smallWork) {
             results.append(b.payrollHoursResult(policy: p))
         }
-        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status != .cancelled {
+        for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status.occupiesDay {
             results.append(b.payrollMirrorBooking().payrollHoursResult(policy: p))
         }
         return results
@@ -409,7 +409,7 @@ struct DailyOverviewView: View {
         }
         let subcontractorIds = scopedSubcontractorBookings.compactMap { booking -> UUID? in
             guard CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: overviewDate),
-                  booking.status != .cancelled else { return nil }
+                  booking.status.occupiesDay else { return nil }  // RULEBOOK `bookingOccupiesDay`
             return booking.projectId
         }
         ids.formUnion(managerIds)
@@ -1696,7 +1696,7 @@ struct ProjectBookingCard: View {
             .filter { booking in
                 booking.projectId == project.id &&
                     CanonicalBusinessEngine.businessCalendar.isDate(booking.date, inSameDayAs: day) &&
-                    booking.status != .cancelled
+                    booking.status.occupiesDay  // RULEBOOK `bookingOccupiesDay`
             }
             .sorted { $0.payrollMirrorBooking().minutesSortKey(policy: payrollTimePolicy) < $1.payrollMirrorBooking().minutesSortKey(policy: payrollTimePolicy) }
     }

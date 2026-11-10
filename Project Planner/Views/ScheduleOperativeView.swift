@@ -1391,7 +1391,7 @@ struct ScheduleOperativeView: View {
         let calendar = OrganizationRulebookContext.calendar
         let normalizedDate = calendar.startOfDay(for: date)
         let isSelected = selectedDates.contains(normalizedDate)
-        let isToday = calendar.isDateInToday(date)
+        let isToday = calendar.isDate(date, inSameDayAs: Date())
         let previousSelected = isSelected && (calendar.date(byAdding: .day, value: -1, to: normalizedDate)
             .map { selectedDates.contains(calendar.startOfDay(for: $0)) } ?? false)
         let nextSelected = isSelected && (calendar.date(byAdding: .day, value: 1, to: normalizedDate)
