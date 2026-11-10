@@ -35,6 +35,8 @@ enum RulebookRosterLists {
         row["surname"] = user.surname
         row["formerUserIds"] = user.formerUserIds
         row["sameEmailUserIds"] = user.sameEmailUserIds
+        // RULEBOOK 1.34.0 §11: a ghost operative (no app login).
+        row["ghost"] = user.isGhost
         if let updated = user.documentUpdatedAt { row["updatedAtMs"] = (updated.timeIntervalSince1970 * 1000).rounded() }
         return row
     }

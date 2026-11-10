@@ -85,6 +85,9 @@ struct WarningsComputationSnapshot: Sendable {
         var formerUserIds: [String] = []
         /// `users/{uid}.status` (e.g. `pending`). The script's own sign-up check reads it.
         var status: String? = nil
+        /// RULEBOOK 1.34.0 §5, §11: a ghost operative (no login by design) counts as signed up for unbooked labour and
+        /// is never an unverified account (`LabourPerson.ghost`, `unverifiedOperativeRows`).
+        var isGhost: Bool = false
     }
 
     struct ProjectSnapshot: Sendable {
@@ -290,7 +293,8 @@ enum WarningsComputation {
                 isAdminRole: user.role == .admin,
                 sameEmailUserIds: user.sameEmailUserIds,
                 formerUserIds: user.formerUserIds,
-                status: user.status
+                status: user.status,
+                isGhost: user.isGhost
             )
         }
 
@@ -847,6 +851,8 @@ enum WarningsComputation {
                 "passwordSet": user.passwordSet,
                 "createdAtIso": CanonicalBusinessEngine.isoString(from: user.createdAt),
                 "isOperativeMode": user.isOperativeMode,
+                // RULEBOOK 1.34.0 §5: a ghost (an invited one too) is never an unverified account.
+                "ghost": user.isGhost,
             ]
         }
         guard let rows = CanonicalBusinessEngine.objectRows(
@@ -1077,6 +1083,8 @@ enum WarningsComputation {
                 "isAdmin": user.permissions.adminAccess || user.role == .admin,
                 "isSuperAdmin": user.isSuperAdmin,
                 "formerIds": user.formerUserIds,
+                // RULEBOOK 1.34.0 §5: a ghost operative has no login by design and counts as signed up.
+                "ghost": user.isGhost,
             ]
             // `users/{uid}.status`: a pending invitee is not unbooked (the script's `hasFinishedSignup`).
             if let status = user.status { row["status"] = status }
@@ -1181,6 +1189,18 @@ enum WarningsComputation {
         }
         if let policyState { payload["payrollPolicy"] = policyState }
         if let weekendCoverage { payload["weekendCoverage"] = weekendCoverage.asFirestoreDictionary() }
+        // RULEBOOK 1.34.0 §5: `CanonicalUnbookedLabourPerson` has no `ghost` key, so put it back on the encoded people
+        // (a ghost operative has no login by design and counts as signed up; the script decides with `LabourPerson.ghost`).
+        let ghostIds = Set(people.compactMap { row -> String? in
+            (row["ghost"] as? Bool) == true ? unbookedText(row["id"]) : nil
+        })
+        if !ghostIds.isEmpty, let encodedPeople = payload["people"] as? [[String: Any]] {
+            payload["people"] = encodedPeople.map { row in
+                var copy = row
+                if ghostIds.contains(unbookedText(row["id"])) { copy["ghost"] = true }
+                return copy
+            }
+        }
         guard let raw = CanonicalBusinessEngine.callJSON("unbookedLabourRowsOnDay", arguments: [payload]),
               let data = try? JSONSerialization.data(withJSONObject: raw),
               let rows = try? JSONDecoder().decode([CanonicalUnbookedLabourRow].self, from: data) else { return [] }
@@ -1301,6 +1321,8 @@ enum WarningsComputation {
                 "isAdmin": user.hasAdminAccess || user.isAdminRole,
                 "isSuperAdmin": user.isSuperAdmin,
                 "formerIds": user.formerUserIds,
+                // RULEBOOK 1.34.0 §5: a ghost operative has no login by design and counts as signed up.
+                "ghost": user.isGhost,
             ]
             // `users/{uid}.status`: a pending invitee is not unbooked (the script's `hasFinishedSignup`).
             if let status = user.status { row["status"] = status }

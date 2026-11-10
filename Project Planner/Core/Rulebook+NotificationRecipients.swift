@@ -192,6 +192,8 @@ enum RulebookPeople {
             "hasNoLineManager": user.hasNoLineManager,
             // RULEBOOK 1.16.0 `notificationRecipientAccountId`: the signed-up row is the person's account.
             "passwordSet": user.passwordSet,
+            // RULEBOOK 1.34.0 §11, §13: a ghost operative is never a recipient, a timesheet subject or a candidate.
+            "ghost": user.isGhost,
         ]
         if let legacy = user.assignedManagerUserId { row["assignedManagerUserId"] = legacy }
         // RULEBOOK 1.28.0 `isOrganizationSuperAdmin` (web `rulebookPerson.organizationSuperAdmin`): the Super Admin of

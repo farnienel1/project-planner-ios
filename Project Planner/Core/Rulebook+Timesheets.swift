@@ -369,6 +369,8 @@ extension CanonicalBusinessEngine {
             "employmentTypeTransitionFrom": user.employmentTypeTransitionFrom?.rawValue ?? NSNull(),
             "employmentTypeEffectiveAt": user.employmentTypeEffectiveAt.map { $0.timeIntervalSince1970 * 1000 } ?? NSNull(),
             "operativeMode": user.permissions.operativeMode,
+            // RULEBOOK 1.34.0 §8: a ghost operative has no timesheet (`timesheetDaysForPerson` is empty).
+            "ghost": user.isGhost,
         ]
     }
 
