@@ -87,7 +87,7 @@ final class IOS136FixesTests: XCTestCase {
         XCTAssertNil(store.range(of: "func completeBooking("), "dead code: no caller")
         XCTAssertNil(store.range(of: "var cancelledBookings"), "dead code: no caller")
         let update = try functionBody("updateBooking", in: store)
-        XCTAssertTrue(update.contains("if !changed.isEmpty, written {"), "notice only once the edit reached the server")
+        XCTAssertTrue(update.contains("if !changed.isEmpty, result == .saved {"), "notice only once the edit reached the server")
         XCTAssertTrue(update.contains("OvertimeReopenNotice.labour(before: before, after: booking)"))
         let coordinator = try source("Project Planner/Core/OfflineSyncCoordinator.swift")
         XCTAssertTrue(coordinator.contains(
