@@ -149,6 +149,19 @@ final class WorksListScreenCache {
         return myList
     }
 
+    /// `myWorksIds`: the whole stored list the ⚙ starts from (ids of deleted or hidden jobs included), asked with the
+    /// rows when the ⚙ opens and again when the server's first answer arrives.
+    func storedIds(_ inputs: WorksListScreenInputs, picks: MyWorksPicks) -> [String] {
+        let answers = answers(inputs)
+        return CanonicalBusinessEngine.myWorksIds(
+            inputs.projects + inputs.smallWorks,
+            picks: picks,
+            viewer: inputs.viewer,
+            context: answers.context,
+            kind: inputs.kind
+        )
+    }
+
     /// `myWorksPickerRows`: asked once when the ⚙ opens; the sheet keeps the snapshot (never recomputed per render).
     func pickerRows(_ inputs: WorksListScreenInputs, picks: MyWorksPicks) -> [MyWorksPickerRow] {
         let answers = answers(inputs)

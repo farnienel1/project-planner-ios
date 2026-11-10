@@ -188,13 +188,56 @@ final class MyWorksPicksSaveTests: XCTestCase {
     func testTheGearIsWiredToTheServerAnswer() throws {
         let sheet = try String(contentsOf: appRoot.appendingPathComponent("Views/MyWorksPickerSheet.swift"), encoding: .utf8)
         XCTAssertTrue(sheet.contains(".disabled(!ready)"), "Save waits until ready")
-        XCTAssertTrue(sheet.contains("MyWorksPickerGate.ids(base: base, toggles: toggles)"), "rows re-taken with the ticks replayed")
+        XCTAssertTrue(sheet.contains("MyWorksPickerGate.ids(base: newStoredIds, toggles: toggles)"), "the stored list re-taken with the ticks replayed")
         XCTAssertFalse(sheet.contains("Button(\"Cancel\") { dismiss() }\n                        .disabled(!ready)"))
         for view in ["Views/ProjectsView.swift", "Views/SmallWorksView.swift"] {
             let source = try String(contentsOf: appRoot.appendingPathComponent(view), encoding: .utf8)
             XCTAssertTrue(source.contains("ready: myWorks.pickerReady"), view)
             XCTAssertTrue(source.contains(".onChange(of: myWorks.confirmedByServer)"), view)
+            XCTAssertTrue(source.contains("storedIds: myWorksPickerStoredIds"), view)
+            XCTAssertEqual(
+                source.components(separatedBy: "myWorksPickerStoredIds = listCache.storedIds(listInputs, picks: myWorks.picks)").count - 1, 2,
+                "\(view): the stored list is taken when the ⚙ opens and when the server answers"
+            )
         }
+    }
+
+    // MARK: Ids not shown stay stored (RULEBOOK §21: a saved id of a deleted or hidden job "stays stored"; guardrail 3)
+
+    func testTheSheetStartsFromTheWholeStoredListNotTheVisibleTicks() throws {
+        let sheet = try String(contentsOf: appRoot.appendingPathComponent("Views/MyWorksPickerSheet.swift"), encoding: .utf8)
+        XCTAssertTrue(sheet.contains("ids = MyWorksPickerGate.ids(base: storedIds, toggles: [])"))
+        XCTAssertFalse(sheet.contains("filter(\\.picked)"), "never the visible ticked rows: Save would drop hidden or deleted ids")
+    }
+
+    func testSaveKeepsStoredIdsOfDeletedAndHiddenJobs() throws {
+        let projects = [try job("P1", ["managerUserIds": ["U-M"]]), try job("P2", ["managerUserIds": ["X"]])]
+        let cache = WorksListScreenCache()
+        let screen = inputs(projects: projects)
+        // Stored on the server: a deleted job (GONE), a visible job (P1) and an id of a job the viewer no longer sees (HIDDEN, not in the list).
+        let picks = MyWorksPicks(projects: ["GONE", "P1", "HIDDEN"], smallWorks: nil)
+        let rows = cache.pickerRows(screen, picks: picks)
+        XCTAssertEqual(rows.filter(\.picked).map(\.job.documentId), ["P1"], "the rows never show the ids it cannot list")
+        let stored = cache.storedIds(screen, picks: picks)
+        XCTAssertEqual(stored, ["GONE", "P1", "HIDDEN"], "myWorksIds: the whole stored list")
+        // The person ticks P2 and unticks P1; Save writes the list with GONE and HIDDEN still on it.
+        let ids = MyWorksPickerGate.ids(base: stored, toggles: [(jobId: "P2", picked: true), (jobId: "P1", picked: false)])
+        XCTAssertEqual(ids, ["GONE", "HIDDEN", "P2"])
+        let write = try XCTUnwrap(CanonicalBusinessEngine.myWorksPicksWriteFields(kind: .projects, ids: ids))
+        XCTAssertEqual(write["projects"] as? [String], ["GONE", "HIDDEN", "P2"])
+    }
+
+    func testNeverSavedListStartsFromThePrefill() throws {
+        let projects = [try job("P1", ["managerUserIds": ["U-M"]]), try job("P2", ["managerUserIds": ["X"]])]
+        XCTAssertEqual(WorksListScreenCache().storedIds(inputs(projects: projects), picks: .neverSaved), ["P1"])
+    }
+
+    func testServerAnswerReplaysTicksOnTheWholeStoredList() {
+        // Opened on the pre-fill; the server then answers with a list holding a deleted job's id. The person's ticks are
+        // replayed on that whole list, so the deleted id is kept.
+        let server = ["GONE", "P2"]
+        let replayed = MyWorksPickerGate.ids(base: server, toggles: [(jobId: "P1", picked: true), (jobId: "P2", picked: false)])
+        XCTAssertEqual(replayed, ["GONE", "P1"])
     }
 
     // MARK: Listener answers

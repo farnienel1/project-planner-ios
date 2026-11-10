@@ -36,6 +36,8 @@ struct ProjectsView: View {
     @State private var showingMyWorksPicker = false
     /// 1.33.1: `myWorksPickerRows` taken once when the ⚙ opens; the sheet keeps this snapshot.
     @State private var myWorksPickerRows: [MyWorksPickerRow] = []
+    /// `myWorksIds` taken with the rows: the whole stored list, so Save keeps ids of hidden or deleted jobs.
+    @State private var myWorksPickerStoredIds: [String] = []
     /// 1.33.1 (owner report: My list took ~20 s): the §21 answers for this screen, asked again only when an input
     /// changes, never once per tile, chip and render (`WorksListScreenCache`).
     @State private var listCache = WorksListScreenCache()
@@ -93,6 +95,7 @@ struct ProjectsView: View {
         MyWorksPickerSheet(
             kind: .projects,
             rows: myWorksPickerRows,
+            storedIds: myWorksPickerStoredIds,
             accent: WorksDashboardListStyle.projects.accent,
             ready: myWorks.pickerReady,
             startsFromPrefill: myWorks.pickerStartsFromPrefill
@@ -110,6 +113,7 @@ struct ProjectsView: View {
     /// Opens the ⚙ with a snapshot of `myWorksPickerRows` (asked once, not on every render while it is open).
     private func openMyWorksPicker() {
         myWorksPickerRows = listCache.pickerRows(listInputs, picks: myWorks.picks)
+        myWorksPickerStoredIds = listCache.storedIds(listInputs, picks: myWorks.picks)
         showingMyWorksPicker = true
     }
 
@@ -118,6 +122,7 @@ struct ProjectsView: View {
     private func myWorksServerAnswered(_ answered: Bool) {
         guard answered, showingMyWorksPicker else { return }
         myWorksPickerRows = listCache.pickerRows(listInputs, picks: myWorks.picks)
+        myWorksPickerStoredIds = listCache.storedIds(listInputs, picks: myWorks.picks)
     }
 
     /// After a save: Pending sync while the server has not confirmed it, or the refusal (the stored list comes back).

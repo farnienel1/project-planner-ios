@@ -85,6 +85,9 @@ struct MyWorksPickerSheet: View {
     /// update while the sheet is open never recomputes the rows). #210 review fix 2: the list screen takes them once
     /// more when the server's first answer arrives after the ⚙ opened; the person's ticks are then replayed on it.
     let rows: [MyWorksPickerRow]
+    /// `myWorksIds`: the whole stored list for this kind, ids of deleted or hidden jobs included (§21: they stay
+    /// stored; guardrail 3). The ticks start from this, never from the visible ticked rows, so Save keeps them.
+    let storedIds: [String]
     let accent: Color
     /// #210 review fix 2: false until the picks are known (server answer or cached copy) or the wait is over
     /// (`MyWorksPicksModel.pickerReady`). Save waits for it; Cancel never does.
@@ -231,16 +234,19 @@ struct MyWorksPickerSheet: View {
             .onAppear {
                 guard !started else { return }
                 started = true
-                ids = rows.filter(\.picked).map { $0.job.documentId }
+                ids = MyWorksPickerGate.ids(base: storedIds, toggles: [])
                 counts = WorksListStatusCounts.from(jobs)
                 membership = MyWorksPickerFilter.tabMembership(jobs)
             }
-            .onChange(of: rows) { _, newRows in
-                // The server's first answer arrived after the ⚙ opened: tick what the server holds, then the
-                // person's own ticks on top, so Save never writes the pre-fill over a list saved elsewhere.
+            .onChange(of: storedIds) { _, newStoredIds in
+                // The server's first answer arrived after the ⚙ opened: start from the whole list the server holds
+                // (hidden and deleted jobs' ids included), then the person's own ticks on top, so Save never writes
+                // the pre-fill over a list saved elsewhere and never drops ids it does not show.
                 guard started else { return }
-                let base = newRows.filter(\.picked).map { $0.job.documentId }
-                ids = MyWorksPickerGate.ids(base: base, toggles: toggles)
+                ids = MyWorksPickerGate.ids(base: newStoredIds, toggles: toggles)
+            }
+            .onChange(of: rows) { _, newRows in
+                guard started else { return }
                 let newJobs = newRows.map(\.job)
                 counts = WorksListStatusCounts.from(newJobs)
                 membership = MyWorksPickerFilter.tabMembership(newJobs)
