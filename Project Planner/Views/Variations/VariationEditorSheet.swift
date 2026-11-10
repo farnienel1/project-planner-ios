@@ -1621,7 +1621,7 @@ struct VariationEditorSheet: View {
         let user = userStore.displayUser
         let uid = user?.id ?? firebaseBackend.currentUser?.uid ?? ""
         let name = (user?.fullName.isEmpty == false ? user?.fullName : user?.email) ?? "Unknown"
-        let parentType: VariationParentType = project.jobType == .smallWorks ? .smallWork : .project
+        let parentType: VariationParentType = project.isSmallWorksDocument ? .smallWork : .project
         let now = Date()
         let baseline = persistedVariation ?? existing
         let creating = baseline == nil
@@ -1679,7 +1679,7 @@ struct VariationEditorSheet: View {
                 await notificationService.notifyVariationAdded(
                     parentId: project.id,
                     parentName: variation.parentName,
-                    isSmallWorks: project.jobType == .smallWorks,
+                    isSmallWorks: project.isSmallWorksDocument,
                     createdByUserId: uid,
                     jobManagerIds: project.managerIds,
                     variationId: variation.id

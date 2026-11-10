@@ -452,13 +452,20 @@ class NotificationService: ObservableObject {
         bookedBy: String,
         recipients: [BookedUserRecipient],
         projectId: UUID? = nil,
-        catalogue: String? = nil
+        catalogue: String? = nil,
+        organizationId expectedOrganizationId: String? = nil
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
               let userStore,
               let operativeStore else { return }
         guard !recipients.isEmpty else { return }
+        // 1.33.1: the bookings were saved in `expectedOrganizationId`. If another organisation is open now its roster
+        // cannot name these people, so nothing is written there.
+        if BookingStore.organizationChanged(captured: expectedOrganizationId, open: organizationId) {
+            print("🔥🔥🔥 DEBUG: Booking notices skipped: the organisation changed since the save")
+            return
+        }
         
         if userStore.organizationUsers.isEmpty {
             await userStore.loadOrganizationUsers()

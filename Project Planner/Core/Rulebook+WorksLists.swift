@@ -55,7 +55,8 @@ extension Project {
     func worksListJSON(index: Int) -> [String: Any] {
         var row: [String: Any] = jobAccessFields
         row["id"] = documentId
-        row["collection"] = jobType == .smallWorks ? "smallWorks" : "projects"
+        // The collection the document was read from decides the kind (`jobKind`), never `jobType`.
+        row["collection"] = sourceCollection.rawValue
         row["isLive"] = isLive
         row["startDayKey"] = OrganizationRulebookContext.dayKey(startDate)
         row["endDayKey"] = OrganizationRulebookContext.dayKey(endDate)
@@ -341,6 +342,27 @@ extension CanonicalBusinessEngine {
                   index >= 0, index < jobs.count else { return nil }
             return (jobs[index], row["picked"] as? Bool ?? false)
         }
+    }
+
+    /// `myWorksIds(picks, jobs, viewer, context, kind)`: the whole stored list for `kind` — the saved ids, else the
+    /// pre-fill (`myWorksDefaultIds`) — including ids of jobs that were deleted or are hidden from the viewer (§21: they
+    /// "stay stored"). The ⚙ starts from this, never from the visible ticked rows, so Save keeps those ids. When the
+    /// script does not answer: the saved list as stored (never drops it), else empty.
+    @MainActor static func myWorksIds(
+        _ jobs: [Project],
+        picks: MyWorksPicks,
+        viewer: JobAccessViewer?,
+        context: RulebookWorksListContext,
+        kind: JobKind
+    ) -> [String] {
+        let saved = kind == .smallWorks ? picks.smallWorks : picks.projects
+        guard let viewer else { return [] }
+        let rows = jobs.enumerated().map { $0.element.worksListJSON(index: $0.offset) }
+        guard let answer = callJSON(
+            "myWorksIds",
+            arguments: [picks.json, rows, viewer.json, context.json, kind.rawValue]
+        ) as? [Any] else { return saved ?? [] }
+        return answer.compactMap { $0 as? String }
     }
 
     /// `myWorksPicksAfterToggle(current, jobId, picked)`: the list after ticking or unticking one job. `current` when

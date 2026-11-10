@@ -71,13 +71,39 @@ struct PendingSyncBadge: View {
     }
 }
 
-/// Shows `PendingSyncBadge` while the outbox holds a change for `entityId` (a booking UUID string).
+/// Shows `PendingSyncBadge` while the outbox holds a change for `entityId` (a booking UUID string). 1.33.1 review
+/// item 3: given a booking's `collection` and stored `documentKey`, also while Firestore holds a write to it whose
+/// confirmation wait timed out (`SDKPendingWrites`, `BookingPendingSync`).
 struct PendingSyncIndicator: View {
     let entityId: String
+    var collection: String? = nil
+    var documentKey: String? = nil
     @ObservedObject private var outbox = OfflineOutboxStore.shared
+    @ObservedObject private var sdkPending = SDKPendingWrites.shared
+
+    init(entityId: String, collection: String? = nil, documentKey: String? = nil) {
+        self.entityId = entityId
+        self.collection = collection
+        self.documentKey = documentKey
+    }
+
+    /// A labour booking row.
+    init(booking: Booking) {
+        self.init(entityId: booking.id.uuidString, collection: "bookings", documentKey: booking.documentKey)
+    }
+
+    /// An annual leave row (1.33.1): queued offline, or held by Firestore after its short wait (`LeaveWriteAck`).
+    init(leave: HolidayBooking) {
+        self.init(entityId: leave.documentId, collection: LeaveWriteAck.collection, documentKey: leave.documentId)
+    }
+
+    /// A manager schedule booking row.
+    init(managerBooking: ManagerSiteBooking) {
+        self.init(entityId: managerBooking.id.uuidString, collection: "managerSiteBookings", documentKey: managerBooking.documentKey)
+    }
 
     var body: some View {
-        if outbox.hasPendingSync(entityId: entityId) {
+        if BookingPendingSync.isPending(entityId: entityId, collection: collection, documentKey: documentKey) {
             PendingSyncBadge()
         }
     }
