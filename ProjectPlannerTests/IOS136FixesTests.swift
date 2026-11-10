@@ -369,4 +369,98 @@ final class IOS136FixesTests: XCTestCase {
         let rows = collection.entries(userIds: ["TEST-U1", "test-old"], operativeIds: [rowId.uuidString.lowercased()])
         XCTAssertEqual(rows.map(\.dayRate), [201, 202, 203])
     }
+
+    // MARK: 1c. Pending sync then a late confirmation (#209 review, merge with 1.33.1)
+
+    /// A short session: its waits are `afterTimeoutWaitSeconds` (1 s).
+    private func shortWaitSession() -> BookingWriteSession {
+        let session = BookingWriteSession(organizationId: "TEST-ORG")
+        session.noteTimeout()
+        return session
+    }
+
+    private let reopenPath = "organizations/TEST-ORG/bookings/BOOKING-1"
+
+    /// Failure before: an edit whose confirmation wait timed out came back Pending sync, and the reopen notice was
+    /// never sent, although Firestore delivered the edit a moment later. Now it is sent when the server confirms.
+    func testAPendingEditSendsItsReopenNoticeWhenTheServerConfirmsLate() async throws {
+        SDKPendingWrites.shared.removeAll()
+        defer { SDKPendingWrites.shared.removeAll() }
+        let session = shortWaitSession()
+        var sent = 0
+        do {
+            try await FirestoreWriteAck.run(timeoutSeconds: session.ackSeconds, pendingKey: reopenPath) {
+                try await Task.sleep(nanoseconds: 1_800_000_000)
+            }
+            XCTFail("the wait must time out first")
+        } catch {
+            XCTAssertTrue(FirestoreWriteAck.isPendingInSDK(error))
+        }
+        SDKPendingWrites.shared.whenConfirmed(reopenPath) { sent += 1 }
+        XCTAssertEqual(sent, 0, "not before the server has the edit")
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        XCTAssertEqual(sent, 1, "sent once the late confirmation arrives")
+        XCTAssertFalse(SDKPendingWrites.shared.contains(path: reopenPath))
+    }
+
+    /// A pending edit the server refuses later never tells anyone.
+    func testAPendingEditRefusedLaterSendsNoReopenNotice() async throws {
+        SDKPendingWrites.shared.removeAll()
+        defer { SDKPendingWrites.shared.removeAll() }
+        OfflineOutboxStore.shared.lastRefusalMessage = nil
+        let session = shortWaitSession()
+        var sent = 0
+        do {
+            try await FirestoreWriteAck.run(timeoutSeconds: session.ackSeconds, pendingKey: reopenPath) {
+                try await Task.sleep(nanoseconds: 1_800_000_000)
+                throw NSError(domain: "FIRFirestoreErrorDomain", code: 7, userInfo: [NSLocalizedDescriptionKey: "Missing or insufficient permissions."])
+            }
+        } catch {
+            XCTAssertTrue(FirestoreWriteAck.isPendingInSDK(error))
+        }
+        SDKPendingWrites.shared.whenConfirmed(reopenPath) { sent += 1 }
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        XCTAssertEqual(sent, 0, "a refused change is never announced")
+    }
+
+    /// The confirmation landed before the action was held (the caller resumed late): it still runs, once.
+    func testAConfirmationThatArrivedFirstStillReleasesTheNotice() {
+        SDKPendingWrites.shared.removeAll()
+        defer { SDKPendingWrites.shared.removeAll() }
+        var sent = 0
+        SDKPendingWrites.shared.mark(reopenPath)
+        SDKPendingWrites.shared.settle(reopenPath, error: nil)
+        SDKPendingWrites.shared.whenConfirmed(reopenPath) { sent += 1 }
+        XCTAssertEqual(sent, 1)
+        SDKPendingWrites.shared.whenConfirmed(reopenPath) { sent += 1 }
+        XCTAssertEqual(sent, 1, "one confirmation releases one notice")
+    }
+
+    /// The labour store holds the notice for exactly the edits Firestore holds, and the manager schedule store does too.
+    func testBothStoresHoldTheReopenNoticeForAPendingEdit() throws {
+        let store = try source("Project Planner/Core/BookingStore.swift")
+        XCTAssertTrue(store.contains("Self.holdReopenNoticesUntilConfirmed(writes, run: run, organizationId: organizationId)"))
+        XCTAssertTrue(store.contains("run.sdkPendingIds.insert(item.booking.id)"))
+        let manager = try source("Project Planner/Core/ManagerScheduleStore.swift")
+        XCTAssertTrue(manager.contains("SDKPendingWrites.shared.whenConfirmed("))
+    }
+
+    func testOnlyEditsFirestoreHoldsGetAHeldNotice() {
+        SDKPendingWrites.shared.removeAll()
+        defer { SDKPendingWrites.shared.removeAll() }
+        let synced = LogicFixtures.booking(on: Date(), slot: .customHours, start: "07:30", end: "16:00")
+        var edited = synced
+        edited.workEndTime = "18:00"
+        let create = LogicFixtures.booking(on: Date())
+        var run = BookingStore.WriteRun()
+        run.sdkPendingIds = [edited.id]
+        let writes = [
+            BookingStore.BookingWrite(booking: edited, changedFields: ["workEndTime"], previous: synced),
+            BookingStore.BookingWrite(booking: create, changedFields: nil),
+        ]
+        let path = SDKPendingWrites.key(organizationId: "TEST-ORG", collection: "bookings", documentId: edited.documentKey)
+        SDKPendingWrites.shared.mark(path)
+        BookingStore.holdReopenNoticesUntilConfirmed(writes, run: run, organizationId: "TEST-ORG")
+        XCTAssertTrue(SDKPendingWrites.shared.contains(path: path))
+    }
 }

@@ -347,6 +347,16 @@ class ManagerScheduleStore: ObservableObject {
             if FirestoreWriteAck.isPendingInSDK(error) {
                 // 1.33.1: the server did not confirm in time. Firestore holds the write and delivers it (later writes to
                 // this booking go after it): Pending sync, and never a second copy in the app outbox.
+                // RULEBOOK 1.33.0 §25 reopen: told when the server confirms the edit (also late), never if it refuses.
+                if let previous, changedFields != nil {
+                    let after = normalizedBooking
+                    SDKPendingWrites.shared.whenConfirmed(
+                        SDKPendingWrites.key(organizationId: orgId, collection: "managerSiteBookings", documentId: after.documentKey)
+                    ) {
+                        OfflineOutboxStore.shared.clearManagerSiteReopenBaseline(bookingId: after.id)
+                        OvertimeReopenNotice.managerSite(before: previous, after: after, organizationId: orgId)
+                    }
+                }
                 errorMessage = BookingStore.pendingSyncMessage
                 return .queued(BookingStore.pendingSyncMessage)
             } else if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache?.isOnline ?? true) {

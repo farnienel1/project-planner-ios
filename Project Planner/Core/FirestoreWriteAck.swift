@@ -194,9 +194,63 @@ final class SDKPendingWrites: ObservableObject {
         "organizations/\(organizationId)/\(collection)/\(documentId)".lowercased()
     }
 
+    // 1.36 (#209 review): actions held for a timed-out write — run when the server confirms it later, dropped when it
+    // refuses it (the leave pattern, `LeaveWriteAck` / `DeferredLeaveNoticeQueue`). Writes to one document settle in
+    // the order they were marked (Firestore delivers them in order), so each mark gets an ordinal per document.
+    private var markedOrdinal: [String: Int] = [:]
+    private var settledOrdinal: [String: Int] = [:]
+    private var held: [String: [Int: @MainActor () -> Void]] = [:]
+    /// Outcomes (true: confirmed) of writes that settled before anything was held for them.
+    private var unclaimed: [String: [Int: Bool]] = [:]
+    /// The last outcome of a document whose writes have all settled, for a `whenConfirmed` that arrives just after it.
+    private var lastOutcome: [String: Bool] = [:]
+
     func mark(_ path: String) {
-        counts[path.lowercased(), default: 0] += 1
+        let key = path.lowercased()
+        counts[key, default: 0] += 1
+        markedOrdinal[key, default: 0] += 1
+        lastOutcome.removeValue(forKey: key)
         ScheduleChangeNotifier.postBookingStoreDidChange()
+    }
+
+    /// Runs `action` once the server confirms the most recent timed-out write to `path` (at once if it already has),
+    /// and never if the server refuses it. Call it right after that write's wait timed out (`FirestoreWriteAck.TimedOut`).
+    /// Used for the PAYE overtime reopen notice of a booking edit reported Pending sync (RULEBOOK 1.33.0 §25): the
+    /// person is told once the change is on the server, never for a change the server refused.
+    func whenConfirmed(_ path: String, _ action: @escaping @MainActor () -> Void) {
+        let key = path.lowercased()
+        if (counts[key] ?? 0) > 0, let ordinal = markedOrdinal[key] {
+            if let confirmed = unclaimed[key]?.removeValue(forKey: ordinal) {
+                if confirmed { action() }
+            } else {
+                held[key, default: [:]][ordinal] = action
+            }
+        } else if let confirmed = lastOutcome.removeValue(forKey: key) {
+            if confirmed { action() }
+        } else {
+            print("🔥🔥🔥 DEBUG: [SDKPendingWrites] No timed-out write to \(path); held action dropped")
+        }
+    }
+
+    /// Runs (confirmed) or drops (refused) what was held for the write that just settled.
+    private func releaseHeld(_ key: String, confirmed: Bool) {
+        let ordinal = settledOrdinal[key, default: 0] + 1
+        settledOrdinal[key] = ordinal
+        if let action = held[key]?.removeValue(forKey: ordinal) {
+            if confirmed { action() }
+        } else {
+            unclaimed[key, default: [:]][ordinal] = confirmed
+        }
+        if (counts[key] ?? 0) == 0 {
+            // Every write to this document has settled: keep only the last outcome for a late `whenConfirmed`.
+            if let latest = markedOrdinal[key], let outcome = unclaimed[key]?[latest] {
+                lastOutcome[key] = outcome
+            }
+            markedOrdinal.removeValue(forKey: key)
+            settledOrdinal.removeValue(forKey: key)
+            held.removeValue(forKey: key)
+            unclaimed.removeValue(forKey: key)
+        }
     }
 
     /// The write finished after its wait timed out. Refused by the server: never sent again. 1.33.1 review item 4: the
@@ -206,6 +260,9 @@ final class SDKPendingWrites: ObservableObject {
         let key = path.lowercased()
         if let count = counts[key] {
             if count <= 1 { counts.removeValue(forKey: key) } else { counts[key] = count - 1 }
+        }
+        if markedOrdinal[key] != nil {
+            releaseHeld(key, confirmed: error == nil)
         }
         if let error {
             print("🔥🔥🔥 DEBUG: [SDKPendingWrites] Write to \(path) was refused after its wait timed out (not resent): \(error.localizedDescription)")
@@ -244,6 +301,11 @@ final class SDKPendingWrites: ObservableObject {
     /// Tests only.
     func removeAll() {
         counts.removeAll()
+        markedOrdinal.removeAll()
+        settledOrdinal.removeAll()
+        held.removeAll()
+        unclaimed.removeAll()
+        lastOutcome.removeAll()
     }
 }
 
