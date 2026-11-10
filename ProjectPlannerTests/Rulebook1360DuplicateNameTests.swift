@@ -100,4 +100,44 @@ final class Rulebook1360DuplicateNameTests: XCTestCase {
         XCTAssertEqual(CanonicalBusinessEngine.duplicateNameConfirmLabel, "Add anyway")
         XCTAssertEqual(CanonicalBusinessEngine.duplicateNameCancelLabel, "Cancel")
     }
+
+    // MARK: Owner decision 10 Nov (judgement call 4): no rules, no new user
+
+    func testScriptNotAnsweringRefusesTheSave() {
+        XCTAssertEqual(
+            DuplicateNameRulebook.decision(answer: nil, nameConfirmed: false),
+            .refuse("Couldn't check this user — try again.")
+        )
+        // Add anyway never bypasses the rules: still refused when they do not answer.
+        XCTAssertEqual(
+            DuplicateNameRulebook.decision(answer: nil, nameConfirmed: true),
+            .refuse(DuplicateNameRulebook.unavailableMessage)
+        )
+    }
+
+    func testAnswerDecidesWarnOrSave() {
+        let match = RulebookSameNamePerson(
+            id: "TEST-U-1", displayName: "TEST-Sam Smith", email: "test-sam@example.com",
+            level: "operative", active: true, segment: "active", ghost: false
+        )
+        XCTAssertEqual(DuplicateNameRulebook.decision(answer: [], nameConfirmed: false), .save)
+        XCTAssertEqual(DuplicateNameRulebook.decision(answer: [match], nameConfirmed: false), .warn([match]))
+        XCTAssertEqual(DuplicateNameRulebook.decision(answer: [match], nameConfirmed: true), .save)
+    }
+
+    /// Both Add user paths (invite and ghost) ask before they start saving, so a refusal saves nothing.
+    func testBothAddUserPathsCheckBeforeSaving() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let view = try String(
+            contentsOf: root.appendingPathComponent("Project Planner/Views/AddUserView.swift"),
+            encoding: .utf8
+        )
+        for marker in ["private func createUser() {", "private func createGhostAccount() {"] {
+            let body = try XCTUnwrap(AddUserSavedDataGuardTests.declaration(startingAt: marker, in: view), marker)
+            let check = try XCTUnwrap(body.range(of: "if stopForDuplicateName() { return }"), "\(marker) does not check")
+            let creating = try XCTUnwrap(body.range(of: "isCreating = true"), "\(marker) never saves")
+            XCTAssertLessThan(check.lowerBound, creating.lowerBound, "\(marker) must check before it starts saving")
+        }
+        XCTAssertTrue(view.contains("case .refuse(let message):"), "the refusal must stop the save with its message")
+    }
 }

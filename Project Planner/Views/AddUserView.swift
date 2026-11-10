@@ -1530,22 +1530,29 @@ struct AddUserView: View {
     }
 
     /// RULEBOOK 1.36.0 §11 `usersWithSameName(roster, { firstName, lastName }, { claimedEmails })`: true when the save
-    /// stops for the duplicate-name warning. After Add anyway the next save goes straight through (once). When the
-    /// script does not answer there is no warning (a person is identified by their email, never their name).
+    /// stops — for the duplicate-name warning, or (owner decision 10 Nov, judgement call 4) because the rules could not
+    /// run on this phone, when nothing is saved and `DuplicateNameRulebook.unavailableMessage` is shown, invite and
+    /// ghost alike. After Add anyway the next save goes through (once), still only when the rules answer.
     private func stopForDuplicateName() -> Bool {
-        if duplicateNameConfirmed {
-            duplicateNameConfirmed = false
-            return false
-        }
-        guard let matches = CanonicalBusinessEngine.usersWithSameName(
+        let nameConfirmed = duplicateNameConfirmed
+        duplicateNameConfirmed = false
+        let answer = CanonicalBusinessEngine.usersWithSameName(
             roster: DuplicateNameRulebook.roster(userStore.organizationUsers),
             firstName: firstName,
             lastName: surname,
             claimedEmails: userStore.organizationUserEmailClaims.map { Array($0) }
-        ), !matches.isEmpty else { return false }
-        duplicateNameMatches = matches
-        showingDuplicateNameWarning = true
-        return true
+        )
+        switch DuplicateNameRulebook.decision(answer: answer, nameConfirmed: nameConfirmed) {
+        case .save:
+            return false
+        case .warn(let matches):
+            duplicateNameMatches = matches
+            showingDuplicateNameWarning = true
+            return true
+        case .refuse(let message):
+            errorMessage = message
+            return true
+        }
     }
 
     /// The warning text and one line per matching person: their email, or "No app login" for a ghost.
