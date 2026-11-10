@@ -105,6 +105,26 @@ final class ScheduleLeaveMarksTests: XCTestCase {
         XCTAssertEqual(SchedulingV2CellKindBuilder.fromBooking(paidHours: 0, overtimeHours: 0, timeSlot: .customHours), .standard(hours: 0))
     }
 
+    /// Review follow-up: no leave is marked until the bank holidays have loaded (as web), so a multi-day request never
+    /// shows "AL" on a bank holiday for a moment.
+    func testNoLeaveMarksUntilBankHolidaysHaveLoaded() {
+        var asked = false
+        let before = ScheduleLeaveMarksGate.marks(bankHolidaysReady: false) {
+            asked = true
+            return ["row-a": [nil]]
+        }
+        XCTAssertTrue(before.isEmpty)
+        XCTAssertFalse(asked, "the script is not asked before the bank holidays load")
+        let after = ScheduleLeaveMarksGate.marks(bankHolidaysReady: true) { ["row-a": [nil]] }
+        XCTAssertEqual(after.keys.sorted(), ["row-a"])
+    }
+
+    func testSchedulingGridWaitsForBankHolidays() throws {
+        let text = try String(contentsOf: repoRoot.appendingPathComponent("Project Planner/Views/ProjectDetailView.swift"), encoding: .utf8)
+        XCTAssertTrue(text.contains("ScheduleLeaveMarksGate.marks(bankHolidaysReady: scheduleBankHolidaysReady)"))
+        XCTAssertTrue(text.contains("BankHolidayService.shared.ensureLoaded(region: region, referenceDate: weekStartDate)"))
+    }
+
     /// The grid asks the rulebook; the exact-id Swift match is gone.
     func testSchedulingGridUsesTheRulebookForLeave() throws {
         let text = try String(contentsOf: repoRoot.appendingPathComponent("Project Planner/Views/ProjectDetailView.swift"), encoding: .utf8)

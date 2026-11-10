@@ -82,6 +82,8 @@ struct ProjectDetailView: View {
     }
     
     @State private var selectedWeek: Date = Date()
+    /// RULEBOOK 1.37.0: leave is marked on the Scheduling grid only once the region's bank holidays have loaded.
+    @State private var scheduleBankHolidaysReady = false
     @State private var showingScheduleOperative = false
     /// When non-nil, operative schedule opens pre-filled to edit this booking (same project).
     @State private var scheduleOperativeSeedBooking: Booking? = nil
@@ -919,6 +921,18 @@ struct ProjectDetailView: View {
             SchedulingV2Legend()
                 .padding(.horizontal, 4)
         }
+        .task(id: OrganizationRulebookContext.dayKey(weekStartDate)) {
+            await loadSchedulingBankHolidays()
+        }
+    }
+
+    /// Loads the region's bank holidays for the visible week (the years around it), then lets the grid mark leave.
+    /// A failed load still finishes (the cached list, or none), as web's `loaded` does.
+    private func loadSchedulingBankHolidays() async {
+        if let region = CanonicalBusinessEngine.resolvedBankHolidayRegion(for: firebaseBackend.currentOrganization) {
+            await BankHolidayService.shared.ensureLoaded(region: region, referenceDate: weekStartDate)
+        }
+        scheduleBankHolidaysReady = true
     }
 
     // MARK: - Scheduling v2 person × day grid
@@ -1225,14 +1239,16 @@ struct ProjectDetailView: View {
             return ScheduleLeaveMarksInput.Person(key: person.id, operativeIds: operativeIds, userIds: userIds)
         }
         guard !rows.isEmpty else { return [:] }
-        let input = ScheduleLeaveMarksInput.build(
-            people: rows,
-            days: weekDays,
-            holidays: holidayStore.bookings,
-            users: userStore.organizationUsers,
-            operatives: operativeStore.allOperatives
-        )
-        return CanonicalBusinessEngine.jobScheduleLeaveMarks(input) ?? [:]
+        return ScheduleLeaveMarksGate.marks(bankHolidaysReady: scheduleBankHolidaysReady) {
+            let input = ScheduleLeaveMarksInput.build(
+                people: rows,
+                days: weekDays,
+                holidays: holidayStore.bookings,
+                users: userStore.organizationUsers,
+                operatives: operativeStore.allOperatives
+            )
+            return CanonicalBusinessEngine.jobScheduleLeaveMarks(input)
+        }
     }
 
     /// Day strip: weekday, date and a count pill per day ("–" when none). Today filled navy, weekends muted.

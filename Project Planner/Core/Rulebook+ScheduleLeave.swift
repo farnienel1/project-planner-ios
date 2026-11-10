@@ -62,6 +62,19 @@ extension CanonicalBusinessEngine {
     }
 }
 
+/// RULEBOOK 1.37.0 §21: a multi-day leave record skips the region's bank holidays, so no leave is marked on the grid
+/// until the bank-holiday list has loaded (as web) — otherwise a bank holiday, or the wrong region's, would show "AL"
+/// for a moment. Not a rule: it only decides whether to ask the script yet.
+enum ScheduleLeaveMarksGate {
+    static func marks(
+        bankHolidaysReady: Bool,
+        compute: () -> [String: [RulebookScheduleLeaveMark?]]?
+    ) -> [String: [RulebookScheduleLeaveMark?]] {
+        guard bankHolidaysReady else { return [:] }
+        return compute() ?? [:]
+    }
+}
+
 /// Maps the app's stores into `jobScheduleLeaveMarks`' input. Plain data mapping only.
 enum ScheduleLeaveMarksInput {
     /// One grid person: their row key and every id their bookings are filed under (stored spelling).
