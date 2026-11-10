@@ -1257,8 +1257,19 @@ struct WarningsDetailView: View {
     @MainActor
     private func scanWhenInputsHaveLoaded() async {
         guard userStore.canViewStaffWarnings() else { return }
-        var pause: UInt64 = 400_000_000
-        while !Task.isCancelled, !warningsService.hasCompletedLiveDetection {
+        var pause: UInt64 = WarningsFirstOpenPolicy.firstPauseNanoseconds
+        while WarningsFirstOpenPolicy.keepWaiting(
+            cancelled: Task.isCancelled,
+            hasCompletedLiveDetection: warningsService.hasCompletedLiveDetection
+        ) {
+            // 1.33.1: a booking read that failed at launch is read again, rather than leaving the screen empty until
+            // Refresh is tapped.
+            if WarningsFirstOpenPolicy.shouldReload(lastLoadFailed: bookingStore.lastLoadFailed, isLoading: bookingStore.isLoading) {
+                bookingStore.loadData()
+            }
+            if WarningsFirstOpenPolicy.shouldReload(lastLoadFailed: managerScheduleStore.lastLoadFailed, isLoading: managerScheduleStore.isLoading) {
+                managerScheduleStore.loadData(force: true)
+            }
             let readiness = currentInputsReadiness()
             loadingInputsMessage = readiness.waitingMessage
             if readiness.storeInputsReady, !isRefreshingWarnings {
@@ -1276,13 +1287,13 @@ struct WarningsDetailView: View {
                     manualUserInitiated: true
                 )
                 if published || warningsService.hasCompletedLiveDetection { break }
-                if warningsService.incompleteDataMessage != nil { break }
+                // 1.33.1: incomplete data no longer ends the loop (the banner stays until a scan of loaded data runs).
                 // Settings or payment runs not read yet: say so, then try again a little later.
                 loadingInputsMessage = currentInputsReadiness().waitingMessage
                     ?? "Waiting for organisation settings and payment runs."
             }
             try? await Task.sleep(nanoseconds: pause)
-            pause = min(pause * 2, 5_000_000_000)
+            pause = WarningsFirstOpenPolicy.nextPause(after: pause)
         }
         loadingInputsMessage = nil
     }

@@ -31,34 +31,34 @@ struct SmallWorksView: View {
     /// The My list chosen (true) or a status chip chosen (false); nil is the rulebook's default (`defaultWorksListTab`).
     @State private var myListChosen: Bool? = nil
     @State private var showingMyWorksPicker = false
+    /// 1.33.1: `myWorksPickerRows` taken once when the ⚙ opens; the sheet keeps this snapshot.
+    @State private var myWorksPickerRows: [MyWorksPickerRow] = []
+    /// `myWorksIds` taken with the rows: the whole stored list, so Save keeps ids of hidden or deleted jobs.
+    @State private var myWorksPickerStoredIds: [String] = []
+    /// 1.33.1 (owner report: My list took ~20 s): the §21 answers for this screen, asked again only when an input
+    /// changes, never once per tile, chip and render (`WorksListScreenCache`).
+    @State private var listCache = WorksListScreenCache()
 
     private var listCounts: WorksListStatusCounts {
-        WorksListStatusCounts.from(smallWorksBeforeStatusFilter)
+        listAnswers.counts
     }
 
     // MARK: My list (RULEBOOK 1.33.0 §21)
 
     /// `hasMyWorksList`: admins and managers get the My list; operatives never.
     private var hasMyList: Bool {
-        CanonicalBusinessEngine.hasMyWorksList(userStore.displayJobAccessViewer)
+        listAnswers.hasMyList
     }
 
     /// The My list is shown: chosen, or the first and default filter (`defaultWorksListTab` = `mine`).
     private var showsMyList: Bool {
         guard hasMyList else { return false }
-        return myListChosen ?? (CanonicalBusinessEngine.defaultWorksListTab(userStore.displayJobAccessViewer) == "mine")
+        return myListChosen ?? listAnswers.myListIsDefault
     }
 
     /// `myWorksList`: the saved picks, else the jobs they manage (until their first save); every status.
     private var myListJobs: [Project] {
-        guard hasMyList, myWorks.loaded else { return [] }
-        return CanonicalBusinessEngine.myWorksList(
-            projectStore.projects + projectStore.smallWorks,
-            picks: myWorks.picks,
-            viewer: userStore.displayJobAccessViewer,
-            context: worksListContext,
-            kind: .smallWorks
-        )
+        listCache.myList(listInputs, picks: myWorks.picks, loaded: myWorks.listKnown)
     }
 
     /// The status filter as the tiles and chips see it: none while the My list is shown; choosing one leaves the My list.
@@ -89,20 +89,54 @@ struct SmallWorksView: View {
     private var myWorksPickerSheet: some View {
         MyWorksPickerSheet(
             kind: .smallWorks,
-            rows: CanonicalBusinessEngine.myWorksPickerRows(
-                projectStore.projects + projectStore.smallWorks,
-                picks: myWorks.picks,
-                viewer: userStore.displayJobAccessViewer,
-                context: worksListContext,
-                kind: .smallWorks
-            ),
-            accent: WorksDashboardListStyle.smallWorks.accent
+            rows: myWorksPickerRows,
+            storedIds: myWorksPickerStoredIds,
+            accent: WorksDashboardListStyle.smallWorks.accent,
+            ready: myWorks.pickerReady,
+            startsFromPrefill: myWorks.pickerStartsFromPrefill
         ) { ids in
             guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
                   let uid = firebaseBackend.currentUser?.uid else {
                 throw NSError(domain: "MyWorks", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in to an organisation."])
             }
-            try await firebaseBackend.saveMyWorksPicks(organizationId: orgId, uid: uid, kind: .smallWorks, ids: ids)
+            // 1.33.1: hands the list to Firestore and returns; the server's answer is awaited in the background
+            // (bounded), so the sheet closes at once and never waits on "Saving…".
+            try myWorks.save(backend: firebaseBackend, organizationId: orgId, uid: uid, kind: .smallWorks, ids: ids)
+        }
+    }
+
+    /// Opens the ⚙ with a snapshot of `myWorksPickerRows` (asked once, not on every render while it is open).
+    private func openMyWorksPicker() {
+        myWorksPickerRows = listCache.pickerRows(listInputs, picks: myWorks.picks)
+        myWorksPickerStoredIds = listCache.storedIds(listInputs, picks: myWorks.picks)
+        showingMyWorksPicker = true
+    }
+
+    /// #210 review fix 2: the server's first answer arrived while the ⚙ is open — take its rows once more (the sheet
+    /// replays the person's ticks on them), so Save never writes the pre-fill over a list saved on another device.
+    private func myWorksServerAnswered(_ answered: Bool) {
+        guard answered, showingMyWorksPicker else { return }
+        myWorksPickerRows = listCache.pickerRows(listInputs, picks: myWorks.picks)
+        myWorksPickerStoredIds = listCache.storedIds(listInputs, picks: myWorks.picks)
+    }
+
+    /// After a save: Pending sync while the server has not confirmed it, or the refusal (the stored list comes back).
+    @ViewBuilder
+    private var myListSaveNote: some View {
+        if showsMyList, let message = myWorks.saveError {
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("smallWorks.myList.saveError")
+        } else if showsMyList, myWorks.pendingSync {
+            Text(MyWorksPicksModel.pendingSyncMessage)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("smallWorks.myList.pendingSync")
         }
     }
 
@@ -121,7 +155,7 @@ struct SmallWorksView: View {
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
             Button(CanonicalBusinessEngine.myWorksEmptyActionLabel(.smallWorks)) {
-                showingMyWorksPicker = true
+                openMyWorksPicker()
             }
             .accessibilityIdentifier("smallWorks.myList.choose")
             .buttonStyle(.borderedProminent)
@@ -149,7 +183,7 @@ struct SmallWorksView: View {
             )
             if showsMyList {
                 Button {
-                    showingMyWorksPicker = true
+                    openMyWorksPicker()
                 } label: {
                     Image(systemName: "gearshape")
                         .font(.subheadline.weight(.semibold))
@@ -240,6 +274,12 @@ struct SmallWorksView: View {
                 refreshMyWorksListener()
             }
             .onChange(of: hasMyList) { _, _ in refreshMyWorksListener() }
+            // 1.33.1: also when the signed-in uid arrives after the screen opened (the listener never started then).
+            .onChange(of: MyWorksPicksModel.listenKey(
+                organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId,
+                uid: firebaseBackend.currentUser?.uid,
+                hasMyList: hasMyList
+            )) { _, _ in refreshMyWorksListener() }
             .onReceive(NotificationCenter.default.publisher(for: .pushWorkCatalogueDetail)) { note in
                 let isSmallWorks = note.userInfo?["isSmallWorks"] as? Bool ?? false
                 guard isSmallWorks else { return }
@@ -261,6 +301,9 @@ struct SmallWorksView: View {
             }
             .sheet(isPresented: $showingMyWorksPicker) {
                 myWorksPickerSheet
+            }
+            .onChange(of: myWorks.confirmedByServer) { _, answered in
+                myWorksServerAnswered(answered)
             }
             .sheet(isPresented: $showingCreateSmallWorks) {
                 CreateSmallWorksView()
@@ -310,7 +353,10 @@ struct SmallWorksView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         smallWorksNavyHeader
-                        smallWorksSheetContent
+                        VStack(alignment: .leading, spacing: 0) {
+                            myListSaveNote
+                            smallWorksSheetContent
+                        }
                             // Launch checklist 1.20: tighter gap under the header (web PR #286, 34px → 16px).
                             .padding(.top, 10)
                             .padding(.bottom, 24)
@@ -387,7 +433,7 @@ struct SmallWorksView: View {
             ProgressView("Finding jobs assigned to you...")
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 28)
-        } else if showsMyList && !myWorks.loaded && !smallWorksBeforeStatusFilter.isEmpty {
+        } else if showsMyList && !myWorks.listKnown && !smallWorksBeforeStatusFilter.isEmpty {
             myListLoadingState
         } else if showsMyList && filteredSmallWorks.isEmpty && !smallWorksBeforeStatusFilter.isEmpty {
             myListEmptyState
@@ -581,22 +627,30 @@ struct SmallWorksView: View {
     /// the kind, inactive included, once by id) and `visibleJobs(..., viewer, context)` (by account id and email,
     /// never by name; an operative's jobs are their bookings, tasks and deadlines). No Swift visibility rule.
     private var smallWorksBeforeStatusFilter: [Project] {
-        let members = CanonicalBusinessEngine.worksListMembership(projectStore.projects + projectStore.smallWorks, kind: .smallWorks)
-        return CanonicalBusinessEngine.visibleJobs(members, viewer: userStore.displayJobAccessViewer, context: worksListContext)
+        listAnswers.visible
     }
 
-    /// The §21 context from the loaded stores (deadline jobs by stored id).
-    private var worksListContext: RulebookWorksListContext {
-        let deadlineIds = (projectStore.projects + projectStore.smallWorks)
+    /// What this screen's §21 answers depend on (the loaded stores; deadline jobs by stored id).
+    private var listInputs: WorksListScreenInputs {
+        let deadlineIds: [String] = deadlineAssignedProjectIds.isEmpty ? [] : (projectStore.projects + projectStore.smallWorks)
             .filter { deadlineAssignedProjectIds.contains($0.id) }
             .map(\.documentId)
-        return WorksListContextBuilder.context(
+        return WorksListScreenInputs(
+            kind: .smallWorks,
+            projects: projectStore.projects,
+            smallWorks: projectStore.smallWorks,
+            viewer: userStore.displayJobAccessViewer,
             operatives: operativeStore.allOperatives,
             bookings: bookingStore.bookings,
             managerSiteBookings: managerScheduleStore.managerSiteBookings,
             tasks: taskStore.tasks,
             deadlineJobIds: deadlineIds
         )
+    }
+
+    /// `worksListMembership` + `visibleJobs`, `worksTabCounts`, `hasMyWorksList`, `defaultWorksListTab` — cached.
+    private var listAnswers: WorksListScreenCache.Answers {
+        listCache.answers(listInputs)
     }
 
     private func refreshDeadlineAssignedProjectIds() async {
@@ -633,7 +687,7 @@ struct SmallWorksView: View {
         
         if let status = selectedStatus {
             // RULEBOOK 1.21.0 §21 `worksInTab`: inactive jobs are under Completed; All keeps every job.
-            works = WorksListStatusCounts.jobs(works, chip: status)
+            works = listCache.jobs(listInputs, chip: status)
         }
         
         return works

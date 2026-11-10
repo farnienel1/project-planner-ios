@@ -10,8 +10,8 @@ enum WorkAccess {
 
         func includes(_ project: Project) -> Bool {
             switch self {
-            case .projects: return project.jobType != .smallWorks
-            case .smallWorks: return project.jobType == .smallWorks
+            case .projects: return !project.isSmallWorksDocument
+            case .smallWorks: return project.isSmallWorksDocument
             case .all: return true
             }
         }

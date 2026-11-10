@@ -1736,7 +1736,7 @@ struct ProjectCardFromStore: View {
             
             HStack(spacing: 16) {
                 HStack(spacing: 4) {
-                    Image(systemName: project.jobType == .smallWorks ? "hammer" : "wrench")
+                    Image(systemName: project.isSmallWorksDocument ? "hammer" : "wrench")
                         .font(.caption)
                         .foregroundColor(Color.theme.primary(for: appSettings.settings.colorScheme))
                     Text(jobTypeDisplayText)
