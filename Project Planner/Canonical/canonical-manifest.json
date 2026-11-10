@@ -1,7 +1,7 @@
 {
   "rulebookVersion": "1.37.0",
-  "rulebookSha256": "91d28fbb613a97774e8e3bb63ddb5dd82670f949a889af94a0948fa4e5db0d37",
-  "bundleSha256": "8989071a9ac4887b4c897e7afc2142db7a62ee648e9d29fa84680ae74f9ff78a",
+  "rulebookSha256": "75b3a0ddbc4b3ea0257f91391af63a9aef507e56456171886726625f84373a42",
+  "bundleSha256": "77b911f3289b7bd146b09d8bed54ad33f86b26e484ade29fa40c4b0388f2fbe3",
   "crossPlatformContractSha256": "59d6bc6123f250e1f57599240eb3190ab48f5cd2532f8281a99360d9e187d86b",
   "exports": [
     "ACCOUNT_DELETE_WITH_COMPANY_MESSAGE",
@@ -69,6 +69,7 @@
     "DEVICE_PUSH_NOTIFICATION_TYPES",
     "DUPLICATE_NAME_CANCEL_LABEL",
     "DUPLICATE_NAME_CONFIRM_LABEL",
+    "DUPLICATE_NAME_NO_EMAIL_LABEL",
     "DUPLICATE_NAME_WARNING_MESSAGE",
     "DUPLICATE_NAME_WARNING_TITLE",
     "EDIT_OF_MISSING_DOCUMENT_MESSAGE",
@@ -1264,6 +1265,7 @@
     "roundPennies",
     "rulebookStamp",
     "rulebookVersionLabel",
+    "sameNamePersonContactLabel",
     "scheduleOptionsWriteFields",
     "screenMustListen",
     "securitySwitchOn",
