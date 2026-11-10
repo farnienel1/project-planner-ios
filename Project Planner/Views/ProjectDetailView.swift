@@ -928,11 +928,16 @@ struct ProjectDetailView: View {
 
     /// Loads the region's bank holidays for the visible week (the years around it), then lets the grid mark leave.
     /// A failed load still finishes (the cached list, or none), as web's `loaded` does.
+    /// Not ready again for each new week until its load finishes, or for at most
+    /// `ScheduleLeaveMarksGate.bankHolidayWaitCapSeconds` (then the cached bank holidays are used).
     private func loadSchedulingBankHolidays() async {
-        if let region = CanonicalBusinessEngine.resolvedBankHolidayRegion(for: firebaseBackend.currentOrganization) {
-            await BankHolidayService.shared.ensureLoaded(region: region, referenceDate: weekStartDate)
+        let region = CanonicalBusinessEngine.resolvedBankHolidayRegion(for: firebaseBackend.currentOrganization)
+        let week = weekStartDate
+        await ScheduleLeaveMarksGate.waitForBankHolidays(setReady: { scheduleBankHolidaysReady = $0 }) {
+            if let region {
+                await BankHolidayService.shared.ensureLoaded(region: region, referenceDate: week)
+            }
         }
-        scheduleBankHolidaysReady = true
     }
 
     // MARK: - Scheduling v2 person × day grid

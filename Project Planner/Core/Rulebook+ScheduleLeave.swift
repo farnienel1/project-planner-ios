@@ -82,6 +82,33 @@ enum ScheduleLeaveMarksGate {
         guard bankHolidaysReady else { return [:] }
         return compute() ?? [:]
     }
+    /// The grid's own wait for the bank holidays (offline a fetch can take 20 s a year): after this the marks show
+    /// with the bank holidays already cached and are worked out again when the load finishes.
+    static let bankHolidayWaitCapSeconds: Double = 10
+
+    /// For each visible week: not ready until that week's load finishes or the cap passes, whichever is first. A week
+    /// left before then (the task is cancelled) never marks the next one ready.
+    @MainActor
+    static func waitForBankHolidays(
+        capSeconds: Double = bankHolidayWaitCapSeconds,
+        setReady: @escaping @MainActor (Bool) -> Void,
+        load: @MainActor () async -> Void
+    ) async {
+        setReady(false)
+        let cap = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, capSeconds) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            setReady(true)
+        }
+        await withTaskCancellationHandler {
+            await load()
+        } onCancel: {
+            cap.cancel()
+        }
+        cap.cancel()
+        guard !Task.isCancelled else { return }
+        setReady(true)
+    }
 }
 
 /// Maps the app's stores into `jobScheduleLeaveMarks`' input. Plain data mapping only.

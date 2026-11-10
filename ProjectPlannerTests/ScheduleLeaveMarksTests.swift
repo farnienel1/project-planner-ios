@@ -149,7 +149,42 @@ final class ScheduleLeaveMarksTests: XCTestCase {
     func testSchedulingGridWaitsForBankHolidays() throws {
         let text = try String(contentsOf: repoRoot.appendingPathComponent("Project Planner/Views/ProjectDetailView.swift"), encoding: .utf8)
         XCTAssertTrue(text.contains("ScheduleLeaveMarksGate.marks(bankHolidaysReady: scheduleBankHolidaysReady)"))
-        XCTAssertTrue(text.contains("BankHolidayService.shared.ensureLoaded(region: region, referenceDate: weekStartDate)"))
+        XCTAssertTrue(text.contains("BankHolidayService.shared.ensureLoaded(region: region, referenceDate: week)"))
+        XCTAssertTrue(text.contains("ScheduleLeaveMarksGate.waitForBankHolidays(setReady:"))
+        XCTAssertTrue(text.contains(".task(id: OrganizationRulebookContext.dayKey(weekStartDate))"))
+    }
+
+    /// Final review (1): each new week starts not ready and is ready once its load finishes.
+    func testEachWeekWaitsForItsOwnLoad() async {
+        let log = ReadyLog()
+        await ScheduleLeaveMarksGate.waitForBankHolidays(capSeconds: 10, setReady: { log.values.append($0) }) {}
+        XCTAssertEqual(log.values, [false, true])
+    }
+
+    /// Final review (2): a slow load is capped — the marks show (with the cached bank holidays) after the cap, and
+    /// again when the load finishes.
+    func testASlowLoadIsCapped() async {
+        let log = ReadyLog()
+        await ScheduleLeaveMarksGate.waitForBankHolidays(capSeconds: 0.05, setReady: { log.values.append($0) }) {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            XCTAssertEqual(log.values, [false, true], "ready after the cap, before the load finished")
+        }
+        XCTAssertEqual(log.values, [false, true, true])
+        XCTAssertEqual(ScheduleLeaveMarksGate.bankHolidayWaitCapSeconds, 10)
+    }
+
+    /// A week left before its load finished never marks the next week ready.
+    func testALeftWeekNeverMarksReady() async {
+        let log = ReadyLog()
+        let task = Task { @MainActor in
+            await ScheduleLeaveMarksGate.waitForBankHolidays(capSeconds: 0.2, setReady: { log.values.append($0) }) {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+        task.cancel()
+        await task.value
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertFalse(log.values.contains(true), "a cancelled week never sets ready")
     }
 
     /// The grid asks the rulebook; the exact-id Swift match is gone.
@@ -164,4 +199,10 @@ final class ScheduleLeaveMarksTests: XCTestCase {
             XCTAssertTrue(support.contains("legendItem(\(label))"), "legend keeps \(label) (JOB_SCHEDULE_LEGEND)")
         }
     }
+}
+
+/// Records the ready flags a bank-holiday wait sets (main actor, so the closures may share it).
+@MainActor
+private final class ReadyLog {
+    var values: [Bool] = []
 }
