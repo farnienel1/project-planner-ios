@@ -258,10 +258,17 @@ final class SDKPendingWrites: ObservableObject {
 final class BookingWriteSession {
     /// The longest any wait of a save lasts once one wait of it has timed out.
     static let afterTimeoutWaitSeconds: Double = 1
-    /// The organisation check's server read (as `getDocumentWithServerTimeoutAndCacheFallback`).
-    static let organizationReadSeconds: Double = 8
-    /// After this long, a save's later waits are short as if one had timed out.
-    static let budgetSeconds: Double = 20
+    /// 1.33.1 (owner report: Save hung on its spinner although the booking was written): the first wait for the
+    /// server's confirmation of a booking write, and for the read before an edit. Firestore has already applied the
+    /// write on this phone and keeps it in its own queue, so after this the save returns as Pending sync and the
+    /// confirmation (or a refusal, `SDKPendingWrites.settle`) follows in the background — the My list pattern. On a
+    /// good connection the confirmation comes well inside it. Was `FirestoreWriteAck.defaultTimeoutSeconds` (15 s).
+    static let firstWaitSeconds: Double = 2
+    /// The organisation check's server read. 1.33.1: 2 s (was 8 s); a timeout still writes to this organisation.
+    static let organizationReadSeconds: Double = 2
+    /// After this long, a save's later waits are short as if one had timed out. 1.33.1: 4 s (was 20 s), so one
+    /// booking's Save is back within about 4 s however slow the server is.
+    static let budgetSeconds: Double = 4
 
     /// The organisation captured when Save was pressed.
     let organizationId: String?
@@ -285,9 +292,9 @@ final class BookingWriteSession {
     }
 
     /// The confirmation wait of the next write.
-    var ackSeconds: Double { wait(FirestoreWriteAck.defaultTimeoutSeconds) }
+    var ackSeconds: Double { wait(Self.firstWaitSeconds) }
     /// The server read before the next edit.
-    var editReadSeconds: Double { wait(FirestoreWriteAck.defaultTimeoutSeconds) }
+    var editReadSeconds: Double { wait(Self.firstWaitSeconds) }
     /// The organisation check, when it has not run yet.
     var organizationCheckSeconds: Double { wait(Self.organizationReadSeconds) }
 

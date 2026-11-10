@@ -5043,10 +5043,18 @@ class FirebaseBackend: ObservableObject {
         guard let orgId = currentOrganization?.firestoreDocumentId else { return false }
         let snapshot: DocumentSnapshot
         do {
-            snapshot = try await db.collection("organizations").document(orgId).getDocument(source: .server)
+            // 1.33.1: bounded (`WarningsFirstOpenPolicy`): an unanswered read held the first Warnings scan.
+            snapshot = try await Self.boundedServerRead(
+                db.collection("organizations").document(orgId),
+                timeoutSeconds: WarningsFirstOpenPolicy.organizationReadSeconds
+            )
         } catch {
             print("🔥🔥🔥 DEBUG: warningDetection server read failed: \(error.localizedDescription)")
-            return false
+            // The live organisation listener keeps these settings current once it has delivered them.
+            return WarningsFirstOpenPolicy.settingsUsable(
+                serverReadAnswered: false,
+                listenerLoadedThisOrganization: organizationIdsMatch(warningSettingsLoadedOrganizationId, orgId)
+            )
         }
         guard let data = snapshot.data(), var org = currentOrganization,
               organizationIdsMatch(org.firestoreDocumentId, orgId) else { return false }

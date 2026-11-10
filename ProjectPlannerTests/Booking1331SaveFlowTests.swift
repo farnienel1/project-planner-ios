@@ -193,7 +193,7 @@ final class Booking1331SaveFlowTests: XCTestCase {
         XCTAssertEqual(run.pendingCount, 1)
         XCTAssertTrue(run.refusedIds.isEmpty)
         XCTAssertTrue(OfflineOutboxStore.shared.entries.isEmpty, "Firestore already holds it: never a second copy")
-        XCTAssertEqual(waits, [FirestoreWriteAck.defaultTimeoutSeconds])
+        XCTAssertEqual(waits, [BookingWriteSession.firstWaitSeconds])
         XCTAssertEqual(
             ScheduleBookingSaveOutcome.decide(results: Array(run.results.values)),
             .pendingSync(BookingStore.pendingSyncMessage)
@@ -217,7 +217,7 @@ final class Booking1331SaveFlowTests: XCTestCase {
         XCTAssertEqual(order, writes.map { $0.booking.id }, "same order, every write handed over")
         XCTAssertEqual(
             waits,
-            [FirestoreWriteAck.defaultTimeoutSeconds, BookingStore.afterTimeoutAckSeconds, BookingStore.afterTimeoutAckSeconds]
+            [BookingWriteSession.firstWaitSeconds, BookingStore.afterTimeoutAckSeconds, BookingStore.afterTimeoutAckSeconds]
         )
         XCTAssertEqual(run.pendingCount, 3)
         XCTAssertTrue(OfflineOutboxStore.shared.entries.isEmpty)
@@ -587,7 +587,7 @@ final class Booking1331SaveFlowTests: XCTestCase {
         var clock = Date(timeIntervalSince1970: 1_800_000_000)
         let session = BookingWriteSession(organizationId: "TEST-ORG", now: { clock })
         XCTAssertEqual(session.organizationCheckSeconds, BookingWriteSession.organizationReadSeconds)
-        XCTAssertEqual(session.editReadSeconds, FirestoreWriteAck.defaultTimeoutSeconds)
+        XCTAssertEqual(session.editReadSeconds, BookingWriteSession.firstWaitSeconds)
 
         // The organisation check times out once; it is not run again for the next booking.
         var checks = 0
@@ -633,11 +633,11 @@ final class Booking1331SaveFlowTests: XCTestCase {
         fresh.note(FirestoreWriteAck.ReadTimedOut())
         XCTAssertEqual(fresh.ackSeconds, BookingWriteSession.afterTimeoutWaitSeconds)
 
-        // The budget: a save that has already run 19 s waits at most 1 s, however slow the link.
+        // The budget: a save that has already run its budget waits at most 1 s, however slow the link.
         let slow = BookingWriteSession(organizationId: "TEST-ORG", now: { clock })
-        clock = clock.addingTimeInterval(5)
-        XCTAssertEqual(slow.ackSeconds, FirestoreWriteAck.defaultTimeoutSeconds)
-        clock = clock.addingTimeInterval(14)
+        clock = clock.addingTimeInterval(1)
+        XCTAssertEqual(slow.ackSeconds, BookingWriteSession.firstWaitSeconds)
+        clock = clock.addingTimeInterval(BookingWriteSession.budgetSeconds)
         XCTAssertEqual(slow.ackSeconds, BookingWriteSession.afterTimeoutWaitSeconds)
         XCTAssertFalse(slow.timedOut)
     }

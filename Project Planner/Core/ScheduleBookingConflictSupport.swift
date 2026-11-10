@@ -526,8 +526,9 @@ enum ScheduleBookingConflictEngine {
         acknowledgedRowIds: Set<String>,
         struckRowIds: Set<String>
     ) -> Bool {
+        var summaries: [SchedulePersonConflictSummary?] = []
         for person in people where selectedOperativeIds.contains(person.operativeId) {
-            let summary = summarizePerson(
+            summaries.append(summarizePerson(
                 person: person,
                 selectedDates: selectedDates,
                 isSelected: true,
@@ -542,11 +543,18 @@ enum ScheduleBookingConflictEngine {
                 manuallyExcludedDays: manuallyExcludedDaysByOperative[person.operativeId] ?? [],
                 acknowledgedRowIds: acknowledgedRowIds,
                 struckRowIds: struckRowIds
-            )
-            if summary?.hasUnactionedRows == true { return false }
-            if summary?.effectiveSelectedDates.isEmpty == true { return false }
+            ))
         }
-        return !selectedOperativeIds.isEmpty
+        return rowsResolvedForSave(summaries, anyPersonSelected: !selectedOperativeIds.isEmpty)
+    }
+
+    /// RULEBOOK 1.16.0 §5 (`BOOKING_CONFLICTS_HEADING`, web `conflictsResolved`): Save is on once every conflict row
+    /// is ticked (book anyway) or ✕ (drop that day for that person). A person whose every day was dropped is simply
+    /// not booked — that never keeps Save off (1.33.1 owner report: ✕ on the only clash left Save grey, ✓ enabled it).
+    /// The save then books what is left, or nothing (`ScheduleBookingSaveOutcome.nothingToSave`).
+    static func rowsResolvedForSave(_ summaries: [SchedulePersonConflictSummary?], anyPersonSelected: Bool) -> Bool {
+        guard anyPersonSelected else { return false }
+        return !summaries.contains { $0?.hasUnactionedRows == true }
     }
 
     private static func myScheduleLocationLabel(_ booking: ManagerSiteBooking, projectStore: ProjectStore) -> String {

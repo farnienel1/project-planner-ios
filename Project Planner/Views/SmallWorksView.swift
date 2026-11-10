@@ -58,7 +58,7 @@ struct SmallWorksView: View {
 
     /// `myWorksList`: the saved picks, else the jobs they manage (until their first save); every status.
     private var myListJobs: [Project] {
-        listCache.myList(listInputs, picks: myWorks.picks, loaded: myWorks.loaded)
+        listCache.myList(listInputs, picks: myWorks.picks, loaded: myWorks.listKnown)
     }
 
     /// The status filter as the tiles and chips see it: none while the My list is shown; choosing one leaves the My list.
@@ -274,6 +274,12 @@ struct SmallWorksView: View {
                 refreshMyWorksListener()
             }
             .onChange(of: hasMyList) { _, _ in refreshMyWorksListener() }
+            // 1.33.1: also when the signed-in uid arrives after the screen opened (the listener never started then).
+            .onChange(of: MyWorksPicksModel.listenKey(
+                organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId,
+                uid: firebaseBackend.currentUser?.uid,
+                hasMyList: hasMyList
+            )) { _, _ in refreshMyWorksListener() }
             .onReceive(NotificationCenter.default.publisher(for: .pushWorkCatalogueDetail)) { note in
                 let isSmallWorks = note.userInfo?["isSmallWorks"] as? Bool ?? false
                 guard isSmallWorks else { return }
@@ -427,7 +433,7 @@ struct SmallWorksView: View {
             ProgressView("Finding jobs assigned to you...")
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 28)
-        } else if showsMyList && !myWorks.loaded && !smallWorksBeforeStatusFilter.isEmpty {
+        } else if showsMyList && !myWorks.listKnown && !smallWorksBeforeStatusFilter.isEmpty {
             myListLoadingState
         } else if showsMyList && filteredSmallWorks.isEmpty && !smallWorksBeforeStatusFilter.isEmpty {
             myListEmptyState

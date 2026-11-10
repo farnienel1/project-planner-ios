@@ -1498,10 +1498,7 @@ struct OperativeCustomHoursSheet: View {
 
     // MARK: Unpaid break warning (3.7; RULEBOOK 1.13.0 §8 `customHoursBreakWarning`)
 
-    private enum BreakWarningChoice {
-        case payFullDay
-        case keepBreak
-    }
+    private typealias BreakWarningChoice = UnpaidBreakWarningChoice
 
     private func breakWarningSheet(_ bd: BookingEditHoursBreakdown) -> some View {
         // "Pay the full day": the same probe with the unpaid break off (`BookingEditHoursBreakdown.compute`).
@@ -1550,13 +1547,9 @@ struct OperativeCustomHoursSheet: View {
     private func runBreakWarningChoice() {
         guard let choice = breakWarningChoice else { return }
         breakWarningChoice = nil
-        switch choice {
-        case .payFullDay:
-            breakIncluded = false
-            validateAndSave(breakWarningConfirmed: true)
-        case .keepBreak:
-            validateAndSave(breakWarningConfirmed: true)
-        }
+        // "Keep the break" leaves the Unpaid break exactly as it is (a stored choice is never flipped, guardrail 7).
+        breakIncluded = choice.breakIncluded(after: breakIncluded)
+        validateAndSave(breakWarningConfirmed: true)
     }
 
     /// What the weekend rows depend on; they are recomputed only when it changes.
@@ -1834,6 +1827,25 @@ private struct OvertimeRateSheet: View {
 
 // MARK: - Unpaid break warning sheet (docs/design/booking-ui 3.7)
 
+/// The two answers to the lunch warning (`customHoursBreakWarning`). View state only: which fields a save writes is
+/// unchanged (`BookingWritePatch.changedLabourFields`).
+enum UnpaidBreakWarningChoice: Equatable {
+    case keepBreak
+    case payFullDay
+
+    /// 1.33.1 owner decision: the highlighted (blue) default is "Keep the break" (it was "Pay the full day").
+    static let highlighted: UnpaidBreakWarningChoice = .keepBreak
+
+    /// The Unpaid break toggle after this choice. "Keep the break" never changes it, so a booking's stored
+    /// `isBreakRemoved` is saved as stored unless the person picks "Pay the full day" (guardrail 7).
+    func breakIncluded(after current: Bool) -> Bool {
+        switch self {
+        case .keepBreak: return current
+        case .payFullDay: return false
+        }
+    }
+}
+
 /// Replaces the "Unpaid break" alert. The body is the rulebook's `customHoursBreakWarning` text; the buttons only
 /// report the choice, and the sheet's owner runs it once this sheet has gone (as the old alert did).
 private struct UnpaidBreakWarningSheet: View {
@@ -1875,27 +1887,28 @@ private struct UnpaidBreakWarningSheet: View {
 
                 miniTimeline
 
-                Button(action: onPayFullDay) {
-                    choiceLabel(
-                        title: "Pay the full day",
-                        subtitle: "Turns off the unpaid break for this booking",
-                        hours: payFullDayHours,
-                        prominent: true
-                    )
-                }
-                .buttonStyle(PPPressableButtonStyle())
-                .accessibilityIdentifier("operativeCustomHours.breakWarning.payFullDay")
-
+                // 1.33.1 owner decision: "Keep the break" is the default — first and highlighted (blue).
                 Button(action: onKeepBreak) {
                     choiceLabel(
                         title: "Keep the break",
                         subtitle: "\(breakMinutes) mins deducted, as set",
                         hours: keepBreakHours,
-                        prominent: false
+                        prominent: UnpaidBreakWarningChoice.highlighted == .keepBreak
                     )
                 }
                 .buttonStyle(PPPressableButtonStyle())
                 .accessibilityIdentifier("operativeCustomHours.breakWarning.save")
+
+                Button(action: onPayFullDay) {
+                    choiceLabel(
+                        title: "Pay the full day",
+                        subtitle: "Turns off the unpaid break for this booking",
+                        hours: payFullDayHours,
+                        prominent: UnpaidBreakWarningChoice.highlighted == .payFullDay
+                    )
+                }
+                .buttonStyle(PPPressableButtonStyle())
+                .accessibilityIdentifier("operativeCustomHours.breakWarning.payFullDay")
 
                 Button(action: onGoBack) {
                     Text("Go back and change the hours")

@@ -165,6 +165,22 @@ final class MyWorksPicksModel: ObservableObject {
         MyWorksPickerGate.saveEnabled(serverAnswered: confirmedByServer, cachedCopy: hadCachedCopy, waitElapsed: serverWaitElapsed)
     }
 
+    /// 1.33.1 (owner report: My Projects was empty on first open and filled in only after leaving and coming back):
+    /// the list shows the picks only once they are known — the server answered, this phone held a cached copy, or
+    /// the wait is over (then the rulebook's pre-fill). A cached "missing" snapshot on a phone that never read the
+    /// list is not an answer: it showed the pre-fill (often empty) as if it were the saved list. Until then the screen
+    /// shows its loading state.
+    var listKnown: Bool { pickerReady }
+
+    /// The listener key for these ids, "" when either is blank (`listen` re-subscribes when it changes, so a
+    /// signed-in uid that arrives after the screen opened starts the listener).
+    nonisolated static func listenKey(organizationId: String?, uid: String?, hasMyList: Bool) -> String {
+        guard hasMyList else { return "" }
+        let org = organizationId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let user = uid?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return org.isEmpty || user.isEmpty ? "" : "\(org)/\(user)"
+    }
+
     /// The ⚙ is ready only because the wait is over: it starts from the pre-fill, which may differ from a list saved
     /// on another device (the sheet says so).
     var pickerStartsFromPrefill: Bool {

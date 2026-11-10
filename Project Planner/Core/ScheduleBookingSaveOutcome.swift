@@ -23,6 +23,22 @@ enum ScheduleBookingSaveOutcome: Equatable {
     case nothingToSave
 
     static let nothingToSaveMessage = "Nothing new to save. These people are already booked at these times."
+    /// Every conflict row was ✕-dropped, so nothing is booked (RULEBOOK 1.16.0 §5: "dropping every day saves nothing").
+    static let allDroppedMessage = "Nothing booked. Every clashing day was dropped."
+
+    /// RULEBOOK 1.16.0 §5 (web `conflictsResolved`): the double-booking review's Confirm is on once every clashing
+    /// person is ticked (book anyway) or ✕ (dropped) — whether or not anyone is left to book. Before 1.33.1 a ✕ on the
+    /// only person emptied the selection and Confirm stayed grey; a ✓ enabled it.
+    static func clashReviewConfirmEnabled(
+        selectedCount: Int,
+        droppedCount: Int,
+        awaitingDecisionCount: Int,
+        hasDates: Bool,
+        isBooking: Bool
+    ) -> Bool {
+        guard hasDates, !isBooking, awaitingDecisionCount == 0 else { return false }
+        return selectedCount > 0 || droppedCount > 0
+    }
 
     /// 1.33.1 review item 4: decided from each booking's own outcome (`BookingSaveResult`), never from a count made
     /// before the save ran. A queued booking counts as saved (Pending sync), never as "not saved".

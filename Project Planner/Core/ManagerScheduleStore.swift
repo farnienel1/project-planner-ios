@@ -282,6 +282,9 @@ class ManagerScheduleStore: ObservableObject {
             return .refused(BookingStore.organizationChangedMessage)
         }
         guard let orgId = capturedOrganizationId ?? openOrganizationId else { return .refused(notSaved) }
+        // 1.33.1: every save is bounded by a session (Quick Add, My Schedule and Daily Overview passed none, so the
+        // write waited 15 s for the server and the organisation check had no limit at all).
+        let session = session ?? BookingWriteSession(organizationId: orgId)
         if let refusal = writeRefusal(booking) {
             errorMessage = refusal
             return .refused(refusal)
@@ -335,7 +338,7 @@ class ManagerScheduleStore: ObservableObject {
             loadData(force: true)
             return .saved
         } catch {
-            session?.note(error)
+            session.note(error)
             if FirestoreWriteAck.isPendingInSDK(error) {
                 // 1.33.1: the server did not confirm in time. Firestore holds the write and delivers it (later writes to
                 // this booking go after it): Pending sync, and never a second copy in the app outbox.

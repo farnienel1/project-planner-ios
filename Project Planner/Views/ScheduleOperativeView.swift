@@ -47,6 +47,8 @@ struct ScheduleOperativeView: View {
     @State private var operativeClashSummaries: [UUID: [BookingClash]] = [:]
     /// User approved overlap for these operatives (✓ on warning panel).
     @State private var approvedOverlapOperativeIds: Set<UUID> = []
+    /// People ✕-dropped in the double-booking review (1.33.1 owner report: ✕ on the only person left Confirm grey).
+    @State private var droppedClashOperativeIds: Set<UUID> = []
     @State private var didApplyOrgDefaultHours = false
     @State private var didApplyEditingBookingPrefill = false
     @State private var didApplyEditingGroupPrefill = false
@@ -496,6 +498,7 @@ struct ScheduleOperativeView: View {
     private func handleHoursOrDatesChanged() {
         acknowledgedConflictIds.removeAll()
         struckConflictIds.removeAll()
+        droppedClashOperativeIds.removeAll()
         if mainScreenHasUnactionedConflicts && !didShowHoursClashAlertThisSession {
             didShowHoursClashAlertThisSession = true
             showingHoursClashAlert = true
@@ -1611,9 +1614,28 @@ struct ScheduleOperativeView: View {
                 clashReviewOperativeIds.removeAll()
                 operativeClashSummaries.removeAll()
                 approvedOverlapOperativeIds.removeAll()
+                droppedClashOperativeIds.removeAll()
             },
-            onConfirmBooking: { proceedWithBooking() },
-            canConfirmBooking: !selectedOperatives.isEmpty && !selectedDates.isEmpty && clashReviewOperativeIds.isEmpty && !isBooking,
+            onConfirmBooking: {
+                guard !selectedOperatives.isEmpty else {
+                    // Every clashing person was ✕-dropped: nothing is booked (web `droppedPersonDays`).
+                    droppedClashOperativeIds.removeAll()
+                    saveOutcomeAlert = ScheduleBookingSaveAlert(
+                        outcome: .nothingToSave,
+                        message: ScheduleBookingSaveOutcome.allDroppedMessage
+                    )
+                    return
+                }
+                droppedClashOperativeIds.removeAll()
+                proceedWithBooking()
+            },
+            canConfirmBooking: ScheduleBookingSaveOutcome.clashReviewConfirmEnabled(
+                selectedCount: selectedOperatives.count,
+                droppedCount: droppedClashOperativeIds.count,
+                awaitingDecisionCount: clashReviewOperativeIds.count,
+                hasDates: !selectedDates.isEmpty,
+                isBooking: isBooking
+            ),
             approvedOperativeIds: approvedOverlapOperativeIds
         )
         .environmentObject(projectStore)
@@ -1621,11 +1643,13 @@ struct ScheduleOperativeView: View {
     }
 
     private func approveClashOperative(_ operativeId: UUID) {
+        droppedClashOperativeIds.remove(operativeId)
         approvedOverlapOperativeIds.insert(operativeId)
         reconcileOperativeClashState()
     }
 
     private func dismissClashOperative(_ operativeId: UUID) {
+        droppedClashOperativeIds.insert(operativeId)
         clashReviewOperativeIds.remove(operativeId)
         operativeClashSummaries.removeValue(forKey: operativeId)
         approvedOverlapOperativeIds.remove(operativeId)
