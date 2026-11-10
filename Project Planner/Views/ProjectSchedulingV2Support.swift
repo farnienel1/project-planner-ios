@@ -45,7 +45,9 @@ enum SchedulingV2CellKind: Equatable {
     case standard(hours: Double)
     case overtimeOnly(hours: Double)
     case split(stdHours: Double, otHours: Double)
-    case annualLeave
+    /// RULEBOOK 1.37.0 `jobScheduleLeaveMarks`: a day of annual leave with no booking on the job ("AL", "AL AM",
+    /// "AL PM"; pending "AL?" paler).
+    case annualLeave(RulebookScheduleLeaveMark)
     case halfDay(hours: Double, label: String)
 }
 
@@ -104,6 +106,9 @@ enum SchedulingV2CellKindBuilder {
 /// the tap is the caller's existing action.
 struct SchedulingV2BookingCell: View {
     let kind: SchedulingV2CellKind
+    /// RULEBOOK 1.37.0: annual leave on a day that also has a booking — the booking chip stays and a thin brown band
+    /// with the label sits across the top (overtime keeps its own marking underneath). Ignored for a leave cell.
+    var leaveBand: RulebookScheduleLeaveMark? = nil
     let isToday: Bool
     let isWeekend: Bool
     var accessibilityDay: String = ""
@@ -114,9 +119,21 @@ struct SchedulingV2BookingCell: View {
 
     var body: some View {
         Button(action: action) {
-            ZStack {
+            ZStack(alignment: .top) {
                 cellBackground
                 cellContent
+                    .frame(maxHeight: .infinity)
+                    .padding(.top, bandMark == nil ? 0 : 10)
+                if let band = bandMark {
+                    Text(band.label)
+                        .font(.system(size: 7, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 10)
+                        .background(Self.leaveColor(band))
+                        .accessibilityIdentifier("schedulingV2BookingCell.leaveBand")
+                }
             }
             .frame(maxWidth: .infinity)
             .frame(height: 46)
@@ -129,6 +146,18 @@ struct SchedulingV2BookingCell: View {
         .buttonStyle(.plain)
     }
 
+    /// The band is drawn only over a booking chip, never over an empty or leave cell.
+    private var bandMark: RulebookScheduleLeaveMark? {
+        switch kind {
+        case .empty, .annualLeave: return nil
+        default: return leaveBand
+        }
+    }
+
+    static func leaveColor(_ mark: RulebookScheduleLeaveMark) -> Color {
+        mark.pending ? PPBookingColor.leave.opacity(0.45) : PPBookingColor.leave
+    }
+
     private var accessibilityText: String {
         let what: String
         switch kind {
@@ -137,10 +166,11 @@ struct SchedulingV2BookingCell: View {
         case .overtimeOnly(let h): what = "\(SchedulingV2CellKindBuilder.hoursLabel(h)) overtime"
         case .split(let std, let ot):
             what = "\(SchedulingV2CellKindBuilder.hoursLabel(std)) standard, \(SchedulingV2CellKindBuilder.hoursLabel(ot)) overtime"
-        case .annualLeave: what = "Annual leave"
+        case .annualLeave(let mark): what = mark.title
         case .halfDay(let h, let label): what = "\(label) half day, \(SchedulingV2CellKindBuilder.hoursLabel(h))"
         }
-        return [accessibilityPerson, accessibilityDay, what].filter { !$0.isEmpty }.joined(separator: ", ")
+        let band = bandMark.map { $0.title } ?? ""
+        return [accessibilityPerson, accessibilityDay, what, band].filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
     @ViewBuilder
@@ -160,8 +190,16 @@ struct SchedulingV2BookingCell: View {
             PPBookingColor.standard
         case .overtimeOnly:
             PPOvertimeFill()
-        case .annualLeave:
-            PPBookingColor.leave
+        case .annualLeave(let mark):
+            if mark.isHalfDay {
+                // Half-day leave: the leave half in brown, the other half open (the "Half day" split style).
+                HStack(spacing: 0) {
+                    if mark.slot == "AM" { Self.leaveColor(mark) } else { PPBookingColor.field.opacity(0.7) }
+                    if mark.slot == "PM" { Self.leaveColor(mark) } else { PPBookingColor.field.opacity(0.7) }
+                }
+            } else {
+                Self.leaveColor(mark)
+            }
         case .halfDay:
             HStack(spacing: 0) {
                 PPBookingColor.standard
@@ -184,10 +222,14 @@ struct SchedulingV2BookingCell: View {
             cellLabel(SchedulingV2CellKindBuilder.hoursLabel(hours), "Std", ink: .white)
         case .overtimeOnly(let hours):
             cellLabel(SchedulingV2CellKindBuilder.hoursLabel(hours), "OT", ink: Self.otInk)
-        case .annualLeave:
-            Text("AL")
+        case .annualLeave(let mark):
+            Text(mark.label)
                 .font(.caption.weight(.heavy))
-                .foregroundStyle(.white)
+                .foregroundStyle(mark.isHalfDay ? Color.primary : .white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .shadow(color: mark.isHalfDay ? .clear : .black.opacity(0.2), radius: 1)
+                .accessibilityIdentifier("schedulingV2BookingCell.leaveLabel")
         case .halfDay(let hours, let label):
             cellLabel(SchedulingV2CellKindBuilder.hoursLabel(hours), label, ink: .white)
                 .shadow(color: .black.opacity(0.25), radius: 1)
@@ -255,12 +297,14 @@ private struct FlexWrapLegend: View {
                     }
                 }
             }
+            // RULEBOOK 1.37.0: pending leave requests are shown paler, "AL?" (web shows the same swatch).
+            legendItem("AL? = leave requested") { PPBookingColor.leave.opacity(0.45) }
         }
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
         .padding(.top, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Legend: Standard, Standard plus overtime, Overtime only, Annual leave, Half day")
+        .accessibilityLabel("Legend: Standard, Standard plus overtime, Overtime only, Annual leave, Half day, AL question mark means leave requested")
     }
 
     private func legendItem<Swatch: View>(_ label: String, @ViewBuilder swatch: () -> Swatch) -> some View {

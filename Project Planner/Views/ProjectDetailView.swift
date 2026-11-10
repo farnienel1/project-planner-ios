@@ -936,6 +936,8 @@ struct ProjectDetailView: View {
         let operativeBooking: Booking?
         let managerBooking: ManagerSiteBooking?
         let subcontractorBooking: SubcontractorBooking?
+        /// RULEBOOK 1.37.0 `jobScheduleLeaveMarks`: this day's annual leave for the person (nil when none).
+        var leave: RulebookScheduleLeaveMark? = nil
     }
 
     private struct QuickAddRequest: Identifiable {
@@ -1010,7 +1012,8 @@ struct ProjectDetailView: View {
         day: Date,
         dayId: TimeInterval,
         operativeIds: [UUID],
-        userIds: [String]
+        userIds: [String],
+        leave: RulebookScheduleLeaveMark?
     ) -> SchedulingGridDayCell {
         var paid = 0.0
         var overtime = 0.0
@@ -1064,13 +1067,15 @@ struct ProjectDetailView: View {
                 kind: cell,
                 operativeBooking: operativeBooking,
                 managerBooking: operativeBooking == nil ? managerBooking : nil,
-                subcontractorBooking: nil
+                subcontractorBooking: nil,
+                leave: leave
             )
         }
-        if isPersonOnAnnualLeave(operativeIds: operativeIds, userIds: userIds, date: day) {
+        if let leave {
             return SchedulingGridDayCell(
-                id: dayId, date: day, kind: .annualLeave,
-                operativeBooking: nil, managerBooking: nil, subcontractorBooking: nil
+                id: dayId, date: day, kind: .annualLeave(leave),
+                operativeBooking: nil, managerBooking: nil, subcontractorBooking: nil,
+                leave: leave
             )
         }
         return SchedulingGridDayCell(
@@ -1085,14 +1090,17 @@ struct ProjectDetailView: View {
     ) -> SchedulingGridPersonRow {
         let resolvedOperativeIds = person.operativeIds
         let resolvedUserIds = person.userIds
-        let days: [SchedulingGridDayCell] = weekDays.map { day in
+        let leaveMarks = schedulingLeaveMarks(person: person, kind: kind)
+        let days: [SchedulingGridDayCell] = weekDays.enumerated().map { index, day in
             let dayId = OrganizationRulebookContext.calendar.startOfDay(for: day).timeIntervalSince1970
+            let leave = index < leaveMarks.count ? leaveMarks[index] : nil
             if !resolvedOperativeIds.isEmpty || !resolvedUserIds.isEmpty {
                 return schedulingCombinedDayCell(
                     day: day,
                     dayId: dayId,
                     operativeIds: resolvedOperativeIds,
-                    userIds: resolvedUserIds
+                    userIds: resolvedUserIds,
+                    leave: leave
                 )
             }
             switch kind {
@@ -1111,13 +1119,15 @@ struct ProjectDetailView: View {
                         kind: cell,
                         operativeBooking: booking,
                         managerBooking: nil,
-                        subcontractorBooking: nil
+                        subcontractorBooking: nil,
+                        leave: leave
                     )
                 }
-                if isPersonOnAnnualLeave(operativeId: opId, userId: nil, date: day) {
+                if let leave {
                     return SchedulingGridDayCell(
-                        id: dayId, date: day, kind: .annualLeave,
-                        operativeBooking: nil, managerBooking: nil, subcontractorBooking: nil
+                        id: dayId, date: day, kind: .annualLeave(leave),
+                        operativeBooking: nil, managerBooking: nil, subcontractorBooking: nil,
+                        leave: leave
                     )
                 }
             case .manager(let userId):
@@ -1143,13 +1153,15 @@ struct ProjectDetailView: View {
                         kind: cell,
                         operativeBooking: nil,
                         managerBooking: booking,
-                        subcontractorBooking: nil
+                        subcontractorBooking: nil,
+                        leave: leave
                     )
                 }
-                if isPersonOnAnnualLeave(operativeId: nil, userId: userId, date: day) {
+                if let leave {
                     return SchedulingGridDayCell(
-                        id: dayId, date: day, kind: .annualLeave,
-                        operativeBooking: nil, managerBooking: nil, subcontractorBooking: nil
+                        id: dayId, date: day, kind: .annualLeave(leave),
+                        operativeBooking: nil, managerBooking: nil, subcontractorBooking: nil,
+                        leave: leave
                     )
                 }
             case .subcontractor(let subId):
@@ -1188,22 +1200,27 @@ struct ProjectDetailView: View {
         )
     }
 
-    private func isPersonOnAnnualLeave(operativeId: UUID?, userId: String?, date: Date) -> Bool {
-        isPersonOnAnnualLeave(
-            operativeIds: operativeId.map { [$0] } ?? [],
-            userIds: userId.map { [$0] } ?? [],
-            date: date
-        )
-    }
-
-    private func isPersonOnAnnualLeave(operativeIds: [UUID], userIds: [String], date: Date) -> Bool {
-        let operativeSet = Set(operativeIds)
-        let userSet = Set(userIds)
-        return holidayStore.approvedBookings(covering: date).contains { booking in
-            if let operativeId = booking.operativeId, operativeSet.contains(operativeId) { return true }
-            if let userId = booking.userId, userSet.contains(userId) { return true }
-            return false
+    /// RULEBOOK 1.37.0 §21 `jobScheduleLeaveMarks`: the person's annual leave on each visible day (aligned with
+    /// `weekDays`; nil when none). Matched under every id they go by, without case, on the organisation day; pending
+    /// leave included, rejected never. Subcontractors have none. Only people already on the grid are asked — leave
+    /// never adds a row.
+    private func schedulingLeaveMarks(person: ScheduleWeekPerson, kind: SchedulingGridPersonKind) -> [RulebookScheduleLeaveMark?] {
+        var operativeIds = person.operativeIds
+        var userIds = person.userIds
+        switch kind {
+        case .operative(let id): if operativeIds.isEmpty { operativeIds = [id] }
+        case .manager(let id): if userIds.isEmpty { userIds = [id] }
+        case .subcontractor: return []
         }
+        guard !operativeIds.isEmpty || !userIds.isEmpty else { return [] }
+        let input = ScheduleLeaveMarksInput.build(
+            people: [ScheduleLeaveMarksInput.Person(key: person.id, operativeIds: operativeIds, userIds: userIds)],
+            days: weekDays,
+            holidays: holidayStore.bookings,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
+        return CanonicalBusinessEngine.jobScheduleLeaveMarks(input)?[person.id] ?? []
     }
 
     /// Day strip: weekday, date and a count pill per day ("–" when none). Today filled navy, weekends muted.
@@ -1326,6 +1343,7 @@ struct ProjectDetailView: View {
                 ForEach(Array(row.days.enumerated()), id: \.element.id) { index, day in
                     SchedulingV2BookingCell(
                         kind: day.kind,
+                        leaveBand: day.leave,
                         isToday: OrganizationRulebookContext.calendar.isDate(day.date, inSameDayAs: Date()),
                         isWeekend: index >= 5,
                         accessibilityDay: day.date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)),
