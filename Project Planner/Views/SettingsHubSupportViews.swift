@@ -107,9 +107,52 @@ private struct SettingsProfileSheetsModifier: ViewModifier {
     }
 }
 
+/// Leaving My Profile with an unsaved VAT / UTR draft asks first. Pushed from Settings: the back chevron
+/// (`settingsUnsavedLeave`). As the root of the Home avatar's sheet: Done, with the same question, and swipe-down is
+/// disabled while the draft is unsaved.
+private struct ProfileLeaveGuard: ViewModifier {
+    let isSheetRoot: Bool
+    let isDirty: Bool
+    let onLeave: () -> Void
+    @State private var showingConfirm = false
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isSheetRoot {
+            content
+                .interactiveDismissDisabled(isDirty)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            if isDirty { showingConfirm = true } else { onLeave() }
+                        }
+                        .accessibilityIdentifier("homeProfileCard.done")
+                    }
+                }
+                .alert("Unsaved changes", isPresented: $showingConfirm) {
+                    Button("Cancel", role: .cancel) {}
+                        .accessibilityIdentifier("settingsUnsavedLeave.cancel")
+                    Button("Continue", action: onLeave)
+                        .accessibilityIdentifier("settingsUnsavedLeave.continue")
+                } message: {
+                    Text("You have changes that have not been saved. Leave this page and discard them?")
+                }
+        } else {
+            content.settingsUnsavedLeave(isDirty: isDirty, onLeave: onLeave)
+        }
+    }
+}
+
+/// RULEBOOK 1.35.0 §12: the one My Profile screen. Settings → My Profile and the Home avatar (`HomeProfileCardSheet`)
+/// both open it; it holds every field the two screens had (photo, name, email, organisation, rate, employment type,
+/// billing details, qualifications) and the "Your figures" card (`MyProfileFiguresCard`, `myProfileSummary`).
 struct SettingsProfileDetailView: View {
+    /// True when the screen is the root of the Home avatar's sheet: Done (asking first when the VAT / UTR draft is
+    /// unsaved) instead of the back chevron, and no swipe-down while the draft is unsaved.
+    var isSheetRoot: Bool = false
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var operativeStore: OperativeStore
     /// RULEBOOK 1.13.0 §8 (Q1 step C): the person's own pay, read pay profile first (`overlayPayProfile`).
     @State private var payShownUser: AppUser?
     @State private var showingManualLinkSheet = false
@@ -156,7 +199,7 @@ struct SettingsProfileDetailView: View {
     var body: some View {
         profileScroll
             .background(PPColor.page.ignoresSafeArea())
-            .navigationTitle("My profile")
+            .navigationTitle("My Profile")
             .navigationBarTitleDisplayMode(.inline)
             .ppNavyNavigationBar()
             .safeAreaInset(edge: .bottom) {
@@ -164,11 +207,11 @@ struct SettingsProfileDetailView: View {
                     Task { await saveBillingDetails() }
                 }
             }
-            .settingsUnsavedLeave(isDirty: isDirty) {
+            .modifier(ProfileLeaveGuard(isSheetRoot: isSheetRoot, isDirty: isDirty) {
                 vatDraft.reset(saved: vatDraft.saved)
                 utrDraft.reset(saved: utrDraft.saved)
                 dismiss()
-            }
+            })
             .modifier(SettingsProfileSheetsModifier(
                 showingManualLinkSheet: $showingManualLinkSheet,
                 manualLinkOrganizationId: $manualLinkOrganizationId,
@@ -258,7 +301,18 @@ struct SettingsProfileDetailView: View {
                             profileValueRow("Day rate", OrgMoney.format(dayRate))
                         }
                     }
+                    // Employment type today in the organisation zone (`employmentTypeOnDay` through `AppUser.employmentType(on:)`).
+                    if let user = payShownUser ?? userStore.currentUser {
+                        SettingsHubChrome.divider()
+                        profileValueRow("Employment type", user.employmentType(on: Date()).title)
+                    }
+                    SettingsHubChrome.divider()
+                    profileValueRow("Qualifications", qualificationsText)
+                        .accessibilityIdentifier("settingsProfileDetail.qualifications")
                 }
+
+                MyProfileFiguresCard()
+                    .padding(.top, 8)
 
                 SettingsHubChrome.sectionTitle("Billing details")
                 SettingsHubChrome.card {
@@ -316,6 +370,14 @@ struct SettingsProfileDetailView: View {
             }
             .padding(16)
         }
+    }
+
+    /// The person's own `operatives` row (`personDedupeKey`), for the qualification names (from the Home profile card).
+    private var qualificationsText: String {
+        guard let user = userStore.currentUser,
+              let operative = operativeStore.operativeRow(for: user),
+              !operative.qualifications.isEmpty else { return "None added" }
+        return operative.qualifications.map(\.name).joined(separator: ", ")
     }
 
     private func profileValueRow(_ title: String, _ value: String, valueColor: Color = Color.secondary) -> some View {

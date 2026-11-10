@@ -1913,8 +1913,10 @@ struct OperativeQualificationsReadOnlyView: View {
     }
 }
 
+/// RULEBOOK 1.35.0 §12: the Home avatar opens the one My Profile screen (`SettingsProfileDetailView`, the same screen as
+/// Settings → My Profile) in a sheet, with the Settings gear and Done (Done asks first when the VAT / UTR draft is unsaved). Before 1.35 this was a separate read-only card
+/// that labelled every rate "Day rate"; the merged screen reads the rate with `readStoredRates`.
 private struct HomeProfileCardSheet: View {
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -1926,136 +1928,41 @@ private struct HomeProfileCardSheet: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
 
-    private var user: AppUser? { userStore.displayUser }
-    @State private var taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
-
-    private var operative: Operative? {
-        // The person's own row (`personDedupeKey`); an empty email never matches another no-email row.
-        guard let user else { return nil }
-        return operativeStore.operativeRow(for: user)
-    }
-
-    private var displayName: String {
-        guard let user else { return "Profile" }
-        let full = "\(user.firstName) \(user.surname)".trimmingCharacters(in: .whitespacesAndNewlines)
-        return full.isEmpty ? user.email : full
-    }
-
-    private var initials: String { PlannerUIInitials.from(displayName) }
-
-    private var qualificationsText: String {
-        guard let operative, !operative.qualifications.isEmpty else { return "None added" }
-        return operative.qualifications.map(\.name).joined(separator: ", ")
-    }
-
-    private var dayRateText: String {
-        guard let user else { return "Not set" }
-        let resolved = PayrollRateResolver.resolveCurrentProfileRate(
-            user: user,
-            operative: operative,
-            // RULEBOOK 1.20.0 §8: today's weekday paid day, not a fixed 8h.
-            standardDayHours: max(CanonicalBusinessEngine.weekdayPaidHours(firebaseBackend.payrollPolicy(for: Date())), 0.01)
-        )
-        if let label = resolved.displayRateLabel() {
-            return label.replacingOccurrences(of: "/day", with: "").replacingOccurrences(of: "/hr", with: " per hour")
-        }
-        return "Not set"
-    }
-
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 12) {
-                        // `profilePhotoUpdatedAt` refreshes the cached picture; a failed load is retried (§12).
-                        ProfilePhotoAvatar(urlString: user?.profilePhotoURL, updatedAt: user?.profilePhotoUpdatedAt) {
-                            Circle().fill(Color.blue.opacity(0.2))
-                                .overlay(Text(initials).font(.headline).foregroundStyle(.blue))
+            // `userStore.currentUser` inside: the signed-in person's own users document for the open organisation.
+            // `displayUser` (the old card) only adds the role-testing preset, which changes permissions, not personal
+            // data, so the figures, rate and billing details are the person's own either way.
+            SettingsProfileDetailView(isSheetRoot: true)
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+                .environmentObject(operativeStore)
+                .environmentObject(holidayStore)
+                .environmentObject(taskStore)
+                .environmentObject(bookingStore)
+                .environmentObject(managerScheduleStore)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        NavigationLink {
+                            SettingsView(popsNavigationOnBack: true)
+                                .environmentObject(firebaseBackend)
+                                .environmentObject(projectStore)
+                                .environmentObject(operativeStore)
+                                .environmentObject(bookingStore)
+                                .environmentObject(taskStore)
+                                .environmentObject(appSettings)
+                                .environmentObject(userStore)
+                                .environmentObject(notificationService)
+                                .environmentObject(holidayStore)
+                                .environmentObject(managerScheduleStore)
+                        } label: {
+                            Image(systemName: "gearshape.fill")
                         }
-                        .frame(width: 62, height: 62)
-                        .clipShape(Circle())
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(displayName).font(.headline)
-                            Text(user?.email ?? "—").font(.subheadline).foregroundStyle(.secondary)
-                            Text(firebaseBackend.currentOrganization?.name ?? "No organisation")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+                        .accessibilityIdentifier("homeProfileCard.settings")
+                        .accessibilityLabel("Settings")
                     }
-                    .padding(14)
-                    .background(Color(.systemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                    profileRow("Day rate", dayRateText)
-                    profileRow("Employment type", user?.employmentType(on: Date()).title ?? "—")
-                    sensitiveProfileRow("VAT number", taxIds?.vatNumber ?? "", token: "homeProfile.vatNumber")
-                        .task(id: user?.id) {
-                            guard let user else { return }
-                            taxIds = await userStore.loadSensitiveProfile(for: user)
-                        }
-                    sensitiveProfileRow("UTR number", taxIds?.utrNumber ?? "", token: "homeProfile.utrNumber")
-                    profileRow("Qualifications", qualificationsText)
                 }
-                .padding(16)
-            }
-            .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-            .navigationTitle("My Profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    NavigationLink {
-                        SettingsView(popsNavigationOnBack: true)
-                            .environmentObject(firebaseBackend)
-                            .environmentObject(projectStore)
-                            .environmentObject(operativeStore)
-                            .environmentObject(bookingStore)
-                            .environmentObject(taskStore)
-                            .environmentObject(appSettings)
-                            .environmentObject(userStore)
-                            .environmentObject(notificationService)
-                            .environmentObject(holidayStore)
-                            .environmentObject(managerScheduleStore)
-                    } label: {
-                        Image(systemName: "gearshape.fill")
-                    }
-                    .accessibilityIdentifier("homeProfileCard.settings")
-                    .accessibilityLabel("Settings")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                        .accessibilityIdentifier("homeProfileCard.done")
-                }
-            }
         }
-    }
-
-    /// Own UTR / VAT: masked by default with Show / Hide.
-    private func sensitiveProfileRow(_ label: String, _ value: String, token: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label.uppercased())
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            SensitiveFieldValue(value: value, accessibilityToken: token)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private func profileRow(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label.uppercased())
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
