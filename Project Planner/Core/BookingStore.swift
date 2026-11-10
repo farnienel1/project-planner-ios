@@ -450,12 +450,15 @@ class BookingStore: ObservableObject {
             let before = bookings[index]
             let baseline = changed.isEmpty ? nil : BookingWritePatch.deleteFingerprint(before)
             bookings[index] = booking
+            // The company this save actually wrote to, as `saveData` resolved it (#209 re-review).
+            var writtenOrganizationId: String?
             let results = await saveData(
                 writes: changed.isEmpty ? [] : [
                     BookingWrite(booking: booking, changedFields: changed, baselineFingerprint: baseline, previous: before)
                 ],
                 organizationId: capturedOrganizationId,
-                session: session
+                session: session,
+                writtenTo: { writtenOrganizationId = $0 }
             )
             let result = results[booking.id] ?? .saved
             // RULEBOOK 1.33.0 §25 reopen: the PAYE overtime line this booking carried (best effort, after the write).
@@ -466,7 +469,6 @@ class BookingStore: ObservableObject {
                 // One notice per change: an older queued edit of this booking replays later, silently.
                 OfflineOutboxStore.shared.clearReopenBaseline(bookingId: booking.id)
                 // The company this edit was written to (#209 review item 4), never nil when it is known.
-                let writtenOrganizationId = capturedOrganizationId ?? firebaseBackend?.resolvedOrganizationIdForOfflineWrites()
                 OvertimeReopenNotice.labour(before: before, after: booking, organizationId: writtenOrganizationId)
             }
             return result
@@ -1027,7 +1029,8 @@ class BookingStore: ObservableObject {
     private func saveData(
         writes: [BookingWrite] = [],
         organizationId capturedOrganizationId: String? = nil,
-        session: BookingWriteSession? = nil
+        session: BookingWriteSession? = nil,
+        writtenTo: ((String) -> Void)? = nil
     ) async -> [UUID: BookingSaveResult] {
         var results: [UUID: BookingSaveResult] = [:]
         do {
@@ -1050,6 +1053,9 @@ class BookingStore: ObservableObject {
                 ) ?? firebaseBackend?.resolvedOrganizationIdForOfflineWrites()
             }
             let organizationId = resolvedOrganizationId
+            // The organisation every write of this save goes to: the caller's notices name it, never the one open
+            // when they are sent.
+            if let organizationId { writtenTo?(organizationId) }
 
             if smartCache?.isOnline == false {
                 if let organizationId {

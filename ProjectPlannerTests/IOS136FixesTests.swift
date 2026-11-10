@@ -532,6 +532,11 @@ final class IOS136FixesTests: XCTestCase {
         let manager = try source("Project Planner/Core/ManagerScheduleStore.swift")
         XCTAssertTrue(manager.contains("SDKPendingWrites.shared.whenConfirmed(ticket: FirestoreWriteAck.pendingTicket(error))"))
         XCTAssertTrue(manager.contains("OvertimeReopenNotice.managerSite(before: booking, after: nil, organizationId: orgId)"))
+        // The immediate notice names the company `saveData` wrote to, never one read again when it is sent.
+        let update = try functionBody("updateBooking", in: store)
+        XCTAssertTrue(update.contains("writtenTo: { writtenOrganizationId = $0 }"))
+        XCTAssertFalse(update.contains("resolvedOrganizationIdForOfflineWrites()"))
+        XCTAssertTrue(store.contains("if let organizationId { writtenTo?(organizationId) }"))
         let coordinator = try source("Project Planner/Core/OfflineSyncCoordinator.swift")
         XCTAssertEqual(
             coordinator.components(separatedBy: "SDKPendingWrites.shared.whenConfirmed(ticket: FirestoreWriteAck.pendingTicket(error))").count - 1,
