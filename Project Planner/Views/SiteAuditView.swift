@@ -119,8 +119,8 @@ enum SiteAuditWorksBrowserKind: String, Identifiable {
 
     func includes(_ project: Project) -> Bool {
         switch self {
-        case .projects: return project.jobType != .smallWorks
-        case .smallWorks: return project.jobType == .smallWorks
+        case .projects: return !project.isSmallWorksDocument
+        case .smallWorks: return project.isSmallWorksDocument
         }
     }
 }
@@ -176,7 +176,7 @@ private struct SiteAuditProjectAccess {
             managerBookings: managerBookings,
             taskStore: taskStore,
             extraProjectIds: extraProjectIds
-        ).filter { $0.jobType != .smallWorks }
+        ).filter { !$0.isSmallWorksDocument }
     }
 
     static func visibleSmallWorks(
@@ -196,7 +196,7 @@ private struct SiteAuditProjectAccess {
             managerBookings: managerBookings,
             taskStore: taskStore,
             extraProjectIds: extraProjectIds
-        ).filter { $0.jobType == .smallWorks }
+        ).filter { $0.isSmallWorksDocument }
     }
 }
 
@@ -1532,7 +1532,7 @@ struct SiteAuditProjectPickerView: View {
     @State private var showingSmallWorks = false
 
     private var scopedJobs: [Project] {
-        availableProjects.filter { showingSmallWorks ? $0.jobType == .smallWorks : $0.jobType != .smallWorks }
+        availableProjects.filter { showingSmallWorks ? $0.isSmallWorksDocument : !$0.isSmallWorksDocument }
     }
 
     private var filteredProjects: [Project] {

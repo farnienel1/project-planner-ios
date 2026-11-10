@@ -303,7 +303,7 @@ enum WarningsComputation {
                 id: project.id,
                 jobNumber: project.jobNumber,
                 siteName: project.siteName,
-                isSmallWorks: project.jobType == .smallWorks
+                isSmallWorks: project.isSmallWorksDocument
             )
         }
 

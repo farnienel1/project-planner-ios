@@ -23,7 +23,7 @@ struct ProjectDeadlinesView: View {
     @State private var siteAudits: [SiteAudit] = []
 
     private var canManage: Bool { !userStore.isOperativeMode() }
-    private var contextKind: String { project.jobType == .smallWorks ? "Small Work" : "Project" }
+    private var contextKind: String { project.isSmallWorksDocument ? "Small Work" : "Project" }
     private var authorName: String { userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown" }
     private var projectNotificationName: String {
         let site = project.siteName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -106,7 +106,7 @@ struct ProjectDeadlinesView: View {
         .listensWhileOpen("deadlines", key: "deadlines", targetSuffix: project.documentId,
                           firebaseBackend: firebaseBackend,
                           query: { org in
-                              let isSmallWorks = project.jobType == .smallWorks
+                              let isSmallWorks = project.isSmallWorksDocument
                               let docId = CanonicalBusinessEngine.deadlinesDocumentId(projectId: project.documentId, isSmallWorks: isSmallWorks)
                                   ?? "deadlines_\(isSmallWorks ? "smallWorks" : "projects")_\(project.documentId.uppercased())"
                               return org.collection("settings").whereField(FieldPath.documentID(), in: [docId, "deadlineAssignments"])
@@ -194,7 +194,7 @@ struct ProjectDeadlinesView: View {
         if OfflineWriteSupport.shouldQueue(isOnline: smartCache.isOnline) {
             OfflineOutboxStore.shared.enqueueSaveDeadlines(
                 projectId: project.id,
-                isSmallWorks: project.jobType == .smallWorks,
+                isSmallWorks: project.isSmallWorksDocument,
                 items: items,
                 baseUpdatedAt: store.lastKnownUpdatedAt,
                 organizationId: orgId
@@ -222,7 +222,7 @@ struct ProjectDeadlinesView: View {
             if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache.isOnline) {
                 OfflineOutboxStore.shared.enqueueSaveDeadlines(
                     projectId: project.id,
-                    isSmallWorks: project.jobType == .smallWorks,
+                    isSmallWorks: project.isSmallWorksDocument,
                     items: items,
                     baseUpdatedAt: store.lastKnownUpdatedAt,
                     organizationId: orgId

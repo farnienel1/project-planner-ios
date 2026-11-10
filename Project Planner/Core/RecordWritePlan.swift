@@ -60,6 +60,9 @@ struct ProjectStoreChangeSet {
         let id: UUID
         let mode: RecordSaveMode
         let previous: Project?
+        /// The collection of the record (`sourceCollection`): a `projects` and a `smallWorks` document may share
+        /// an id, so the record saved is matched by id and collection. Nil matches by id alone.
+        var collection: JobKind? = nil
     }
 
     struct ClientChange {
@@ -78,11 +81,11 @@ struct ProjectStoreChangeSet {
     static let localOnly = ProjectStoreChangeSet()
 
     static func createWork(_ work: Project) -> ProjectStoreChangeSet {
-        ProjectStoreChangeSet(works: [Work(id: work.id, mode: .create, previous: nil)])
+        ProjectStoreChangeSet(works: [Work(id: work.id, mode: .create, previous: nil, collection: work.sourceCollection)])
     }
 
     static func updateWork(_ work: Project, previous: Project?) -> ProjectStoreChangeSet {
-        ProjectStoreChangeSet(works: [Work(id: work.id, mode: .update, previous: previous)])
+        ProjectStoreChangeSet(works: [Work(id: work.id, mode: .update, previous: previous, collection: work.sourceCollection)])
     }
 
     static func createClient(_ client: Client) -> ProjectStoreChangeSet {
@@ -111,7 +114,8 @@ struct ProjectStoreChangeSet {
         let keep = Self.kept(recordIds: projects.map(\.id), changedIds: works.map(\.id))
         return works.compactMap { change in
             guard keep.contains(change.id.uuidString.lowercased()) else { return nil }
-            return projects.first(where: { $0.id == change.id }).map { (work: $0, mode: change.mode, previous: change.previous) }
+            return projects.first(where: { $0.id == change.id && (change.collection == nil || $0.sourceCollection == change.collection) })
+                .map { (work: $0, mode: change.mode, previous: change.previous) }
         }
     }
 

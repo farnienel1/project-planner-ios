@@ -40,14 +40,15 @@ nonisolated struct JobAccessViewer: Equatable, Sendable {
 }
 
 /// The job kind a job belongs to (`WorkCatalogue`): the collection it is stored in.
-nonisolated enum JobKind: String, Sendable {
+nonisolated enum JobKind: String, Sendable, Codable {
     case projects
     case smallWorks
 }
 
 extension Project {
-    /// `projects` or `smallWorks` (`JobKind`), as `canSeeJob` / `canEditJob` take it.
-    var jobKind: JobKind { jobType == .smallWorks ? .smallWorks : .projects }
+    /// `projects` or `smallWorks` (`JobKind`), as `canSeeJob` / `canEditJob` take it: the collection the document
+    /// was read from (`sourceCollection`), never a guess from `jobType` (RULEBOOK §17 `jobKind`).
+    var jobKind: JobKind { sourceCollection }
 
     /// The stored manager fields of this job (`JobManagerFields`): `managerIds` and `managerId` in their stored
     /// spelling, and the stored `managerUserIds`.
@@ -433,6 +434,17 @@ extension UserStore {
     /// The viewer for `user` (`personIdSet` ids against the roster, the Projects / Small works toggles).
     func jobAccessViewer(for user: AppUser) -> JobAccessViewer {
         let authUid = Auth.auth().currentUser?.uid.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // 1.33.1 (owner report: Projects took ~20 s): screens read the viewer many times per render, and each read ran
+        // `personIdSet` over the whole roster in the script. The answer is kept until the person, the roster or the
+        // signed-in account changes (unchanged arrays compare in O(1)).
+        let key = JobAccessViewerMemo.Key(user: user, roster: organizationUsers, authUid: authUid, currentUserId: currentUser?.id)
+        if let hit = JobAccessViewerMemo.shared.value(for: key) { return hit }
+        let viewer = buildJobAccessViewer(for: user, authUid: authUid)
+        JobAccessViewerMemo.shared.store(viewer, for: key)
+        return viewer
+    }
+
+    private func buildJobAccessViewer(for user: AppUser, authUid: String) -> JobAccessViewer {
         let ids = RulebookPeople.ownerIds(for: user, users: organizationUsers)
         return JobAccessViewer(
             role: Self.staffAccountRole(for: user),
@@ -614,5 +626,30 @@ enum DailyOverviewScopeSupport {
         if rowAnswers.count > 4096 { rowAnswers.removeAll(keepingCapacity: true) }
         rowAnswers[rowKey] = answer
         return answer
+    }
+}
+
+/// The last few `jobAccessViewer(for:)` answers, by their inputs (main actor only).
+@MainActor
+final class JobAccessViewerMemo {
+    struct Key: Equatable {
+        let user: AppUser
+        let roster: [AppUser]
+        let authUid: String
+        let currentUserId: String?
+    }
+
+    static let shared = JobAccessViewerMemo()
+    private var entries: [(key: Key, viewer: JobAccessViewer)] = []
+    private let limit = 4
+
+    func value(for key: Key) -> JobAccessViewer? {
+        entries.first { $0.key == key }?.viewer
+    }
+
+    func store(_ viewer: JobAccessViewer, for key: Key) {
+        entries.removeAll { $0.key == key }
+        entries.insert((key, viewer), at: 0)
+        if entries.count > limit { entries.removeLast(entries.count - limit) }
     }
 }
