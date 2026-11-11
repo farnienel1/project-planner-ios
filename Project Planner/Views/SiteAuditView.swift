@@ -772,7 +772,8 @@ struct SiteAuditCreateFlowView: View {
     @State private var multiSelection: [PhotosPickerItem] = []
     @State private var isSubmitting = false
     @State private var submitStatusMessage = ""
-    @State private var isProcessingPhotos = false
+    /// Multi-add placeholders whose photo is still loading (shown with a spinner, not editable yet).
+    @State private var loadingPhotoIds: Set<UUID> = []
     @State private var errorMessage: String?
 
     @State private var showingSubmitSuccess = false
@@ -784,6 +785,12 @@ struct SiteAuditCreateFlowView: View {
     @State private var extraVisibleProjectIds: Set<UUID> = []
 
     private var isEditing: Bool { existingAudit != nil }
+
+    /// Items on screen whose Multi-add photo has not loaded yet. Preview and Save wait for these only;
+    /// deleting a stuck placeholder lets the person carry on.
+    private var photosStillLoading: Int {
+        items.reduce(0) { $0 + (loadingPhotoIds.contains($1.id) ? 1 : 0) }
+    }
 
     private var canGoNext: Bool {
         selectedProject != nil && !authorName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -863,11 +870,11 @@ struct SiteAuditCreateFlowView: View {
                         SiteAuditToolbarPill(title: "Next", filled: true, disabled: !canGoNext, onNavy: true) { step = 2 }
                     } else if step == 2 {
                         if isEditing {
-                            SiteAuditToolbarPill(title: isSubmitting ? "Saving…" : "Save", filled: true, disabled: items.isEmpty || isSubmitting, onNavy: true) {
+                            SiteAuditToolbarPill(title: isSubmitting ? "Saving…" : "Save", filled: true, disabled: items.isEmpty || isSubmitting || photosStillLoading > 0, onNavy: true) {
                                 submitAudit()
                             }
                         } else {
-                            SiteAuditToolbarPill(title: "Preview", filled: true, disabled: items.isEmpty, onNavy: true) { step = 3 }
+                            SiteAuditToolbarPill(title: "Preview", filled: true, disabled: items.isEmpty || photosStillLoading > 0, onNavy: true) { step = 3 }
                         }
                     }
                 }
@@ -968,9 +975,13 @@ struct SiteAuditCreateFlowView: View {
                 authorName: authorName,
                 items: $items,
                 multiSelection: $multiSelection,
-                isProcessingPhotos: isProcessingPhotos,
+                photosStillLoading: photosStillLoading,
+                loadingItemIds: loadingPhotoIds,
                 onAddItem: { editingItem = SiteAuditDraftItem(assignee: authorName) },
-                onEditItem: { editingItem = $0 },
+                onEditItem: { item in
+                    guard !loadingPhotoIds.contains(item.id) else { return }
+                    editingItem = item
+                },
                 onDelete: { items.remove(atOffsets: $0) }
             )
         } else {
@@ -1045,35 +1056,55 @@ struct SiteAuditCreateFlowView: View {
         await MainActor.run { items = updated }
     }
 
+    /// Multi-add: every picked photo becomes an item at once (a placeholder with a spinner), and each
+    /// placeholder gets its photo as soon as that one is ready — a few at a time, not one after another.
+    /// Batches may overlap (Multi-add stays available while one is loading).
+    /// Before, nothing appeared until every photo had loaded, and one photo stuck downloading from iCloud held
+    /// the whole batch ("Processing… / Items · 0"). Local only: nothing is uploaded until Submit.
     private func addMultiPhotos(from selection: [PhotosPickerItem]) async {
-        await MainActor.run {
-            isProcessingPhotos = true
-            submitStatusMessage = "Processing \(selection.count) photo\(selection.count == 1 ? "" : "s")…"
+        let picked = selection
+        multiSelection = []
+        let placeholders = picked.map { _ in SiteAuditDraftItem(title: "Photo item", capturedAt: Date()) }
+        items.append(contentsOf: placeholders)
+        loadingPhotoIds.formUnion(placeholders.map(\.id))
+        let jobs: [(id: UUID, capturedAt: Date, entry: PhotosPickerItem)] = zip(placeholders, picked).map {
+            ($0.id, $0.capturedAt ?? Date(), $1)
         }
-        var newItems: [SiteAuditDraftItem] = []
-        newItems.reserveCapacity(selection.count)
-        for (index, entry) in selection.enumerated() {
-            guard let data = try? await entry.loadTransferable(type: Data.self) else { continue }
-            let captured = Date()
-            let stamped = await Task.detached(priority: .userInitiated) {
-                SiteAuditMediaProcessor.draftImage(from: data, capturedAt: captured)
-            }.value
-            guard let stamped else { continue }
-            newItems.append(SiteAuditDraftItem(
-                title: "Photo item",
-                image: stamped,
-                capturedAt: captured
-            ))
-            await MainActor.run {
-                submitStatusMessage = "Processed \(index + 1) of \(selection.count) photos…"
+        var failed = 0
+        await withTaskGroup(of: (UUID, UIImage?).self) { group in
+            var next = 0
+            while next < min(Self.multiAddParallelLoads, jobs.count) {
+                let job = jobs[next]
+                group.addTask { (job.id, await Self.loadDraftPhoto(job.entry, capturedAt: job.capturedAt)) }
+                next += 1
+            }
+            for await (id, image) in group {
+                loadingPhotoIds.remove(id)
+                if let image {
+                    if let idx = items.firstIndex(where: { $0.id == id }) { items[idx].image = image }
+                } else {
+                    failed += 1
+                    items.removeAll { $0.id == id }
+                }
+                if next < jobs.count {
+                    let job = jobs[next]
+                    group.addTask { (job.id, await Self.loadDraftPhoto(job.entry, capturedAt: job.capturedAt)) }
+                    next += 1
+                }
             }
         }
-        await MainActor.run {
-            items.append(contentsOf: newItems)
-            multiSelection = []
-            isProcessingPhotos = false
-            submitStatusMessage = ""
+        if failed > 0 {
+            errorMessage = "\(failed) photo\(failed == 1 ? "" : "s") could not be loaded. Check your connection (photos stored in iCloud need to download first) and add \(failed == 1 ? "it" : "them") again."
         }
+    }
+
+    private static let multiAddParallelLoads = 3
+
+    nonisolated private static func loadDraftPhoto(_ entry: PhotosPickerItem, capturedAt: Date) async -> UIImage? {
+        guard let data = try? await entry.loadTransferable(type: Data.self) else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            SiteAuditMediaProcessor.draftImage(from: data, capturedAt: capturedAt)
+        }.value
     }
 
     private func submitAudit() {
@@ -1661,6 +1692,7 @@ struct SiteAuditAddItemView: View {
                                 TextField("Front courtyard", text: $draft.title)
                                     .accessibilityIdentifier("siteAuditAddItem.frontCourtyard")
                                     .font(.body)
+                                    .siteAuditClearButton($draft.title, identifier: "siteAuditAddItem.clearTitle")
                             }
                             divider
                             fieldBlock("Comments", required: false) {
@@ -1668,6 +1700,7 @@ struct SiteAuditAddItemView: View {
                                     .accessibilityIdentifier("siteAuditAddItem.notes")
                                     .lineLimit(3...6)
                                     .font(.body)
+                                    .siteAuditClearButton($draft.comments, identifier: "siteAuditAddItem.clearComments", alignment: .top)
                             }
                             divider
                             assigneeRow
@@ -1676,6 +1709,7 @@ struct SiteAuditAddItemView: View {
                                 TextField("e.g. Front entrance courtyard", text: $draft.location)
                                     .accessibilityIdentifier("siteAuditAddItem.eGFrontEntranceCourtyard")
                                     .font(.body)
+                                    .siteAuditClearButton($draft.location, identifier: "siteAuditAddItem.clearLocation")
                             }
                             divider
                             annotationsRow
@@ -1748,6 +1782,7 @@ struct SiteAuditAddItemView: View {
                 TextField("Name", text: $draft.assignee)
                     .accessibilityIdentifier("siteAuditAddItem.name")
                     .font(.body)
+                    .siteAuditClearButton($draft.assignee, identifier: "siteAuditAddItem.clearAssignee")
             }
         }
         .padding(.vertical, 11)
@@ -1764,6 +1799,7 @@ struct SiteAuditAddItemView: View {
                     .accessibilityIdentifier("siteAuditAddItem.notesOnPhoto")
                     .font(.body)
                     .foregroundStyle(SiteAuditColors.primary)
+                    .siteAuditClearButton($draft.annotations, identifier: "siteAuditAddItem.clearAnnotations")
             }
         }
         .padding(.vertical, 11)
