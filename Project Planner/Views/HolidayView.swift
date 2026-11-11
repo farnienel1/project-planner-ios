@@ -628,7 +628,7 @@ struct HolidayView: View {
                     Text("\(away)")
                         .font(.system(.largeTitle, design: .rounded).weight(.bold))
                         .monospacedDigit()
-                    Text("away today")
+                    Text("Away today")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(PPColor.onNavySecondary)
                 }

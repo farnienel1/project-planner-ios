@@ -940,17 +940,11 @@ struct ProjectDetailView: View {
                         schedulingPersonGridRow(row)
                     }
                 }
-                schedulingSectionLabel(
-                    "Subcontractors",
-                    count: subRows.isEmpty ? nil : "\(subRows.count)"
-                )
-                .padding(.top, 8)
-                if subRows.isEmpty {
-                    schedulingEmptyRow("No subcontractors booked this week") {
-                        guard schedulingTapAction(.scheduleDay(subcontractor: true)) == .openScheduler else { return }
-                        showingScheduleSubcontractor = true
-                    }
-                } else {
+                // Owner 11 Nov: no Subcontractors section on a week with no subcontractor booked; the "Book a sub"
+                // card above is the way in. A week with one shows the section as before.
+                if ScheduleWeekGrid.showsSubcontractorSection(subRows.map(\.person)) {
+                    schedulingSectionLabel("Subcontractors", count: "\(subRows.count)")
+                        .padding(.top, 8)
                     ForEach(subRows) { row in
                         schedulingPersonGridRow(row)
                     }
@@ -1360,20 +1354,13 @@ struct ProjectDetailView: View {
 
     /// Dashed empty card with the original text; the subcontractor one also offers a Book link (same action as
     /// "Book a sub").
-    private func schedulingEmptyRow(_ message: String, onBook: (() -> Void)? = nil) -> some View {
+    private func schedulingEmptyRow(_ message: String) -> some View {
         HStack(spacing: 8) {
             Text(message)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            if let onBook {
-                Button("Book", action: onBook)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(PPColor.brand)
-                    .accessibilityIdentifier("projectDetail.bookSubEmpty")
-                    .accessibilityHint("Opens Schedule subcontractor")
-            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
