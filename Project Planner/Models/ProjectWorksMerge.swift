@@ -71,6 +71,35 @@ enum ProjectWorksMerge {
         return list
     }
 
+    /// 1.37.1 (owner report 11 Nov: C716's stale `projects` copy deleted). The rows that stand beside a new `projects`
+    /// slice: the store's small works rows, plus every small works document of the last small works read whose id is
+    /// not among them. A small works document whose id a projects document held was folded into that project by
+    /// `uniqueWorks`; when the projects copy goes, it comes back here instead of leaving the store (job lookups,
+    /// pickers and Home) until another small works snapshot or a restart.
+    static func smallWorksBesideProjects(store: [Project], smallWorksDocuments: [Project]) -> [Project] {
+        var rows = store.filter { $0.isSmallWorksDocument }
+        var listed = Set(rows.map(\.id))
+        for document in smallWorksDocuments where document.isSmallWorksDocument && listed.insert(document.id).inserted {
+            rows.append(document)
+        }
+        return rows
+    }
+
+    /// 1.37.1 (owner report 11 Nov: 1 Carnaby Street missing on iOS until a cold start). The rows a server snapshot of
+    /// one collection no longer holds. Nothing else in a session reads that collection again, so each one is checked
+    /// with a server read of its own document before it leaves the store for good (`ProjectStore.confirmRemovedJobs`).
+    static func removedRows(existingSlice: [Project], nextSlice: [Project]) -> [Project] {
+        let kept = Set(nextSlice.map { "\($0.sourceCollection.rawValue)|\($0.id.uuidString)" })
+        return existingSlice.filter { !kept.contains("\($0.sourceCollection.rawValue)|\($0.id.uuidString)") }
+    }
+
+    /// 1.37.1: a one-off load (`ProjectStore.loadData`) that started before a server snapshot of the same collection
+    /// arrived must not replace that snapshot: its read is older and may have come from the device cache (server read
+    /// timed out or refused). The live slice stays; nil means "keep what the store has".
+    static func loadSlice(remote: [Project]?, liveServerSnapshotDuringLoad: Bool) -> [Project]? {
+        liveServerSnapshotDuringLoad ? nil : remote
+    }
+
     /// Merge one collection (projects or small works) without letting an empty/failed
     /// remote snapshot wipe jobs that are already in memory or on disk.
     static func mergeWorkSlice(
