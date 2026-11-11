@@ -465,7 +465,8 @@ fileprivate struct ManagerCustomHoursSheet: View {
     /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): the confirm step before saving hours over the unpaid break.
     @State private var breakWarningMessage: String?
     /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for the request's days, worked out when the times change.
-    @State private var weekendBreakdownLines: [String] = []
+    /// RULEBOOK 1.18.0 weekend rows, or (1.39.0) the weekday explanation — each with the words behind its figure.
+    @State private var weekendBreakdownLines: [RulebookBreakdownSection] = []
     /// RULEBOOK 1.19.0 `unpaidBreakAppliesOnDay`: the "No break" toggle only when a booked day takes an unpaid break off.
     private let breakApplies: Bool
 
@@ -514,7 +515,7 @@ fileprivate struct ManagerCustomHoursSheet: View {
                     if !context.days.isEmpty {
                         WeekendBookingNoteView(days: context.days, policy: policy)
                     }
-                    WeekendBookingBreakdownView(lines: weekendBreakdownLines)
+                    WeekendBookingBreakdownView(sections: weekendBreakdownLines)
                     // RULEBOOK 1.32.0 §25: pre-filled with the first booked day's organisation rate
                     // (`overtimeRateCreateControl`); each day is stored against its own rate on save.
                     BookingCreateOvertimeRateField(day: context.days.first ?? Date(), rate: $overtimeRate)
@@ -531,14 +532,18 @@ fileprivate struct ManagerCustomHoursSheet: View {
             .navigationTitle("Custom hours")
             .navigationBarTitleDisplayMode(.inline)
             .onChange(of: "\(startText)|\(endText)|\(breakRemoved)", initial: true) { _, _ in
-                weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownLines(
+                let start = startText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let end = endText.trimmingCharacters(in: .whitespacesAndNewlines)
+                weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownSections(
                     CanonicalBusinessEngine.weekendBookingBreakdown(
                         on: context.days,
-                        start: startText.trimmingCharacters(in: .whitespacesAndNewlines),
-                        end: endText.trimmingCharacters(in: .whitespacesAndNewlines),
+                        start: start,
+                        end: end,
                         isBreakRemoved: breakRemoved,
                         fallbackPolicy: policy
                     )
+                ) + CanonicalBusinessEngine.weekdayExplanationSections(
+                    on: context.days, start: start, end: end, isBreakRemoved: breakRemoved, fallbackPolicy: policy
                 )
             }
             .toolbar {
@@ -2319,7 +2324,8 @@ fileprivate struct ManagerSelfBookingEntryView: View {
     @State private var endTime: Date
     @State private var errorMessage: String?
     /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for this day, worked out when the times change.
-    @State private var weekendBreakdownLines: [String] = []
+    /// RULEBOOK 1.18.0 weekend rows, or (1.39.0) the weekday explanation — each with the words behind its figure.
+    @State private var weekendBreakdownLines: [RulebookBreakdownSection] = []
 
     init(
         day: Date,
@@ -2374,7 +2380,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                 }
                 WeekendBookingNoteView(day: day, policy: policy)
                 if selectedSlot == .customHours {
-                    WeekendBookingBreakdownView(lines: weekendBreakdownLines)
+                    WeekendBookingBreakdownView(sections: weekendBreakdownLines)
                 }
 
                 VStack(spacing: 10) {
@@ -2447,7 +2453,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: "\(hhmm(startTime))|\(hhmm(endTime))", initial: true) { _, _ in
             // Saved with the break kept (`breakRemoved: false`), as the booking flow writes it.
-            weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownLines(
+            weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownSections(
                 CanonicalBusinessEngine.weekendBookingBreakdown(
                     on: [day],
                     start: hhmm(startTime),
@@ -2455,6 +2461,8 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                     isBreakRemoved: false,
                     fallbackPolicy: policy
                 )
+            ) + CanonicalBusinessEngine.weekdayExplanationSections(
+                on: [day], start: hhmm(startTime), end: hhmm(endTime), isBreakRemoved: false, fallbackPolicy: policy
             )
         }
     }

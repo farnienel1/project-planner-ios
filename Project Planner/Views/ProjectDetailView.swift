@@ -3003,8 +3003,11 @@ private struct ProjectVisibilitySettingsView: View {
                             Image(systemName: isVisible(user) ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(isVisible(user) ? .blue : .gray)
                         }
+                        // 1.39.0 (owner request 11 Nov, UI only): the whole row, gaps included, toggles.
+                        .contentShape(Rectangle())
                     }
                     .accessibilityIdentifier("projectVisibilitySettings.row.\(user.id)")
+                    .accessibilityAddTraits(isVisible(user) ? .isSelected : [])
                     .buttonStyle(.plain)
                 }
             }

@@ -1038,9 +1038,9 @@ struct ScheduleOperativeView: View {
         isBreakRemoved: Bool,
         paidHours paidH: Double
     ) -> some View {
-        let weekendLines = weekendBreakdownLines(start: start, end: end, isBreakRemoved: isBreakRemoved)
-        if !weekendLines.isEmpty {
-            WeekendBookingBreakdownView(lines: weekendLines)
+        let weekendSections = weekendBreakdownSections(start: start, end: end, isBreakRemoved: isBreakRemoved)
+        if !weekendSections.isEmpty {
+            WeekendBookingBreakdownView(sections: weekendSections)
         } else {
             let otH = probe.overtimeHoursBeyondPaidStandard(policy: p)
             let result = probe.payrollHoursResult(policy: p)
@@ -1059,6 +1059,14 @@ struct ScheduleOperativeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(tone.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .accessibilityElement(children: .combine)
+            // RULEBOOK 1.39.0 `bookingHoursExplanation`: the weekday rule and the steps behind the figure.
+            BookingBreakdownSectionsView(sections: CanonicalBusinessEngine.weekdayExplanationSections(
+                on: selectedDates.sorted(),
+                start: start,
+                end: end,
+                isBreakRemoved: isBreakRemoved,
+                fallbackPolicy: primarySelectedDatePolicy
+            ))
         }
     }
 
@@ -1283,11 +1291,11 @@ struct ScheduleOperativeView: View {
         }
     }
 
-    /// `weekendBookingBreakdown` lines for the selected days with one pair of times (`collapsedBreakdownLines`); empty
-    /// for a weekday-only selection or no dates.
-    private func weekendBreakdownLines(start: String, end: String, isBreakRemoved: Bool) -> [String] {
+    /// `weekendBookingBreakdown` rows for the selected days with one pair of times, with their 1.39.0 explanation
+    /// (`collapsedBreakdownSections`); empty for a weekday-only selection or no dates.
+    private func weekendBreakdownSections(start: String, end: String, isBreakRemoved: Bool) -> [RulebookBreakdownSection] {
         guard !selectedDates.isEmpty else { return [] }
-        return CanonicalBusinessEngine.collapsedBreakdownLines(
+        return CanonicalBusinessEngine.collapsedBreakdownSections(
             CanonicalBusinessEngine.weekendBookingBreakdown(
                 on: selectedDates.sorted(),
                 start: start,
