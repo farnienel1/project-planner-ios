@@ -389,6 +389,27 @@ struct AnnualLeaveBalanceHero: View {
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.9))
             }
+            // RULEBOOK 1.40.0 §4.4: adjustments, pro rata and leave on self-employed days, said plainly.
+            if summary.hasAllowance && abs(summary.adjustmentDays) > 0.001 {
+                Text("Includes \(CanonicalBusinessEngine.annualLeaveAdjustmentLabel(summary.adjustmentDays)) adjusted this leave year")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            if summary.hasAllowance && summary.proRata {
+                Text("Pro rata: the allowance counts only from the start date or the day PAYE began.")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            if summary.hasAllowance && summary.notCountedTakenDays > 0.001 {
+                Text("\(AnnualLeavePolicy.formatAllowanceDays(summary.notCountedTakenDays)) taken while self-employed does not come out of the allowance.")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            if !summary.hasAllowance {
+                Text("No paid allowance: self-employed, or the allowance is switched off.")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.9))
+            }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)

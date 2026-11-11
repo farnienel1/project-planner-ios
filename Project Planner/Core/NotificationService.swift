@@ -526,6 +526,7 @@ class NotificationService: ObservableObject {
         title: String,
         message: String,
         relatedId: UUID?,
+        relatedKey: String? = nil,
         dedupeKey: String
     ) async {
         guard let firebaseBackend = firebaseBackend,
@@ -547,10 +548,26 @@ class NotificationService: ObservableObject {
                 message: message,
                 userId: recipientId,
                 relatedId: relatedId,
+                relatedKey: relatedKey,
                 requiresPermission: nil
             )
             await saveNotification(notification)
         }
+    }
+
+    /// RULEBOOK 1.40.0 §4.4, §13: a manual annual-leave adjustment tells every admin (`annual_leave_adjusted`,
+    /// `annualLeaveAdjustedRecipients` = `companyActivityRecipients`, never the person who made it). `relatedId` is the
+    /// person; tapping opens their annual leave page (`annualLeavePerson`). Copy from `annualLeaveAdjustedNoticeText`.
+    func notifyAnnualLeaveAdjusted(personUserId: String, personName: String, actorName: String, days: Double, reason: String, adjustmentId: String) async {
+        let text = CanonicalBusinessEngine.annualLeaveAdjustedNoticeText(personName: personName, actorName: actorName, days: days, reason: reason)
+        await saveCompanyActivityNotice(
+            type: .annualLeaveAdjusted,
+            title: text.title,
+            message: text.message,
+            relatedId: nil,
+            relatedKey: personUserId,
+            dedupeKey: "annualLeaveAdjusted|\(adjustmentId)"
+        )
     }
 
     func notifyOperativeCreated(operativeId: UUID, operativeName: String, createdBy: String) async {

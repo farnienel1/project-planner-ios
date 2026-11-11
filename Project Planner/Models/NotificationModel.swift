@@ -16,6 +16,9 @@ struct AppNotification: Identifiable, Codable, Hashable {
         /// RULEBOOK 1.31.0 §11: a person stopped being a manager and was taken off their jobs
         /// (`JOB_MANAGER_REMOVED_NOTICE_TYPE`, company activity).
         case jobManagerRemoved = "job_manager_removed"
+        /// RULEBOOK 1.40.0 §4.4, §13: an admin or line manager adjusted someone's annual leave (company activity,
+        /// `annualLeaveAdjustedRecipients`); `relatedId` is the person.
+        case annualLeaveAdjusted = "annual_leave_adjusted"
         case managerCreated = "manager_created"
         case clientCreated = "client_created"
         case projectCreated = "project_created"

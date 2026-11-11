@@ -164,6 +164,8 @@ enum MyProfileSummaryInput {
         if let allowance = user.annualLeaveYearAllowance, allowance.isFinite { row["annualLeaveYearAllowance"] = allowance }
         if let key = user.annualLeaveYearAllowanceKey { row["annualLeaveYearAllowanceKey"] = key }
         if let start = user.employmentStartDate, !start.isEmpty { row["employmentStartDate"] = start }
+        // RULEBOOK 1.40.0 §4.4: the allowance applies only on PAYE days (`employmentTypeOnDay`).
+        for (key, value) in AnnualLeaveEmployment(user).json { row[key] = value }
         return row
     }
 
@@ -194,6 +196,7 @@ enum MyProfileSummaryInput {
         tasks: [ProjectTask],
         bookings: [Booking],
         managerBookings: [ManagerSiteBooking],
+        leaveAdjustments: [AnnualLeaveAdjustmentRecord] = [],
         now: Date = Date()
     ) -> [String: Any] {
         func optional(_ value: String?) -> Any { value.map { $0 as Any } ?? NSNull() }
@@ -210,6 +213,8 @@ enum MyProfileSummaryInput {
             "leaveDefaults": leaveDefaultsRow(OrganizationRulebookContext.annualLeaveDefaults),
             "holidays": holidays.map(\.rulebookLeaveRecord.json),
             "nonWorkingDayKeys": OrganizationBankHolidays.dayKeys,
+            // RULEBOOK 1.40.0 §4.4: the person's manual adjustments (this leave year's count).
+            "leaveAdjustments": leaveAdjustments.map(\.balanceRow),
             "tasks": tasks.map { task -> [String: Any] in
                 [
                     "status": task.status.rawValue,

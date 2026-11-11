@@ -156,6 +156,7 @@ struct NotificationRowView: View {
         case .operativeCreated: return "person.badge.plus"
         case .operativeDeleted: return "person.badge.minus"
         case .jobManagerRemoved: return "person.crop.circle.badge.xmark"
+        case .annualLeaveAdjusted: return "sun.max"
         case .managerCreated: return "person.badge.key"
         case .clientCreated: return "person.2.badge.plus"
         case .projectCreated: return "folder.badge.plus"
@@ -193,6 +194,7 @@ struct NotificationRowView: View {
         case .bookingCreated: return .plan
         case .operativeCreated: return .people
         case .operativeDeleted, .jobManagerRemoved: return .people
+        case .annualLeaveAdjusted: return .people
         case .managerCreated: return .people
         case .clientCreated: return .people
         case .projectCreated: return .sites

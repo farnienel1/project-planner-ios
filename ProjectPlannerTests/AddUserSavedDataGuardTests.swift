@@ -21,6 +21,11 @@ import XCTest
 /// deliberate behaviour change): `createUser()` gains one line after the form's own checks, `if stopForDuplicateName()
 /// { return }` (`usersWithSameName`; Add anyway saves as before). Its hash was recomputed with this test's own
 /// extraction (marker through the closing brace, whitespace collapsed, SHA-256). Every other recorded hash is unchanged.
+///
+/// New baseline (RULEBOOK 1.40.0 §4.4, owner decision 11 Nov H35 — a deliberate behaviour change): Add user no longer
+/// sets a "remaining this year" figure; `inviteRemainingOverride` returns nil (a joiner is pro rata from their start
+/// date, and extra days are an adjustment with a reason). Its hash was recomputed with this test's own extraction.
+/// Every other recorded hash is unchanged.
 final class AddUserSavedDataGuardTests: XCTestCase {
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -37,7 +42,7 @@ final class AddUserSavedDataGuardTests: XCTestCase {
         ("Project Planner/Views/AddUserView.swift", "private var lineManagerSummary: String {", "e8f06da82202af7aae99b4853f5b6d904b4e2b89ca25f931f24d71b699f7af5d"),
         ("Project Planner/Views/AddUserView.swift", "private func resetAnnualLeaveInviteDefaults() {", "f17b78c831a34b530fa859da42d803b6a17859082423f27a12679e754660398c"),
         ("Project Planner/Views/AddUserView.swift", "private func parseAnnualLeaveDaysForInvite() -> Double {", "a2e00bbf0a0e9ff9b8c4a7d9ffa3cc1eeb94ff1771abea044789b77af5739a4e"),
-        ("Project Planner/Views/AddUserView.swift", "private var inviteRemainingOverride: CanonicalBusinessEngine.CanonicalRemainingOverride? {", "5d482d83e144c976026fdd9b7a0deb2929c1954d803baf5631cdab85b68f5bc0"),
+        ("Project Planner/Views/AddUserView.swift", "private var inviteRemainingOverride: CanonicalBusinessEngine.CanonicalRemainingOverride? {", "c44279ed31eb598090e5366520effa9c616f3e62b0f1e5d115794be899909fd0"),
         ("Project Planner/Views/AddUserView.swift", "private var annualLeaveAllowanceCopy: CanonicalBusinessEngine.CanonicalAnnualLeaveAllowanceCopy {", "0eb42bcf835ccec753425e18594d650432f9f7e392a07571ecc558b02bc97744"),
         ("Project Planner/Views/AddUserView.swift", "private var permissionsDescriptionHeader: String {", "b6b8c0d3df760a1c7d3b2b570ec5b1fbdf3b866dfabf31dd6072559bbb6b6bd7"),
         ("Project Planner/Views/AddUserView.swift", "private func applyPermissionsForInvitedType() {", "33d474cf3f9ad5e4fd366549fa2164a47adc434718cf0c13a5552c360a425ea9"),

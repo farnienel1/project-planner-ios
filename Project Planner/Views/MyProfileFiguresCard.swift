@@ -40,6 +40,8 @@ struct MyProfileFiguresCard: View {
     /// True once the bank holidays the leave figure needs have loaded (or failed): until then a bank holiday inside a
     /// leave record could still count as leave, so no figures are shown.
     @State private var bankHolidaysReady = false
+    /// RULEBOOK 1.40.0 §4.4: the person's own manual adjustments (live while the card is shown).
+    @StateObject private var adjustmentsModel = AnnualLeaveAdjustmentsModel()
 
     private var viewer: AppUser? {
         guard let me = userStore.currentUser else { return nil }
@@ -83,7 +85,8 @@ struct MyProfileFiguresCard: View {
             holidays: holidayStore.bookings,
             tasks: taskStore.tasks,
             bookings: bookingStore.bookings,
-            managerBookings: managerScheduleStore.managerSiteBookings
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            leaveAdjustments: adjustmentsModel.rows(for: RulebookPeople.ownerIds(for: viewer, users: userStore.organizationUsers))
         )
         return CanonicalBusinessEngine.myProfileSummary(input)
     }
@@ -101,6 +104,10 @@ struct MyProfileFiguresCard: View {
         }
         .task(id: bankHolidayKey) { await loadBankHolidays() }
         .task(id: recomputeKey) { summary = computeSummary() }
+        .task(id: viewer?.id ?? "") {
+            if let id = viewer?.id { adjustmentsModel.listen(backend: firebaseBackend, userIds: [id]) }
+        }
+        .onReceive(adjustmentsModel.objectWillChange) { _ in storeRevision &+= 1 }
         .onReceive(userStore.objectWillChange) { _ in storeRevision &+= 1 }
         .onReceive(operativeStore.objectWillChange) { _ in storeRevision &+= 1 }
         .onReceive(holidayStore.objectWillChange) { _ in storeRevision &+= 1 }

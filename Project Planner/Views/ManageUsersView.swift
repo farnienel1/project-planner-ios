@@ -1612,6 +1612,8 @@ struct EditUserView: View {
     @State private var annualLeaveEnabledDraft: Bool
     @State private var remainingLeaveText = ""
     @State private var baselineRemainingText = ""
+    /// RULEBOOK 1.40.0 §4.4: this person's manual adjustments, for the remaining figure shown (read only).
+    @StateObject private var leaveAdjustmentsModel = AnnualLeaveAdjustmentsModel()
     @State private var employmentTypeDraft: EmploymentType
     @State private var showingEmploymentTypeConfirmation = false
     @State private var employmentTypeConfirmationAccepted = false
@@ -1922,7 +1924,10 @@ struct EditUserView: View {
             orgEndMonth: org.endMonth,
             yearAllowance: subject.annualLeaveYearAllowance,
             yearAllowanceKey: subject.annualLeaveYearAllowanceKey,
-            employmentStartDayKey: subject.employmentStartDate
+            employmentStartDayKey: subject.employmentStartDate,
+            // RULEBOOK 1.40.0 §4.4: PAYE days only, with this year's adjustments.
+            employment: AnnualLeaveEmployment(subject),
+            adjustments: leaveAdjustmentsModel.rows(for: [subject.id])
         )
         return summary.remainingDays ?? 0
     }
@@ -2007,19 +2012,25 @@ struct EditUserView: View {
                     isEnabled: canEditPermissionsMatrix
                 )
                 .padding(14)
+                // RULEBOOK 1.40.0 (owner decision 11 Nov H35): no "set remaining" box any more — days are added or taken
+                // off with a reason on the person's annual leave page (Annual leave → Team); a stored override still
+                // counts until its leave year ends.
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(annualLeaveAllowanceCopy.remainingTitle)
+                    Text("Remaining this leave year")
                         .font(.subheadline.weight(.semibold))
-                    TextField("Remaining", text: $remainingLeaveText)
-                        .keyboardType(.decimalPad)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(!canEditPermissionsMatrix)
-                    Text(annualLeaveAllowanceCopy.remainingNote)
+                    Text("\(AnnualLeavePolicy.formatAllowanceDays(currentRemainingDays(for: userStore.rosterRow(for: user.id) ?? user))) days")
+                        .font(.body.weight(.semibold))
+                        .monospacedDigit()
+                        .accessibilityIdentifier("editUser.remainingLeave")
+                    Text("To add or take off days, open this person on Annual leave → Team and choose Adjust leave. Each change needs a reason and is kept as history.")
                         .font(.caption)
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
+                .task(id: user.id) {
+                    leaveAdjustmentsModel.listen(backend: firebaseBackend, userIds: [user.id])
+                }
                 employmentStartDateRow
             }
         }
