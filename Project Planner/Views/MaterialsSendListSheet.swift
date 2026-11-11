@@ -59,6 +59,8 @@ struct MaterialsSendListSheet: View {
         let requestType: MaterialOrderRequest.RequestType
         let itemCount: Int
         let recipientCount: Int
+        /// No signal: the request waits in the offline outbox and is emailed when the phone is back online.
+        var queuedForSync = false
     }
 
     var body: some View {
@@ -88,15 +90,38 @@ struct MaterialsSendListSheet: View {
                     footerBar
                 }
             }
+            // The success state fills this sheet instead of opening a second, half-height sheet on top of it
+            // (that stacked look — a narrow card over a wider sheet — read as broken). Same content as before.
+            .overlay {
+                if let conf = sendConfirmation {
+                    MaterialsSendConfirmationView(
+                        project: project,
+                        confirmation: conf,
+                        wholesalers: wholesalers,
+                        selectedContactIds: selectedContactIds,
+                        oneOffRecipients: effectiveOneOffRecipients,
+                        onDone: {
+                            sendConfirmation = nil
+                            isPresented = false
+                            NotificationCenter.default.post(name: NSNotification.Name("reloadMaterials"), object: nil)
+                        }
+                    )
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: sendConfirmation?.id)
+            .interactiveDismissDisabled(sendConfirmation != nil)
             .background(PPColor.page.ignoresSafeArea())
-            .navigationTitle("Send list")
+            .navigationTitle(sendConfirmation.map(MaterialsSendConfirmationView.headline) ?? "Send list")
             .navigationBarTitleDisplayMode(.inline)
             .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { isPresented = false }
-                        .foregroundStyle(.white)
-                        .accessibilityIdentifier("materialsSendList.cancel")
+                    if sendConfirmation == nil {
+                        Button("Cancel") { isPresented = false }
+                            .foregroundStyle(.white)
+                            .accessibilityIdentifier("materialsSendList.cancel")
+                    }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -143,21 +168,6 @@ struct MaterialsSendListSheet: View {
                 )
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
-            }
-            .sheet(item: $sendConfirmation) { conf in
-                MaterialsSendConfirmationView(
-                    project: project,
-                    confirmation: conf,
-                    wholesalers: wholesalers,
-                    selectedContactIds: selectedContactIds,
-                    oneOffRecipients: effectiveOneOffRecipients,
-                    onDone: {
-                        sendConfirmation = nil
-                        isPresented = false
-                        NotificationCenter.default.post(name: NSNotification.Name("reloadMaterials"), object: nil)
-                    }
-                )
-                .presentationDetents([.medium, .large])
             }
         }
     }
@@ -705,7 +715,8 @@ struct MaterialsSendListSheet: View {
                         sendConfirmation = SendConfirmationState(
                             requestType: type,
                             itemCount: items.count,
-                            recipientCount: contacts.count
+                            recipientCount: contacts.count,
+                            queuedForSync: true
                         )
                         NotificationCenter.default.post(
                             name: NSNotification.Name("materialSendHistoryDidChange"),
@@ -982,7 +993,7 @@ private struct MaterialsResendIncludeExcludeSheet: View {
     }
 }
 
-private struct MaterialsSendConfirmationView: View {
+struct MaterialsSendConfirmationView: View {
     let project: Project
     let confirmation: MaterialsSendListSheet.SendConfirmationState
     let wholesalers: [Wholesaler]
@@ -990,29 +1001,45 @@ private struct MaterialsSendConfirmationView: View {
     let oneOffRecipients: [MaterialsSendListSheet.OneOffRecipient]
     let onDone: () -> Void
 
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 16) {
-                    PPIconTile(symbol: "checkmark", family: .sites, size: PPMetrics.quickActionIcon, lifted: true)
-                    Text(confirmation.requestType == .quote ? "Quote sent" : "Order placed")
-                        .font(.system(.title2, design: .rounded))
-                        .fontWeight(.bold)
-                    Text("Sent to \(confirmation.recipientCount) recipients · \(confirmation.itemCount) items")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Button("Done", action: onDone)
-                        .accessibilityIdentifier("materialsSendConfirmation.done")
-                        .buttonStyle(.borderedProminent)
-                        .buttonBorderShape(.capsule)
-                        .tint(MaterialsOrderingTheme.success)
-                        .padding(.top, 12)
-                }
-                .padding(24)
-            }
-            .background(PPColor.page.ignoresSafeArea())
-            .navigationBarTitleDisplayMode(.inline)
+    static func headline(_ confirmation: MaterialsSendListSheet.SendConfirmationState) -> String {
+        if confirmation.queuedForSync {
+            return confirmation.requestType == .quote ? "Quote queued" : "Order queued"
         }
+        return confirmation.requestType == .quote ? "Quote sent" : "Order placed"
+    }
+
+    static func detail(_ confirmation: MaterialsSendListSheet.SendConfirmationState) -> String {
+        let recipients = "\(confirmation.recipientCount) recipient\(confirmation.recipientCount == 1 ? "" : "s")"
+        let items = "\(confirmation.itemCount) item\(confirmation.itemCount == 1 ? "" : "s")"
+        if confirmation.queuedForSync {
+            return "No signal — it will be emailed to \(recipients) when you're back online · \(items)"
+        }
+        return "Sent to \(recipients) · \(items)"
+    }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Spacer(minLength: 0)
+            PPIconTile(symbol: confirmation.queuedForSync ? "clock" : "checkmark", family: .sites, size: PPMetrics.quickActionIcon, lifted: true)
+            Text(Self.headline(confirmation))
+                .font(.system(.title2, design: .rounded))
+                .fontWeight(.bold)
+            Text(Self.detail(confirmation))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button("Done", action: onDone)
+                .accessibilityIdentifier("materialsSendConfirmation.done")
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(MaterialsOrderingTheme.success)
+                .padding(.top, 12)
+            Spacer(minLength: 0)
+            Spacer(minLength: 0)
+        }
+        .multilineTextAlignment(.center)
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(PPColor.page.ignoresSafeArea())
     }
 }
 
