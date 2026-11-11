@@ -192,7 +192,8 @@ struct AnnualLeaveDisplaySpan: Identifiable {
 
 struct AnnualLeaveLegend: View {
     var body: some View {
-        HStack(spacing: 10) {
+        // Owner 11 Nov: wrap by whole item (flow layout), never mid-word ("Pendin g"), as web's flex-wrap legend.
+        PPWrapLayout(spacing: 10) {
             item(AnnualLeavePalette.approved, "Approved")
             halfItem("Half day")
             item(AnnualLeavePalette.amber, "Pending", bordered: true)
@@ -216,6 +217,7 @@ struct AnnualLeaveLegend: View {
                 }
             Text(title)
         }
+        .fixedSize()
     }
 
     private func halfItem(_ title: String) -> some View {
@@ -231,6 +233,7 @@ struct AnnualLeaveLegend: View {
                 .frame(width: 13, height: 13)
             Text(title)
         }
+        .fixedSize()
     }
 }
 
