@@ -75,8 +75,8 @@ final class Booking1331SaveFlowTests: XCTestCase {
         let proceed = try body(of: "private func proceedWithBooking()", in: wizard)
         XCTAssertTrue(proceed.contains("ScheduleBookingSaveOutcome.decide(results: saveResults)"))
         XCTAssertEqual(
-            proceed.components(separatedBy: "createdDatesByOperative[").count - 1, 2,
-            "a booking is counted (and notified) only from its own kept outcome, for edits and for new bookings"
+            proceed.components(separatedBy: "createdDatesByOperative[").count - 1, 3,
+            "a booking is counted (and notified) only from its own kept outcome, for edits, new bookings and (1.41.0) Replace"
         )
         XCTAssertEqual(proceed.components(separatedBy: "if result.keepsBooking {").count - 1, 2)
     }
