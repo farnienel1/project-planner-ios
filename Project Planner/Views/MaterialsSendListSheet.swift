@@ -90,6 +90,10 @@ struct MaterialsSendListSheet: View {
                     footerBar
                 }
             }
+            // Behind the success state the form (and its Send buttons) is hidden from VoiceOver and taps, so it
+            // cannot be sent twice.
+            .accessibilityHidden(sendConfirmation != nil)
+            .allowsHitTesting(sendConfirmation == nil)
             // The success state fills this sheet instead of opening a second, half-height sheet on top of it
             // (that stacked look — a narrow card over a wider sheet — read as broken). Same content as before.
             .overlay {
@@ -106,13 +110,14 @@ struct MaterialsSendListSheet: View {
                             NotificationCenter.default.post(name: NSNotification.Name("reloadMaterials"), object: nil)
                         }
                     )
+                    .accessibilityAddTraits(.isModal)
                     .transition(.opacity)
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: sendConfirmation?.id)
             .interactiveDismissDisabled(sendConfirmation != nil)
             .background(PPColor.page.ignoresSafeArea())
-            .navigationTitle(sendConfirmation.map(MaterialsSendConfirmationView.headline) ?? "Send list")
+            .navigationTitle(sendConfirmation == nil ? "Send list" : "")
             .navigationBarTitleDisplayMode(.inline)
             .ppNavyNavigationBar()
             .toolbar {

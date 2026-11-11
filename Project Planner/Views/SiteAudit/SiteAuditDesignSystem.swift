@@ -161,26 +161,26 @@ struct SiteAuditIconCircleButton: View {
 
     @ViewBuilder
     private var label: some View {
-    if onNavy {
-        Image(systemName: systemName)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(Color.white)
-            .frame(width: 36, height: 36)
-            .background(Circle().fill(primary ? PPColor.brand : PPColor.onNavyFill))
-            .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
-            .contentShape(Circle())
-    } else {
-        Image(systemName: systemName)
-            .font(.system(size: primary ? 16 : 17, weight: .medium))
-            .foregroundStyle(primary ? Color.white : SiteAuditColors.text)
-            .frame(width: 34, height: 34)
-            .background(primary ? SiteAuditColors.primary : PPColor.card)
-            .clipShape(Circle())
-            .overlay(
-                Circle()
-                    .strokeBorder(primary ? Color.clear : SiteAuditColors.borderStrong, lineWidth: 0.5)
-            )
-    }
+        if onNavy {
+            Image(systemName: systemName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.white)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(primary ? PPColor.brand : PPColor.onNavyFill))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5))
+                .contentShape(Circle())
+        } else {
+            Image(systemName: systemName)
+                .font(.system(size: primary ? 16 : 17, weight: .medium))
+                .foregroundStyle(primary ? Color.white : SiteAuditColors.text)
+                .frame(width: 34, height: 34)
+                .background(primary ? SiteAuditColors.primary : PPColor.card)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .strokeBorder(primary ? Color.clear : SiteAuditColors.borderStrong, lineWidth: 0.5)
+                )
+        }
     }
 }
 
@@ -208,43 +208,78 @@ struct SiteAuditToolbarPill: View {
 
     @ViewBuilder
     private var label: some View {
-            if onNavy {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(disabled ? 0.45 : 1))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background {
-                        if filled {
-                            Capsule().fill(disabled ? PPColor.onNavyFill : PPColor.brand)
-                        } else {
-                            Capsule()
-                                .fill(PPColor.onNavyFill)
-                                .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
-                        }
+        if onNavy {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.white.opacity(disabled ? 0.45 : 1))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background {
+                    if filled {
+                        Capsule().fill(disabled ? PPColor.onNavyFill : PPColor.brand)
+                    } else {
+                        Capsule()
+                            .fill(PPColor.onNavyFill)
+                            .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
                     }
-            } else {
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(disabled ? SiteAuditColors.textDisabled : (filled ? .white : SiteAuditColors.text))
-                    .padding(.horizontal, filled ? 14 : 12)
-                    .padding(.vertical, 6)
-                    .background {
-                        if filled {
-                            Capsule().fill(disabled ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
-                        } else {
-                            Capsule()
-                                .fill(SiteAuditColors.card)
-                                .overlay(Capsule().strokeBorder(SiteAuditColors.borderStrong, lineWidth: 0.5))
-                        }
+                }
+        } else {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(disabled ? SiteAuditColors.textDisabled : (filled ? .white : SiteAuditColors.text))
+                .padding(.horizontal, filled ? 14 : 12)
+                .padding(.vertical, 6)
+                .background {
+                    if filled {
+                        Capsule().fill(disabled ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
+                    } else {
+                        Capsule()
+                            .fill(SiteAuditColors.card)
+                            .overlay(Capsule().strokeBorder(SiteAuditColors.borderStrong, lineWidth: 0.5))
                     }
+                }
+        }
+    }
+}
+
+/// "N photos could not be loaded" from Multi-add, with a dismiss ✕ (sets the count back to 0). Shown in the
+/// items step and in the item editor, so it is seen even while the editor sheet is open. UI only.
+struct SiteAuditPhotoLoadFailureBanner: View {
+    @Binding var count: Int
+
+    var body: some View {
+        if count > 0 {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(SiteAuditColors.warn)
+                Text("\(count) photo\(count == 1 ? "" : "s") could not be loaded. Check your connection (photos stored in iCloud download first) and add \(count == 1 ? "it" : "them") again.")
+                    .font(.footnote)
+                    .foregroundStyle(SiteAuditColors.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button { count = 0 } label: {
+                    Image(systemName: "xmark")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(SiteAuditColors.textSecondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss photo loading message")
+                .accessibilityIdentifier("siteAuditPhotoLoadFailure.dismiss")
             }
+            .padding(.leading, 12)
+            .background(SiteAuditColors.warnTint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityIdentifier("siteAuditPhotoLoadFailure")
+        }
     }
 }
 
 /// A small ✕ inside a text field that empties it in one tap; shown only while the field has text. UI only.
 struct SiteAuditClearTextButton: View {
     @Binding var text: String
+    /// Spoken by VoiceOver, e.g. "Clear title".
+    var accessibilityName: String
     var identifier: String
 
     var body: some View {
@@ -253,11 +288,11 @@ struct SiteAuditClearTextButton: View {
                 Image(systemName: "xmark.circle.fill")
                     .font(.body)
                     .foregroundStyle(SiteAuditColors.textDisabled)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Clear")
+            .accessibilityLabel(accessibilityName)
             .accessibilityIdentifier(identifier)
         }
     }
@@ -265,10 +300,10 @@ struct SiteAuditClearTextButton: View {
 
 extension View {
     /// Puts a `SiteAuditClearTextButton` at the end of a text field.
-    func siteAuditClearButton(_ text: Binding<String>, identifier: String, alignment: VerticalAlignment = .center) -> some View {
-        HStack(alignment: alignment, spacing: 4) {
+    func siteAuditClearButton(_ text: Binding<String>, label: String, identifier: String, alignment: VerticalAlignment = .center) -> some View {
+        HStack(alignment: alignment, spacing: 0) {
             self
-            SiteAuditClearTextButton(text: text, identifier: identifier)
+            SiteAuditClearTextButton(text: text, accessibilityName: label, identifier: identifier)
         }
     }
 }

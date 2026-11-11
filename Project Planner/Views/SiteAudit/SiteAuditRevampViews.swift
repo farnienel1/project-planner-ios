@@ -419,6 +419,7 @@ struct SiteAuditItemsStepView: View {
     /// Multi-add photos still loading (their items are already listed with a spinner).
     var photosStillLoading = 0
     var loadingItemIds: Set<UUID> = []
+    @Binding var failedPhotoLoads: Int
     let onAddItem: () -> Void
     let onEditItem: (SiteAuditDraftItem) -> Void
     let onDelete: (IndexSet) -> Void
@@ -467,6 +468,8 @@ struct SiteAuditItemsStepView: View {
                         .accessibilityIdentifier("siteAuditItemsStep.photoOnRectangleAngled")
                     }
 
+                    SiteAuditPhotoLoadFailureBanner(count: $failedPhotoLoads)
+
                     if photosStillLoading > 0 {
                         HStack(spacing: 8) {
                             ProgressView()
@@ -495,6 +498,9 @@ struct SiteAuditItemsStepView: View {
                             }
                             .accessibilityIdentifier("siteAuditItemsStep.row.\(item.id)")
                             .buttonStyle(.plain)
+                            // A row still loading its photo cannot be opened yet: not announced as a button.
+                            .accessibilityRemoveTraits(loadingItemIds.contains(item.id) ? .isButton : [])
+                            .accessibilityValue(loadingItemIds.contains(item.id) ? "Photo loading" : "")
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     if let i = items.firstIndex(where: { $0.id == item.id }) {

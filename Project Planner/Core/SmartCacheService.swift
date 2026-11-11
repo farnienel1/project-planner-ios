@@ -14,6 +14,22 @@ import Network
 import UIKit
 #endif
 
+/// When the offline outbox is retried besides "network came back" (a path change) and app foreground: every
+/// `interval` seconds while anything is still pending. A phone on a weak site signal often never reports the
+/// path going offline, so a queued material order email could wait until airplane mode was toggled.
+enum OutboxRetryPolicy {
+    nonisolated static let interval: TimeInterval = 60
+
+    nonisolated static func shouldKeepRetrying(pendingCount: Int) -> Bool {
+        pendingCount > 0
+    }
+
+    /// One timer pass: retry only while online, something is pending and no sync is already running.
+    nonisolated static func shouldRetryNow(pendingCount: Int, isOnline: Bool, isSyncing: Bool) -> Bool {
+        shouldKeepRetrying(pendingCount: pendingCount) && isOnline && !isSyncing
+    }
+}
+
 // MARK: - Smart Cache Service for Offline Functionality
 
 @MainActor
@@ -44,6 +60,8 @@ class SmartCacheService: ObservableObject {
     private var firebaseBackend: FirebaseBackend?
     private var outboxCancellable: AnyCancellable?
     private var syncTask: Task<Void, Never>?
+    /// Runs while the outbox has pending entries (`OutboxRetryPolicy`); stops itself when it is empty.
+    private var outboxRetryTask: Task<Void, Never>?
 
     // In-memory cache for offline functionality. Values are stored per organisation
     // so a switch cannot satisfy the next company from the previous company's arrays.
@@ -91,6 +109,7 @@ class SmartCacheService: ObservableObject {
         networkMonitor.cancel()
         #endif
         syncTask?.cancel()
+        outboxRetryTask?.cancel()
     }
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
@@ -102,6 +121,33 @@ class SmartCacheService: ObservableObject {
         failedSyncCount = OfflineOutboxStore.shared.failedCount
         if isOnline && pendingSyncCount == 0 && failedSyncCount == 0 {
             isSyncing = false
+        }
+        updateOutboxRetryTimer()
+    }
+
+    private func updateOutboxRetryTimer() {
+        guard OutboxRetryPolicy.shouldKeepRetrying(pendingCount: OfflineOutboxStore.shared.pendingCount) else {
+            outboxRetryTask?.cancel()
+            outboxRetryTask = nil
+            return
+        }
+        guard outboxRetryTask == nil else { return }
+        outboxRetryTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(OutboxRetryPolicy.interval * 1_000_000_000))
+                guard !Task.isCancelled, let self else { return }
+                let pending = OfflineOutboxStore.shared.pendingCount
+                guard OutboxRetryPolicy.shouldKeepRetrying(pendingCount: pending) else {
+                    self.outboxRetryTask = nil
+                    return
+                }
+                #if canImport(Network)
+                self.isOnline = self.networkMonitor.currentPath.status == .satisfied
+                #endif
+                if OutboxRetryPolicy.shouldRetryNow(pendingCount: pending, isOnline: self.isOnline, isSyncing: self.isSyncing) {
+                    self.syncPendingChanges()
+                }
+            }
         }
     }
 

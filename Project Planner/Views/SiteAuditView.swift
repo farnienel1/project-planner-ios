@@ -774,6 +774,12 @@ struct SiteAuditCreateFlowView: View {
     @State private var submitStatusMessage = ""
     /// Multi-add placeholders whose photo is still loading (shown with a spinner, not editable yet).
     @State private var loadingPhotoIds: Set<UUID> = []
+    /// Multi-add batches and the existing-audit photo download; cancelled when the flow closes.
+    @State private var multiAddTasks: [UUID: Task<Void, Never>] = [:]
+    @State private var hydrateTask: Task<Void, Never>?
+    /// Photos that could not be loaded, summed across batches; shown in the items step and in the item editor
+    /// (an alert would not show while the editor sheet is open). Cleared when the person dismisses it.
+    @State private var failedPhotoLoads = 0
     @State private var errorMessage: String?
 
     @State private var showingSubmitSuccess = false
@@ -880,7 +886,7 @@ struct SiteAuditCreateFlowView: View {
                 }
             }
                 .sheet(item: $editingItem) { item in
-                    SiteAuditAddItemView(item: item) { updated in
+                    SiteAuditAddItemView(item: item, failedPhotoLoads: $failedPhotoLoads) { updated in
                         if let idx = items.firstIndex(where: { $0.id == updated.id }) {
                             items[idx] = updated
                         } else {
@@ -912,7 +918,12 @@ struct SiteAuditCreateFlowView: View {
                     )
                 }
                 .onChange(of: multiSelection) { _, newValue in
-                    if !newValue.isEmpty { Task { await addMultiPhotos(from: newValue) } }
+                    guard !newValue.isEmpty else { return }
+                    let batch = UUID()
+                    multiAddTasks[batch] = Task {
+                        await addMultiPhotos(from: newValue)
+                        multiAddTasks[batch] = nil
+                    }
                 }
                 .onAppear {
                     if let existing = existingAudit, !didBootstrapExisting {
@@ -949,6 +960,14 @@ struct SiteAuditCreateFlowView: View {
                     Text(errorMessage ?? "")
                 }
         }
+        // On the NavigationStack, not the step Group: modifiers on a Group apply to each step view, so they
+        // would fire on every step change. This fires only when the whole flow closes.
+        .onDisappear {
+            multiAddTasks.values.forEach { $0.cancel() }
+            multiAddTasks = [:]
+            hydrateTask?.cancel()
+            hydrateTask = nil
+        }
     }
 
     private var detailsStep: some View {
@@ -977,6 +996,7 @@ struct SiteAuditCreateFlowView: View {
                 multiSelection: $multiSelection,
                 photosStillLoading: photosStillLoading,
                 loadingItemIds: loadingPhotoIds,
+                failedPhotoLoads: $failedPhotoLoads,
                 onAddItem: { editingItem = SiteAuditDraftItem(assignee: authorName) },
                 onEditItem: { item in
                     guard !loadingPhotoIds.contains(item.id) else { return }
@@ -1037,23 +1057,26 @@ struct SiteAuditCreateFlowView: View {
                 createdAt: item.createdAt
             )
         }
-        Task { await hydrateItemImages(from: existing.items) }
+        hydrateTask = Task { await hydrateItemImages(from: existing.items) }
     }
 
+    /// Fills each saved item's photo in place, by id, as it downloads. It never replaces the whole list, so
+    /// Multi-add placeholders, photos already loaded and edits made meanwhile are kept; an item the person
+    /// deleted, or whose photo they replaced, is left alone.
     private func hydrateItemImages(from saved: [SiteAuditItem]) async {
-        var updated = items
         for item in saved {
+            if Task.isCancelled { return }
             guard let urlString = item.imageURL,
                   let url = URL(string: urlString),
-                  let (data, _) = try? await URLSession.shared.data(from: url),
-                  let image = UIImage(data: data),
-                  let idx = updated.firstIndex(where: { $0.id == item.id }) else { continue }
+                  let (data, _) = try? await URLSession.shared.data(from: url) else { continue }
             let normalized = await Task.detached(priority: .utility) {
-                SiteAuditMediaProcessor.normalizedForDisplay(image)
+                SiteAuditMediaProcessor.displayImage(from: data)
             }.value
-            updated[idx].image = normalized
+            guard let normalized,
+                  let idx = items.firstIndex(where: { $0.id == item.id }),
+                  items[idx].image == nil else { continue }
+            items[idx].image = normalized
         }
-        await MainActor.run { items = updated }
     }
 
     /// Multi-add: every picked photo becomes an item at once (a placeholder with a spinner), and each
@@ -1080,28 +1103,30 @@ struct SiteAuditCreateFlowView: View {
             }
             for await (id, image) in group {
                 loadingPhotoIds.remove(id)
+                if Task.isCancelled { continue }
                 if let image {
                     if let idx = items.firstIndex(where: { $0.id == id }) { items[idx].image = image }
                 } else {
                     failed += 1
                     items.removeAll { $0.id == id }
                 }
-                if next < jobs.count {
+                if next < jobs.count, !Task.isCancelled {
                     let job = jobs[next]
                     group.addTask { (job.id, await Self.loadDraftPhoto(job.entry, capturedAt: job.capturedAt)) }
                     next += 1
                 }
             }
         }
-        if failed > 0 {
-            errorMessage = "\(failed) photo\(failed == 1 ? "" : "s") could not be loaded. Check your connection (photos stored in iCloud need to download first) and add \(failed == 1 ? "it" : "them") again."
-        }
+        // A closed screen shows nothing; a second batch adds to the first batch's count.
+        if failed > 0, !Task.isCancelled { failedPhotoLoads += failed }
     }
 
     private static let multiAddParallelLoads = 3
 
     nonisolated private static func loadDraftPhoto(_ entry: PhotosPickerItem, capturedAt: Date) async -> UIImage? {
-        guard let data = try? await entry.loadTransferable(type: Data.self) else { return nil }
+        guard !Task.isCancelled,
+              let data = try? await entry.loadTransferable(type: Data.self),
+              !Task.isCancelled else { return nil }
         return await Task.detached(priority: .userInitiated) {
             SiteAuditMediaProcessor.draftImage(from: data, capturedAt: capturedAt)
         }.value
@@ -1663,10 +1688,17 @@ struct SiteAuditAddItemView: View {
     @State private var draft: SiteAuditDraftItem
     @State private var showingCamera = false
     @State private var showingLibrary = false
+    /// Multi-add load failures from the flow behind this sheet (an alert there would not show over the sheet).
+    @Binding var failedPhotoLoads: Int
     let onSubmit: (SiteAuditDraftItem) -> Void
 
-    init(item: SiteAuditDraftItem = SiteAuditDraftItem(), onSubmit: @escaping (SiteAuditDraftItem) -> Void) {
+    init(
+        item: SiteAuditDraftItem = SiteAuditDraftItem(),
+        failedPhotoLoads: Binding<Int> = .constant(0),
+        onSubmit: @escaping (SiteAuditDraftItem) -> Void
+    ) {
         self._draft = State(initialValue: item)
+        self._failedPhotoLoads = failedPhotoLoads
         self.onSubmit = onSubmit
     }
 
@@ -1678,6 +1710,7 @@ struct SiteAuditAddItemView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    SiteAuditPhotoLoadFailureBanner(count: $failedPhotoLoads)
                     SiteAuditSectionLabel(title: "Photo")
                     photoBlock
                     HStack(spacing: 10) {
@@ -1692,7 +1725,7 @@ struct SiteAuditAddItemView: View {
                                 TextField("Front courtyard", text: $draft.title)
                                     .accessibilityIdentifier("siteAuditAddItem.frontCourtyard")
                                     .font(.body)
-                                    .siteAuditClearButton($draft.title, identifier: "siteAuditAddItem.clearTitle")
+                                    .siteAuditClearButton($draft.title, label: "Clear title", identifier: "siteAuditAddItem.clearTitle")
                             }
                             divider
                             fieldBlock("Comments", required: false) {
@@ -1700,7 +1733,7 @@ struct SiteAuditAddItemView: View {
                                     .accessibilityIdentifier("siteAuditAddItem.notes")
                                     .lineLimit(3...6)
                                     .font(.body)
-                                    .siteAuditClearButton($draft.comments, identifier: "siteAuditAddItem.clearComments", alignment: .top)
+                                    .siteAuditClearButton($draft.comments, label: "Clear comments", identifier: "siteAuditAddItem.clearComments", alignment: .top)
                             }
                             divider
                             assigneeRow
@@ -1709,7 +1742,7 @@ struct SiteAuditAddItemView: View {
                                 TextField("e.g. Front entrance courtyard", text: $draft.location)
                                     .accessibilityIdentifier("siteAuditAddItem.eGFrontEntranceCourtyard")
                                     .font(.body)
-                                    .siteAuditClearButton($draft.location, identifier: "siteAuditAddItem.clearLocation")
+                                    .siteAuditClearButton($draft.location, label: "Clear location tag", identifier: "siteAuditAddItem.clearLocation")
                             }
                             divider
                             annotationsRow
@@ -1782,7 +1815,7 @@ struct SiteAuditAddItemView: View {
                 TextField("Name", text: $draft.assignee)
                     .accessibilityIdentifier("siteAuditAddItem.name")
                     .font(.body)
-                    .siteAuditClearButton($draft.assignee, identifier: "siteAuditAddItem.clearAssignee")
+                    .siteAuditClearButton($draft.assignee, label: "Clear assignee", identifier: "siteAuditAddItem.clearAssignee")
             }
         }
         .padding(.vertical, 11)
@@ -1799,7 +1832,7 @@ struct SiteAuditAddItemView: View {
                     .accessibilityIdentifier("siteAuditAddItem.notesOnPhoto")
                     .font(.body)
                     .foregroundStyle(SiteAuditColors.primary)
-                    .siteAuditClearButton($draft.annotations, identifier: "siteAuditAddItem.clearAnnotations")
+                    .siteAuditClearButton($draft.annotations, label: "Clear annotations", identifier: "siteAuditAddItem.clearAnnotations")
             }
         }
         .padding(.vertical, 11)

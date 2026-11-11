@@ -24,6 +24,8 @@ struct SendToWholesalerView: View {
     @State private var isSending = false
     @State private var requiredDeliveryAt: Date?
     @State private var sendErrorMessage: String?
+    /// Set when the request was queued with no signal; the screen says so before it closes.
+    @State private var queuedNotice: MaterialsSendListSheet.SendConfirmationState?
     
     var body: some View {
         NavigationView {
@@ -175,6 +177,21 @@ struct SendToWholesalerView: View {
             } message: {
                 Text(sendErrorMessage ?? "")
             }
+            .alert(
+                queuedNotice.map(MaterialsSendConfirmationView.headline) ?? "",
+                isPresented: Binding(
+                    get: { queuedNotice != nil },
+                    set: { if !$0 { queuedNotice = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {
+                    queuedNotice = nil
+                    isPresented = false
+                }
+                .accessibilityIdentifier("sendToWholesaler.queuedOk")
+            } message: {
+                Text(queuedNotice.map(MaterialsSendConfirmationView.detail) ?? "")
+            }
             .alert("Multiple Wholesalers Selected", isPresented: $showingMultipleWholesalerAlert) {
                 Button("OK", role: .cancel) { }
                     .accessibilityIdentifier("sendToWholesaler.ok")
@@ -294,16 +311,23 @@ struct SendToWholesalerView: View {
                     firebaseBackend: firebaseBackend,
                     isOnline: smartCache.isOnline
                 )
-                if result == .queuedForSync {
-                    print("🔥🔥🔥 DEBUG: Material request queued for offline sync")
-                }
                 NotificationCenter.default.post(
                     name: NSNotification.Name("materialSendHistoryDidChange"),
                     object: nil
                 )
                 await MainActor.run {
                     isSending = false
-                    isPresented = false
+                    if result == .queuedForSync {
+                        // Honest wording: it has not been emailed yet (same copy as the Send list sheet).
+                        queuedNotice = MaterialsSendListSheet.SendConfirmationState(
+                            requestType: request.requestType,
+                            itemCount: selectedMaterialItems.count,
+                            recipientCount: selectedContactObjects.count,
+                            queuedForSync: true
+                        )
+                    } else {
+                        isPresented = false
+                    }
                 }
             } catch {
                 await MainActor.run {
