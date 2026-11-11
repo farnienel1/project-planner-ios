@@ -260,6 +260,34 @@ class ManagerScheduleStore: ObservableObject {
         )
     }
 
+    /// RULEBOOK 1.41.0 §5: Replace — the new manager schedule booking and each replaced booking's delete with its
+    /// tombstone in one batch. Online only (`booking.replace`). Nil when saved, else why nothing was saved.
+    func saveBookingReplacing(_ booking: ManagerSiteBooking, replaces: [RulebookBookingReplaceRef]) async -> String? {
+        guard let fb = firebaseBackend, let orgId = fb.resolvedOrganizationIdForOfflineWrites() else {
+            return "This booking could not be saved."
+        }
+        if let refusal = writeRefusal(booking) {
+            errorMessage = refusal
+            return refusal
+        }
+        guard OfflinePolicy.isEnabled(.replaceBooking, isOnline: smartCache?.isOnline != false) else {
+            return OfflinePolicy.onlineOnlyMessage
+        }
+        var normalized = booking
+        normalized.date = BookingDay.organizationMidnight(for: booking.date)
+        normalized.updatedAt = Date()
+        do {
+            try await fb.createBookingReplacing(manager: normalized, replaces: replaces, organizationId: orgId)
+        } catch {
+            errorMessage = error.localizedDescription
+            return error.localizedDescription
+        }
+        let gone = Set(replaces.filter { $0.collection == "managerSiteBookings" }.map { $0.bookingId.lowercased() })
+        managerSiteBookings.removeAll { gone.contains($0.documentKey.lowercased()) }
+        managerSiteBookings.append(normalized)
+        return nil
+    }
+
     func saveBooking(_ booking: ManagerSiteBooking) async {
         await saveBookingReportingProblem(booking)
     }

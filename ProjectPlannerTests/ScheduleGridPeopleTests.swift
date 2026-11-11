@@ -4,8 +4,8 @@ import XCTest
 /// 1.37.3: the project / small-works Scheduling week grid names each row through the rulebook's
 /// `resolveBookingPerson` (web `ProjectScheduleWeekOverview.tsx` with `findUserByAnyId` and the roster's
 /// `userIdAliases`), so a booking under a former invite id, a same-email document, a catalogue row or another letter
-/// case lands on the person's row with their level's pill; an id that names nobody reads "Unknown person" with a
-/// neutral pill, never "Op". Taps follow `canWriteBooking` (`ScheduleGridTapGate`).
+/// case lands on the person's row with their level's pill; an id that names nobody is left off the grid as on web
+/// (1.41.0; before, "Unknown person" with a neutral pill). Taps follow `canWriteBooking` (`ScheduleGridTapGate`).
 @MainActor
 final class ScheduleGridPeopleTests: XCTestCase {
     private typealias Role = CanonicalBusinessEngine.CanonicalStaffAccountRole
@@ -140,7 +140,9 @@ final class ScheduleGridPeopleTests: XCTestCase {
         XCTAssertEqual(rows[0].role, .admin)
     }
 
-    func testAnIdThatNamesNobodyIsUnknownWithANeutralPill() {
+    func testAnIdThatNamesNobodyIsLeftOffTheGridLikeWeb() {
+        // RULEBOOK 1.41.0 §21 (owner 11 Nov): a booked person is never unknown. A booking whose id names nobody is
+        // left off the grid, exactly as web drops a row with no name (it used to read "Unknown person" with a grey pill).
         let stray = UUID()
         let someone = account(
             "TEST-someone", email: "someone@example.test", first: "Some", last: "One",
@@ -149,12 +151,19 @@ final class ScheduleGridPeopleTests: XCTestCase {
 
         let rows = ScheduleWeekGrid.staffRows(operativeIds: [stray], userIds: [], operatives: [], users: [someone])
 
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].name, unknownLabourPersonName)
-        XCTAssertEqual(rows[0].role, .unknown)
-        XCTAssertEqual(rows[0].role.tone, .grey)
-        XCTAssertNotEqual(rows[0].role.badge, "Op")
-        XCTAssertNil(ScheduleWeekGrid.saveTarget(for: rows[0], jobType: .catA), "nobody to quick add for")
+        XCTAssertTrue(rows.isEmpty, "an id that names nobody has no row")
+        XCTAssertFalse(rows.contains { $0.role == .unknown })
+    }
+
+    func testAStrayIdNeverHidesTheKnownPeopleBookedThatWeek() {
+        var person = account(
+            "TEST-farnie-uid", email: "farnie@example.test", first: "Farnie", last: "Nel",
+            role: .operative, permissions: UserPermissions(operativeMode: true)
+        )
+        person.formerUserIds = ["TEST-old-invite-id"]
+        let former = Booking.internalOperativeId(for: "TEST-old-invite-id")
+        let rows = ScheduleWeekGrid.staffRows(operativeIds: [former, UUID()], userIds: [], operatives: [], users: [person])
+        XCTAssertEqual(rows.map(\.name), ["Farnie Nel"], "the former id keeps its row; only the stray one is dropped")
     }
 
     // MARK: Tap gate (`canWriteBooking`)
@@ -320,7 +329,7 @@ final class ScheduleGridPeopleTests: XCTestCase {
         let catalogue = rows.first { $0.operativeIds == [rowId] }
         XCTAssertEqual(catalogue?.role, .operative, "a catalogue row the id names stays an operative")
         XCTAssertEqual(catalogue.flatMap { ScheduleWeekGrid.saveTarget(for: $0, jobType: .catA) }, .operativeBookings(operativeId: rowId))
-        XCTAssertEqual(rows.first { $0.operativeIds == [stray] }?.role, .unknown, "only an id that names nothing is unknown")
+        XCTAssertNil(rows.first { $0.operativeIds == [stray] }, "an id that names nothing is left off the grid (RULEBOOK 1.41.0)")
     }
 
     func testWhenTheScriptDoesNotAnswerAdminsAreNotLockedOut() {

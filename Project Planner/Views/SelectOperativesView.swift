@@ -24,6 +24,8 @@ struct SelectOperativesView: View {
     @Binding var acknowledgedConflictIds: Set<String>
     @Binding var struckConflictIds: Set<String>
     @Binding var expandedPersonIds: Set<UUID>
+    /// RULEBOOK 1.41.0 §5: rows where Replace was chosen (they are acknowledged too).
+    @Binding var replacedConflictIds: Set<String>
 
     @State private var searchText = ""
     @State private var selectedFilter: AvailabilityFilter = .all
@@ -111,13 +113,22 @@ struct SelectOperativesView: View {
                             onAcknowledge: { rowId in
                                 acknowledgedConflictIds.insert(rowId)
                                 struckConflictIds.remove(rowId)
+                                replacedConflictIds.remove(rowId)
                             },
                             onStrike: { rowId in
                                 struckConflictIds.insert(rowId)
                                 acknowledgedConflictIds.remove(rowId)
+                                replacedConflictIds.remove(rowId)
                             },
                             acknowledgedIds: acknowledgedConflictIds,
-                            struckIds: struckConflictIds
+                            struckIds: struckConflictIds,
+                            replacedIds: replacedConflictIds,
+                            onReplace: { rowId in
+                                // A Replace books the day, so the row counts as acknowledged as well.
+                                replacedConflictIds.insert(rowId)
+                                acknowledgedConflictIds.insert(rowId)
+                                struckConflictIds.remove(rowId)
+                            }
                         )
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -265,6 +276,8 @@ private struct SchedulePersonSelectionRow: View {
     let onStrike: (String) -> Void
     let acknowledgedIds: Set<String>
     let struckIds: Set<String>
+    var replacedIds: Set<String> = []
+    var onReplace: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -342,7 +355,9 @@ private struct SchedulePersonSelectionRow: View {
                             isAcknowledged: acknowledgedIds.contains(row.id),
                             isStruck: struckIds.contains(row.id),
                             onAcknowledge: { onAcknowledge(row.id) },
-                            onStrike: { onStrike(row.id) }
+                            onStrike: { onStrike(row.id) },
+                            isReplaced: replacedIds.contains(row.id),
+                            onReplace: onReplace.map { action in { action(row.id) } }
                         )
                     }
                 }

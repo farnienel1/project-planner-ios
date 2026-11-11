@@ -198,3 +198,106 @@ extension CanonicalBusinessEngine {
         }
     }
 }
+
+// MARK: - One tile per person-day (RULEBOOK 1.41.0 §21, `scheduleDayCell`)
+
+/// One booking of a person's day as `scheduleDayCell` adds it up: the pay rule's paid hours, the paid hours at a
+/// multiplier, the stored slot and the clock overtime (`payrollMultipliedHours`).
+nonisolated struct RulebookScheduleDayBooking: Hashable, Sendable {
+    let paidHours: Double
+    let overtimeHours: Double
+    let timeSlot: String?
+    var overtimeClockHours: Double = 0
+    var overtimeMultiplier: Double = 1
+    var overtimeBreakHours: Double = 0
+}
+
+/// The answer of `scheduleDayCell`: the colour of the summed hours and the tile's text.
+nonisolated struct RulebookScheduleDayCell: Hashable, Sendable {
+    let cell: RulebookScheduleCellKind
+    let totalHours: Double
+    let bookingCount: Int
+    /// "26h".
+    let hoursText: String
+    /// "2 bookings" (nil for one booking).
+    let countText: String?
+    /// "26h · 2 bookings", or "8h".
+    let headline: String
+    /// "Std", "OT", "AM" / "PM"; nil on a split tile and, for Std / OT, under the leave band.
+    let caption: String?
+    /// "18h Std" ("18h" under the leave band); nil with no standard hours.
+    let standardText: String?
+    /// "8h OT" ("8h" under the leave band); nil with no overtime.
+    let overtimeText: String?
+    let overtimeLines: [String]
+}
+
+extension CanonicalBusinessEngine {
+    nonisolated private static let scheduleDayCellMemo = RulebookAnswerMemo<String, RulebookScheduleDayCell>(limit: 512)
+
+    /// RULEBOOK 1.41.0 `scheduleDayCell({ bookings, onLeave })`: one tile per person-day — "26h · 2 bookings" with the
+    /// standard and overtime hours underneath; the Std / OT words dropped on a leave day. Nil with no booking or when
+    /// the script did not answer.
+    nonisolated static func scheduleDayCell(bookings: [RulebookScheduleDayBooking], onLeave: Bool) -> RulebookScheduleDayCell? {
+        guard !bookings.isEmpty else { return nil }
+        let input: [String: Any] = [
+            "onLeave": onLeave,
+            "bookings": bookings.map { booking -> [String: Any] in
+                var row: [String: Any] = [
+                    "paidHours": booking.paidHours.isFinite ? booking.paidHours : 0,
+                    "overtimeHours": booking.overtimeHours.isFinite ? booking.overtimeHours : 0,
+                    "timeSlot": booking.timeSlot.map { $0 as Any } ?? NSNull(),
+                ]
+                if booking.overtimeClockHours > 0 {
+                    row["overtime"] = [
+                        "clockHours": booking.overtimeClockHours,
+                        "multiplier": booking.overtimeMultiplier,
+                        "breakHours": booking.overtimeBreakHours,
+                    ]
+                }
+                return row
+            },
+        ]
+        guard let key = rulebookMemoKey(input) else { return nil }
+        return scheduleDayCellMemo.value(for: key) {
+            guard let row = callJSON("scheduleDayCell", arguments: [input]) as? [String: Any],
+                  let tone = row["tone"] as? String,
+                  let hoursText = row["hoursText"] as? String,
+                  let headline = row["headline"] as? String else { return nil }
+            func number(_ name: String) -> Double { (row[name] as? NSNumber)?.doubleValue ?? 0 }
+            return RulebookScheduleDayCell(
+                cell: RulebookScheduleCellKind(
+                    tone: tone,
+                    standardHours: number("standardHours"),
+                    overtimeHours: number("overtimeHours"),
+                    halfLabel: row["halfLabel"] as? String
+                ),
+                totalHours: number("totalHours"),
+                bookingCount: (row["bookingCount"] as? NSNumber)?.intValue ?? bookings.count,
+                hoursText: hoursText,
+                countText: row["countText"] as? String,
+                headline: headline,
+                caption: row["caption"] as? String,
+                standardText: row["standardText"] as? String,
+                overtimeText: row["overtimeText"] as? String,
+                overtimeLines: row["overtimeLines"] as? [String] ?? []
+            )
+        }
+    }
+}
+
+extension RulebookScheduleDayBooking {
+    /// A labour or manager schedule booking's figures for `scheduleDayCell` (`payrollHoursResult` under the day's
+    /// working hours). A mapping only.
+    @MainActor static func from(_ result: PayrollHoursResult, timeSlot: String?) -> RulebookScheduleDayBooking {
+        let multiplied = result.multipliedHours
+        return RulebookScheduleDayBooking(
+            paidHours: result.totalPaidHours,
+            overtimeHours: result.paidOvertimeHours,
+            timeSlot: timeSlot,
+            overtimeClockHours: multiplied?.clockHours ?? 0,
+            overtimeMultiplier: multiplied?.multiplier ?? 1,
+            overtimeBreakHours: multiplied?.breakHours ?? 0
+        )
+    }
+}

@@ -7704,6 +7704,64 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Booking saved successfully to Firebase")
     }
     
+    /// RULEBOOK 1.41.0 §5 (owner decision 11 Nov, "Replace existing booking"): the new labour or manager schedule
+    /// booking and, in the SAME batch, each replaced booking's delete with its tombstone (`bookingReplaceWrites`). Online
+    /// only (`booking.replace`): nothing is queued, and a refusal changes nothing (the batch is all or none). Exactly one
+    /// of `labour` / `manager` is the booking being created.
+    func createBookingReplacing(
+        labour: Booking? = nil,
+        manager: ManagerSiteBooking? = nil,
+        replaces: [RulebookBookingReplaceRef],
+        organizationId: String
+    ) async throws {
+        let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
+        guard let uid = currentUser?.uid, !uid.isEmpty else {
+            throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in."])
+        }
+        let collection: String
+        let documentKey: String
+        var data: [String: Any]
+        if let labour {
+            collection = "bookings"
+            documentKey = labour.documentKey
+            data = BookingWritePatch.labourValues(labour, deletesClearedFields: false)
+            data["createdAt"] = Timestamp(date: labour.createdAt)
+        } else if let manager {
+            collection = "managerSiteBookings"
+            documentKey = manager.documentKey
+            data = BookingWritePatch.managerValues(manager, deletesClearedFields: false)
+            data["organizationId"] = orgId
+            data["createdAt"] = Timestamp(date: manager.createdAt)
+        } else {
+            return
+        }
+        data["id"] = documentKey
+        guard let plan = CanonicalBusinessEngine.bookingReplaceWrites(
+            organizationId: orgId,
+            bookingCollection: collection,
+            bookingId: documentKey,
+            replaced: replaces,
+            deletedBy: uid
+        ) else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "This booking could not replace the existing one. Nothing was saved."]
+            )
+        }
+        let batch = db.batch()
+        // A plain create (never a merge onto an existing document, RULEBOOK 1.20.2).
+        batch.setData(WriteMetadata.stamped(data, userId: uid), forDocument: db.document(plan.bookingPath))
+        for row in plan.deletes {
+            var tombstone = row.tombstone
+            tombstone["deletedAt"] = FieldValue.serverTimestamp()
+            batch.deleteDocument(db.document(row.path))
+            batch.setData(tombstone, forDocument: db.document(row.tombstonePath))
+        }
+        NSLog("BOOKING_REPLACE collection=%@ id=%@ replaces=%ld", collection, documentKey, plan.deletes.count)
+        try await batch.commit()
+    }
+
     /// 1.33.1: `getDocument(source: .server)` that gives up after `FirestoreWriteAck.defaultTimeoutSeconds` with
     /// `FirestoreWriteAck.ReadTimedOut` (nothing was written; `readBeforeEdit` then reads the local cache).
     static func boundedServerRead(

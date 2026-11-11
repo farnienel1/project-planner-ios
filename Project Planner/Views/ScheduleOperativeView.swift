@@ -56,6 +56,8 @@ struct ScheduleOperativeView: View {
     @State private var replaceBookingOnConfirmByOverrideKey: [String: UUID] = [:]
     @State private var acknowledgedConflictIds: Set<String> = []
     @State private var struckConflictIds: Set<String> = []
+    /// RULEBOOK 1.41.0 §5: conflict rows where Replace was chosen (also in `acknowledgedConflictIds`).
+    @State private var replacedConflictIds: Set<String> = []
     @State private var expandedMainConflictPersonIds: Set<UUID> = []
     @State private var expandedPickerPersonIds: Set<UUID> = []
     @State private var showingSelectDatesFirstAlert = false
@@ -238,6 +240,7 @@ struct ScheduleOperativeView: View {
                 if oldSet != newSet {
                     acknowledgedConflictIds.removeAll()
                     struckConflictIds.removeAll()
+                    replacedConflictIds.removeAll()
                 }
                 if newSet.count == 1, let only = newSet.sorted().first {
                     sharedBulkChoice = baseChoice(for: only)
@@ -334,7 +337,8 @@ struct ScheduleOperativeView: View {
             excludingBookingIds: excludingBookingIds,
             acknowledgedConflictIds: $acknowledgedConflictIds,
             struckConflictIds: $struckConflictIds,
-            expandedPersonIds: $expandedPickerPersonIds
+            expandedPersonIds: $expandedPickerPersonIds,
+            replacedConflictIds: $replacedConflictIds
         )
         .environmentObject(operativeStore)
         .environmentObject(userStore)
@@ -498,6 +502,7 @@ struct ScheduleOperativeView: View {
     private func handleHoursOrDatesChanged() {
         acknowledgedConflictIds.removeAll()
         struckConflictIds.removeAll()
+        replacedConflictIds.removeAll()
         droppedClashOperativeIds.removeAll()
         if mainScreenHasUnactionedConflicts && !didShowHoursClashAlertThisSession {
             didShowHoursClashAlertThisSession = true
@@ -1253,8 +1258,10 @@ struct ScheduleOperativeView: View {
                             expandedMainConflictPersonIds.insert(person.operativeId)
                         }
                     },
-                    onAcknowledge: { acknowledgedConflictIds.insert($0); struckConflictIds.remove($0) },
-                    onStrike: { struckConflictIds.insert($0); acknowledgedConflictIds.remove($0) }
+                    onAcknowledge: { acknowledgedConflictIds.insert($0); struckConflictIds.remove($0); replacedConflictIds.remove($0) },
+                    onStrike: { struckConflictIds.insert($0); acknowledgedConflictIds.remove($0); replacedConflictIds.remove($0) },
+                    replacedIds: replacedConflictIds,
+                    onReplace: { replacedConflictIds.insert($0); acknowledgedConflictIds.insert($0); struckConflictIds.remove($0) }
                 )
                 .padding(.leading, 4)
             }
@@ -1786,6 +1793,20 @@ struct ScheduleOperativeView: View {
             // first wait that times out (a write, a read before an edit, or the organisation check) every later wait of
             // this Confirm is 1 s at most, so a dead link cannot add 15–38 s per booking.
             let writeSession = BookingWriteSession(organizationId: savingOrganizationId)
+            // RULEBOOK 1.41.0 §5: per operative and day, the bookings Replace removes (read before any write changes the
+            // stores). Those bookings are saved one by one, each in one batch with its replaced deletes (online only).
+            var replacing: [(booking: Booking, refs: [RulebookBookingReplaceRef])] = []
+            var refsByOperativeDay: [String: [RulebookBookingReplaceRef]] = [:]
+            if !replacedConflictIds.isEmpty {
+                for operative in operatives {
+                    guard let person = bookablePeople.first(where: { $0.operativeId == operative.id }),
+                          let rows = personConflictSummary(person)?.rows else { continue }
+                    for row in rows where replacedConflictIds.contains(row.id) {
+                        guard let ref = row.replaceRef else { continue }
+                        refsByOperativeDay[operativeOverrideKey(operative.id, row.date), default: []].append(ref)
+                    }
+                }
+            }
 
             for operative in operatives {
                 let dates = effectiveDates(for: operative.id)
@@ -1860,8 +1881,21 @@ struct ScheduleOperativeView: View {
                             bookingGroupId: groupId
                         )
                         booking.updatedAt = Date()
-                        newBookings.append(booking)
+                        if let refs = refsByOperativeDay[ovKey], !refs.isEmpty {
+                            replacing.append((booking, refs))
+                        } else {
+                            newBookings.append(booking)
+                        }
                     }
+                }
+            }
+
+            for entry in replacing {
+                if let problem = await bookingStore.addBookingReplacing(entry.booking, replaces: entry.refs) {
+                    saveResults.append(.refused(problem))
+                } else {
+                    saveResults.append(.saved)
+                    createdDatesByOperative[entry.booking.operativeId, default: []].insert(entry.booking.date)
                 }
             }
 
@@ -1898,6 +1932,7 @@ struct ScheduleOperativeView: View {
                 if outcome.clearsSelection {
                     acknowledgedConflictIds.removeAll()
                     struckConflictIds.removeAll()
+                    replacedConflictIds.removeAll()
                     selectedDates.removeAll()
                     selectedOperatives.removeAll()
                     dateSlotChoices.removeAll()

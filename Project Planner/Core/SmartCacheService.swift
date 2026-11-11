@@ -18,7 +18,12 @@ import UIKit
 
 @MainActor
 class SmartCacheService: ObservableObject {
-    @Published var isOnline = true
+    @Published var isOnline = true {
+        didSet { Self.lastKnownOnline = isOnline }
+    }
+    /// The app's last known connectivity, for small controls that are not handed the service (RULEBOOK 1.41.0: the
+    /// online-only Replace button on a conflict row). The stores still check their own service before writing.
+    nonisolated(unsafe) static var lastKnownOnline = true
     @Published var isSyncing = false
     @Published private(set) var pendingSyncCount = 0
     @Published private(set) var failedSyncCount = 0

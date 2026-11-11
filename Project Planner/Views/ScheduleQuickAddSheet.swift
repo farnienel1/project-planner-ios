@@ -14,7 +14,8 @@ struct ScheduleQuickAddSheet: View {
     let clocks: ScheduleQuickAddClocks?
     let existingPaidHours: Double
     let showsNotes: Bool
-    let onSave: (ScheduleQuickAddDraft) async -> String?
+    /// RULEBOOK 1.41.0 §5: the second argument is the bookings Replace removes (empty unless Replace was chosen).
+    let onSave: (ScheduleQuickAddDraft, [RulebookBookingReplaceRef]) async -> String?
     let onCancel: () -> Void
     /// RULEBOOK 1.16.0 `bookingLeaveConflicts` for the draft as it stands (purple rows to tick or drop).
     let leaveConflicts: (ScheduleQuickAddDraft) -> [BookingConflictItem]
@@ -34,7 +35,7 @@ struct ScheduleQuickAddSheet: View {
         clocks: ScheduleQuickAddClocks?,
         existingPaidHours: Double,
         showsNotes: Bool,
-        onSave: @escaping (ScheduleQuickAddDraft) async -> String?,
+        onSave: @escaping (ScheduleQuickAddDraft, [RulebookBookingReplaceRef]) async -> String?,
         onCancel: @escaping () -> Void,
         leaveConflicts: @escaping (ScheduleQuickAddDraft) -> [BookingConflictItem] = { _ in [] }
     ) {
@@ -353,10 +354,11 @@ struct ScheduleQuickAddSheet: View {
                 workEnd: range.end,
                 notes: showsNotes && !trimmed.isEmpty ? trimmed : nil
             )
+            let replaces = BookingConflictResolution.choices(rows, decisions: conflictDecisions).allReplaced
             isSaving = true
             errorMessage = nil
             Task {
-                let message = await onSave(draft)
+                let message = await onSave(draft, replaces)
                 isSaving = false
                 if let message {
                     errorMessage = message

@@ -180,6 +180,9 @@ struct ScheduleConflictRow: Identifiable, Hashable {
     /// The line under the person and day in the shared conflict row (`BookingConflictRowView`): "Annual leave booked ·
     /// AM" for leave (`bookingLeaveConflicts`), "Already booked · time · job" for a double booking.
     var conflictDetail: String? = nil
+    /// RULEBOOK 1.41.0 §5: the existing booking this double-booking row is about, set only when the viewer may delete
+    /// it (`bookingReplaceOffer`), so the row offers Replace.
+    var replaceRef: RulebookBookingReplaceRef? = nil
 
     static func rowId(operativeId: UUID, date: Date, kind: ScheduleConflictKind, suffix: String = "") -> String {
         let day = OrganizationRulebookContext.calendar.startOfDay(for: date).timeIntervalSince1970
@@ -418,7 +421,8 @@ enum ScheduleBookingConflictEngine {
                         title: "\(ScheduleConflictRow.dayTitle(day)) — \(timeLabel)",
                         detail: jobLabel,
                         requiresAcknowledgement: true,
-                        conflictDetail: "Already booked · \(timeLabel) · \(jobLabel)"
+                        conflictDetail: "Already booked · \(timeLabel) · \(jobLabel)",
+                        replaceRef: CanonicalBusinessEngine.bookingReplaceOffer(labour: [existing], manager: [])?.first
                     )
                 )
             }
@@ -439,7 +443,8 @@ enum ScheduleBookingConflictEngine {
                             title: "\(ScheduleConflictRow.dayTitle(day)) — \(timeLabel)",
                             detail: location,
                             requiresAcknowledgement: true,
-                            conflictDetail: "Already booked · \(timeLabel) · \(location)"
+                            conflictDetail: "Already booked · \(timeLabel) · \(location)",
+                            replaceRef: CanonicalBusinessEngine.bookingReplaceOffer(labour: [], manager: [msb])?.first
                         )
                     )
                 }

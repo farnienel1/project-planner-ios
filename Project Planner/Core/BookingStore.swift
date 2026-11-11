@@ -384,6 +384,37 @@ class BookingStore: ObservableObject {
         await saveData(writes: [BookingWrite(booking: booking, changedFields: nil)])
     }
 
+    /// RULEBOOK 1.41.0 §5 (owner decision 11 Nov): Replace — the new booking and each replaced booking's delete with its
+    /// tombstone in one batch (`FirebaseBackend.createBookingReplacing`). Online only (`booking.replace`): offline it
+    /// writes nothing and returns `OFFLINE_ONLINE_ONLY_MESSAGE`. Returns nil when saved, else why nothing was saved.
+    func addBookingReplacing(_ booking: Booking, replaces: [RulebookBookingReplaceRef]) async -> String? {
+        var booking = booking
+        booking.date = BookingDay.organizationMidnight(for: booking.date)
+        if let refusal = writeRefusal([booking]) {
+            errorMessage = refusal
+            return refusal
+        }
+        guard OfflinePolicy.isEnabled(.replaceBooking, isOnline: smartCache?.isOnline != false) else {
+            return OfflinePolicy.onlineOnlyMessage
+        }
+        guard let firebaseBackend, let organizationId = firebaseBackend.resolvedOrganizationIdForOfflineWrites() else {
+            return "This booking could not be saved."
+        }
+        do {
+            try await firebaseBackend.createBookingReplacing(labour: booking, replaces: replaces, organizationId: organizationId)
+        } catch {
+            errorMessage = error.localizedDescription
+            return error.localizedDescription
+        }
+        let gone = Set(replaces.filter { $0.collection == "bookings" }.map { $0.bookingId.lowercased() })
+        bookings.removeAll { gone.contains($0.documentKey.lowercased()) }
+        bookings.append(booking)
+        try? await persistenceService.saveBookingData(bookings: bookings)
+        smartCache?.cacheBookings(bookings)
+        ScheduleChangeNotifier.postBookingStoreDidChange()
+        return nil
+    }
+
     /// Append multiple bookings then sync only the new rows (much faster than repeated full saves).
     func addBookings(_ newBookings: [Booking]) async {
         await addBookingsReturningResults(newBookings)

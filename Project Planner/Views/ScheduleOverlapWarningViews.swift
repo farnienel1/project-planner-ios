@@ -114,6 +114,8 @@ struct OperativeClashReviewPanel: View {
             switch decision {
             case .confirm: onApprove(operative.id)
             case .drop: onDismissOperative(operative.id)
+            // No Replace on this older summary row (its item carries none, so the button never shows).
+            case .replace: break
             }
         }
     }
