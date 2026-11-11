@@ -13,6 +13,7 @@
 //  decision is the packed script's.
 //
 
+import Combine
 import Foundation
 import UIKit
 @preconcurrency import FirebaseFirestore
