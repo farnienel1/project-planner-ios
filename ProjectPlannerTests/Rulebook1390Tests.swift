@@ -68,20 +68,28 @@ final class Rulebook1390Tests: XCTestCase {
         XCTAssertEqual(mon.steps, ["07:30–16:00 = 8h (day, less 30 min unpaid break)"])
     }
 
-    /// "Missing to standard day" names what it compares against; nothing on a day paid every hour at a multiplier.
-    func testShortfallNamesTheDaysOwnFullDay() throws {
-        let short = try XCTUnwrap(CanonicalBusinessEngine.bookingShortfall(
-            policy: ownerPolicy, dayKey: saturday, bookedHours: 3.69, timeZone: zone
+    /// Review (11 Nov): "missing hours" is coverage of the day's working time (lunch window excluded), never paid
+    /// hours — 05:00–10:00 on a 07:30–16:00 day leaves 5.5h whatever the overtime before the day pays.
+    func testShortfallIsCoverageOfTheWorkingDay() throws {
+        func row(_ start: String, _ end: String) -> [String: Any] {
+            ["timeSlot": "CUSTOM_HOURS", "workStartTime": start, "workEndTime": end]
+        }
+        let early = try XCTUnwrap(CanonicalBusinessEngine.bookingShortfall(
+            policy: ownerPolicy, dayKey: monday, bookings: [row("05:00", "10:00")], timeZone: zone
         ))
-        XCTAssertEqual(short.label, "Short of a full Saturday (8h)")
-        XCTAssertEqual(short.value, "4.31h")
-        XCTAssertEqual(short.missingHours, 4.31, accuracy: 0.001)
-        XCTAssertNil(CanonicalBusinessEngine.bookingShortfall(policy: ownerPolicy, dayKey: saturday, bookedHours: 12, timeZone: zone))
-        XCTAssertNil(CanonicalBusinessEngine.bookingShortfall(policy: ownerPolicy, dayKey: sunday, bookedHours: 6, timeZone: zone))
-        XCTAssertEqual(
-            CanonicalBusinessEngine.bookingShortfall(policy: ownerPolicy, dayKey: monday, bookedHours: 4, timeZone: zone)?.label,
-            "Short of a full Monday (8h)"
+        XCTAssertEqual(early.label, "Short of a full Monday (07:30–16:00)")
+        XCTAssertEqual(early.missingHours, 5.5, accuracy: 0.001)
+        XCTAssertEqual(early.value, "5.5h")
+        XCTAssertNil(CanonicalBusinessEngine.bookingShortfall(
+            policy: ownerPolicy, dayKey: monday, bookings: [row("07:30", "12:00"), row("12:30", "16:00")], timeZone: zone
+        ))
+        XCTAssertNil(CanonicalBusinessEngine.bookingShortfall(
+            policy: ownerPolicy, dayKey: sunday, bookings: [row("07:30", "10:30")], timeZone: zone
+        ))
+        let saturday = CanonicalBusinessEngine.bookingShortfall(
+            policy: ownerPolicy, dayKey: self.saturday, bookings: [row("07:30", "10:30")], timeZone: zone
         )
+        XCTAssertTrue(saturday?.label.hasPrefix("Short of a full Saturday (07:30–14:00)") ?? false, saturday?.label ?? "nil")
     }
 
     /// Weekend rows carry the explanation; the figures (`line`, `paidHoursEquivalent`) are exactly as before 1.39.0.
@@ -174,6 +182,7 @@ final class Rulebook1390Tests: XCTestCase {
                 "managerIds": [] as [String],
                 "decisions": decisions,
                 "canOpenWarnings": canOpen,
+                "scanDayKeys": [monday],
             ]
         }
         let unloaded = CanonicalBusinessEngine.myScheduleClashMarkers(input(decisions: NSNull(), canOpen: false))
@@ -191,5 +200,53 @@ final class Rulebook1390Tests: XCTestCase {
         XCTAssertEqual(approved["A"]?.state, "approved")
         XCTAssertEqual(approved["A"]?.title, "Clash approved")
         XCTAssertNil(approved["A"]?.actionLabel)
+    }
+
+    /// Review (11 Nov): a night shift Monday 22:00–06:00 and Tuesday 05:00–08:00 clash — markers on both, as My Schedule
+    /// passes the day before the shown day.
+    func testOvernightBookingClashesWithTheNextMorning() {
+        let markers = CanonicalBusinessEngine.myScheduleClashMarkers([
+            "operativeBookings": [
+                ["id": "N", "operativeId": "op1", "dayKey": monday, "timeSlot": "CUSTOM_HOURS", "workStartTime": "22:00", "workEndTime": "06:00", "status": "Confirmed", "placeLabel": "Night"],
+                ["id": "T", "operativeId": "op1", "dayKey": "2026-11-10", "timeSlot": "CUSTOM_HOURS", "workStartTime": "05:00", "workEndTime": "08:00", "status": "Confirmed", "placeLabel": "Early"],
+            ],
+            "people": ["accounts": [] as [Any], "operatives": [["id": "op1", "email": "a@x.test"]]] as [String: Any],
+            "managerIds": [] as [String],
+            "decisions": ["approvedKeys": [] as [String], "acceptedClashes": [] as [Any]] as [String: Any],
+        ])
+        XCTAssertEqual(markers["N"]?.state, "clash")
+        XCTAssertEqual(markers["T"]?.state, "clash")
+    }
+
+    /// Review (11 Nov): "Open Warnings" only for a clash Warnings lists now — outside today's clash days the staff
+    /// viewer reads the period note instead.
+    func testOpenWarningsOnlyInsideTheWarningsPeriod() {
+        let markers = CanonicalBusinessEngine.myScheduleClashMarkers([
+            "operativeBookings": [
+                ["id": "A", "operativeId": "op1", "dayKey": monday, "timeSlot": "CUSTOM_HOURS", "workStartTime": "07:00", "workEndTime": "12:00", "status": "Confirmed", "placeLabel": "J1"],
+                ["id": "B", "operativeId": "op1", "dayKey": monday, "timeSlot": "CUSTOM_HOURS", "workStartTime": "11:00", "workEndTime": "15:00", "status": "Confirmed", "placeLabel": "J2"],
+            ],
+            "people": ["accounts": [] as [Any], "operatives": [["id": "op1", "email": "a@x.test"]]] as [String: Any],
+            "managerIds": [] as [String],
+            "decisions": ["approvedKeys": [] as [String], "resolvedKeys": [] as [String], "acceptedClashes": [] as [Any]] as [String: Any],
+            "canOpenWarnings": true,
+            "scanDayKeys": ["2026-11-20"],
+        ])
+        XCTAssertNil(markers["A"]?.actionLabel)
+        XCTAssertTrue(markers["A"]?.message.hasSuffix("This clash isn't in the current Warnings period.") ?? false)
+    }
+
+    func testBreakDeductionIsWhatTheBreakTakesOffThisBooking() throws {
+        let day = try XCTUnwrap(CanonicalBusinessEngine.date(fromDayKey: monday))
+        let whole = CanonicalBusinessEngine.bookingBreakDeductionText(
+            on: day, start: "07:30", end: "16:00", isBreakRemoved: false, fallbackPolicy: ownerPolicy, timeZone: zone
+        )
+        XCTAssertTrue(whole?.hasPrefix("30 mins deducted") ?? false, whole ?? "nil")
+        XCTAssertNil(CanonicalBusinessEngine.bookingBreakDeductionText(
+            on: day, start: "07:30", end: "11:00", isBreakRemoved: false, fallbackPolicy: ownerPolicy, timeZone: zone
+        ))
+        XCTAssertNil(CanonicalBusinessEngine.bookingBreakDeductionText(
+            on: day, start: "07:30", end: "16:00", isBreakRemoved: true, fallbackPolicy: ownerPolicy, timeZone: zone
+        ))
     }
 }

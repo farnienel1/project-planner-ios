@@ -176,16 +176,21 @@ fileprivate func operativeBookingClockSubtitle(_ b: Booking, day: Date, policy: 
     return "\(start) – \(end) · \(b.payrollHoursResult(policy: policy).paidHoursLabel)"
 }
 
-/// RULEBOOK 1.39.0 §10 `myScheduleClashMarkers`: the clash marker per booking id for the viewer's own bookings shown on
-/// one day, from the same inputs Warnings passes (`operativeClashGroups` / `managerClashGroups`: the roster accounts
-/// with their former and same-email ids, the operatives catalogue, `clashManagerIds`, the working-hours state) and the
-/// live approvals (`WarningResolutionStore.clashMarkerDecisions`, nil until loaded — nothing reads approved).
+/// RULEBOOK 1.39.0 §10 `myScheduleClashMarkers`: the clash marker per booking id for the viewer's own bookings, from
+/// the same inputs Warnings passes (`operativeClashGroups` / `managerClashGroups`: the roster accounts with their former
+/// and same-email ids, the operatives catalogue, `clashManagerIds`, the working-hours state), the live approvals
+/// (`WarningResolutionStore.clashMarkerDecisions`, nil until loaded — nothing reads approved), the viewer's real warning
+/// scope (`WarningScopeSupport` → `warningScopeFor`) and today's Warnings clash days (`warningScanWindow` →
+/// `clashScanDays`), so "Open Warnings" is offered only for a clash Warnings lists now. Callers pass the day before
+/// the shown day too: an overnight booking clashes with the next morning (review 11 Nov).
 @MainActor
 fileprivate func myScheduleClashMarkerMap(
     manager: [ManagerSiteBooking],
     operative: [Booking],
     userStore: UserStore,
     operativeStore: OperativeStore,
+    organizationSettings: OrganizationSettings?,
+    resolutionStore: WarningResolutionStore,
     fallbackPolicy: OrgPayrollTimePolicy,
     placeLabel: (Booking) -> String,
     managerPlaceLabel: (ManagerSiteBooking) -> String
@@ -232,14 +237,30 @@ fileprivate func myScheduleClashMarkerMap(
             "operatives": operativeStore.allOperatives.map { ["id": Booking.storedOperativeId(for: $0.id), "email": $0.email.lowercased()] },
         ],
         "managerIds": RulebookRosterLists.clashManagerIds(users.map(RulebookRosterLists.levelRow)) ?? [],
-        "canOpenWarnings": userStore.canViewStaffWarnings(),
+        // The viewer's real scope: nil from `WarningScopeSupport` is everything for a loaded viewer; no viewer → no button.
+        "canOpenWarnings": userStore.canViewStaffWarnings() && JobAccessContext.readViewer != nil,
+        "scope": WarningScopeSupport.scope(
+            bookings: operative,
+            managerBookings: manager,
+            users: users,
+            operatives: operativeStore.allOperatives
+        ) ?? (["kind": "all"] as [String: Any]),
         "viewerIds": viewerIds,
         "viewerEmail": viewer?.email ?? NSNull(),
     ]
     input["day"] = CanonicalBusinessEngine.dayPolicyArgument(
         fallbackPolicy: fallbackPolicy, timeZone: OrganizationRulebookContext.timeZoneIdentifier
     ) ?? NSNull()
-    input["decisions"] = WarningResolutionStore.shared.clashMarkerDecisions() ?? NSNull()
+    input["decisions"] = resolutionStore.clashMarkerDecisions() ?? NSNull()
+    if let settings = organizationSettings {
+        let bookedDayKeys = Set(operative.map { dayKey($0.date) } + manager.map { dayKey($0.date) }).sorted()
+        let window = CanonicalBusinessEngine.warningScanWindow(
+            detection: settings.warningDetection, invoicing: settings.invoicing, bookedDayKeys: bookedDayKeys
+        )
+        input["scanDayKeys"] = window?.clashDayKeys ?? []
+    } else {
+        input["scanDayKeys"] = [] as [String]
+    }
     return CanonicalBusinessEngine.myScheduleClashMarkers(input)
 }
 
@@ -779,6 +800,8 @@ struct MyScheduleView: View {
 // MARK: - Manager / Admin: book into site or office (AM, PM, Full Day)
 
 struct ManagerScheduleContentView: View {
+    /// RULEBOOK 1.39.0 §10 (review): the clash markers redraw when an approval, dismissal or accepted clash changes.
+    @ObservedObject private var resolutionStore = WarningResolutionStore.shared
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var bookingStore: BookingStore
@@ -1772,11 +1795,15 @@ struct ManagerScheduleContentView: View {
         let annualLeaveSlotForDay = annualLeaveTimeSlot(on: day)
         let segments = mergedDaySegments(manager: bookings, operative: operativeBookings, day: day, policy: policy)
         let daysBookedInWeek = weekDates.filter { hasScheduleDot(on: $0) }.count
+        // Review (11 Nov): the day before too, so a night shift that runs into this morning is a clash here.
+        let dayBefore = calendar.date(byAdding: .day, value: -1, to: day) ?? day
         let clashMarkers = myScheduleClashMarkerMap(
-            manager: bookings,
-            operative: operativeBookings,
+            manager: mySiteBookings(on: dayBefore) + bookings,
+            operative: myOperativeBookings(on: dayBefore) + operativeBookings,
             userStore: userStore,
             operativeStore: operativeStore,
+            organizationSettings: firebaseBackend.currentOrganization?.settings,
+            resolutionStore: resolutionStore,
             fallbackPolicy: policy,
             placeLabel: { b in (projectStore.projects.first(where: { $0.id == b.projectId }) ?? projectStore.smallWorks.first(where: { $0.id == b.projectId })).map { "\($0.jobNumber) \($0.siteName)" } ?? "Scheduled work" },
             managerPlaceLabel: { locationNameString(for: $0) }
@@ -2806,6 +2833,8 @@ struct ManagerBookingSheet: View {
 // MARK: - Operative: read-only week, swipe weeks, Add to Calendar
 
 struct OperativeScheduleContentView: View {
+    /// RULEBOOK 1.39.0 §10 (review): the clash markers redraw when an approval, dismissal or accepted clash changes.
+    @ObservedObject private var resolutionStore = WarningResolutionStore.shared
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var projectStore: ProjectStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -3037,11 +3066,15 @@ struct OperativeScheduleContentView: View {
         let policy = firebaseBackend.payrollPolicy(for: date)
         let dayBookings = myBookingsThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
         let dayManagerBookings = myManagerAttendanceThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
+        // Review (11 Nov): every booking of the viewer loaded for the week, as web passes them, so a night shift that
+        // runs into the next morning is a clash on both rows.
         let clashMarkers = myScheduleClashMarkerMap(
-            manager: dayManagerBookings,
-            operative: dayBookings,
+            manager: myManagerAttendanceThisWeek,
+            operative: myBookingsThisWeek,
             userStore: userStore,
             operativeStore: operativeStore,
+            organizationSettings: firebaseBackend.currentOrganization?.settings,
+            resolutionStore: resolutionStore,
             fallbackPolicy: policy,
             placeLabel: { b in (projectStore.projects.first(where: { $0.id == b.projectId }) ?? projectStore.smallWorks.first(where: { $0.id == b.projectId })).map { "\($0.jobNumber) \($0.siteName)" } ?? "Scheduled work" },
             managerPlaceLabel: { managerSelfBookingTitle($0) }

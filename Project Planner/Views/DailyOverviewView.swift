@@ -1746,13 +1746,14 @@ struct ProjectBookingCard: View {
         ) ?? "\(ScheduleCoverageFormat.hours(booked))h booked"
     }
 
+    /// Clock hours at the multiplier on this card (`CanonicalBusinessEngine` `payrollMultipliedHours.clockHours`, as web `bookedWithOvertimeText`
+    /// and the day tile), never `workedHoursSplit` (review 11 Nov).
     private var cardOvertimeHours: Double {
         let p = payrollTimePolicy
-        // Hours worked outside the standard window (`workedHoursSplit`), as the day headline.
-        var t = sortedBookings.reduce(0.0) { $0 + ($1.workedHoursSplit(policy: p)?.outsideWorkedHours ?? 0) }
-        t += managerBookingsThisProjectDay.reduce(0.0) { $0 + ($1.workedHoursSplit(policy: p)?.outsideWorkedHours ?? 0) }
-        t += subcontractorBookingsThisProjectDay.reduce(0.0) { $0 + ($1.payrollMirrorBooking().workedHoursSplit(policy: p)?.outsideWorkedHours ?? 0) }
-        return t
+        var results = sortedBookings.map { $0.payrollHoursResult(policy: p) }
+        results += managerBookingsThisProjectDay.map { $0.payrollHoursResult(policy: p) }
+        results += subcontractorBookingsThisProjectDay.map { $0.payrollMirrorBooking().payrollHoursResult(policy: p) }
+        return results.reduce(0.0) { $0 + ($1.multipliedHours?.clockHours ?? 0) }
     }
 
     /// Per-person pill: the pay rule's hours for that day (`payrollHoursResult`), never the clock duration —

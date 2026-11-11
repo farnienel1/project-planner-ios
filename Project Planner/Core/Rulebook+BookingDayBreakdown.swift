@@ -214,7 +214,7 @@ extension CanonicalBusinessEngine {
         todayKey: String,
         timeZone: String
     ) -> [String: Any]? {
-        callJSON("payrollTimePolicyTimeline", arguments: [policyDocument, todayKey, timeZone]) as? [String: Any]
+        memoCallJSON("payrollTimePolicyTimeline", arguments: [policyDocument, todayKey, timeZone]) as? [String: Any]
     }
 
     // MARK: customHoursPrefillForDays (1.18.0 §4.3)
@@ -372,7 +372,7 @@ extension CanonicalBusinessEngine {
             todayKey: organizationDayKey(Date(), timeZoneIdentifier: timeZone),
             timeZone: timeZone
            ),
-           let row = RulebookBookingHoursExplanation(json: callJSON("bookingHoursExplanation", arguments: [state, key, booking, timeZone])) {
+           let row = RulebookBookingHoursExplanation(json: memoCallJSON("bookingHoursExplanation", arguments: [state, key, booking, timeZone])) {
             return row
         }
         return bookingHoursExplanation(
@@ -393,7 +393,7 @@ extension CanonicalBusinessEngine {
         let booking: [String: Any] = [
             "timeSlot": "CUSTOM_HOURS", "workStartTime": start, "workEndTime": end, "isBreakRemoved": isBreakRemoved,
         ]
-        return RulebookBookingHoursExplanation(json: callJSON("bookingHoursExplanation", arguments: [policyJSON, dayKey, booking, timeZone]))
+        return RulebookBookingHoursExplanation(json: memoCallJSON("bookingHoursExplanation", arguments: [policyJSON, dayKey, booking, timeZone]))
     }
 
     /// The explanation of a weekday selection's hours as screen sections (the weekend rows carry their own): one per
@@ -429,12 +429,22 @@ extension CanonicalBusinessEngine {
         }
     }
 
-    /// RULEBOOK 1.39.0 §4.3 `bookingShortfall(policyState, dayKey, bookedHours, timeZone)`: "Short of a full Saturday (8h)"
-    /// and the missing hours, against that day's own full day; nil when nothing is short or the day pays every hour at a
-    /// multiplier (no full day). Replaces the screens' own "Missing to standard day" subtraction.
+    /// One booking as `CanonicalBusinessEngine.bookingShortfall` reads it (slot and clock times). A mapping only.
+    nonisolated static func shortfallRow(_ booking: Booking) -> [String: Any] {
+        [
+            "timeSlot": booking.timeSlot.rawValue,
+            "workStartTime": booking.workStartTime ?? NSNull(),
+            "workEndTime": booking.workEndTime ?? NSNull(),
+        ]
+    }
+
+    /// RULEBOOK 1.39.0 §4.3 (review 11 Nov) `bookingShortfall(policyState, dayKey, bookings, timeZone)`: how much of the
+    /// day's working time the person's bookings that day (existing + the new one) leave unbooked, by COVERAGE —
+    /// `standardDayCoverage` on a weekday, `windowCoverage` of a set-window weekend day, lunch window excluded — never
+    /// paid hours. "Short of a full Monday (07:30–16:00): 5.5h"; nil under 0.05h or on a day paid every hour at a rate.
     nonisolated static func bookingShortfall(
         on date: Date,
-        bookedHours: Double,
+        bookings: [[String: Any]],
         fallbackPolicy: OrgPayrollTimePolicy,
         timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> RulebookBookingShortfall? {
@@ -445,20 +455,20 @@ extension CanonicalBusinessEngine {
             todayKey: organizationDayKey(Date(), timeZoneIdentifier: timeZone),
             timeZone: timeZone
            ) {
-            return RulebookBookingShortfall(json: callJSON("bookingShortfall", arguments: [state, key, bookedHours, timeZone]))
+            return RulebookBookingShortfall(json: memoCallJSON("bookingShortfall", arguments: [state, key, bookings, timeZone]))
         }
-        return bookingShortfall(policy: fallbackPolicy, dayKey: key, bookedHours: bookedHours, timeZone: timeZone)
+        return bookingShortfall(policy: fallbackPolicy, dayKey: key, bookings: bookings, timeZone: timeZone)
     }
 
-    /// `bookingShortfall(policy, dayKey, bookedHours, timeZone)` with one policy (no policy state).
+    /// `bookingShortfall(policy, dayKey, bookings, timeZone)` with one policy (no policy state).
     nonisolated static func bookingShortfall(
         policy: OrgPayrollTimePolicy,
         dayKey: String,
-        bookedHours: Double,
+        bookings: [[String: Any]],
         timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> RulebookBookingShortfall? {
         guard let policyJSON = payrollPolicyJSON(policy) else { return nil }
-        return RulebookBookingShortfall(json: callJSON("bookingShortfall", arguments: [policyJSON, dayKey, bookedHours, timeZone]))
+        return RulebookBookingShortfall(json: memoCallJSON("bookingShortfall", arguments: [policyJSON, dayKey, bookings, timeZone]))
     }
 
     /// The breakdown rows as screen sections (RULEBOOK 1.39.0): each `collapsedBreakdownLines` line with the explanation

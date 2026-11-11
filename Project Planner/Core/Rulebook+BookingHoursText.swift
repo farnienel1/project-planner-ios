@@ -83,7 +83,28 @@ nonisolated struct RulebookMyScheduleClashMarker: Equatable, Hashable, Sendable 
     }
 }
 
+/// A script answer carried through `memoCallJSON`.
+nonisolated struct RulebookAnyBox: @unchecked Sendable {
+    let value: Any
+}
+
 extension CanonicalBusinessEngine {
+    nonisolated private static let answerMemo = RulebookAnswerMemo<String, RulebookAnyBox>(limit: 512)
+
+    /// RULEBOOK 1.39.0 (review 11 Nov): one script call per distinct input. Screens ask these rules on every render
+    /// (explanations, the shortfall line, clash markers); the answer depends only on the arguments, so it is kept by
+    /// their JSON. Arguments that are not JSON are not memoised. Nil answers are never kept.
+    nonisolated static func memoCallJSON(_ function: String, arguments: [Any]) -> Any? {
+        guard JSONSerialization.isValidJSONObject(arguments),
+              let data = try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return callJSON(function, arguments: arguments)
+        }
+        return answerMemo.value(for: function + "|" + text) {
+            callJSON(function, arguments: arguments).map(RulebookAnyBox.init(value:))
+        }?.value
+    }
+
     // MARK: Labels (1.39.0 §4.3)
 
     /// `overtimeTotalText`: "12h OT × 1.5 = 18h" (Daily Overview's overtime tile); nil with no overtime.
@@ -123,7 +144,7 @@ extension CanonicalBusinessEngine {
     /// the working hours in effect on it), else `fallbackPolicy`.
     nonisolated static func dayPolicyArgument(fallbackPolicy: OrgPayrollTimePolicy, timeZone: String) -> Any? {
         if let document = OrganizationRulebookContext.payrollPolicyDocument,
-           let state = callJSON(
+           let state = memoCallJSON(
             "payrollTimePolicyTimeline",
             arguments: [document, organizationDayKey(Date(), timeZoneIdentifier: timeZone), timeZone]
            ) as? [String: Any] {
@@ -139,7 +160,7 @@ extension CanonicalBusinessEngine {
         timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> RulebookBookingBreakText? {
         guard let policy = dayPolicyArgument(fallbackPolicy: fallbackPolicy, timeZone: timeZone) else { return nil }
-        return RulebookBookingBreakText(json: callJSON("bookingBreakText", arguments: [policy, bookingDayKey(date), timeZone]))
+        return RulebookBookingBreakText(json: memoCallJSON("bookingBreakText", arguments: [policy, bookingDayKey(date), timeZone]))
     }
 
     /// `bookingHoursTiles(policyOrState, dayKey, booking, timeZone)`: the Edit booking tiles (standard with the break on
@@ -158,8 +179,25 @@ extension CanonicalBusinessEngine {
             "timeSlot": "CUSTOM_HOURS", "workStartTime": start, "workEndTime": end, "isBreakRemoved": isBreakRemoved,
         ]
         if let otMultiplierOverride { booking["otMultiplierOverride"] = otMultiplierOverride }
-        let rows = callJSON("bookingHoursTiles", arguments: [policy, bookingDayKey(date), booking, timeZone]) as? [Any] ?? []
+        let rows = memoCallJSON("bookingHoursTiles", arguments: [policy, bookingDayKey(date), booking, timeZone]) as? [Any] ?? []
         return rows.compactMap(RulebookBookingHoursTile.init(json:))
+    }
+
+    /// RULEBOOK 1.39.0 (review) `bookingBreakDeductionText`: what the unpaid break takes off this booking — "30 mins
+    /// deducted 11:30–12:00", "15 mins deducted (11:30–11:45 covered)"; nil when nothing comes off.
+    nonisolated static func bookingBreakDeductionText(
+        on date: Date,
+        start: String,
+        end: String,
+        isBreakRemoved: Bool,
+        fallbackPolicy: OrgPayrollTimePolicy,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> String? {
+        guard let policy = dayPolicyArgument(fallbackPolicy: fallbackPolicy, timeZone: timeZone) else { return nil }
+        let booking: [String: Any] = [
+            "timeSlot": "CUSTOM_HOURS", "workStartTime": start, "workEndTime": end, "isBreakRemoved": isBreakRemoved,
+        ]
+        return memoCallJSON("bookingBreakDeductionText", arguments: [policy, bookingDayKey(date), booking, timeZone]) as? String
     }
 
     // MARK: My Schedule clash marker (1.39.0 §10)
@@ -169,7 +207,7 @@ extension CanonicalBusinessEngine {
     /// `managerIds`, `day`) plus `decisions` (nil while the approvals have not loaded — nothing reads approved),
     /// `canOpenWarnings`, `viewerIds` and `viewerEmail`. Empty when the script did not answer.
     nonisolated static func myScheduleClashMarkers(_ input: [String: Any]) -> [String: RulebookMyScheduleClashMarker] {
-        let rows = callJSON("myScheduleClashMarkers", arguments: [input]) as? [Any] ?? []
+        let rows = memoCallJSON("myScheduleClashMarkers", arguments: [input]) as? [Any] ?? []
         var out: [String: RulebookMyScheduleClashMarker] = [:]
         for row in rows {
             guard let marker = RulebookMyScheduleClashMarker(json: row) else { continue }

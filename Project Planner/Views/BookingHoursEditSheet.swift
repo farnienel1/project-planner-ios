@@ -873,6 +873,13 @@ struct OperativeCustomHoursSheet: View {
         CanonicalBusinessEngine.bookingBreakText(on: rulebookDay, fallbackPolicy: policy)
     }
 
+    /// RULEBOOK 1.39.0 `bookingBreakDeductionText` for the times on screen (`payrollHoursResult.unpaidBreakHours`).
+    private var bookingBreakDeduction: String? {
+        CanonicalBusinessEngine.bookingBreakDeductionText(
+            on: rulebookDay, start: startText, end: endText, isBreakRemoved: !breakIncluded, fallbackPolicy: policy
+        )
+    }
+
     private var paidPerDaySuffix: String {
         noteDays.count > 1 ? " per day" : ""
     }
@@ -1313,8 +1320,10 @@ struct OperativeCustomHoursSheet: View {
                     .foregroundStyle(.primary)
                 Text(
                     breakIncluded
-                        // RULEBOOK 1.39.0 `bookingBreakText`: "30 mins deducted 11:30–12:00" (that day's own window).
-                        ? (dayBreakText?.deducted ?? "\(dayBreakMinutes) mins deducted")
+                        // RULEBOOK 1.39.0 (review) `bookingBreakDeductionText`: what the break takes off THIS booking —
+                        // "30 mins deducted 11:30–12:00" or "15 mins deducted (11:30–11:45 covered)"; when nothing comes
+                        // off, the day's break as it is set (`bookingBreakText.label`), never a deduction.
+                        ? (bookingBreakDeduction ?? dayBreakText?.label ?? "No unpaid break taken off")
                         : "Removed · full hours in total"
                 )
                 .font(.footnote)

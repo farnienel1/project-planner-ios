@@ -980,8 +980,15 @@ struct BookLabourFlowView: View {
             let combinedPaidHours = existingPaidHours + newPaidHours
             // RULEBOOK 1.39.0 `bookingShortfall`: how far the day is from ITS full day ("Short of a full Saturday (8h)"),
             // none on a day paid every hour at a multiplier. Replaces "Missing to standard day".
+            // Review (11 Nov): by coverage of the working day (lunch window excluded), never paid hours.
             let shortfall = CanonicalBusinessEngine.bookingShortfall(
-                on: day, bookedHours: combinedPaidHours, fallbackPolicy: dayPayrollPolicy
+                on: day,
+                bookings: existingCoverageRowsForOperative(op.id) + [[
+                    "timeSlot": TimeSlot.customHours.rawValue,
+                    "workStartTime": timeText(from: draft.startMinutes),
+                    "workEndTime": timeText(from: draft.endMinutes),
+                ]],
+                fallbackPolicy: dayPayrollPolicy
             )
             // RULEBOOK 1.39.0 `bookingHoursExplanation`: the weekday rule and the steps behind the new booking's hours.
             let weekdaySections = CanonicalBusinessEngine.weekdayExplanationSections(
@@ -1323,6 +1330,15 @@ struct BookLabourFlowView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
         )
+    }
+
+    /// RULEBOOK 1.39.0 `bookingShortfall`: the same existing bookings as `existingPaidHoursForOperative`, as the
+    /// coverage rule reads them. A mapping only.
+    private func existingCoverageRowsForOperative(_ operativeId: UUID) -> [[String: Any]] {
+        let personIds = samePersonIds(operativeId)
+        return bookingStore.bookings
+            .filter { personIds.contains($0.operativeId) && calendar.isDate($0.date, inSameDayAs: day) && $0.occupiesDay }
+            .map(CanonicalBusinessEngine.shortfallRow)
     }
 
     private func existingPaidHoursForOperative(_ operativeId: UUID) -> Double {

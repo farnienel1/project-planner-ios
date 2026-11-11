@@ -284,6 +284,13 @@ struct ProjectDetailView: View {
                     managerBookings: managerScheduleStore.managerSiteBookings,
                     policy: policy
                 ),
+                existingCoverageRows: ScheduleWeekGrid.coverageRows(
+                    operativeIds: request.person.operativeIds,
+                    userIds: request.person.userIds,
+                    day: request.day,
+                    operativeBookings: bookingStore.bookings,
+                    managerBookings: managerScheduleStore.managerSiteBookings
+                ),
                 showsNotes: request.person.savesAsOperativeBooking,
                 onSave: { draft in
                     await commitQuickAdd(request, draft: draft, policy: policy)
