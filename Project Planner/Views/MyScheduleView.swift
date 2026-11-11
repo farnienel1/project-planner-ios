@@ -38,6 +38,11 @@ fileprivate struct DayHoursSegmentTotals {
     /// (a Saturday window counting 8h is 8h; Sunday every hour ×2 is 13h), never the clock duration.
     var totalPaidHours: Double
     var otReported: Double
+    /// RULEBOOK 1.39.0: clock hours at the multiplier and the unpaid break in them (`payrollMultipliedHours`), and the
+    /// rates seen, for "incl. 6h OT × 1.5 = 9h" (`overtimeIncludedText`).
+    var otClockHours: Double = 0
+    var otBreakHours: Double = 0
+    var otMultipliers: Set<Double> = []
 }
 
 fileprivate func mergedDaySegments(
@@ -46,20 +51,24 @@ fileprivate func mergedDaySegments(
     day: Date,
     policy: OrgPayrollTimePolicy
 ) -> DayHoursSegmentTotals {
-    var ot: Double = 0, paidSum: Double = 0
+    var totals = DayHoursSegmentTotals(totalPaidHours: 0, otReported: 0)
+    func add(_ result: PayrollHoursResult, split: Double) {
+        totals.totalPaidHours += result.totalPaidHours
+        totals.otReported += split
+        if let multiplied = result.multipliedHours, multiplied.clockHours > 0 {
+            totals.otClockHours += multiplied.clockHours
+            totals.otBreakHours += multiplied.breakHours
+            totals.otMultipliers.insert(multiplied.multiplier)
+        }
+    }
     for b in manager {
         // Same figures as web and Daily Overview: `workedHoursSplit(payrollHoursResult)` (never multiplied).
-        let split = b.workedHoursSplit(policy: policy)
-        paidSum += b.payrollHoursResult(policy: policy).totalPaidHours
-        ot += split?.outsideWorkedHours ?? 0
+        add(b.payrollHoursResult(policy: policy), split: b.workedHoursSplit(policy: policy)?.outsideWorkedHours ?? 0)
     }
     for b in operative {
-        // Same figures as web and Daily Overview: `workedHoursSplit(payrollHoursResult)` (never multiplied).
-        let split = b.workedHoursSplit(policy: policy)
-        paidSum += b.payrollHoursResult(policy: policy).totalPaidHours
-        ot += split?.outsideWorkedHours ?? 0
+        add(b.payrollHoursResult(policy: policy), split: b.workedHoursSplit(policy: policy)?.outsideWorkedHours ?? 0)
     }
-    return DayHoursSegmentTotals(totalPaidHours: paidSum, otReported: ot)
+    return totals
 }
 
 /// Icon tile colour family per location type (Midnight design). Display only.
@@ -167,6 +176,73 @@ fileprivate func operativeBookingClockSubtitle(_ b: Booking, day: Date, policy: 
     return "\(start) – \(end) · \(b.payrollHoursResult(policy: policy).paidHoursLabel)"
 }
 
+/// RULEBOOK 1.39.0 §10 `myScheduleClashMarkers`: the clash marker per booking id for the viewer's own bookings shown on
+/// one day, from the same inputs Warnings passes (`operativeClashGroups` / `managerClashGroups`: the roster accounts
+/// with their former and same-email ids, the operatives catalogue, `clashManagerIds`, the working-hours state) and the
+/// live approvals (`WarningResolutionStore.clashMarkerDecisions`, nil until loaded — nothing reads approved).
+@MainActor
+fileprivate func myScheduleClashMarkerMap(
+    manager: [ManagerSiteBooking],
+    operative: [Booking],
+    userStore: UserStore,
+    operativeStore: OperativeStore,
+    fallbackPolicy: OrgPayrollTimePolicy,
+    placeLabel: (Booking) -> String,
+    managerPlaceLabel: (ManagerSiteBooking) -> String
+) -> [String: RulebookMyScheduleClashMarker] {
+    guard manager.count + operative.count >= 2 else { return [:] }
+    func dayKey(_ date: Date) -> String { CanonicalBusinessEngine.dayKeyInOrganizationZone(date) ?? "" }
+    let users = userStore.organizationUsers
+    let viewer = userStore.currentUser
+    var viewerIds: [String] = []
+    if let viewer { viewerIds = [viewer.id] + viewer.formerUserIds + viewer.sameEmailUserIds }
+    viewerIds += operative.map { Booking.storedOperativeId(for: $0.operativeId) }
+    var input: [String: Any] = [
+        "operativeBookings": operative.map { b -> [String: Any] in
+            [
+                "id": b.id.uuidString,
+                "operativeId": Booking.storedOperativeId(for: b.operativeId),
+                "dayKey": dayKey(b.date),
+                "timeSlot": b.timeSlot.rawValue,
+                "workStartTime": b.workStartTime ?? NSNull(),
+                "workEndTime": b.workEndTime ?? NSNull(),
+                "status": b.occupiesDay ? "Confirmed" : "Cancelled",
+                "placeLabel": placeLabel(b),
+                "projectId": b.projectId.uuidString,
+            ]
+        },
+        "managerBookings": manager.map { b -> [String: Any] in
+            let isJob = b.locationType == .project || b.locationType == .smallWork
+            let jobId: Any = isJob ? (b.locationId.map { $0.uuidString as Any } ?? NSNull()) : NSNull()
+            return [
+                "id": b.id.uuidString,
+                "userId": b.userId,
+                "dayKey": dayKey(b.date),
+                "timeSlot": b.timeSlot.rawValue,
+                "workStartTime": b.workStartTime ?? NSNull(),
+                "workEndTime": b.workEndTime ?? NSNull(),
+                "placeLabel": managerPlaceLabel(b),
+                "jobId": jobId,
+            ]
+        },
+        "people": [
+            "accounts": users.map { user -> [String: Any] in
+                ["id": user.id, "email": user.email.lowercased(), "formerIds": user.formerUserIds, "aliasIds": user.sameEmailUserIds]
+            },
+            "operatives": operativeStore.allOperatives.map { ["id": Booking.storedOperativeId(for: $0.id), "email": $0.email.lowercased()] },
+        ],
+        "managerIds": RulebookRosterLists.clashManagerIds(users.map(RulebookRosterLists.levelRow)) ?? [],
+        "canOpenWarnings": userStore.canViewStaffWarnings(),
+        "viewerIds": viewerIds,
+        "viewerEmail": viewer?.email ?? NSNull(),
+    ]
+    input["day"] = CanonicalBusinessEngine.dayPolicyArgument(
+        fallbackPolicy: fallbackPolicy, timeZone: OrganizationRulebookContext.timeZoneIdentifier
+    ) ?? NSNull()
+    input["decisions"] = WarningResolutionStore.shared.clashMarkerDecisions() ?? NSNull()
+    return CanonicalBusinessEngine.myScheduleClashMarkers(input)
+}
+
 fileprivate struct MyScheduleBookingStripeRow: View {
     let family: PPFamily
     let symbol: String
@@ -178,6 +254,8 @@ fileprivate struct MyScheduleBookingStripeRow: View {
     var onDelete: (() -> Void)?
     /// RULEBOOK §2: booking UUID string; shows "Pending sync" while the outbox holds a change for it.
     var pendingSyncEntityId: String? = nil
+    /// RULEBOOK 1.39.0 §10: the clash marker for this booking (`myScheduleClashMarkers`), nil when it overlaps nothing.
+    var clashMarker: RulebookMyScheduleClashMarker? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -205,6 +283,9 @@ fileprivate struct MyScheduleBookingStripeRow: View {
                 .buttonStyle(.plain)
                 .disabled(onEdit == nil)
                 .accessibilityIdentifier("myScheduleBookingStripe.open")
+                if let clashMarker {
+                    MyScheduleClashMarkerButton(marker: clashMarker)
+                }
                 if let otChip {
                     MyScheduleAmberPill(text: otChip)
                 }
@@ -335,6 +416,17 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
         }
     }
 
+    /// RULEBOOK 1.39.0 `overtimeIncludedText`: "incl. 6h OT × 1.5 = 9h"; several rates keep the clock hours only.
+    private static func overtimeIncludedLine(_ segments: DayHoursSegmentTotals) -> String? {
+        guard segments.otClockHours > 0.05 else { return nil }
+        if segments.otMultipliers.count == 1, let rate = segments.otMultipliers.first {
+            return CanonicalBusinessEngine.overtimeIncludedText(
+                clockHours: segments.otClockHours, multiplier: rate, breakHours: segments.otBreakHours
+            )
+        }
+        return "incl. \(ScheduleCoverageFormat.hours(segments.otClockHours))h OT"
+    }
+
     @ViewBuilder
     var body: some View {
         if let annualLeaveLabel, !annualLeaveLabel.isEmpty {
@@ -414,8 +506,10 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
-                        if ot > 0.05 {
-                            Text("+\(ScheduleCoverageFormat.hours(ot)) overtime")
+                        // RULEBOOK 1.39.0 `overtimeIncludedText`: the overtime is part of the total — "incl. 6h OT ×
+                        // 1.5 = 9h" (never "+6 overtime"); several rates keep the clock hours only.
+                        if ot > 0.05, let included = Self.overtimeIncludedLine(segments) {
+                            Text(included)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(PPFamily.trade.bottom)
                         }
@@ -1678,6 +1772,15 @@ struct ManagerScheduleContentView: View {
         let annualLeaveSlotForDay = annualLeaveTimeSlot(on: day)
         let segments = mergedDaySegments(manager: bookings, operative: operativeBookings, day: day, policy: policy)
         let daysBookedInWeek = weekDates.filter { hasScheduleDot(on: $0) }.count
+        let clashMarkers = myScheduleClashMarkerMap(
+            manager: bookings,
+            operative: operativeBookings,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            fallbackPolicy: policy,
+            placeLabel: { b in (projectStore.projects.first(where: { $0.id == b.projectId }) ?? projectStore.smallWorks.first(where: { $0.id == b.projectId })).map { "\($0.jobNumber) \($0.siteName)" } ?? "Scheduled work" },
+            managerPlaceLabel: { locationNameString(for: $0) }
+        )
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 managerNavyHeader(
@@ -1742,7 +1845,7 @@ struct ManagerScheduleContentView: View {
                             .myScheduleCard(cornerRadius: PPMetrics.rowCardRadius)
                         } else if !bookings.isEmpty {
                             ForEach(bookings) { b in
-                                bookingRow(b: b)
+                                bookingRow(b: b, clashMarker: clashMarkers[b.id.uuidString])
                             }
                         }
                         dashedAddBookingButton()
@@ -1769,7 +1872,8 @@ struct ManagerScheduleContentView: View {
                                     onDelete: bookingStore.canDeleteBooking(b) ? {
                                         Task { await bookingStore.deleteBooking(b) }
                                     } : nil,
-                                    pendingSyncEntityId: b.id.uuidString
+                                    pendingSyncEntityId: b.id.uuidString,
+                                    clashMarker: clashMarkers[b.id.uuidString]
                                 )
                             }
                         }
@@ -1790,7 +1894,7 @@ struct ManagerScheduleContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func bookingRow(b: ManagerSiteBooking) -> some View {
+    private func bookingRow(b: ManagerSiteBooking, clashMarker: RulebookMyScheduleClashMarker? = nil) -> some View {
         let p = payrollPolicy(for: b.date)
         return MyScheduleBookingStripeRow(
             family: myScheduleLocationFamily(b.locationType),
@@ -1804,7 +1908,8 @@ struct ManagerScheduleContentView: View {
             onDelete: managerScheduleStore.canDeleteBooking(b) ? {
                 Task { await managerScheduleStore.deleteBooking(b) }
             } : nil,
-            pendingSyncEntityId: b.id.uuidString
+            pendingSyncEntityId: b.id.uuidString,
+            clashMarker: clashMarker
         )
     }
 
@@ -2932,6 +3037,15 @@ struct OperativeScheduleContentView: View {
         let policy = firebaseBackend.payrollPolicy(for: date)
         let dayBookings = myBookingsThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
         let dayManagerBookings = myManagerAttendanceThisWeek.filter { calendar.isDate($0.date, inSameDayAs: date) }
+        let clashMarkers = myScheduleClashMarkerMap(
+            manager: dayManagerBookings,
+            operative: dayBookings,
+            userStore: userStore,
+            operativeStore: operativeStore,
+            fallbackPolicy: policy,
+            placeLabel: { b in (projectStore.projects.first(where: { $0.id == b.projectId }) ?? projectStore.smallWorks.first(where: { $0.id == b.projectId })).map { "\($0.jobNumber) \($0.siteName)" } ?? "Scheduled work" },
+            managerPlaceLabel: { managerSelfBookingTitle($0) }
+        )
         let isOnHoliday = holidayCoversDay(date)
         let annualLeaveLabel = approvedHolidayLabel(on: date)
         let annualLeaveSlotForDay = approvedHolidayTimeSlot(on: date)
@@ -3008,7 +3122,8 @@ struct OperativeScheduleContentView: View {
                         subtitle: managerBookingClockSubtitle(b, day: date, policy: policy),
                         otChip: managerBookingOtChipText(b, policy: policy),
                         showActions: false,
-                        pendingSyncEntityId: b.id.uuidString
+                        pendingSyncEntityId: b.id.uuidString,
+                        clashMarker: clashMarkers[b.id.uuidString]
                     )
                 }
                 if !dayBookings.isEmpty {
@@ -3027,7 +3142,8 @@ struct OperativeScheduleContentView: View {
                             subtitle: operativeBookingClockSubtitle(b, day: date, policy: policy),
                             otChip: operativeBookingOtChipText(b, policy: policy),
                             showActions: false,
-                            pendingSyncEntityId: b.id.uuidString
+                            pendingSyncEntityId: b.id.uuidString,
+                            clashMarker: clashMarkers[b.id.uuidString]
                         )
                     }
                 }

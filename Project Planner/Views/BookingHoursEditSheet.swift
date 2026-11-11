@@ -868,12 +868,18 @@ struct OperativeCustomHoursSheet: View {
         Double(max(0, endMinutes - startMinutes)) / 60.0
     }
 
+    /// RULEBOOK 1.39.0 `bookingBreakText`: the booking day's own lunch break, from the working hours in effect on it.
+    private var dayBreakText: RulebookBookingBreakText? {
+        CanonicalBusinessEngine.bookingBreakText(on: rulebookDay, fallbackPolicy: policy)
+    }
+
     private var paidPerDaySuffix: String {
         noteDays.count > 1 ? " per day" : ""
     }
 
     private var saveButtonTitle: String {
-        showsGlance ? "Save · \(formatHours(breakdown.totalHours))h paid" : "Save"
+        // RULEBOOK 1.39.0 `saveHoursLabel`: "Save · 17.5 hours" (never "paid").
+        showsGlance ? (CanonicalBusinessEngine.saveHoursLabel(breakdown.totalHours) ?? "Save · \(formatHours(breakdown.totalHours)) hours") : "Save"
     }
 
     private var customHoursForm: some View {
@@ -986,7 +992,8 @@ struct OperativeCustomHoursSheet: View {
             if showsGlance {
                 PPGlanceHeadline(
                     eyebrow: onDelete != nil || headerName != nil ? "This booking at a glance" : "At a glance",
-                    primary: "\(formatHours(bd.totalHours))h paid\(paidPerDaySuffix)",
+                    // RULEBOOK 1.39.0 `bookingHoursCountText`: "17.5 hours" (never "17.5h paid").
+                    primary: "\(CanonicalBusinessEngine.bookingHoursCountText(bd.totalHours) ?? "\(formatHours(bd.totalHours)) hours")\(paidPerDaySuffix)",
                     secondary: "\(formatHours(onSiteHours))h on site"
                 )
                 PPStatRow(items: glanceStats(bd))
@@ -1000,26 +1007,24 @@ struct OperativeCustomHoursSheet: View {
         .ppNavyHeader()
     }
 
-    /// Standard `payrollHoursResult.standardHours`; OT `payrollMultipliedHours` (clock hours, and its "× rate = paid"
-    /// text); unpaid break `payrollHoursResult.unpaidBreakHours`. Bound, never recalculated here.
+    /// RULEBOOK 1.39.0 `bookingHoursTiles` (owner option A, 11 Nov): the standard hours with the unpaid break on the
+    /// same tile ("9" "Standard (−0.5 break)") and the hours at the multiplier ("6" "OT", with its "× rate = paid"
+    /// text from `payrollMultipliedHours`); no separate break tile. Bound, never recalculated here.
     private func glanceStats(_ bd: BookingEditHoursBreakdown) -> [PPStatItem] {
+        let tiles = CanonicalBusinessEngine.bookingHoursTiles(
+            on: rulebookDay,
+            start: startText,
+            end: endText,
+            isBreakRemoved: !breakIncluded,
+            otMultiplierOverride: resolvedOtMultiplierOverride,
+            fallbackPolicy: policy
+        )
         let multiplied = bd.result.multipliedHours
-        let breakHours = bd.result.unpaidBreakHours
-        return [
-            PPStatItem(id: "standard", value: formatHours(bd.result.standardHours), label: "Standard hrs"),
-            PPStatItem(
-                id: "overtime",
-                value: formatHours(multiplied?.clockHours ?? 0),
-                label: "OT",
-                detail: multiplied?.text,
-                tint: PPColor.warningAmber
-            ),
-            PPStatItem(
-                id: "break",
-                value: breakHours > 0.005 ? "−\(formatHours(breakHours))" : "0",
-                label: "Unpaid break"
-            ),
-        ]
+        return tiles.map { tile in
+            tile.kind == "overtime"
+                ? PPStatItem(id: "overtime", value: tile.value, label: tile.label, detail: multiplied?.text, tint: PPColor.warningAmber)
+                : PPStatItem(id: "standard", value: tile.value, label: tile.label)
+        }
     }
 
     @ViewBuilder
@@ -1064,8 +1069,9 @@ struct OperativeCustomHoursSheet: View {
                     .font(.headline)
                     .monospacedDigit()
                     .foregroundStyle(.white)
-                if showsBreakIncludedNote {
-                    Text("· break included")
+                if showsBreakIncludedNote, let breakText = dayBreakText {
+                    // RULEBOOK 1.39.0 `bookingBreakText`: "· 30 min unpaid break 11:30–12:00" (was "· break included").
+                    Text("· \(breakText.label)")
                         .font(.subheadline)
                         .foregroundStyle(PPColor.onNavySecondary)
                 }
@@ -1307,7 +1313,8 @@ struct OperativeCustomHoursSheet: View {
                     .foregroundStyle(.primary)
                 Text(
                     breakIncluded
-                        ? "\(dayBreakMinutes) mins deducted around midday"
+                        // RULEBOOK 1.39.0 `bookingBreakText`: "30 mins deducted 11:30–12:00" (that day's own window).
+                        ? (dayBreakText?.deducted ?? "\(dayBreakMinutes) mins deducted")
                         : "Removed · full hours in total"
                 )
                 .font(.footnote)
@@ -1721,7 +1728,7 @@ private struct OvertimeRateSheet: View {
     private var useTitle: String {
         let option = pickedOption
         if let total = option.figure?.totalPaidHours {
-            return "Use \(option.title) · \(ScheduleCoverageFormat.hours(total))h paid"
+            return "Use \(option.title) · \(CanonicalBusinessEngine.bookingHoursCountText(total) ?? "\(ScheduleCoverageFormat.hours(total)) hours")"
         }
         return "Use \(option.title)"
     }

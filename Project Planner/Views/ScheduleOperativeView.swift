@@ -754,7 +754,7 @@ struct ScheduleOperativeView: View {
                 // `paidBookedHours` per effective day), shifts = `totalEffectiveBookingDays`.
                 PPGlanceHeadline(
                     eyebrow: "Booking at a glance",
-                    primary: "\(ScheduleCoverageFormat.hours(totalPlannedHours))h paid",
+                    primary: CanonicalBusinessEngine.bookingHoursCountText(totalPlannedHours) ?? "\(ScheduleCoverageFormat.hours(totalPlannedHours)) hours", // 1.39.0
                     secondary: "\(totalEffectiveBookingDays) shift\(totalEffectiveBookingDays == 1 ? "" : "s")"
                 )
                 PPStatRow(items: [
@@ -973,7 +973,7 @@ struct ScheduleOperativeView: View {
             stepSummaryCard(
                 step: 2,
                 title: "Hours · \(bulkSlotSummary(choice))",
-                value: "\(start) – \(end) · \(ScheduleCoverageFormat.hours(paidH))h paid"
+                value: "\(start) – \(end) · \(CanonicalBusinessEngine.bookingHoursCountText(paidH) ?? "\(ScheduleCoverageFormat.hours(paidH)) hours")" // 1.39.0
             )
         } else {
             VStack(alignment: .leading, spacing: 10) {
@@ -1025,7 +1025,7 @@ struct ScheduleOperativeView: View {
         }
     }
 
-    /// The green line "8.5h paid · 9h on site less 30m unpaid break" (amber with the overtime sum when the day has
+    /// The green line "8.5 hours · 9h on site less 30m unpaid break" (amber with the overtime sum when the day has
     /// overtime). Paid = `paidBookedHours`, break = `payrollHoursResult.unpaidBreakHours`, overtime =
     /// `payrollMultipliedHours` text; on site = finish − start (owner decision 2). A weekend selection shows its
     /// per-day rows (`weekendBookingBreakdown`) instead, as before.
@@ -1077,7 +1077,8 @@ struct ScheduleOperativeView: View {
         paidHours: Double,
         hasOvertime: Bool
     ) -> String {
-        var text = "\(ScheduleCoverageFormat.hours(paidHours))h paid"
+        // RULEBOOK 1.39.0 `bookingHoursCountText`: "17.5 hours" (never "paid").
+        var text = CanonicalBusinessEngine.bookingHoursCountText(paidHours) ?? "\(ScheduleCoverageFormat.hours(paidHours)) hours"
         if let s = ManagerScheduleInterval.parseMinutes(start),
            let e = ManagerScheduleInterval.parseMinutes(end), e > s {
             text += " · \(ScheduleCoverageFormat.hours(Double(e - s) / 60))h on site"
