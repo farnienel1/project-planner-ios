@@ -479,16 +479,6 @@ struct ContentView: View {
         let levelBefore = userStore.currentUser?.rosterListKind
         await userStore.loadCurrentUser()
         guard firebaseBackend.hasBootstrappedOrgDataLoad else { return }
-        // A level change (or new claims) reads the roster and the Operatives list again from the server, never the
-        // copy loaded under the previous level (`UserStore.rosterNeedsFreshLoad`).
-        if UserStore.rosterNeedsFreshLoad(
-            levelBefore: levelBefore,
-            levelAfter: userStore.currentUser?.rosterListKind,
-            claimsRefreshed: claimsRefreshed
-        ) {
-            operativeStore.loadData()
-            await userStore.loadOrganizationUsers(forceRefresh: true)
-        }
         bookingStore.loadData()
         managerScheduleStore.loadData(force: true)
         PlannerStoreWiring.startOrgLiveListeners(
@@ -499,6 +489,17 @@ struct ContentView: View {
             taskStore: taskStore,
             holidayStore: holidayStore
         )
+        // A level change (or new claims) reads the roster and the Operatives list again from the server, never the
+        // copy loaded under the previous level (`UserStore.rosterNeedsFreshLoad`). On its own task, after the booking
+        // reloads and listeners above, so they never wait for it.
+        if UserStore.rosterNeedsFreshLoad(
+            levelBefore: levelBefore,
+            levelAfter: userStore.currentUser?.rosterListKind,
+            claimsRefreshed: claimsRefreshed
+        ) {
+            operativeStore.loadData()
+            Task { await userStore.loadOrganizationUsers(forceRefresh: true) }
+        }
     }
 
     private func refreshNotificationDelivery() async {

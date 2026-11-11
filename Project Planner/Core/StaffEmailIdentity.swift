@@ -195,37 +195,72 @@ enum StaffEmailIdentity {
         var unresolved: Bool = false
     }
 
+    typealias BookingPersonResolver = (String, CanonicalBusinessEngine.CanonicalBookingPersonInput) -> CanonicalBusinessEngine.CanonicalResolvedBookingPerson?
+
+    private struct ResolvedPersonKey: Hashable {
+        var roster: Int
+        var storedId: String
+    }
+
+    /// One answer per booked id per roster: the grid re-renders often and the roster rarely changes.
+    nonisolated private static let resolvedPersonMemo = RulebookAnswerMemo<ResolvedPersonKey, CanonicalBusinessEngine.CanonicalResolvedBookingPerson>(limit: 2048)
+
+    /// `resolveBookingPerson`, memoised on the roster (`rosterHash`, the input's hash taken once per pass) and the id.
+    static func memoisedBookingPerson(
+        _ storedId: String,
+        _ input: CanonicalBusinessEngine.CanonicalBookingPersonInput,
+        rosterHash: Int
+    ) -> CanonicalBusinessEngine.CanonicalResolvedBookingPerson? {
+        resolvedPersonMemo.value(for: ResolvedPersonKey(roster: rosterHash, storedId: storedId)) {
+            CanonicalBusinessEngine.resolveBookingPerson(storedId, input)
+        }
+    }
+
+    /// The row key for one answer of `resolveBookingPerson`: the person's email as web keys rows
+    /// (`ProjectScheduleWeekOverview.tsx`), else the rulebook's `bookingPersonKey` form (`account:` / `operative:` /
+    /// `id:`, ids lower-cased), read off the same answer instead of asking the script a second time.
+    static func scheduleRowKey(storedId: String, person: CanonicalBusinessEngine.CanonicalResolvedBookingPerson) -> String {
+        let email = emailKey(person.email)
+        if !email.isEmpty { return "email:\(email)" }
+        func lower(_ id: String) -> String { id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        if let account = person.accountId { return "account:\(lower(account))" }
+        if let operative = person.operativeId { return "operative:\(lower(operative))" }
+        return "id:\(lower(storedId))"
+    }
+
     /// One row per person on the project / small-works week grid. Each booked id (a labour booking's `operativeId`, a
     /// manager site booking's `userId`) is resolved once with the rulebook's `resolveBookingPerson` (web
     /// `findUserByAnyId` with the roster's `userIdAliases`, `ProjectScheduleWeekOverview.tsx`), and rows are keyed by
-    /// the person's email as web keys them, else `bookingPersonKey`. Before 1.37.3 iOS matched the stored id exactly
-    /// (own id and same-email ids, never `formerUserIds`), so a booking under a former invite id read "Unknown person".
+    /// the person's email as web keys them, else the `bookingPersonKey` form. Before 1.37.3 iOS matched the stored id
+    /// exactly (own id and same-email ids, never `formerUserIds`), so a booking under a former invite id read
+    /// "Unknown person". `resolve` is the rulebook call (replaced only in tests to stand for a script that did not
+    /// answer).
     static func scheduleBuckets(
         operativeIds: Set<UUID>,
         userIds: Set<String>,
         operatives: [Operative],
-        users: [AppUser]
+        users: [AppUser],
+        resolve: BookingPersonResolver? = nil
     ) -> [SchedulePersonBucket] {
         let input = bookingPersonInput(operatives: operatives, users: users)
+        let rosterHash = input.hashValue
+        let resolve: BookingPersonResolver = resolve ?? { memoisedBookingPerson($0, $1, rosterHash: rosterHash) }
         var byKey: [String: SchedulePersonBucket] = [:]
-        func place(_ storedId: String, legacyEmail: () -> String?, legacyKey: String, add: (inout SchedulePersonBucket) -> Void) {
+        func place(_ storedId: String, legacy: () -> (email: String?, known: Bool), legacyKey: String, add: (inout SchedulePersonBucket) -> Void) {
             let key: String
             var accountId: String?
             let found: Bool
-            if let person = CanonicalBusinessEngine.resolveBookingPerson(storedId, input) {
+            if let person = resolve(storedId, input) {
                 accountId = person.accountId
                 found = person.accountId != nil || person.operativeId != nil
-                let email = emailKey(person.email)
-                if !email.isEmpty {
-                    key = "email:\(email)"
-                } else {
-                    key = CanonicalBusinessEngine.bookingPersonKey(storedId, input) ?? legacyKey
-                }
+                key = scheduleRowKey(storedId: storedId, person: person)
             } else {
-                // The script did not answer: the email grouping this app had before (no Swift copy of the rule).
-                let email = legacyEmail()
-                key = personKey(email: email, fallbackId: legacyKey)
-                found = !emailKey(email).isEmpty
+                // The script did not answer: the email grouping this app had before (no Swift copy of the rule). A
+                // catalogue row or account the id names exactly — a ghost or a row with no email included — keeps
+                // its row, pill and quick add as before; only an id that names nothing is unknown.
+                let old = legacy()
+                key = personKey(email: old.email, fallbackId: legacyKey)
+                found = old.known
             }
             var bucket = byKey[key] ?? SchedulePersonBucket(key: key, operativeIds: [], userIds: [], resolvedAccountIds: [], unresolved: true)
             add(&bucket)
@@ -236,14 +271,20 @@ enum StaffEmailIdentity {
         for id in operativeIds.sorted(by: { $0.uuidString < $1.uuidString }) {
             place(
                 Booking.storedOperativeId(for: id),
-                legacyEmail: { operativeBookingEmail(id, operatives: operatives, users: users) },
+                legacy: {
+                    let known = operatives.contains { $0.id == id } || AccountLabourBooking.account(forOperativeId: id, users: users) != nil
+                    return (operativeBookingEmail(id, operatives: operatives, users: users), known)
+                },
                 legacyKey: "op:\(id.uuidString)"
             ) { $0.operativeIds.append(id) }
         }
         for id in userIds.sorted() {
             place(
                 id,
-                legacyEmail: { users.first { $0.id == id }?.email },
+                legacy: {
+                    let account = users.first { $0.id == id }
+                    return (account?.email, account != nil)
+                },
                 legacyKey: "u:\(id)"
             ) { $0.userIds.append(id) }
         }

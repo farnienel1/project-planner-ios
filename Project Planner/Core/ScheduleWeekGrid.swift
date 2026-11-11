@@ -109,13 +109,15 @@ enum ScheduleWeekGrid {
         operativeIds: Set<UUID>,
         userIds: Set<String>,
         operatives: [Operative],
-        users: [AppUser]
+        users: [AppUser],
+        resolve: StaffEmailIdentity.BookingPersonResolver? = nil
     ) -> [ScheduleWeekPerson] {
         let buckets = StaffEmailIdentity.scheduleBuckets(
             operativeIds: operativeIds,
             userIds: userIds,
             operatives: operatives,
-            users: users
+            users: users,
+            resolve: resolve
         )
         return buckets.map { bucket in
             person(from: bucket, operatives: operatives, users: users)
@@ -468,6 +470,12 @@ enum ScheduleGridTapGate {
         case none
     }
 
+    /// The write a tap would lead to.
+    enum Write: Equatable {
+        case booking(collection: String)
+        case managerSiteBooking(userId: String, locationType: String)
+    }
+
     static func action(
         _ tapped: Tapped,
         viewer: JobAccessViewer?,
@@ -475,39 +483,47 @@ enum ScheduleGridTapGate {
         managers: [[String: Any]]
     ) -> Action {
         guard let viewer else { return .none }
-        func may(_ booking: [String: Any]) -> Bool {
-            CanonicalBusinessEngine.canWriteBooking(viewer, booking: booking, job: job.jobAccessFields, managers: managers)
+        // The same helpers every booking screen calls (`UserStore.canWriteBooking(collection:on:)`,
+        // `canWriteManagerSiteBooking`), in their answer-or-nil form.
+        return action(tapped, viewer: viewer) { write in
+            switch write {
+            case .booking(let collection):
+                return UserStore.bookingWriteAnswer(viewer: viewer, collection: collection, on: job, managers: managers)
+            case .managerSiteBooking(let userId, let locationType):
+                return UserStore.managerSiteBookingWriteAnswer(
+                    viewer: viewer, userId: userId, locationType: locationType, job: job, managers: managers
+                )
+            }
         }
-        let labour: [String: Any] = ["collection": "bookings", "projectId": job.documentId]
+    }
+
+    /// `answer` is `canWriteBooking` for one write, nil when the script did not answer.
+    static func action(_ tapped: Tapped, viewer: JobAccessViewer, answer: (Write) -> Bool?) -> Action {
+        func may(_ write: Write) -> Bool {
+            if let allowed = answer(write) { return allowed }
+            // The script did not answer: never silently lock an admin out of their own grid. Admins and super admins
+            // outside operative mode write every booking (RULEBOOK §16, the admin branch of `canWriteBooking`);
+            // everyone else waits for an answer. The store and the security rules still decide the save.
+            return (viewer.role.isAdmin || viewer.role.isSuperAdmin) && !viewer.role.isOperativeMode
+        }
         switch tapped {
         case .labourBooking:
-            return may(labour) ? .edit : .none
+            return may(.booking(collection: "bookings")) ? .edit : .none
         case .managerBooking(let userId, let locationType):
-            return may([
-                "collection": "managerSiteBookings",
-                "userId": userId,
-                "locationType": locationType,
-                "locationId": job.documentId,
-            ]) ? .edit : .none
+            return may(.managerSiteBooking(userId: userId, locationType: locationType)) ? .edit : .none
         case .subcontractorBooking:
-            return may(["collection": "subcontractorBookings", "projectId": job.documentId]) ? .edit : .none
+            return may(.booking(collection: "subcontractorBookings")) ? .edit : .none
         case .emptyDay(let target):
             switch target {
             case .operativeBookings:
-                return may(labour) ? .quickAdd : .none
+                return may(.booking(collection: "bookings")) ? .quickAdd : .none
             case .managerSiteBookings(let userId, let locationType):
-                return may([
-                    "collection": "managerSiteBookings",
-                    "userId": userId,
-                    "locationType": locationType.rawValue,
-                    "locationId": job.documentId,
-                ]) ? .quickAdd : .none
+                return may(.managerSiteBooking(userId: userId, locationType: locationType.rawValue)) ? .quickAdd : .none
             case nil:
                 return .none
             }
         case .scheduleDay(let subcontractor):
-            let collection = subcontractor ? "subcontractorBookings" : "bookings"
-            return may(["collection": collection, "projectId": job.documentId]) ? .openScheduler : .none
+            return may(.booking(collection: subcontractor ? "subcontractorBookings" : "bookings")) ? .openScheduler : .none
         }
     }
 }

@@ -254,6 +254,106 @@ final class ScheduleGridPeopleTests: XCTestCase {
         XCTAssertEqual(ScheduleGridTapGate.action(.emptyDay(saveTarget: nil), viewer: admin, job: managed, managers: []), .none)
     }
 
+    // MARK: Review #216
+
+    func testASmallWorksJobAndAManagersOwnSmallWorkBooking() {
+        var smallWorks = job(managedBy: ["TEST-manager"])
+        smallWorks.sourceCollection = .smallWorks
+        var other = job(managedBy: ["TEST-someone-else"])
+        other.sourceCollection = .smallWorks
+        let own = ScheduleGridTapGate.Tapped.managerBooking(userId: "TEST-manager", locationType: ManagerLocationType.smallWork.rawValue)
+        XCTAssertEqual(ScheduleGridTapGate.action(own, viewer: manager, job: smallWorks, managers: []), .edit)
+        XCTAssertEqual(ScheduleGridTapGate.action(own, viewer: manager, job: other, managers: []), .none)
+        XCTAssertEqual(
+            ScheduleGridTapGate.action(
+                .emptyDay(saveTarget: .managerSiteBookings(userId: "TEST-manager", locationType: .smallWork)),
+                viewer: manager, job: smallWorks, managers: []
+            ),
+            .quickAdd
+        )
+        XCTAssertEqual(ScheduleGridTapGate.action(own, viewer: admin, job: other, managers: []), .edit)
+    }
+
+    func testAManagerMatchedThroughAManagersRowOnTheirEmail() {
+        let rowId = UUID()
+        var byRow = job(managedBy: [])
+        byRow.managerIds = [rowId]
+        byRow.managerId = rowId
+        let managers: [[String: Any]] = [["id": byRow.storedManagerId(for: rowId), "email": "TEST-manager@x.t"]]
+        XCTAssertEqual(ScheduleGridTapGate.action(.labourBooking, viewer: manager, job: byRow, managers: managers), .edit)
+        XCTAssertEqual(
+            ScheduleGridTapGate.action(.labourBooking, viewer: manager, job: byRow, managers: [["id": byRow.storedManagerId(for: rowId), "email": "other@x.t"]]),
+            .none
+        )
+    }
+
+    func testAGhostWithNoEmailKeepsItsRow() {
+        var ghost = account(
+            "TEST-ghost-uid", email: "", first: "Gus", last: "Ghost",
+            role: .operative, permissions: UserPermissions(operativeMode: true)
+        )
+        ghost.isGhost = true
+        let booked = Booking.internalOperativeId(for: "TEST-ghost-uid")
+
+        let rows = ScheduleWeekGrid.staffRows(operativeIds: [booked], userIds: [], operatives: [], users: [ghost])
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].name, "Gus Ghost")
+        XCTAssertEqual(rows[0].role, .operative)
+        XCTAssertNotNil(ScheduleWeekGrid.saveTarget(for: rows[0], jobType: .catA))
+    }
+
+    func testWhenTheScriptDoesNotAnswerCatalogueRowsKeepTheirPillAndQuickAdd() {
+        let rowId = UUID()
+        let noEmailRow = Operative(id: rowId, firstName: "Cat", lastName: "Row", email: "", startDate: Date(timeIntervalSince1970: 0))
+        let stray = UUID()
+        let silent: StaffEmailIdentity.BookingPersonResolver = { _, _ in nil }
+
+        let rows = ScheduleWeekGrid.staffRows(
+            operativeIds: [rowId, stray],
+            userIds: [],
+            operatives: [noEmailRow],
+            users: [],
+            resolve: silent
+        )
+
+        let catalogue = rows.first { $0.operativeIds == [rowId] }
+        XCTAssertEqual(catalogue?.role, .operative, "a catalogue row the id names stays an operative")
+        XCTAssertEqual(catalogue.flatMap { ScheduleWeekGrid.saveTarget(for: $0, jobType: .catA) }, .operativeBookings(operativeId: rowId))
+        XCTAssertEqual(rows.first { $0.operativeIds == [stray] }?.role, .unknown, "only an id that names nothing is unknown")
+    }
+
+    func testWhenTheScriptDoesNotAnswerAdminsAreNotLockedOut() {
+        let silent: (ScheduleGridTapGate.Write) -> Bool? = { _ in nil }
+        XCTAssertEqual(ScheduleGridTapGate.action(.labourBooking, viewer: admin, answer: silent), .edit)
+        XCTAssertEqual(ScheduleGridTapGate.action(.labourBooking, viewer: manager, answer: silent), .none)
+        XCTAssertEqual(ScheduleGridTapGate.action(.labourBooking, viewer: operative, answer: silent), .none)
+        XCTAssertEqual(ScheduleGridTapGate.action(.labourBooking, viewer: manager) { _ in true }, .edit)
+        XCTAssertEqual(ScheduleGridTapGate.action(.labourBooking, viewer: admin) { _ in false }, .none, "a no from the rulebook stands")
+    }
+
+    func testAFormerIdBookingKeepsItsHoursOnThePersonsRow() {
+        var person = account(
+            "TEST-farnie-uid", email: "farnie@example.test", first: "Farnie", last: "Nel",
+            role: .operative, permissions: UserPermissions(operativeMode: true)
+        )
+        person.formerUserIds = ["TEST-old-invite-id"]
+        let oldId = Booking.internalOperativeId(for: "TEST-old-invite-id")
+        let newId = Booking.internalOperativeId(for: "TEST-farnie-uid")
+        let day = Date()
+        let bookings = [
+            Booking(operativeId: oldId, projectId: UUID(), date: day, timeSlot: .fullDay, bookedBy: "TEST-ADMIN"),
+            Booking(operativeId: newId, projectId: UUID(), date: day, timeSlot: .morning, bookedBy: "TEST-ADMIN"),
+        ]
+        let totalBefore = bookings.reduce(0) { $0 + $1.paidBookedHours() }
+
+        let rows = ScheduleWeekGrid.staffRows(operativeIds: Set(bookings.map(\.operativeId)), userIds: [], operatives: [], users: [person])
+
+        XCTAssertEqual(rows.count, 1, "both ids are one person")
+        let onRow = bookings.filter { rows[0].operativeIds.contains($0.operativeId) }.reduce(0) { $0 + $1.paidBookedHours() }
+        XCTAssertEqual(onRow, totalBefore, accuracy: 0.0001, "the row's hours are the bookings' own hours, unchanged")
+    }
+
     // MARK: Fresh roster after a level change
 
     func testALevelChangeOrNewClaimsReloadTheRoster() {

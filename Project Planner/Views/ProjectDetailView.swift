@@ -709,7 +709,11 @@ struct ProjectDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 schedulingNavyHeader
                 VStack(alignment: .leading, spacing: 14) {
-                    schedulingDualActions
+                    // RULEBOOK §2 `canWriteBooking`: one answer per render for both cards.
+                    schedulingDualActions(
+                        mayBookPeople: schedulingTapAction(.scheduleDay(subcontractor: false)) == .openScheduler,
+                        mayBookSub: schedulingTapAction(.scheduleDay(subcontractor: true)) == .openScheduler
+                    )
                         .padding(.top, 16)
                     schedulingWeekOverviewSection
                 }
@@ -871,13 +875,11 @@ struct ProjectDetailView: View {
         return (opIds.count + mgrIds.count, subIds.count)
     }
 
-    private var schedulingDualActions: some View {
+    private func schedulingDualActions(mayBookPeople: Bool, mayBookSub: Bool) -> some View {
         // Both cards share PPBookingActionCardLabel + PPBookingActionCardButtonStyle; the vertical fixedSize lets
         // each card fill the taller card's height so "Book people" and "Book a sub" always match.
         // RULEBOOK §2 `canWriteBooking`: the cards open the booking screens only where the save would be allowed.
-        let mayBookPeople = schedulingTapAction(.scheduleDay(subcontractor: false)) == .openScheduler
-        let mayBookSub = schedulingTapAction(.scheduleDay(subcontractor: true)) == .openScheduler
-        return HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             Button(action: {
                 guard mayBookPeople else { return }
                 scheduleOperativeSeedBooking = nil
@@ -925,7 +927,8 @@ struct ProjectDetailView: View {
         let subRows = schedulingSubcontractorRows
         return VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 0) {
-                schedulingGridHeader
+                // The rows are built once per render and shared with the day counts.
+                schedulingGridHeader(counts: schedulingDayHeadcounts(staffRows: staffRows, subRows: subRows))
                 schedulingSectionLabel(
                     "Operatives & managers",
                     count: staffRows.isEmpty ? nil : "\(staffRows.count) \(staffRows.count == 1 ? "person" : "people")"
@@ -1013,8 +1016,8 @@ struct ProjectDetailView: View {
 
     private var schedulingPersonColumnWidth: CGFloat { 92 }
 
-    private var schedulingDayHeadcounts: [Int] {
-        let rows = schedulingOpsAndManagersRows + schedulingSubcontractorRows
+    private func schedulingDayHeadcounts(staffRows: [SchedulingGridPersonRow], subRows: [SchedulingGridPersonRow]) -> [Int] {
+        let rows = staffRows + subRows
         return (0..<weekDays.count).map { index in
             rows.filter { row in
                 guard index < row.days.count else { return false }
@@ -1293,9 +1296,8 @@ struct ProjectDetailView: View {
     }
 
     /// Day strip: weekday, date and a count pill per day ("–" when none). Today filled navy, weekends muted.
-    private var schedulingGridHeader: some View {
+    private func schedulingGridHeader(counts: [Int]) -> some View {
         let dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        let counts = schedulingDayHeadcounts
         return HStack(spacing: 4) {
             ForEach(Array(weekDays.enumerated()), id: \.offset) { index, day in
                 let isToday = OrganizationRulebookContext.calendar.isDate(day, inSameDayAs: Date())
