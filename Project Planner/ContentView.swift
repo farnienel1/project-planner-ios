@@ -440,7 +440,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .authClaimsDidRefresh)) { _ in
             // RULEBOOK 1.32.4 §16: the ID token now carries new claims (role, toggle, membership or active state
             // changed). Screens may have been refused or may show access that changed: reload as on returning to the app.
-            Task { await reloadOpenOrganizationData() }
+            Task { await reloadOpenOrganizationData(claimsRefreshed: true) }
         }
         .onChange(of: appSettings.settings.notifications.materialOrderCutOff) { _, _ in
             Task { await notificationService.refreshDailyMaterialCutOffReminder() }
@@ -473,11 +473,22 @@ struct ContentView: View {
     /// Reloads the open organisation's data and re-attaches any organisation listener that dropped (attached ones are
     /// kept). Returning to the app and a refreshed auth-claims token (`.authClaimsDidRefresh`) both run it.
     @MainActor
-    private func reloadOpenOrganizationData() async {
+    private func reloadOpenOrganizationData(claimsRefreshed: Bool = false) async {
         // Refresh the signed-in account so permission toggles (e.g. Annual Leave Management) applied by an admin
         // take effect without requiring sign-out.
+        let levelBefore = userStore.currentUser?.rosterListKind
         await userStore.loadCurrentUser()
         guard firebaseBackend.hasBootstrappedOrgDataLoad else { return }
+        // A level change (or new claims) reads the roster and the Operatives list again from the server, never the
+        // copy loaded under the previous level (`UserStore.rosterNeedsFreshLoad`).
+        if UserStore.rosterNeedsFreshLoad(
+            levelBefore: levelBefore,
+            levelAfter: userStore.currentUser?.rosterListKind,
+            claimsRefreshed: claimsRefreshed
+        ) {
+            operativeStore.loadData()
+            await userStore.loadOrganizationUsers(forceRefresh: true)
+        }
         bookingStore.loadData()
         managerScheduleStore.loadData(force: true)
         PlannerStoreWiring.startOrgLiveListeners(

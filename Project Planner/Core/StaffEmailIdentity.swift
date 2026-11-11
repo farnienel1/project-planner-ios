@@ -188,34 +188,66 @@ enum StaffEmailIdentity {
         var key: String
         var operativeIds: [UUID]
         var userIds: [String]
+        /// The accounts the rulebook's `resolveBookingPerson` found for the booked ids — a former invite id, a
+        /// same-email document, a catalogue row on the account's email, any letter case.
+        var resolvedAccountIds: [String] = []
+        /// True when no booked id in the row names any account or catalogue row (`resolveBookingPerson` found nobody).
+        var unresolved: Bool = false
     }
 
+    /// One row per person on the project / small-works week grid. Each booked id (a labour booking's `operativeId`, a
+    /// manager site booking's `userId`) is resolved once with the rulebook's `resolveBookingPerson` (web
+    /// `findUserByAnyId` with the roster's `userIdAliases`, `ProjectScheduleWeekOverview.tsx`), and rows are keyed by
+    /// the person's email as web keys them, else `bookingPersonKey`. Before 1.37.3 iOS matched the stored id exactly
+    /// (own id and same-email ids, never `formerUserIds`), so a booking under a former invite id read "Unknown person".
     static func scheduleBuckets(
         operativeIds: Set<UUID>,
         userIds: Set<String>,
         operatives: [Operative],
         users: [AppUser]
     ) -> [SchedulePersonBucket] {
-        var operativeByKey: [String: [UUID]] = [:]
-        var userByKey: [String: [String]] = [:]
-        for id in operativeIds {
-            let email = operativeBookingEmail(id, operatives: operatives, users: users)
-            let key = personKey(email: email, fallbackId: "op:\(id.uuidString)")
-            operativeByKey[key, default: []].append(id)
+        let input = bookingPersonInput(operatives: operatives, users: users)
+        var byKey: [String: SchedulePersonBucket] = [:]
+        func place(_ storedId: String, legacyEmail: () -> String?, legacyKey: String, add: (inout SchedulePersonBucket) -> Void) {
+            let key: String
+            var accountId: String?
+            let found: Bool
+            if let person = CanonicalBusinessEngine.resolveBookingPerson(storedId, input) {
+                accountId = person.accountId
+                found = person.accountId != nil || person.operativeId != nil
+                let email = emailKey(person.email)
+                if !email.isEmpty {
+                    key = "email:\(email)"
+                } else {
+                    key = CanonicalBusinessEngine.bookingPersonKey(storedId, input) ?? legacyKey
+                }
+            } else {
+                // The script did not answer: the email grouping this app had before (no Swift copy of the rule).
+                let email = legacyEmail()
+                key = personKey(email: email, fallbackId: legacyKey)
+                found = !emailKey(email).isEmpty
+            }
+            var bucket = byKey[key] ?? SchedulePersonBucket(key: key, operativeIds: [], userIds: [], resolvedAccountIds: [], unresolved: true)
+            add(&bucket)
+            if let accountId, !bucket.resolvedAccountIds.contains(accountId) { bucket.resolvedAccountIds.append(accountId) }
+            if found { bucket.unresolved = false }
+            byKey[key] = bucket
         }
-        for id in userIds {
-            let email = users.first { $0.id == id }?.email
-            let key = personKey(email: email, fallbackId: "u:\(id)")
-            userByKey[key, default: []].append(id)
+        for id in operativeIds.sorted(by: { $0.uuidString < $1.uuidString }) {
+            place(
+                Booking.storedOperativeId(for: id),
+                legacyEmail: { operativeBookingEmail(id, operatives: operatives, users: users) },
+                legacyKey: "op:\(id.uuidString)"
+            ) { $0.operativeIds.append(id) }
         }
-        let keys = Set(operativeByKey.keys).union(userByKey.keys)
-        return keys.map { key in
-            SchedulePersonBucket(
-                key: key,
-                operativeIds: operativeByKey[key] ?? [],
-                userIds: userByKey[key] ?? []
-            )
+        for id in userIds.sorted() {
+            place(
+                id,
+                legacyEmail: { users.first { $0.id == id }?.email },
+                legacyKey: "u:\(id)"
+            ) { $0.userIds.append(id) }
         }
+        return Array(byKey.values)
     }
 
     static func bucketDisplayName(
@@ -225,7 +257,8 @@ enum StaffEmailIdentity {
     ) -> String {
         let emails = bucket.userIds.compactMap { id in users.first { $0.id == id }?.email }
             + bucket.operativeIds.compactMap { id in operatives.first { $0.id == id }?.email }
-        if let preferred = emails.compactMap({ preferredUser(sharing: $0, in: users) }).first ?? preferredUser(users.filter { bucket.userIds.contains($0.id) }) {
+        let named = users.filter { bucket.userIds.contains($0.id) || bucket.resolvedAccountIds.contains($0.id) }
+        if let preferred = emails.compactMap({ preferredUser(sharing: $0, in: users) }).first ?? preferredUser(named) {
             let name = preferred.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
             if !name.isEmpty { return name }
             let email = preferred.email.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -235,7 +268,7 @@ enum StaffEmailIdentity {
             let name = rosterNameForLabourBooking(operativeId: id, operatives: operatives, users: users)
             if name != unknownLabourPersonName { return name }
         }
-        return bucket.userIds.isEmpty ? unknownLabourPersonName : "Manager"
+        return bucket.unresolved || bucket.userIds.isEmpty ? unknownLabourPersonName : "Manager"
     }
 
     private static func accountRank(_ user: AppUser) -> Int {
