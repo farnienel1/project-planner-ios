@@ -68,6 +68,8 @@ struct HolidayView: View {
     @State private var isManagingTeamLeave = false
     /// RULEBOOK 1.40.0 §4.4: manual adjustments of the signed-in person and their Team list (live while open).
     @StateObject private var adjustmentsModel = AnnualLeaveAdjustmentsModel()
+    /// Answers for the Team page kept while their inputs are unchanged (the calendar asks for every day cell).
+    @State private var teamCache = HolidayTeamCache()
     /// A notification (`annualLeavePerson`) opens one person's page.
     @State private var deepLinkedTeamPerson: AnnualLeavePerson?
 
@@ -1057,11 +1059,24 @@ struct HolidayView: View {
     private var teamPeople: [AnnualLeavePerson] {
         // RULEBOOK 1.40.0 `annualLeaveTeamPeople`: admins every current person (self-bookers included, never
         // themselves), anyone else the people they line-manage; never deleted, inactive or pending people.
-        AnnualLeavePersonBuilder.teamPeople(
+        var hasher = Hasher()
+        hasher.combine(holidayProfileUser)
+        hasher.combine(userStore.organizationUsers)
+        for op in operativeStore.allOperatives {
+            hasher.combine(op.documentId)
+            hasher.combine(op.email)
+            hasher.combine(op.isActive)
+        }
+        let key = hasher.finalize()
+        if let cached = teamCache.people, teamCache.peopleKey == key { return cached }
+        let people = AnnualLeavePersonBuilder.teamPeople(
             viewer: holidayProfileUser,
             users: userStore.organizationUsers,
             operatives: operativeStore.allOperatives
         )
+        teamCache.peopleKey = key
+        teamCache.people = people
+        return people
     }
 
     /// RULEBOOK 1.40.0 `annualLeaveTeamEmptyMessage`.
@@ -1144,8 +1159,9 @@ struct HolidayView: View {
     /// multi-day record are not leave days.
     private func teamAway(on day: Date) -> [AnnualLeavePerson] {
         let key = OrganizationRulebookContext.dayKey(day)
+        let byPerson = teamLeaveRecords
         return teamPeople.filter { person in
-            let records = teamPersonBookings(person).map(\.rulebookLeaveRecord)
+            let records = byPerson[person.id] ?? []
             let kind = CanonicalBusinessEngine.leaveDayKind(
                 records: records,
                 dayKey: key,
@@ -1153,6 +1169,23 @@ struct HolidayView: View {
             ) ?? RulebookLeaveDayKind.none
             return kind == .approvedFull || kind == .approvedHalf
         }
+    }
+
+    /// Every listed person's leave records (`teamPersonBookings`), worked out once per change of the leave or the list.
+    private var teamLeaveRecords: [String: [RulebookLeaveReportRecord]] {
+        let people = teamPeople
+        var hasher = Hasher()
+        hasher.combine(holidayStore.bookings)
+        hasher.combine(people)
+        let key = hasher.finalize()
+        if let cached = teamCache.records, teamCache.recordsKey == key { return cached }
+        var map: [String: [RulebookLeaveReportRecord]] = [:]
+        for person in people {
+            map[person.id] = teamPersonBookings(person).map(\.rulebookLeaveRecord)
+        }
+        teamCache.recordsKey = key
+        teamCache.records = map
+        return map
     }
 
     /// One listed person's leave records under every id they go by (`leaveRecordsForAccount`).
@@ -2315,4 +2348,13 @@ struct HolidayRequestRowView: View {
         .environmentObject(FirebaseBackend())
         .environmentObject(NotificationService())
         .environmentObject(AppSettingsStore())
+}
+
+/// Team-page answers kept between redraws while their inputs (the hash of the roster, the viewer, the operatives and
+/// the leave records) are unchanged. Holds script answers only; decides nothing.
+final class HolidayTeamCache {
+    var peopleKey = 0
+    var people: [AnnualLeavePerson]?
+    var recordsKey = 0
+    var records: [String: [RulebookLeaveReportRecord]]?
 }
