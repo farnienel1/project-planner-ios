@@ -100,7 +100,12 @@ extension CanonicalBusinessEngine {
     /// subcontractor booking. `booking` is `{ collection, projectId?, userId?, locationType?, locationId? }`;
     /// `job` the stored job the booking names (nil when missing → admins only).
     nonisolated static func canWriteBooking(_ viewer: JobAccessViewer, booking: [String: Any], job: [String: Any]?, managers: [[String: Any]]) -> Bool {
-        callJSON("canWriteBooking", arguments: [viewer.json, booking, job ?? NSNull(), managers]) as? Bool ?? false
+        canWriteBookingAnswer(viewer, booking: booking, job: job, managers: managers) ?? false
+    }
+
+    /// `canWriteBooking`, or nil when the script did not answer (so a caller can tell "no" from "no answer").
+    nonisolated static func canWriteBookingAnswer(_ viewer: JobAccessViewer, booking: [String: Any], job: [String: Any]?, managers: [[String: Any]]) -> Bool? {
+        callJSON("canWriteBooking", arguments: [viewer.json, booking, job ?? NSNull(), managers]) as? Bool
     }
 
     /// `canDeleteBooking(viewer, booking, job, managers)`.
@@ -496,10 +501,19 @@ extension UserStore {
 
     /// `canWriteBooking` for a labour (`bookings`) or subcontractor (`subcontractorBookings`) booking on `job`.
     func canWriteBooking(collection: String = "bookings", on job: Project?) -> Bool {
-        guard let viewer = displayJobAccessViewer else { return false }
+        bookingWriteAnswer(collection: collection, on: job) ?? false
+    }
+
+    /// `canWriteBooking(collection:on:)`; nil when the profile is not loaded or the script did not answer.
+    func bookingWriteAnswer(collection: String = "bookings", on job: Project?) -> Bool? {
+        guard let viewer = displayJobAccessViewer else { return nil }
+        return Self.bookingWriteAnswer(viewer: viewer, collection: collection, on: job, managers: JobAccessContext.managers)
+    }
+
+    static func bookingWriteAnswer(viewer: JobAccessViewer, collection: String, on job: Project?, managers: [[String: Any]]) -> Bool? {
         var booking: [String: Any] = ["collection": collection]
         if let job { booking["projectId"] = job.documentId }
-        return CanonicalBusinessEngine.canWriteBooking(viewer, booking: booking, job: job?.jobAccessFields, managers: JobAccessContext.managers)
+        return CanonicalBusinessEngine.canWriteBookingAnswer(viewer, booking: booking, job: job?.jobAccessFields, managers: managers)
     }
 
     /// `canDeleteBooking` for a labour or subcontractor booking on `job`.
@@ -513,10 +527,21 @@ extension UserStore {
     /// `canWriteBooking` for a manager site booking of `userId` at a job (`job`, project or small works) or at a
     /// place with no job (office, working from home, site survey, custom: `job` nil, `locationType` that place).
     func canWriteManagerSiteBooking(userId: String, locationType: String, job: Project?) -> Bool {
-        guard let viewer = displayJobAccessViewer else { return false }
+        managerSiteBookingWriteAnswer(userId: userId, locationType: locationType, job: job) ?? false
+    }
+
+    /// `canWriteManagerSiteBooking`; nil when the profile is not loaded or the script did not answer.
+    func managerSiteBookingWriteAnswer(userId: String, locationType: String, job: Project?) -> Bool? {
+        guard let viewer = displayJobAccessViewer else { return nil }
+        return Self.managerSiteBookingWriteAnswer(viewer: viewer, userId: userId, locationType: locationType, job: job, managers: JobAccessContext.managers)
+    }
+
+    static func managerSiteBookingWriteAnswer(
+        viewer: JobAccessViewer, userId: String, locationType: String, job: Project?, managers: [[String: Any]]
+    ) -> Bool? {
         var booking: [String: Any] = ["collection": "managerSiteBookings", "userId": userId, "locationType": locationType]
         if let job { booking["locationId"] = job.documentId }
-        return CanonicalBusinessEngine.canWriteBooking(viewer, booking: booking, job: job?.jobAccessFields, managers: JobAccessContext.managers)
+        return CanonicalBusinessEngine.canWriteBookingAnswer(viewer, booking: booking, job: job?.jobAccessFields, managers: managers)
     }
 }
 
