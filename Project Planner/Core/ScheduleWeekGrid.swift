@@ -13,6 +13,8 @@ enum ScheduleWeekTone: String, Equatable {
     case blue
     case green
     case purple
+    /// A booked id that names nobody on the roster: a neutral pill, never "Op".
+    case grey
 }
 
 /// Account role for a week-overview row. Admin and manager share blue.
@@ -21,6 +23,8 @@ enum ScheduleWeekAccountRole: String, Equatable {
     case manager
     case operative
     case subcontractor
+    /// No account or catalogue row matches any booked id in the row (`resolveBookingPerson` found nobody).
+    case unknown
 
     var badge: String {
         switch self {
@@ -28,6 +32,7 @@ enum ScheduleWeekAccountRole: String, Equatable {
         case .manager: return "Mgr"
         case .operative: return "Op"
         case .subcontractor: return "Sub"
+        case .unknown: return "?"
         }
     }
 
@@ -37,6 +42,7 @@ enum ScheduleWeekAccountRole: String, Equatable {
         case .admin, .manager: return .blue
         case .operative: return .green
         case .subcontractor: return .purple
+        case .unknown: return .grey
         }
     }
 
@@ -103,13 +109,15 @@ enum ScheduleWeekGrid {
         operativeIds: Set<UUID>,
         userIds: Set<String>,
         operatives: [Operative],
-        users: [AppUser]
+        users: [AppUser],
+        resolve: StaffEmailIdentity.BookingPersonResolver? = nil
     ) -> [ScheduleWeekPerson] {
         let buckets = StaffEmailIdentity.scheduleBuckets(
             operativeIds: operativeIds,
             userIds: userIds,
             operatives: operatives,
-            users: users
+            users: users,
+            resolve: resolve
         )
         return buckets.map { bucket in
             person(from: bucket, operatives: operatives, users: users)
@@ -148,7 +156,8 @@ enum ScheduleWeekGrid {
 
     /// Roster operative → `bookings`. Everyone else with an account → `managerSiteBookings`.
     static func saveTarget(for person: ScheduleWeekPerson, jobType: JobType) -> ScheduleQuickAddSave? {
-        if person.role == .subcontractor { return nil }
+        // Nobody to book: an unresolved id is never booked again from the grid.
+        if person.role == .subcontractor || person.role == .unknown { return nil }
         if person.savesAsOperativeBooking, let operativeId = person.saveOperativeId {
             return .operativeBookings(operativeId: operativeId)
         }
@@ -259,7 +268,8 @@ enum ScheduleWeekGrid {
     ) -> ScheduleWeekPerson {
         let accounts = accounts(for: bucket, operatives: operatives, users: users)
         let leading = leadingAccount(accounts)
-        let role = leading?.role ?? .operative
+        // A catalogue row with no account is an operative; an id that names nobody is unknown, never "Op".
+        let role: ScheduleWeekAccountRole = leading?.role ?? (bucket.unresolved ? .unknown : .operative)
         let isOperative = role == .operative
         let operativeIds = linkedOperativeIds(accounts: accounts, bucket: bucket, operatives: operatives)
         let userIds = linkedUserIds(accounts: accounts, bucket: bucket, users: users)
@@ -323,12 +333,12 @@ enum ScheduleWeekGrid {
         operatives: [Operative],
         users: [AppUser]
     ) -> [AppUser] {
-        var ids = Set(bucket.userIds)
+        var ids = Set(bucket.userIds).union(bucket.resolvedAccountIds)
         for operativeId in bucket.operativeIds {
             let email = operatives.first { $0.id == operativeId }?.email
             ids.formUnion(StaffEmailIdentity.userIds(sharing: email, in: users))
         }
-        for userId in bucket.userIds {
+        for userId in bucket.userIds + bucket.resolvedAccountIds {
             let email = StaffEmailIdentity.account(forUserId: userId, in: users)?.email
             ids.formUnion(StaffEmailIdentity.userIds(sharing: email, in: users))
         }
@@ -428,6 +438,92 @@ enum AccountLabourBooking {
         return users.first {
             $0.id.caseInsensitiveCompare(stored) == .orderedSame
                 || $0.sameEmailUserIds.contains { $0.caseInsensitiveCompare(stored) == .orderedSame }
+        }
+    }
+}
+
+/// What a tap on the project / small-works week grid may do for the signed-in account, from the rulebook's
+/// `canWriteBooking` (RULEBOOK 1.10.0 §2, §16; web `ProjectScheduleWeekOverview.tsx` `canQuickAdd`): admins every
+/// booking, managers bookings on the jobs they manage (and their own manager site booking at a job they manage),
+/// operatives never. Every manager sees every job (1.33.0 §17), so a manager also sees jobs they may not book on: there
+/// a tap does nothing, instead of opening an editor whose Save is then refused ("a save is never refused after the
+/// fact", §2). An unknown viewer (profile not loaded) may do nothing. Delete inside the editor stays
+/// `bookingRemoveAction` (`BookingStore.canDeleteBooking`, `ManagerScheduleStore.canDeleteBooking`).
+enum ScheduleGridTapGate {
+    enum Tapped: Equatable {
+        /// A labour booking (`bookings`) on this job.
+        case labourBooking
+        /// A manager site booking (`managerSiteBookings`) of `userId` at this job.
+        case managerBooking(userId: String, locationType: String)
+        /// A subcontractor booking (`subcontractorBookings`) on this job.
+        case subcontractorBooking
+        /// An empty day on a person's row: quick add saves to `saveTarget` (nil: nobody to book).
+        case emptyDay(saveTarget: ScheduleQuickAddSave?)
+        /// Any other day (a leave day, a subcontractor row's empty day): the job's scheduler.
+        case scheduleDay(subcontractor: Bool)
+    }
+
+    enum Action: Equatable {
+        case edit
+        case quickAdd
+        case openScheduler
+        case none
+    }
+
+    /// The write a tap would lead to.
+    enum Write: Equatable {
+        case booking(collection: String)
+        case managerSiteBooking(userId: String, locationType: String)
+    }
+
+    static func action(
+        _ tapped: Tapped,
+        viewer: JobAccessViewer?,
+        job: Project,
+        managers: [[String: Any]]
+    ) -> Action {
+        guard let viewer else { return .none }
+        // The same helpers every booking screen calls (`UserStore.canWriteBooking(collection:on:)`,
+        // `canWriteManagerSiteBooking`), in their answer-or-nil form.
+        return action(tapped, viewer: viewer) { write in
+            switch write {
+            case .booking(let collection):
+                return UserStore.bookingWriteAnswer(viewer: viewer, collection: collection, on: job, managers: managers)
+            case .managerSiteBooking(let userId, let locationType):
+                return UserStore.managerSiteBookingWriteAnswer(
+                    viewer: viewer, userId: userId, locationType: locationType, job: job, managers: managers
+                )
+            }
+        }
+    }
+
+    /// `answer` is `canWriteBooking` for one write, nil when the script did not answer.
+    static func action(_ tapped: Tapped, viewer: JobAccessViewer, answer: (Write) -> Bool?) -> Action {
+        func may(_ write: Write) -> Bool {
+            if let allowed = answer(write) { return allowed }
+            // The script did not answer: never silently lock an admin out of their own grid. Admins and super admins
+            // outside operative mode write every booking (RULEBOOK §16, the admin branch of `canWriteBooking`);
+            // everyone else waits for an answer. The store and the security rules still decide the save.
+            return (viewer.role.isAdmin || viewer.role.isSuperAdmin) && !viewer.role.isOperativeMode
+        }
+        switch tapped {
+        case .labourBooking:
+            return may(.booking(collection: "bookings")) ? .edit : .none
+        case .managerBooking(let userId, let locationType):
+            return may(.managerSiteBooking(userId: userId, locationType: locationType)) ? .edit : .none
+        case .subcontractorBooking:
+            return may(.booking(collection: "subcontractorBookings")) ? .edit : .none
+        case .emptyDay(let target):
+            switch target {
+            case .operativeBookings:
+                return may(.booking(collection: "bookings")) ? .quickAdd : .none
+            case .managerSiteBookings(let userId, let locationType):
+                return may(.managerSiteBooking(userId: userId, locationType: locationType.rawValue)) ? .quickAdd : .none
+            case nil:
+                return .none
+            }
+        case .scheduleDay(let subcontractor):
+            return may(.booking(collection: subcontractor ? "subcontractorBookings" : "bookings")) ? .openScheduler : .none
         }
     }
 }
