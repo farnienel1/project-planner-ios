@@ -4,7 +4,7 @@ import XCTest
 /// RULEBOOK 1.39.0 §4.3 (owner request 11 Nov) on iOS through `CanonicalBusinessEngine`: the words that explain a
 /// booking's hours (`bookingHoursExplanation`, the `explanation` on `weekendBookingBreakdown` rows) and what "missing
 /// hours" compare against (`bookingShortfall`). Wording only — the figures are the pay rule's. Expected values were
-/// checked in node against the packed `canonical-business.js` (sha256 2c9d7a20…419eb25).
+/// checked in node against the packed `canonical-business.js` (sha256 5f1eae2f…2e8ef1e).
 @MainActor
 final class Rulebook1390Tests: XCTestCase {
     private let zone = "Europe/London"
