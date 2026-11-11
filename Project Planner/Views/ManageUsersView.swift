@@ -275,6 +275,9 @@ struct ManageUsersView: View {
                 if userStore.hasAdminAccess() && !usersMissingLevel.isEmpty {
                     usersMissingLevelNotice
                 }
+                // RULEBOOK 1.38.0 §27 (owner change 11 Nov): hidden unless platformConfig/app.dataCheckPanel is on.
+                // iOS has no Data health screen, so the admin panel sits with the other admin notices here.
+                DataParityPanel(viewerIsAdmin: userStore.hasAdminAccess())
                 manageUsersListHeader
                 manageUsersCardList
             }

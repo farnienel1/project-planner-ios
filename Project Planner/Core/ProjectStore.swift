@@ -558,8 +558,26 @@ class ProjectStore: ObservableObject {
         }
     }
 
-    /// One collection's slice of `projects` (projects or small works) from a listener snapshot.
-    private func applyLiveWorkSlice(_ incoming: [Project], smallWorks: Bool, fromCache: Bool, rowCount: Int) {
+    /// The result of one listener snapshot for one collection's slice (`liveWorkSliceResult`).
+    struct LiveWorkSliceResult {
+        /// The store's job list after the snapshot; nil when the slice did not change.
+        var projects: [Project]?
+        /// The last read of the `smallWorks` collection (`ProjectWorksMerge.smallWorksList`); nil when unchanged.
+        var smallWorksDocuments: [Project]?
+    }
+
+    /// One collection's slice of `projects` (projects or small works) from a listener snapshot — the pure part of
+    /// `applyLiveWorkSlice`, so the data-parity fixture (RULEBOOK 1.38.0 §27, `DataParityFixtureTests`) runs this
+    /// exact code. Nil when the snapshot must not change anything (`LiveSnapshotMerge.apply`).
+    static func liveWorkSliceResult(
+        projects: [Project],
+        smallWorksDocuments: [Project],
+        incoming: [Project],
+        smallWorks: Bool,
+        fromCache: Bool,
+        rowCount: Int,
+        pendingCreateIds: Set<UUID>
+    ) -> LiveWorkSliceResult? {
         let existingSlice = projects.filter { ($0.isSmallWorksDocument) == smallWorks }
         guard var nextSlice = LiveSnapshotMerge.apply(
             existing: existingSlice,
@@ -567,13 +585,32 @@ class ProjectStore: ObservableObject {
             fromCache: fromCache,
             rowCount: rowCount,
             collection: smallWorks ? "smallWorks" : "projects"
-        ) else { return }
-        if smallWorks, smallWorksDocuments != nextSlice { smallWorksDocuments = nextSlice }
+        ) else { return nil }
+        var result = LiveWorkSliceResult()
+        if smallWorks, smallWorksDocuments != nextSlice { result.smallWorksDocuments = nextSlice }
         let incomingIds = Set(nextSlice.map(\.id))
         nextSlice += existingSlice.filter { pendingCreateIds.contains($0.id) && !incomingIds.contains($0.id) }
-        guard nextSlice != existingSlice else { return }
-        let others = projects.filter { ($0.isSmallWorksDocument) != smallWorks }
-        projects = ProjectWorksMerge.uniqueWorks(others + nextSlice)
+        if nextSlice != existingSlice {
+            let others = projects.filter { ($0.isSmallWorksDocument) != smallWorks }
+            result.projects = ProjectWorksMerge.uniqueWorks(others + nextSlice)
+        }
+        return result
+    }
+
+    /// One collection's slice of `projects` (projects or small works) from a listener snapshot.
+    private func applyLiveWorkSlice(_ incoming: [Project], smallWorks: Bool, fromCache: Bool, rowCount: Int) {
+        guard let result = Self.liveWorkSliceResult(
+            projects: projects,
+            smallWorksDocuments: smallWorksDocuments,
+            incoming: incoming,
+            smallWorks: smallWorks,
+            fromCache: fromCache,
+            rowCount: rowCount,
+            pendingCreateIds: pendingCreateIds
+        ) else { return }
+        if let documents = result.smallWorksDocuments { smallWorksDocuments = documents }
+        guard let next = result.projects else { return }
+        projects = next
         if !fromCache { lastWorkLoadUnreliable = false }
         persistLiveSnapshotLocally()
     }

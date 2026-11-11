@@ -55,6 +55,14 @@ pack_problems() {
     [ -f "$contract" ] && [ "$(sha256_of "$contract")" = "$want_contract" ] \
       || echo "ProjectPlannerTests/CrossPlatformContract.json differs from the contract web published — re-run scripts/sync-rulebook-from-web.sh."
   fi
+  # Rulebook 1.38.0 §27: the data-parity fixture is mirrored too (manifest dataParityFixtureSha256).
+  local want_fixture fixture
+  want_fixture="$(json_string "$MANIFEST" dataParityFixtureSha256)"
+  fixture="$ROOT/ProjectPlannerTests/DataParityFixture.json"
+  if [ -n "$want_fixture" ]; then
+    [ -f "$fixture" ] && [ "$(sha256_of "$fixture")" = "$want_fixture" ] \
+      || echo "ProjectPlannerTests/DataParityFixture.json differs from the fixture web published — re-run scripts/sync-rulebook-from-web.sh."
+  fi
 }
 
 # Rulebook-owned areas (RULEBOOK.md §4–§13). A changed Swift file that adds lines computing one of these
