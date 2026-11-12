@@ -6,6 +6,7 @@
 //  uploads, and PDF generation stay responsive with many images.
 //
 
+import ImageIO
 import UIKit
 
 enum SiteAuditMediaProcessor {
@@ -29,9 +30,33 @@ enum SiteAuditMediaProcessor {
     }
 
     nonisolated static func draftImage(from data: Data, capturedAt: Date = Date()) -> UIImage? {
-        guard let source = UIImage(data: data) else { return nil }
-        let normalized = normalizedForDisplay(source)
-        return addTimestampWatermark(to: normalized, at: capturedAt)
+        guard let source = displayImage(from: data) else { return nil }
+        return addTimestampWatermark(to: source, at: capturedAt)
+    }
+
+    /// Decodes photo data straight to at most `displayMaxPixelDimension` with ImageIO, so a 48 MP camera
+    /// original is never decoded at full size in memory (Multi-add loads several at once). Orientation is
+    /// applied. Falls back to a full decode and resize if ImageIO cannot read the data.
+    nonisolated static func displayImage(from data: Data) -> UIImage? {
+        if let thumbnail = downsampledImage(from: data, maxPixelDimension: displayMaxPixelDimension) {
+            return thumbnail
+        }
+        return UIImage(data: data).map { normalizedForDisplay($0) }
+    }
+
+    nonisolated static func downsampledImage(from data: Data, maxPixelDimension: CGFloat) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else { return nil }
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxPixelDimension)
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage)
     }
 
     nonisolated static func addTimestampWatermark(to image: UIImage, at date: Date) -> UIImage {
