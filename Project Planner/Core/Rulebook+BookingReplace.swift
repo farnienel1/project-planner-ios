@@ -13,9 +13,12 @@
 import Foundation
 
 /// A booking Replace removes: its collection (`bookings` / `managerSiteBookings`) and stored document id.
+/// `fingerprint` (re-review 1.41 #3): `bookingDeleteFingerprint` of the booking as this phone showed it on the orange
+/// row; the save compares the live document with it and refuses when it is missing.
 nonisolated struct RulebookBookingReplaceRef: Hashable, Codable, Sendable {
     let collection: String
     let bookingId: String
+    var fingerprint: String? = nil
 }
 
 /// One delete of `bookingReplaceWrites`: the booking path, its tombstone path and the tombstone fields (the app adds
@@ -129,7 +132,17 @@ extension CanonicalBusinessEngine {
                     ) == "delete"
                 )
             }
-        return bookingReplaceOffer(clashing: clashing)
+        // Re-review 1.41 #3: each ref carries the fingerprint of the booking as shown on this row.
+        var shown: [String: String] = [:]
+        for booking in labour { shown["bookings/\(booking.documentKey.lowercased())"] = BookingWritePatch.deleteFingerprint(booking) }
+        for booking in manager {
+            shown["managerSiteBookings/\(booking.documentKey.lowercased())"] = BookingWritePatch.deleteFingerprint(booking)
+        }
+        return bookingReplaceOffer(clashing: clashing)?.map { ref in
+            var stamped = ref
+            stamped.fingerprint = shown["\(ref.collection)/\(ref.bookingId.lowercased())"]
+            return stamped
+        }
     }
 }
 
@@ -144,7 +157,8 @@ struct BookingReplaceTarget {
     let manager: ManagerSiteBooking?
 
     /// Each ref resolved against the bookings on this phone. Nil — replace nothing — when any of them is no longer here
-    /// (deleted or not loaded): Replace never removes a booking the person was not shown.
+    /// (deleted or not loaded) or carries no shown fingerprint: Replace never removes a booking the person was not shown,
+    /// and compares the live booking with the copy on the row (re-review 1.41 #3), not with the store now.
     static func resolve(
         _ refs: [RulebookBookingReplaceRef],
         bookings: [Booking],
@@ -154,12 +168,13 @@ struct BookingReplaceTarget {
         var targets: [BookingReplaceTarget] = []
         for ref in refs {
             let key = ref.bookingId.lowercased()
+            guard let fingerprint = ref.fingerprint, !fingerprint.isEmpty else { return nil }
             if ref.collection == "bookings",
                let booking = bookings.first(where: { $0.documentKey.lowercased() == key }) {
-                targets.append(BookingReplaceTarget(ref: ref, fingerprint: BookingWritePatch.deleteFingerprint(booking), labour: booking, manager: nil))
+                targets.append(BookingReplaceTarget(ref: ref, fingerprint: fingerprint, labour: booking, manager: nil))
             } else if ref.collection == "managerSiteBookings",
                       let booking = managerBookings.first(where: { $0.documentKey.lowercased() == key }) {
-                targets.append(BookingReplaceTarget(ref: ref, fingerprint: BookingWritePatch.deleteFingerprint(booking), labour: nil, manager: booking))
+                targets.append(BookingReplaceTarget(ref: ref, fingerprint: fingerprint, labour: nil, manager: booking))
             } else {
                 return nil
             }

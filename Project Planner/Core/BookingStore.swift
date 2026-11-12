@@ -417,7 +417,9 @@ class BookingStore: ObservableObject {
         }
         await BookingReplaceNotices.warnIfOnSignedTimesheet(targets, organizationId: organizationId, firebaseBackend: firebaseBackend)
         do {
-            try await firebaseBackend.createBookingReplacing(labour: booking, replacing: targets, organizationId: organizationId)
+            try await firebaseBackend.createBookingReplacing(labour: booking, replacing: targets, organizationId: organizationId,
+                onLateApply: { BookingReplaceNotices.reopenOvertime(targets, organizationId: organizationId) }
+            )
         } catch {
             errorMessage = error.localizedDescription
             return error.localizedDescription

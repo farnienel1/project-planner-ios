@@ -173,6 +173,11 @@ final class Rulebook1410Tests: XCTestCase {
         XCTAssertTrue(backend.contains("tombstone = try transaction.getDocument(row.tombstoneRef)"))
         XCTAssertTrue(backend.contains("if BookingWritePatch.stored(data, collection: row.collection) != row.expected { return \"changed\" as NSString }"))
         XCTAssertTrue(backend.contains("throw Self.bookingReplaceError(BookingReplaceMessages.notConfirmed)"))
+        // Re-review #4: an empty fingerprint never counts as unchanged; #5: a late commit still sends the follow-ups.
+        XCTAssertTrue(backend.contains("if row.expected.isEmpty || liveFingerprint.isEmpty || liveFingerprint != row.expected {"))
+        XCTAssertTrue(backend.contains("guard error == nil, outcome.value == \"apply\" else { return }"))
+        let replace = try source("Project Planner/Core/Rulebook+BookingReplace.swift")
+        XCTAssertTrue(replace.contains("stamped.fingerprint = shown["), "refs carry the fingerprint shown on the row")
         XCTAssertFalse(backend.contains("BOOKING_REPLACE collection=%@ id=%@ replaces=%ld\", collection, documentKey, plan.deletes.count)\n        try await batch.commit()"))
         let detail = try source("Project Planner/Views/ProjectDetailView.swift")
         XCTAssertTrue(
@@ -187,6 +192,11 @@ final class Rulebook1410Tests: XCTestCase {
         let wizard = try source("Project Planner/Views/ScheduleOperativeView.swift")
         XCTAssertTrue(wizard.contains("bookingStore.addBookingReplacing(\n                    entry.booking,\n                    replaces: refs,"), "Scheduling wizard")
         XCTAssertTrue(wizard.contains("alreadyReplaced.insert("), "a booking overlapping two days is replaced once (review #10)")
+        // Re-review #1: marked only after its day saved; refs captured when Replace was tapped (re-review #3).
+        let saveBranch = try XCTUnwrap(wizard.components(separatedBy: "saveResults.append(.refused(problem))\n                } else {").last)
+        XCTAssertTrue(saveBranch.hasPrefix("\n                    for ref in refs { alreadyReplaced.insert("))
+        XCTAssertTrue(wizard.contains("guard let captured = replacedConflictRefs[row.id]"))
+        XCTAssertTrue(wizard.contains("captureReplacedConflictRefs(added: newIds.subtracting(oldIds)"))
     }
 
     func testAReplaceSendsTheDeleteFollowUps() throws {
@@ -195,6 +205,7 @@ final class Rulebook1410Tests: XCTestCase {
             let store = try source(path)
             XCTAssertTrue(store.contains("await BookingReplaceNotices.warnIfOnSignedTimesheet(targets,"), path)
             XCTAssertTrue(store.contains("BookingReplaceNotices.reopenOvertime(targets, organizationId:"), path)
+            XCTAssertTrue(store.contains("onLateApply: { BookingReplaceNotices.reopenOvertime(targets, organizationId:"), path)
         }
         let notices = try source("Project Planner/Core/Rulebook+BookingReplace.swift")
         XCTAssertTrue(notices.contains("OvertimeReopenNotice.labour(before: booking, after: nil, organizationId: organizationId)"))
@@ -205,12 +216,25 @@ final class Rulebook1410Tests: XCTestCase {
     func testAReplacedBookingNoLongerOnThisPhoneReplacesNothing() throws {
         let day = try XCTUnwrap(OrganizationRulebookContext.calendar.date(from: DateComponents(year: 2026, month: 11, day: 17)))
         let shown = Booking(operativeId: UUID(), projectId: UUID(), date: day, timeSlot: .fullDay, bookedBy: "x")
-        let ref = RulebookBookingReplaceRef(collection: "bookings", bookingId: shown.documentKey)
-        let targets = try XCTUnwrap(BookingReplaceTarget.resolve([ref], bookings: [shown], managerBookings: []))
+        let ref = RulebookBookingReplaceRef(
+            collection: "bookings", bookingId: shown.documentKey, fingerprint: BookingWritePatch.deleteFingerprint(shown)
+        )
+        // The store has moved on since the row was shown: the shown fingerprint is kept (re-review #3).
+        var changed = shown
+        changed.workEndTime = "18:00"
+        let targets = try XCTUnwrap(BookingReplaceTarget.resolve([ref], bookings: [changed], managerBookings: []))
         XCTAssertEqual(targets.first?.fingerprint, BookingWritePatch.deleteFingerprint(shown))
+        XCTAssertNotEqual(targets.first?.fingerprint, BookingWritePatch.deleteFingerprint(changed))
+        XCTAssertNil(
+            BookingReplaceTarget.resolve(
+                [RulebookBookingReplaceRef(collection: "bookings", bookingId: shown.documentKey)],
+                bookings: [shown], managerBookings: []
+            ),
+            "a ref with no shown fingerprint replaces nothing (fail closed)"
+        )
         XCTAssertNil(BookingReplaceTarget.resolve([ref], bookings: [], managerBookings: []), "gone from this phone: nothing is replaced")
         XCTAssertNil(BookingReplaceTarget.resolve(
-            [ref, RulebookBookingReplaceRef(collection: "managerSiteBookings", bookingId: "MISSING")],
+            [ref, RulebookBookingReplaceRef(collection: "managerSiteBookings", bookingId: "MISSING", fingerprint: "x")],
             bookings: [shown], managerBookings: []
         ), "one missing booking stops the whole Replace")
     }

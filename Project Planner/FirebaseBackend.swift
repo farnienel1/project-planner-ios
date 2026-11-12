@@ -7714,7 +7714,8 @@ class FirebaseBackend: ObservableObject {
         labour: Booking? = nil,
         manager: ManagerSiteBooking? = nil,
         replacing targets: [BookingReplaceTarget],
-        organizationId: String
+        organizationId: String,
+        onLateApply: (@MainActor () -> Void)? = nil
     ) async throws {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         guard let uid = currentUser?.uid, !uid.isEmpty else {
@@ -7773,7 +7774,16 @@ class FirebaseBackend: ObservableObject {
         let outcome = ReplaceOutcomeBox()
         NSLog("BOOKING_REPLACE collection=%@ id=%@ replaces=%ld", collection, documentKey, rows.count)
         do {
-            try await FirestoreWriteAck.run(timeoutSeconds: FirestoreWriteAck.defaultTimeoutSeconds) {
+            // Re-review 1.41 #5: a transaction that commits after the wait timed out still sends the delete's
+            // follow-ups (`onLateApply`: the overtime reopen notices, after `CanonicalBusinessEngine.bookingReplaceWrites`).
+            try await FirestoreWriteAck.run(
+                timeoutSeconds: FirestoreWriteAck.defaultTimeoutSeconds,
+                onSettledAfterTimeout: { error in
+                    guard error == nil, outcome.value == "apply" else { return }
+                    NSLog("BOOKING_REPLACE_CONFIRMED_LATE id=%@", documentKey)
+                    onLateApply?()
+                }
+            ) {
                 outcome.value = try await Self.runReplaceTransaction(db: database, deletes: rows, createRef: createRef, create: create)
             }
         } catch let error as NSError where error.domain == "BookingReplace" {
@@ -7835,7 +7845,12 @@ class FirebaseBackend: ObservableObject {
                     return nil
                 }
                 guard live.exists, !tombstone.exists, let data = live.data() else { return "alreadyGone" as NSString }
-                if BookingWritePatch.stored(data, collection: row.collection) != row.expected { return "changed" as NSString }
+                // Re-review 1.41 #4: fail closed — an empty `CanonicalBusinessEngine.bookingDeleteFingerprint` on either side
+                // never counts as unchanged.
+                let liveFingerprint = BookingWritePatch.stored(data, collection: row.collection)
+                if row.expected.isEmpty || liveFingerprint.isEmpty || liveFingerprint != row.expected {
+                    return "changed" as NSString
+                }
             }
             transaction.setData(create.object, forDocument: createRef)
             for row in deletes {

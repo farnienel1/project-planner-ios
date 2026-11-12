@@ -58,6 +58,9 @@ struct ScheduleOperativeView: View {
     @State private var struckConflictIds: Set<String> = []
     /// RULEBOOK 1.41.0 §5: conflict rows where Replace was chosen (also in `acknowledgedConflictIds`).
     @State private var replacedConflictIds: Set<String> = []
+    /// Re-review 1.41 #3: the refs of each row the person tapped Replace on, captured when they tapped it (with the
+    /// fingerprint of the booking as the row showed it), never rebuilt from the stores at save time.
+    @State private var replacedConflictRefs: [String: (date: Date, refs: [RulebookBookingReplaceRef])] = [:]
     @State private var expandedMainConflictPersonIds: Set<UUID> = []
     @State private var expandedPickerPersonIds: Set<UUID> = []
     @State private var showingSelectDatesFirstAlert = false
@@ -241,6 +244,7 @@ struct ScheduleOperativeView: View {
                     acknowledgedConflictIds.removeAll()
                     struckConflictIds.removeAll()
                     replacedConflictIds.removeAll()
+                    replacedConflictRefs.removeAll()
                 }
                 if newSet.count == 1, let only = newSet.sorted().first {
                     sharedBulkChoice = baseChoice(for: only)
@@ -252,6 +256,9 @@ struct ScheduleOperativeView: View {
             }
             .onChange(of: operativeSlotOverrides.count) { _, _ in
                 handleHoursOrDatesChanged()
+            }
+            .onChange(of: replacedConflictIds) { oldIds, newIds in
+                captureReplacedConflictRefs(added: newIds.subtracting(oldIds), removed: oldIds.subtracting(newIds))
             }
             .onChange(of: sharedBulkChoice) { _, _ in
                 handleHoursOrDatesChanged()
@@ -471,6 +478,21 @@ struct ScheduleOperativeView: View {
     /// the booker ticks or drops like every other conflict, so nothing is excluded up front.
     private var autoExcludedDaysByOperative: [UUID: Set<Date>] {
         [:]
+    }
+
+    /// Re-review 1.41 #3: the rows just marked Replace keep the refs they showed (`CanonicalBusinessEngine.bookingReplaceOffer`,
+    /// stamped with the shown fingerprint); rows un-marked drop theirs.
+    private func captureReplacedConflictRefs(added: Set<String>, removed: Set<String>) {
+        for id in removed { replacedConflictRefs[id] = nil }
+        guard !added.isEmpty else { return }
+        for person in bookablePeople {
+            guard let rows = personConflictSummary(person)?.rows else { continue }
+            for row in rows where added.contains(row.id) {
+                if let refs = row.replaceRefs, !refs.isEmpty {
+                    replacedConflictRefs[row.id] = (row.date, refs)
+                }
+            }
+        }
     }
 
     private func personConflictSummary(_ person: ScheduleBookablePerson) -> SchedulePersonConflictSummary? {
@@ -1802,8 +1824,11 @@ struct ScheduleOperativeView: View {
                     guard let person = bookablePeople.first(where: { $0.operativeId == operative.id }),
                           let rows = personConflictSummary(person)?.rows else { continue }
                     for row in rows where replacedConflictIds.contains(row.id) {
-                        guard let refs = row.replaceRefs, !refs.isEmpty else { continue }
-                        refsByOperativeDay[operativeOverrideKey(operative.id, row.date), default: []].append(contentsOf: refs)
+                        // The refs captured when Replace was tapped (re-review #3); a row that no longer lists a
+                        // clash keeps none.
+                        guard let captured = replacedConflictRefs[row.id], !captured.refs.isEmpty else { continue }
+                        refsByOperativeDay[operativeOverrideKey(operative.id, captured.date), default: []]
+                            .append(contentsOf: captured.refs)
                     }
                 }
             }
@@ -1892,10 +1917,12 @@ struct ScheduleOperativeView: View {
 
             // Review 1.41 #10: an overnight booking can overlap two selected days. It is replaced once, on the first
             // day (in date order); a later day whose bookings were all replaced already is a plain create.
+            // Re-review 1.41 #1: a booking counts as replaced only once its day saved; a refused day leaves it for the
+            // next day (never a silent double booking). The refs are `CanonicalBusinessEngine.bookingReplaceOffer`'s.
             var alreadyReplaced = Set<String>()
             for entry in replacing.sorted(by: { $0.booking.date < $1.booking.date }) {
                 let refs = entry.refs.filter { ref in
-                    alreadyReplaced.insert("\(ref.collection)/\(ref.bookingId.lowercased())").inserted
+                    !alreadyReplaced.contains("\(ref.collection)/\(ref.bookingId.lowercased())")
                 }
                 guard !refs.isEmpty else {
                     newBookings.append(entry.booking)
@@ -1908,6 +1935,7 @@ struct ScheduleOperativeView: View {
                 ) {
                     saveResults.append(.refused(problem))
                 } else {
+                    for ref in refs { alreadyReplaced.insert("\(ref.collection)/\(ref.bookingId.lowercased())") }
                     saveResults.append(.saved)
                     createdDatesByOperative[entry.booking.operativeId, default: []].insert(entry.booking.date)
                 }

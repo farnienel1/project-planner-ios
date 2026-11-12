@@ -288,7 +288,9 @@ class ManagerScheduleStore: ObservableObject {
         normalized.updatedAt = Date()
         await BookingReplaceNotices.warnIfOnSignedTimesheet(targets, organizationId: orgId, firebaseBackend: fb)
         do {
-            try await fb.createBookingReplacing(manager: normalized, replacing: targets, organizationId: orgId)
+            try await fb.createBookingReplacing(manager: normalized, replacing: targets, organizationId: orgId,
+                onLateApply: { BookingReplaceNotices.reopenOvertime(targets, organizationId: orgId) }
+            )
         } catch {
             errorMessage = error.localizedDescription
             return error.localizedDescription
