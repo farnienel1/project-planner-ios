@@ -11,6 +11,8 @@ final class RulebookParityTests: XCTestCase {
         let bundleSha256: String
         /// Rulebook 1.10.0: sha256 of `cross-platform-contract.json` (mirrored as `CrossPlatformContract.json`).
         let crossPlatformContractSha256: String?
+        /// Rulebook 1.38.0 §27: sha256 of `data-parity-fixture.json` (mirrored as `DataParityFixture.json`).
+        let dataParityFixtureSha256: String?
         let exports: [String]
     }
 
@@ -73,5 +75,12 @@ final class RulebookParityTests: XCTestCase {
         let url = Bundle(for: RulebookParityTests.self).url(forResource: "CrossPlatformContract", withExtension: "json")
             ?? repoRoot.appendingPathComponent("ProjectPlannerTests/CrossPlatformContract.json")
         XCTAssertEqual(sha256(try Data(contentsOf: url)), want, "CrossPlatformContract.json was not mirrored from web — run scripts/sync-rulebook-from-web.sh")
+    }
+
+    func testDataParityFixtureMatchesTheManifest() throws {
+        let want = try XCTUnwrap(try manifest().dataParityFixtureSha256, "canonical-manifest.json has no dataParityFixtureSha256 (rulebook 1.38.0+)")
+        let url = Bundle(for: RulebookParityTests.self).url(forResource: "DataParityFixture", withExtension: "json")
+            ?? repoRoot.appendingPathComponent("ProjectPlannerTests/DataParityFixture.json")
+        XCTAssertEqual(sha256(try Data(contentsOf: url)), want, "DataParityFixture.json was not mirrored from web — run scripts/sync-rulebook-from-web.sh")
     }
 }

@@ -65,6 +65,11 @@ nonisolated struct RulebookBookingDayBreakdownRow: Equatable, Hashable, Sendable
     let unpaidBreakHours: Double
     /// RULEBOOK 1.19.0: the row in the Mon–Fri style (set hours / unpaid break / outside hours × rate / total).
     let lines: [RulebookBookingDayBreakdownLine]
+    /// RULEBOOK 1.39.0 `explanation.rule`: the day's rule, e.g. "Saturday full day: 07:30–14:00 counts as 8h, hours
+    /// outside it at 2×". Empty from a script older than 1.39.0.
+    let explanationRule: String
+    /// RULEBOOK 1.39.0 `explanation.steps`, e.g. ["Booked 07:30–10:30 = 3h of the 6.5h window → 8h × 3 ÷ 6.5 = 3.69h"].
+    let explanationSteps: [String]
 
     init?(json: Any?) {
         guard let row = json as? [String: Any],
@@ -85,7 +90,62 @@ nonisolated struct RulebookBookingDayBreakdownRow: Equatable, Hashable, Sendable
         self.line = line
         self.unpaidBreakHours = number("unpaidBreakHours")
         self.lines = (row["lines"] as? [[String: Any]] ?? []).compactMap(RulebookBookingDayBreakdownLine.init(json:))
+        let explanation = row["explanation"] as? [String: Any]
+        self.explanationRule = explanation?["rule"] as? String ?? ""
+        self.explanationSteps = explanation?["steps"] as? [String] ?? []
     }
+}
+
+/// RULEBOOK 1.39.0 §4.3 `bookingHoursExplanation` → `{ dayKey, weekdayLabel, kind, rule, steps, totalPaidHours, fullDayHours }`.
+nonisolated struct RulebookBookingHoursExplanation: Equatable, Hashable, Sendable {
+    let dayKey: String
+    let weekdayLabel: String
+    /// `weekday`, `weekendWindow` or `weekendAllHours`.
+    let kind: String
+    let rule: String
+    let steps: [String]
+    let totalPaidHours: Double
+    let fullDayHours: Double?
+
+    init?(json: Any?) {
+        guard let row = json as? [String: Any],
+              let dayKey = row["dayKey"] as? String,
+              let weekdayLabel = row["weekdayLabel"] as? String,
+              let rule = row["rule"] as? String else { return nil }
+        self.dayKey = dayKey
+        self.weekdayLabel = weekdayLabel
+        self.kind = row["kind"] as? String ?? ""
+        self.rule = rule
+        self.steps = row["steps"] as? [String] ?? []
+        self.totalPaidHours = (row["totalPaidHours"] as? NSNumber)?.doubleValue ?? 0
+        self.fullDayHours = (row["fullDayHours"] as? NSNumber)?.doubleValue
+    }
+}
+
+/// RULEBOOK 1.39.0 §4.3 `bookingShortfall` → `{ label, fullDayHours, missingHours, value }`, e.g. "Short of a full Saturday (8h)".
+nonisolated struct RulebookBookingShortfall: Equatable, Hashable, Sendable {
+    let label: String
+    let fullDayHours: Double
+    let missingHours: Double
+    /// e.g. "4.31h".
+    let value: String
+
+    init?(json: Any?) {
+        guard let row = json as? [String: Any],
+              let label = row["label"] as? String,
+              let value = row["value"] as? String else { return nil }
+        self.label = label
+        self.value = value
+        self.fullDayHours = (row["fullDayHours"] as? NSNumber)?.doubleValue ?? 0
+        self.missingHours = (row["missingHours"] as? NSNumber)?.doubleValue ?? 0
+    }
+}
+
+/// One block of a booking's hours on screen: the figure (`line`, may be empty) and the words that explain it (`detail`:
+/// the day's rule, then the steps). Text only; every word is the script's.
+nonisolated struct RulebookBreakdownSection: Equatable, Hashable, Sendable {
+    let line: String
+    let detail: [String]
 }
 
 /// One `BookingDayBreakdownLine` (1.19.0): `kind` is `standard`, `break`, `outside` or `total`. Values only.
@@ -154,7 +214,7 @@ extension CanonicalBusinessEngine {
         todayKey: String,
         timeZone: String
     ) -> [String: Any]? {
-        callJSON("payrollTimePolicyTimeline", arguments: [policyDocument, todayKey, timeZone]) as? [String: Any]
+        memoCallJSON("payrollTimePolicyTimeline", arguments: [policyDocument, todayKey, timeZone]) as? [String: Any]
     }
 
     // MARK: customHoursPrefillForDays (1.18.0 §4.3)
@@ -289,6 +349,157 @@ extension CanonicalBusinessEngine {
         ) ?? []
     }
 
+    // MARK: bookingHoursExplanation / bookingShortfall (1.39.0 §4.3)
+
+    /// RULEBOOK 1.39.0 §4.3 `bookingHoursExplanation(policyState, dayKey, booking, timeZone)` for one custom-hours booking:
+    /// the day's rule and one step per part, read from `payrollHoursResult`. Uses the open organisation's policy state
+    /// when loaded, else `fallbackPolicy`. Nil when the script did not answer or the times are not valid.
+    nonisolated static func bookingHoursExplanation(
+        on date: Date,
+        start: String,
+        end: String,
+        isBreakRemoved: Bool,
+        fallbackPolicy: OrgPayrollTimePolicy,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> RulebookBookingHoursExplanation? {
+        let key = bookingDayKey(date)
+        let booking: [String: Any] = [
+            "timeSlot": "CUSTOM_HOURS", "workStartTime": start, "workEndTime": end, "isBreakRemoved": isBreakRemoved,
+        ]
+        if let document = OrganizationRulebookContext.payrollPolicyDocument,
+           let state = payrollPolicyState(
+            policyDocument: document,
+            todayKey: organizationDayKey(Date(), timeZoneIdentifier: timeZone),
+            timeZone: timeZone
+           ),
+           let row = RulebookBookingHoursExplanation(json: memoCallJSON("bookingHoursExplanation", arguments: [state, key, booking, timeZone])) {
+            return row
+        }
+        return bookingHoursExplanation(
+            policy: fallbackPolicy, dayKey: key, start: start, end: end, isBreakRemoved: isBreakRemoved, timeZone: timeZone
+        )
+    }
+
+    /// `bookingHoursExplanation(policy, dayKey, booking, timeZone)` with one policy (no policy state).
+    nonisolated static func bookingHoursExplanation(
+        policy: OrgPayrollTimePolicy,
+        dayKey: String,
+        start: String,
+        end: String,
+        isBreakRemoved: Bool,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> RulebookBookingHoursExplanation? {
+        guard let policyJSON = payrollPolicyJSON(policy) else { return nil }
+        let booking: [String: Any] = [
+            "timeSlot": "CUSTOM_HOURS", "workStartTime": start, "workEndTime": end, "isBreakRemoved": isBreakRemoved,
+        ]
+        return RulebookBookingHoursExplanation(json: memoCallJSON("bookingHoursExplanation", arguments: [policyJSON, dayKey, booking, timeZone]))
+    }
+
+    /// The explanation of a weekday selection's hours as screen sections (the weekend rows carry their own): one per
+    /// weekday, days that read the same once the day name is taken off sharing one ("Monday/Tuesday full day: …"). `[]`
+    /// when the selection holds a Saturday or Sunday or nothing answered.
+    nonisolated static func weekdayExplanationSections(
+        on dates: [Date],
+        start: String,
+        end: String,
+        isBreakRemoved: Bool,
+        fallbackPolicy: OrgPayrollTimePolicy
+    ) -> [RulebookBreakdownSection] {
+        guard !dates.isEmpty, !dates.contains(where: { isWeekendDayKey(bookingDayKey($0)) }) else { return [] }
+        var order: [String] = []
+        var groups: [String: (labels: [String], rule: String, steps: [String])] = [:]
+        for date in dates {
+            guard let row = bookingHoursExplanation(
+                on: date, start: start, end: end, isBreakRemoved: isBreakRemoved, fallbackPolicy: fallbackPolicy
+            ) else { continue }
+            let ruleBody = row.rule.hasPrefix(row.weekdayLabel) ? String(row.rule.dropFirst(row.weekdayLabel.count)) : " " + row.rule
+            let key = ruleBody + "|" + row.steps.joined(separator: "|")
+            if groups[key] == nil {
+                order.append(key)
+                groups[key] = ([], ruleBody, row.steps)
+            }
+            if groups[key]?.labels.contains(row.weekdayLabel) == false {
+                groups[key]?.labels.append(row.weekdayLabel)
+            }
+        }
+        return order.compactMap { key in
+            guard let group = groups[key] else { return nil }
+            return RulebookBreakdownSection(line: "", detail: [group.labels.joined(separator: "/") + group.rule] + group.steps)
+        }
+    }
+
+    /// One booking as `CanonicalBusinessEngine.bookingShortfall` reads it (slot and clock times). A mapping only.
+    nonisolated static func shortfallRow(_ booking: Booking) -> [String: Any] {
+        [
+            "timeSlot": booking.timeSlot.rawValue,
+            "workStartTime": booking.workStartTime ?? NSNull(),
+            "workEndTime": booking.workEndTime ?? NSNull(),
+        ]
+    }
+
+    /// RULEBOOK 1.39.0 §4.3 (review 11 Nov) `bookingShortfall(policyState, dayKey, bookings, timeZone)`: how much of the
+    /// day's working time the person's bookings that day (existing + the new one) leave unbooked, by COVERAGE —
+    /// `standardDayCoverage` on a weekday, `windowCoverage` of a set-window weekend day, lunch window excluded — never
+    /// paid hours. "Short of a full Monday (07:30–16:00): 5.5h"; nil under 0.05h or on a day paid every hour at a rate.
+    nonisolated static func bookingShortfall(
+        on date: Date,
+        bookings: [[String: Any]],
+        fallbackPolicy: OrgPayrollTimePolicy,
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> RulebookBookingShortfall? {
+        let key = bookingDayKey(date)
+        if let document = OrganizationRulebookContext.payrollPolicyDocument,
+           let state = payrollPolicyState(
+            policyDocument: document,
+            todayKey: organizationDayKey(Date(), timeZoneIdentifier: timeZone),
+            timeZone: timeZone
+           ) {
+            return RulebookBookingShortfall(json: memoCallJSON("bookingShortfall", arguments: [state, key, bookings, timeZone]))
+        }
+        return bookingShortfall(policy: fallbackPolicy, dayKey: key, bookings: bookings, timeZone: timeZone)
+    }
+
+    /// `bookingShortfall(policy, dayKey, bookings, timeZone)` with one policy (no policy state).
+    nonisolated static func bookingShortfall(
+        policy: OrgPayrollTimePolicy,
+        dayKey: String,
+        bookings: [[String: Any]],
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+    ) -> RulebookBookingShortfall? {
+        guard let policyJSON = payrollPolicyJSON(policy) else { return nil }
+        return RulebookBookingShortfall(json: memoCallJSON("bookingShortfall", arguments: [policyJSON, dayKey, bookings, timeZone]))
+    }
+
+    /// The breakdown rows as screen sections (RULEBOOK 1.39.0): each `collapsedBreakdownLines` line with the explanation
+    /// under it (the day's rule, then the steps). Days share a section only when the figure and the explanation read
+    /// the same once the day name is taken off. Text grouping only.
+    nonisolated static func collapsedBreakdownSections(_ rows: [RulebookBookingDayBreakdownRow]) -> [RulebookBreakdownSection] {
+        func body(_ text: String, _ label: String) -> String {
+            text.hasPrefix(label) ? String(text.dropFirst(label.count)) : " " + text
+        }
+        var order: [String] = []
+        var groups: [String: (labels: [String], line: String, rule: String, steps: [String])] = [:]
+        for row in rows {
+            let lineBody = body(row.line, row.weekdayLabel)
+            let ruleBody = row.explanationRule.isEmpty ? "" : body(row.explanationRule, row.weekdayLabel)
+            let key = lineBody + "|" + ruleBody + "|" + row.explanationSteps.joined(separator: "|")
+            if groups[key] == nil {
+                order.append(key)
+                groups[key] = ([], lineBody, ruleBody, row.explanationSteps)
+            }
+            if groups[key]?.labels.contains(row.weekdayLabel) == false {
+                groups[key]?.labels.append(row.weekdayLabel)
+            }
+        }
+        return order.compactMap { key in
+            guard let group = groups[key] else { return nil }
+            let label = group.labels.joined(separator: "/")
+            let rule = group.rule.isEmpty ? [] : [label + group.rule]
+            return RulebookBreakdownSection(line: label + group.line, detail: rule + group.steps)
+        }
+    }
+
     /// `isWeekendDayKey(dayKey, timeZone)`: Saturday or Sunday in the organisation zone.
     nonisolated static func isWeekendDayKey(_ dayKey: String, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> Bool {
         callJSON("isWeekendDayKey", arguments: [dayKey, timeZone]) as? Bool ?? false
@@ -335,33 +546,71 @@ nonisolated struct CustomHoursKindTracker: Equatable, Sendable {
 }
 
 /// The per-day hours of a weekend booking (`weekendBookingBreakdown`, RULEBOOK 1.18.0), shown in place of the
-/// standard-day summary. Takes lines the caller already computed (`collapsedBreakdownLines`), so a redraw never runs
-/// the script. Nothing when `lines` is empty.
+/// standard-day summary. Takes sections the caller already computed (`collapsedBreakdownSections`), so a redraw never
+/// runs the script. RULEBOOK 1.39.0: under each figure, the words that explain it (the day's rule and the steps).
+/// Nothing when `sections` is empty.
 struct WeekendBookingBreakdownView: View {
-    let lines: [String]
+    let sections: [RulebookBreakdownSection]
     var title: String = "Hours by day"
 
+    init(sections: [RulebookBreakdownSection], title: String = "Hours by day") {
+        self.sections = sections
+        self.title = title
+    }
+
+    /// Figures only (no explanation), for callers that hold plain lines.
+    init(lines: [String], title: String = "Hours by day") {
+        self.init(sections: lines.map { RulebookBreakdownSection(line: $0, detail: []) }, title: title)
+    }
+
     var body: some View {
-        if !lines.isEmpty {
+        if !sections.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title.uppercased())
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                     .tracking(0.6)
-                ForEach(lines, id: \.self) { line in
-                    Text(line)
-                        .font(.system(size: 12, weight: .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(ProjectWorksRevampColors.ink)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("booking.weekendBreakdownRow")
-                }
+                BookingBreakdownSectionsView(sections: sections)
             }
             .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(ProjectWorksRevampColors.canvas)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+}
+
+/// RULEBOOK 1.39.0: breakdown sections without a card — each figure (`line`, bold) and its explanation (`detail`:
+/// the rule in muted text, then the steps; the "→" total in bold). Web draws the same text
+/// (`components/scheduling/BookingHoursExplanation.tsx`).
+struct BookingBreakdownSectionsView: View {
+    let sections: [RulebookBreakdownSection]
+    var lineColor: Color = ProjectWorksRevampColors.ink
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(sections, id: \.self) { section in
+                VStack(alignment: .leading, spacing: 2) {
+                    if !section.line.isEmpty {
+                        Text(section.line)
+                            .font(.system(size: 12, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(lineColor)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("booking.weekendBreakdownRow")
+                    }
+                    ForEach(Array(section.detail.enumerated()), id: \.offset) { index, text in
+                        Text(text)
+                            .font(.system(size: 11, weight: index == 0 || text.hasPrefix("→") ? .semibold : .regular))
+                            .monospacedDigit()
+                            .foregroundStyle(index == 0 ? ProjectWorksRevampColors.muted : ProjectWorksRevampColors.ink)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("booking.hoursExplanationLine")
+                    }
+                }
+            }
         }
     }
 }

@@ -57,6 +57,18 @@ enum PlannerStoreWiring {
         holidayStore.setFirebaseBackend(firebaseBackend)
         holidayStore.setSmartCache(smartCache)
         subcontractorStore.setFirebaseBackend(firebaseBackend)
+        // RULEBOOK 1.38.0 §27: the silent, read-only data check (server count vs what each store holds).
+        DataParityMonitor.shared.connect(
+            firebaseBackend: firebaseBackend,
+            smartCache: smartCache,
+            projectStore: projectStore,
+            operativeStore: operativeStore,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            userStore: userStore,
+            taskStore: taskStore,
+            holidayStore: holidayStore
+        )
 
         notificationService.setFirebaseBackend(firebaseBackend)
         notificationService.setUserStore(userStore)
@@ -95,6 +107,8 @@ enum PlannerStoreWiring {
         subcontractorStore.startLiveUpdates(organizationId: organizationId)
         taskStore.startLiveUpdates(organizationId: organizationId)
         firebaseBackend.startDismissedWarningsListener(organizationId: organizationId)
+        // RULEBOOK 1.38.0 §27: the "open" data check, once these listeners have had time to load.
+        DataParityMonitor.shared.listenersAttached()
     }
 
     /// Single-flight org data load from the root shell (ContentView must not repeat this on appear).
@@ -439,6 +453,8 @@ struct ProjectPlannerRootView: View {
             case .active:
                 appLock.appDidBecomeActive()
                 Task { await forcedUpdate.check() }
+                // RULEBOOK 1.38.0 §27: the silent data check on return to the foreground (throttled by the rule).
+                DataParityMonitor.shared.appBecameActive()
             default: break
             }
         }
