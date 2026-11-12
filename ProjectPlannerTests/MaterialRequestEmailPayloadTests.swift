@@ -217,6 +217,63 @@ final class MaterialRequestEmailPayloadTests: XCTestCase {
         XCTAssertEqual(emptyError.errorDescription, "Email not sent: the email service answered 502")
     }
 
+    // MARK: - requestId (web functions/email/requestDedupe.js): one send per request, however often it is replayed
+
+    func testBodyCarriesTheRequestIdAtTopLevelOnlyWhenValid() throws {
+        var withId = request(type: .order, contacts: [supplier])
+        withId.requestId = "6F1D2C3B-4A5E-4F60-8172-93A4B5C6D7E8"
+        let body = MaterialRequestEmailPayload.body(
+            organizationId: "org-test",
+            request: withId,
+            senderEmail: "sender@example.com",
+            includesDeliveryRequired: true
+        )
+        XCTAssertEqual(body["requestId"] as? String, "6F1D2C3B-4A5E-4F60-8172-93A4B5C6D7E8")
+        let data = try XCTUnwrap(body["data"] as? [String: Any])
+        XCTAssertNil(data["requestId"], "requestId is top level, not template data")
+
+        for bad in [nil, "", "short", "has space inside", "../../x", String(repeating: "a", count: 129)] as [String?] {
+            var other = request(type: .order, contacts: [supplier])
+            other.requestId = bad
+            let otherBody = MaterialRequestEmailPayload.body(
+                organizationId: "org-test",
+                request: other,
+                senderEmail: "sender@example.com",
+                includesDeliveryRequired: true
+            )
+            XCTAssertNil(otherBody["requestId"], String(describing: bad))
+        }
+    }
+
+    func testARepeatedRequestIsASuccessMarkedDeduped() throws {
+        let body = Data(#"{"sent":true,"sentCount":1,"failed":[],"results":[{"to":"sam@wholesale.example","id":"re_1","cc":["sender@example.com"]}],"ccSupported":true,"deduped":true}"#.utf8)
+        let result = try MaterialRequestEmailPayload.parseResponse(statusCode: 200, data: body).get()
+        XCTAssertTrue(result.deduped)
+        XCTAssertEqual(result.messageIds, ["re_1"])
+        let first = Data(#"{"sent":true,"sentCount":1,"failed":[],"results":[{"to":"a@b.example","id":"re_2"}]}"#.utf8)
+        XCTAssertFalse(try MaterialRequestEmailPayload.parseResponse(statusCode: 200, data: first).get().deduped)
+    }
+
+    func testStillSendingIsAnErrorTheOutboxRetries() {
+        let body = Data(#"{"sent":false,"error":"This email is already being sent. Wait a minute, then check your sent items.","inProgress":true}"#.utf8)
+        guard case .failure(let error) = MaterialRequestEmailPayload.parseResponse(statusCode: 409, data: body) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertEqual(error, .refused(status: 409, reason: "This email is already being sent. Wait a minute, then check your sent items."))
+    }
+
+    func testRequestIdSurvivesTheOutboxCodingAndOlderEntriesDecodeWithout() throws {
+        var queued = request(type: .quote, contacts: [supplier])
+        queued.requestId = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+        let decoded = try JSONDecoder().decode(MaterialOrderRequest.self, from: JSONEncoder().encode(queued))
+        XCTAssertEqual(decoded.requestId, queued.requestId)
+
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(queued)) as? [String: Any])
+        json.removeValue(forKey: "requestId")
+        let older = try JSONDecoder().decode(MaterialOrderRequest.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(older.requestId)
+    }
+
     func testOfflineTransportErrorIsRethrownSoTheSendIsQueued() async throws {
         let url = try XCTUnwrap(URL(string: "https://example.invalid/sendEmail"))
         do {

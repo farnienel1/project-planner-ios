@@ -665,7 +665,7 @@ struct MaterialsSendListSheet: View {
         if !userEmail.isEmpty { senderSignature += "\n\(userEmail)" }
         if !orgName.isEmpty { senderSignature += "\n\(orgName)" }
 
-        let request = MaterialOrderRequest(
+        var request = MaterialOrderRequest(
             projectId: project.id,
             projectNumber: project.jobNumber,
             projectName: project.siteName,
@@ -700,6 +700,9 @@ struct MaterialsSendListSheet: View {
             recipients: recipientSnapshots,
             lines: items.map(\.sendLineSnapshot)
         )
+        // One `sendEmail` request id per Send press, the send record's id: kept if the send is queued, so a replay is
+        // never emailed twice (web functions/email/requestDedupe.js).
+        request.requestId = sendRecord.id.uuidString
 
         Task {
             guard let organizationId = MaterialOfflineService.resolvedOrganizationId(firebaseBackend: firebaseBackend) else {

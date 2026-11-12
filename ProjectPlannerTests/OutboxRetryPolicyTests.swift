@@ -9,6 +9,11 @@ private final class SendCounter {
 }
 
 @MainActor
+private final class RequestIdLog {
+    var ids: [String?] = []
+}
+
+@MainActor
 private final class TaskBox {
     var task: Task<Void, Never>?
 }
@@ -148,6 +153,56 @@ final class OutboxRetryPolicyTests: XCTestCase {
         XCTAssertEqual(first.synced + second.synced, 1)
         XCTAssertTrue(outbox.entries.isEmpty)
         XCTAssertTrue(outbox.claimedEntryIds.isEmpty)
+    }
+
+    /// A queued material email carries one `sendEmail` request id, fixed when it is queued (the send record's id when
+    /// there is one) and sent unchanged on replay, so the function never emails it twice.
+    func testAQueuedMaterialEmailKeepsOneRequestIdForEveryReplay() async throws {
+        let storageKey = "offline_outbox_test_\(UUID().uuidString)"
+        let outbox = OfflineOutboxStore(isolatedStorageKey: storageKey)
+        Self.retained.append(outbox)
+        defer {
+            OfflineSyncCoordinator.replayTestSeam = nil
+            UserDefaults.standard.removeObject(forKey: storageKey)
+        }
+        let request = MaterialOrderRequest(
+            projectId: UUID(),
+            projectNumber: "C647",
+            projectName: "Test site",
+            siteAddress: "",
+            materials: [],
+            requestType: .quote,
+            sentBy: "Tester",
+            recipientContacts: [],
+            senderName: "Tester",
+            senderEmail: "tester@example.com"
+        )
+
+        // With a send record: the request id is the record's id, as the Send sheet sets it.
+        let record = MaterialSendRecord(projectId: request.projectId, requestType: .quote, sentBy: "Tester", recipients: [], lines: [])
+        outbox.enqueueSendMaterialRequest(request, sendRecord: record, organizationId: "TEST-ORG")
+        let withRecord = try XCTUnwrap(outbox.entries.first)
+        let payload = try JSONDecoder().decode(OfflineSendMaterialRequestPayload.self, from: withRecord.payload)
+        XCTAssertEqual(payload.request.requestId, record.id.uuidString)
+        XCTAssertEqual(withRecord.entityId, record.id.uuidString)
+        outbox.removeEntry(id: withRecord.id)
+
+        // Without one: an id is made once at enqueue and stored with the entry; the replay sends exactly that id.
+        outbox.enqueueSendMaterialRequest(request, sendRecord: nil, organizationId: "TEST-ORG")
+        let entry = try XCTUnwrap(outbox.entries.first)
+        let stored = try JSONDecoder().decode(OfflineSendMaterialRequestPayload.self, from: entry.payload)
+        let storedId = try XCTUnwrap(stored.request.requestId)
+        XCTAssertEqual(entry.entityId, storedId)
+
+        let seen = RequestIdLog()
+        OfflineSyncCoordinator.replayTestSeam = .init(signedInUserId: "tester-uid") { sent, _ in
+            seen.ids.append(sent.requestId)
+        }
+        let backend = FirebaseBackend()
+        Self.retained.append(backend)
+        _ = await OfflineSyncCoordinator.processOutbox(firebaseBackend: backend, outbox: outbox)
+        XCTAssertEqual(seen.ids, [storedId])
+        XCTAssertTrue(outbox.entries.isEmpty)
     }
 
     /// Stores are kept alive for the rest of the run (as in WarningInputsReadinessTests).

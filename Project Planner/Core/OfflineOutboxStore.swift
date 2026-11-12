@@ -661,9 +661,16 @@ final class OfflineOutboxStore: ObservableObject {
         sendRecord: MaterialSendRecord?,
         organizationId: String
     ) {
-        let entityId = sendRecord?.id.uuidString ?? UUID().uuidString
+        // The `sendEmail` idempotency key is fixed here, once, and stored with the entry: every replay sends the same
+        // `requestId`, so a replay after a crash or timeout is never emailed twice (web functions/email/requestDedupe.js).
+        let requestId = MaterialRequestEmailPayload.requestIdValue(request.requestId)
+            ?? sendRecord?.id.uuidString
+            ?? UUID().uuidString
+        let entityId = sendRecord?.id.uuidString ?? requestId
+        var queued = request
+        queued.requestId = requestId
         guard let payload = try? encoder.encode(
-            OfflineSendMaterialRequestPayload(request: request, sendRecord: sendRecord)
+            OfflineSendMaterialRequestPayload(request: queued, sendRecord: sendRecord)
         ) else { return }
         enqueue(
             OfflineOutboxEntry(

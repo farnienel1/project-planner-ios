@@ -292,14 +292,20 @@ enum OfflineSyncCoordinator {
 
         case .sendMaterialRequest:
             let payload = try decoder.decode(OfflineSendMaterialRequestPayload.self, from: entry.payload)
+            // Every replay sends the same `requestId` (the function sends it once). An entry queued by an older build
+            // has none: its entry id is stable across replays, so it stands in.
+            var request = payload.request
+            if MaterialRequestEmailPayload.requestIdValue(request.requestId) == nil {
+                request.requestId = entry.entityId
+            }
             #if DEBUG
             if let seam = replayTestSeam {
-                try await seam.sendMaterialRequest(payload.request, entry.organizationId)
+                try await seam.sendMaterialRequest(request, entry.organizationId)
             } else {
-                try await firebaseBackend.sendMaterialRequest(payload.request, organizationId: entry.organizationId)
+                try await firebaseBackend.sendMaterialRequest(request, organizationId: entry.organizationId)
             }
             #else
-            try await firebaseBackend.sendMaterialRequest(payload.request, organizationId: entry.organizationId)
+            try await firebaseBackend.sendMaterialRequest(request, organizationId: entry.organizationId)
             #endif
             if let record = payload.sendRecord {
                 do {

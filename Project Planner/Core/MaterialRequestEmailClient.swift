@@ -41,6 +41,8 @@ struct MaterialRequestEmailResult: Equatable {
     /// CC addresses the function put on the messages. Empty when the deployed function ignored `ccCaller`.
     var cc: [String]
     var ccSupported: Bool
+    /// True when the function answered from an earlier send with the same `requestId` (nothing was sent again).
+    var deduped: Bool = false
 }
 
 enum MaterialRequestEmailError: LocalizedError, Equatable {
@@ -136,18 +138,33 @@ enum MaterialRequestEmailPayload {
         return data
     }
 
+    /// `requestId` as the function accepts it (8–128 letters, digits, `-`, `_`), or nil to leave it out.
+    static func requestIdValue(_ value: String?) -> String? {
+        let id = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard (8...128).contains(id.count),
+              id.unicodeScalars.allSatisfy({ ($0.isASCII && CharacterSet.alphanumerics.contains($0)) || $0 == "-" || $0 == "_" })
+        else { return nil }
+        return id
+    }
+
+    /// The request body. `requestId` (top level) makes the function send this request once: a replay with the same
+    /// id is answered from the first send (`deduped: true`), never emailed again.
     static func body(
         organizationId: String,
         request: MaterialOrderRequest,
         senderEmail: String,
         includesDeliveryRequired: Bool
     ) -> [String: Any] {
-        [
+        var body: [String: Any] = [
             "orgId": organizationId,
             "template": template,
             "to": recipientEmails(contacts: request.recipientContacts, senderEmail: senderEmail),
             "data": data(for: request, includesDeliveryRequired: includesDeliveryRequired),
         ]
+        if let requestId = requestIdValue(request.requestId) {
+            body["requestId"] = requestId
+        }
+        return body
     }
 
     static func functionURL(projectId: String) -> URL? {
@@ -196,7 +213,8 @@ enum MaterialRequestEmailPayload {
             messageIds: ids,
             failed: json["failed"] as? [String] ?? [],
             cc: cc,
-            ccSupported: json["ccSupported"] as? Bool ?? false
+            ccSupported: json["ccSupported"] as? Bool ?? false,
+            deduped: json["deduped"] as? Bool ?? false
         ))
     }
 
