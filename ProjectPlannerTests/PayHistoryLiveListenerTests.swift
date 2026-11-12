@@ -4,6 +4,7 @@ import XCTest
 /// RULEBOOK §1 `LIVE_COLLECTIONS` ("Pay history `operativeDayRateHistory` listens while open") and 1.26.0 / 1.27.0 §8
 /// `rateHistoryQueryPlan`: the listeners Edit User holds for one person's pay history
 /// (`FirebaseBackend.rateHistoryPersonListenQueries`), mirroring web `watchOperativeDayRateHistory`.
+@MainActor
 final class PayHistoryLiveListenerTests: XCTestCase {
     func testWholeCollectionWhilePrivatePayIsOffOrTheViewerSeesEveryPay() {
         let queries = FirebaseBackend.rateHistoryPersonListenQueries(plan: .all, userIds: ["U1"], operativeRowIds: ["ROW1"])
