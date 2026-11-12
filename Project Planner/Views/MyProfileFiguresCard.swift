@@ -42,6 +42,8 @@ struct MyProfileFiguresCard: View {
     @State private var bankHolidaysReady = false
     /// RULEBOOK 1.40.0 §4.4: the person's own manual adjustments (live while the card is shown).
     @StateObject private var adjustmentsModel = AnnualLeaveAdjustmentsModel()
+    /// RULEBOOK 1.40.0 (review r306 #2): the person's employment type from their own pay record.
+    @StateObject private var employmentModel = AnnualLeaveEmploymentModel()
 
     private var viewer: AppUser? {
         guard let me = userStore.currentUser else { return nil }
@@ -77,6 +79,10 @@ struct MyProfileFiguresCard: View {
 
     private func computeSummary() -> RulebookMyProfileSummary? {
         guard bankHolidaysReady, let viewer else { return nil }
+        // Review r306 #2 / #9: no figures until the pay record and the adjustments have loaded (a refused read shows none).
+        let ownerIds = RulebookPeople.ownerIds(for: viewer, users: userStore.organizationUsers)
+        let employment = employmentModel.employment(for: viewer, backend: firebaseBackend)
+        guard employment.ready, adjustmentsModel.isLoaded(for: ownerIds) else { return nil }
         let input = MyProfileSummaryInput.build(
             user: viewer,
             roster: userStore.organizationUsers,
@@ -86,7 +92,8 @@ struct MyProfileFiguresCard: View {
             tasks: taskStore.tasks,
             bookings: bookingStore.bookings,
             managerBookings: managerScheduleStore.managerSiteBookings,
-            leaveAdjustments: adjustmentsModel.rows(for: RulebookPeople.ownerIds(for: viewer, users: userStore.organizationUsers))
+            leaveAdjustments: adjustmentsModel.rows(for: ownerIds),
+            leaveEmployment: .some(employment.employment)
         )
         return CanonicalBusinessEngine.myProfileSummary(input)
     }
@@ -108,6 +115,7 @@ struct MyProfileFiguresCard: View {
             if let id = viewer?.id { adjustmentsModel.listen(backend: firebaseBackend, userIds: [id]) }
         }
         .onReceive(adjustmentsModel.objectWillChange) { _ in storeRevision &+= 1 }
+        .onReceive(employmentModel.objectWillChange) { _ in storeRevision &+= 1 }
         .onReceive(userStore.objectWillChange) { _ in storeRevision &+= 1 }
         .onReceive(operativeStore.objectWillChange) { _ in storeRevision &+= 1 }
         .onReceive(holidayStore.objectWillChange) { _ in storeRevision &+= 1 }

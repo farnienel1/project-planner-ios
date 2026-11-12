@@ -68,6 +68,8 @@ struct HolidayView: View {
     @State private var isManagingTeamLeave = false
     /// RULEBOOK 1.40.0 §4.4: manual adjustments of the signed-in person and their Team list (live while open).
     @StateObject private var adjustmentsModel = AnnualLeaveAdjustmentsModel()
+    /// RULEBOOK 1.40.0 (review r306 #2): each person's employment type from their pay record.
+    @StateObject private var employmentModel = AnnualLeaveEmploymentModel()
     /// Answers for the Team page kept while their inputs are unchanged (the calendar asks for every day cell).
     @State private var teamCache = HolidayTeamCache()
     /// A notification (`annualLeavePerson`) opens one person's page.
@@ -104,6 +106,10 @@ struct HolidayView: View {
 
     private var annualLeaveSummary: AnnualLeaveUsageSummary? {
         guard let u = holidayProfileUser else { return nil }
+        // Review r306 #2 / #9: no figure until the pay record and the adjustments have loaded.
+        let ownerIds = RulebookPeople.ownerIds(for: u, users: userStore.organizationUsers)
+        let employment = employmentModel.employment(for: u, backend: firebaseBackend)
+        guard employment.ready, adjustmentsModel.isLoaded(for: ownerIds) else { return nil }
         let oid = currentOperative?.id
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         return AnnualLeavePolicy.usageSummary(
@@ -121,9 +127,10 @@ struct HolidayView: View {
             yearAllowance: u.annualLeaveYearAllowance,
             yearAllowanceKey: u.annualLeaveYearAllowanceKey,
             employmentStartDayKey: u.employmentStartDate,
-            // RULEBOOK 1.40.0 §4.4: the allowance applies only on PAYE days; this year's adjustments on top.
-            employment: AnnualLeaveEmployment(u),
-            adjustments: adjustmentsModel.rows(for: RulebookPeople.ownerIds(for: u, users: userStore.organizationUsers))
+            // RULEBOOK 1.40.0 §4.4: the allowance applies only on PAYE days (the type from the pay record); this year's
+            // adjustments on top.
+            employment: employment.employment,
+            adjustments: adjustmentsModel.rows(for: ownerIds)
         )
     }
 
@@ -594,7 +601,15 @@ struct HolidayView: View {
 
     private var myLeavePage: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if let summary = annualLeaveSummary {
+            if let me = holidayProfileUser,
+               adjustmentsModel.failed(for: RulebookPeople.ownerIds(for: me, users: userStore.organizationUsers)) {
+                // Review r306 #9: a refused read is an error, never a balance without the adjustments.
+                Text(AnnualLeaveAdjustmentsModel.readError)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(AnnualLeavePalette.red)
+                    .accessibilityIdentifier("leave.adjustmentsError")
+            } else if let summary = annualLeaveSummary {
+                // The person's own balance: they may see their own employment type.
                 AnnualLeaveBalanceHero(summary: summary, pendingCaption: "Yours awaiting")
                 // RULEBOOK 1.40.0 §4.4: the person sees their adjustments (amount, reason, date), not who made them.
                 if let me = holidayProfileUser {
@@ -1214,6 +1229,10 @@ struct HolidayView: View {
 
     private func teamBalance(for person: AnnualLeavePerson) -> (remaining: Double?, allowance: Double, taken: Double, hasAllowance: Bool, used: Double)? {
         guard let user = teamUser(for: person) else { return nil }
+        // Review r306 #2 / #9: no figure until this person's pay record and adjustments have loaded.
+        let ownerIds = RulebookPeople.ownerIds(for: user, users: userStore.organizationUsers)
+        let employment = employmentModel.employment(for: user, backend: firebaseBackend)
+        guard employment.ready, adjustmentsModel.isLoaded(for: ownerIds), !adjustmentsModel.failed(for: ownerIds) else { return nil }
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let summary = AnnualLeavePolicy.usageSummary(
             bookings: holidayStore.myBookings(account: user, operatives: operativeStore.allOperatives, operativeId: person.operativeId),
@@ -1230,9 +1249,9 @@ struct HolidayView: View {
             yearAllowance: user.annualLeaveYearAllowance,
             yearAllowanceKey: user.annualLeaveYearAllowanceKey,
             employmentStartDayKey: user.employmentStartDate,
-            // RULEBOOK 1.40.0 §4.4: PAYE days only, with this year's adjustments.
-            employment: AnnualLeaveEmployment(user),
-            adjustments: adjustmentsModel.rows(for: RulebookPeople.ownerIds(for: user, users: userStore.organizationUsers))
+            // RULEBOOK 1.40.0 §4.4: PAYE days only (the type from the pay record), with this year's adjustments.
+            employment: employment.employment,
+            adjustments: adjustmentsModel.rows(for: ownerIds)
         )
         return (summary.remainingDays, summary.entitlementDays, summary.takenDays, summary.hasAllowance, summary.usedThisYear)
     }
@@ -1254,7 +1273,7 @@ struct HolidayView: View {
         let days = AnnualLeaveDateFormat.leaveDays(request)
         // RULEBOOK 1.40.0: from `annualLeaveBalance.remaining`, which already takes pending requests off — approving a
         // pending request leaves it unchanged; accepting a cancellation gives the days back.
-        let remaining = balance.remaining ?? (balance.allowance - balance.taken)
+        guard let remaining = balance.remaining else { return nil }
         let after = request.cancellationRequestedAt != nil ? remaining + days : remaining
         return "Remaining after: \(AnnualLeavePolicy.formatAllowanceDays(after)) of \(AnnualLeavePolicy.formatAllowanceDays(balance.allowance))"
     }

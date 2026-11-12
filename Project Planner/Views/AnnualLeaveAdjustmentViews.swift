@@ -18,6 +18,9 @@ struct AnnualLeaveAdjustmentsCard: View {
     /// True for admins and line managers (the history with who made each one).
     let showAuthor: Bool
     let hasAllowance: Bool
+    /// The organisation roster with names (`AnnualLeavePersonBuilder.teamCandidate`): the author is named from it by `createdBy`
+    /// (`annualLeaveAdjustmentAuthorName`), never a stored name (review r306 #6).
+    var roster: [[String: Any]] = []
 
     private var rows: [AnnualLeaveAdjustmentRecord] {
         adjustments.filter { $0.yearKey == yearKey }
@@ -30,7 +33,7 @@ struct AnnualLeaveAdjustmentsCard: View {
                     .font(.headline)
                     .foregroundStyle(AnnualLeavePalette.ink)
                 if !hasAllowance {
-                    Text("Kept, but not counted while there is no paid allowance (self-employed).")
+                    Text("Kept, but not counted while there is no paid allowance.")
                         .font(.footnote)
                         .foregroundStyle(AnnualLeavePalette.ink3)
                 }
@@ -63,8 +66,8 @@ struct AnnualLeaveAdjustmentsCard: View {
 
     private func caption(for row: AnnualLeaveAdjustmentRecord) -> String {
         let date = row.createdAtMs.map { Date(timeIntervalSince1970: $0 / 1000).formatted(date: .abbreviated, time: .omitted) } ?? "Saving…"
-        guard showAuthor, !row.createdByName.isEmpty else { return date }
-        return "\(date) · by \(row.createdByName)"
+        guard showAuthor else { return date }
+        return "\(date) · by \(CanonicalBusinessEngine.annualLeaveAdjustmentAuthorName(createdBy: row.createdBy, roster: roster))"
     }
 }
 

@@ -19,8 +19,8 @@ nonisolated struct AnnualLeaveAdjustmentRecord: Identifiable, Hashable, Sendable
     let reason: String
     /// The leave year it belongs to (the year's first day, `annualLeaveBalance(...).yearKey`).
     let yearKey: String
+    /// The writer's users id; screens show their roster name (`annualLeaveAdjustmentAuthorName`), never a stored name.
     let createdBy: String
-    let createdByName: String
     let createdAtMs: Double?
 
     /// The `{ days, yearKey }` row `annualLeaveBalance` reads.
@@ -97,7 +97,7 @@ extension CanonicalBusinessEngine {
         reason: String,
         yearKey: String,
         createdBy: String,
-        createdByName: String
+        allowedYearKeys: [String]
     ) -> [String: Any]? {
         let input: [String: Any] = [
             "userId": userId,
@@ -105,7 +105,7 @@ extension CanonicalBusinessEngine {
             "reason": reason,
             "yearKey": yearKey,
             "createdBy": createdBy,
-            "createdByName": createdByName,
+            "allowedYearKeys": allowedYearKeys,
         ]
         return callJSON("annualLeaveAdjustmentCreateFields", arguments: [input]) as? [String: Any]
     }
@@ -124,7 +124,6 @@ extension CanonicalBusinessEngine {
             reason: row["reason"] as? String ?? "",
             yearKey: yearKey,
             createdBy: row["createdBy"] as? String ?? "",
-            createdByName: row["createdByName"] as? String ?? "",
             createdAtMs: (row["createdAtMs"] as? NSNumber)?.doubleValue
         )
     }
@@ -146,20 +145,74 @@ extension CanonicalBusinessEngine {
         callJSON("canViewAnnualLeaveAdjustments", arguments: [viewer, subject, roster]) as? Bool ?? false
     }
 
-    /// `annualLeaveAdjustedNoticeText({ personName, actorName, days, reason })`: the inbox title and message.
+    /// `annualLeaveAdjustedNoticeText({ personName, actorName, days, reason })`: the inbox title and message (pushed),
+    /// and the reason as the row's inbox-only `detail` (never pushed, review r306 #10).
     nonisolated static func annualLeaveAdjustedNoticeText(
         personName: String,
         actorName: String,
         days: Double,
         reason: String
-    ) -> (title: String, message: String) {
+    ) -> (title: String, message: String, detail: String?) {
         let input: [String: Any] = ["personName": personName, "actorName": actorName, "days": days, "reason": reason]
         guard let row = callJSON("annualLeaveAdjustedNoticeText", arguments: [input]) as? [String: Any],
               let title = row["title"] as? String,
               let message = row["message"] as? String else {
-            return ("Annual leave adjusted", "\(actorName) adjusted \(personName)'s annual leave.")
+            return ("Annual leave adjusted", "\(actorName) adjusted \(personName)'s annual leave.", nil)
         }
-        return (title, message)
+        return (title, message, row["detail"] as? String)
+    }
+
+    /// `annualLeaveAdjustmentAuthorName(adjustment, roster)`: who made it, by `createdBy` on the roster ("Someone" when
+    /// not found or the script did not answer).
+    nonisolated static func annualLeaveAdjustmentAuthorName(createdBy: String, roster: [[String: Any]]) -> String {
+        callJSON("annualLeaveAdjustmentAuthorName", arguments: [["createdBy": createdBy], roster]) as? String ?? "Someone"
+    }
+
+    /// `annualLeaveEmploymentInput({ person, payProfile, privatePay, payProfileRead })`: the employment-type fields of
+    /// the balance from the person's pay record. `.some(nil)` means unreadable (count the whole year); nil when the
+    /// script did not answer.
+    nonisolated static func annualLeaveEmploymentInput(
+        person: [String: Any],
+        payProfileFields: [String: Any]?,
+        privatePay: Bool,
+        payProfileRead: Bool
+    ) -> AnnualLeaveEmployment?? {
+        var input: [String: Any] = ["person": person, "privatePay": privatePay, "payProfileRead": payProfileRead]
+        input["payProfile"] = payProfileFields.map { ["fields": $0] as Any } ?? NSNull()
+        let answer = callJSON("annualLeaveEmploymentInput", arguments: [input])
+        if answer is NSNull { return .some(nil) }
+        guard let row = answer as? [String: Any] else { return nil }
+        let effective = (row["employmentTypeEffectiveAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+            ?? (row["employmentTypeEffectiveAt"] as? String).flatMap(Self.leaveEmploymentInstant)
+        return .some(AnnualLeaveEmployment(
+            employmentType: row["employmentType"] as? String ?? "",
+            transitionFrom: row["employmentTypeTransitionFrom"] as? String,
+            effectiveAt: effective
+        ))
+    }
+
+    /// An ISO instant the script returned (with or without fractional seconds).
+    nonisolated private static func leaveEmploymentInstant(_ text: String) -> Date? {
+        let plain = ISO8601DateFormatter()
+        if let date = plain.date(from: text) { return date }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text)
+    }
+
+    /// `annualLeaveBalanceNotes(balance, { showsEmploymentType })`: the notes under a balance. They name the employment
+    /// type only when the viewer may see the person's pay (`canViewPersonPay`).
+    nonisolated static func annualLeaveBalanceNotes(
+        hasAllowance: Bool,
+        proRata: Bool,
+        notCountedTaken: Double,
+        showsEmploymentType: Bool
+    ) -> (proRata: String?, notCounted: String?, noAllowance: String?) {
+        let balance: [String: Any] = ["hasAllowance": hasAllowance, "proRata": proRata, "notCountedTaken": notCountedTaken]
+        guard let row = callJSON("annualLeaveBalanceNotes", arguments: [balance, ["showsEmploymentType": showsEmploymentType]]) as? [String: Any] else {
+            return (nil, nil, nil)
+        }
+        return (row["proRata"] as? String, row["notCounted"] as? String, row["noAllowance"] as? String)
     }
 }
 
@@ -237,6 +290,11 @@ nonisolated struct RulebookAnnualLeaveBalance: Hashable, Sendable {
     var allowanceBeforeAdjustments: Double
     /// May be below zero.
     var remaining: Double?
+    /// The figures screens show (review r306 #11): the rulebook's sums, never a subtraction in Swift.
+    var shownTaken: Double
+    var shownPending: Double
+    var notCountedTaken: Double
+    var notCountedPending: Double
 }
 
 extension CanonicalBusinessEngine {
@@ -310,7 +368,11 @@ extension CanonicalBusinessEngine {
                 allowancePending: number("allowancePending"),
                 adjustmentDays: number("adjustmentDays"),
                 allowanceBeforeAdjustments: number("allowanceBeforeAdjustments"),
-                remaining: optional("remaining")
+                remaining: optional("remaining"),
+                shownTaken: number("shownTaken"),
+                shownPending: number("shownPending"),
+                notCountedTaken: number("notCountedTaken"),
+                notCountedPending: number("notCountedPending")
             )
         }
     }

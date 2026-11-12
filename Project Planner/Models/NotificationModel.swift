@@ -99,6 +99,9 @@ struct AppNotification: Identifiable, Codable, Hashable {
     var type: NotificationType
     var title: String
     var message: String
+    /// RULEBOOK 1.40.0 §13 (review r306 #10): inbox-only text under the message, never pushed (e.g. the reason for an
+    /// annual-leave adjustment). Nil when the row has none.
+    var detail: String? = nil
     var userId: String? // Target user ID (nil means all users with permission)
     /// RULEBOOK 1.8.0 §13: `relatedId` as stored, any shape (a UUID, a day key, a Firebase uid, a job id).
     var relatedKey: String?
@@ -160,7 +163,7 @@ struct AppNotification: Identifiable, Codable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, organizationId, type, title, message, userId
+        case id, organizationId, type, title, message, detail, userId
         // Older caches encoded the UUID under `relatedId`; it decodes as its string.
         case relatedKey = "relatedId"
         case storedType, isRead, createdAt, requiresPermission, deepLinkUserId, deepLinkWeekStart, dayKey, catalogue

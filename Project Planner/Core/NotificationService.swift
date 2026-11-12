@@ -525,6 +525,7 @@ class NotificationService: ObservableObject {
         type: AppNotification.NotificationType,
         title: String,
         message: String,
+        detail: String? = nil,
         relatedId: UUID?,
         relatedKey: String? = nil,
         dedupeKey: String
@@ -540,7 +541,7 @@ class NotificationService: ObservableObject {
             roster: recipientRoster
         ) else { return }
         for recipientId in recipientIds {
-            let notification = AppNotification(
+            var notification = AppNotification(
                 id: syntheticNotificationId(from: "\(dedupeKey)|\(recipientId)"),
                 organizationId: organizationId,
                 type: type,
@@ -551,6 +552,7 @@ class NotificationService: ObservableObject {
                 relatedKey: relatedKey,
                 requiresPermission: nil
             )
+            notification.detail = detail
             await saveNotification(notification)
         }
     }
@@ -564,6 +566,8 @@ class NotificationService: ObservableObject {
             type: .annualLeaveAdjusted,
             title: text.title,
             message: text.message,
+            // Review r306 #10: the reason is the inbox row's detail, never in the pushed message.
+            detail: text.detail,
             relatedId: nil,
             relatedKey: personUserId,
             dedupeKey: "annualLeaveAdjusted|\(adjustmentId)"

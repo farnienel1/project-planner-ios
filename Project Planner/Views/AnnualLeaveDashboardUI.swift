@@ -336,6 +336,18 @@ struct AnnualLeaveDayFace: View {
 struct AnnualLeaveBalanceHero: View {
     let summary: AnnualLeaveUsageSummary
     var pendingCaption: String = "Yours awaiting approval"
+    /// RULEBOOK 1.40.0 (review r306 #2): the notes name the employment type only when the viewer may see the person's
+    /// pay (`canViewPersonPay`: the person, admins, an Operatives manager for an operative).
+    var showsEmploymentType: Bool = true
+
+    private var notes: (proRata: String?, notCounted: String?, noAllowance: String?) {
+        CanonicalBusinessEngine.annualLeaveBalanceNotes(
+            hasAllowance: summary.hasAllowance,
+            proRata: summary.proRata,
+            notCountedTaken: summary.notCountedTakenDays,
+            showsEmploymentType: showsEmploymentType
+        )
+    }
 
     private var remainingIsOver: Bool { summary.hasAllowance && (summary.remainingDays ?? 0) < -0.001 }
 
@@ -395,18 +407,9 @@ struct AnnualLeaveBalanceHero: View {
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.9))
             }
-            if summary.hasAllowance && summary.proRata {
-                Text("Pro rata: the allowance counts only from the start date or the day PAYE began.")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.9))
-            }
-            if summary.hasAllowance && summary.notCountedTakenDays > 0.001 {
-                Text("\(AnnualLeavePolicy.formatAllowanceDays(summary.notCountedTakenDays)) taken while self-employed does not come out of the allowance.")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.9))
-            }
-            if !summary.hasAllowance {
-                Text("No paid allowance: self-employed, or the allowance is switched off.")
+            // The note texts are the rulebook's (`annualLeaveBalanceNotes`).
+            ForEach([notes.proRata, notes.notCounted, notes.noAllowance].compactMap { $0 }, id: \.self) { note in
+                Text(note)
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.9))
             }

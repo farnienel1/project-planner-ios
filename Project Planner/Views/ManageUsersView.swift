@@ -1614,6 +1614,8 @@ struct EditUserView: View {
     @State private var baselineRemainingText = ""
     /// RULEBOOK 1.40.0 §4.4: this person's manual adjustments, for the remaining figure shown (read only).
     @StateObject private var leaveAdjustmentsModel = AnnualLeaveAdjustmentsModel()
+    /// RULEBOOK 1.40.0 (review r306 #2): the employment type from the person's pay record.
+    @StateObject private var leaveEmploymentModel = AnnualLeaveEmploymentModel()
     @State private var employmentTypeDraft: EmploymentType
     @State private var showingEmploymentTypeConfirmation = false
     @State private var employmentTypeConfirmationAccepted = false
@@ -1910,9 +1912,13 @@ struct EditUserView: View {
         return permissions.operativeMode || user.role == .operative || permissions.manager
     }
 
-    private func currentRemainingDays(for subject: AppUser) -> Double {
+    /// The remaining figure as the rulebook gives it, or nil until the pay record and the adjustments have loaded
+    /// (review r306 #2, #9).
+    private func remainingLeaveSummary(for subject: AppUser) -> AnnualLeaveUsageSummary? {
+        let employment = leaveEmploymentModel.employment(for: subject, backend: firebaseBackend)
+        guard employment.ready, leaveAdjustmentsModel.isLoaded(for: [subject.id]) else { return nil }
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
-        let summary = AnnualLeavePolicy.usageSummary(
+        return AnnualLeavePolicy.usageSummary(
             bookings: holidayStore.myBookings(account: subject, operatives: operativeStore.allOperatives),
             daysPerYear: subject.annualLeaveDaysPerYear,
             startMonth: subject.annualLeaveYearStartMonth,
@@ -1925,11 +1931,21 @@ struct EditUserView: View {
             yearAllowance: subject.annualLeaveYearAllowance,
             yearAllowanceKey: subject.annualLeaveYearAllowanceKey,
             employmentStartDayKey: subject.employmentStartDate,
-            // RULEBOOK 1.40.0 §4.4: PAYE days only, with this year's adjustments.
-            employment: AnnualLeaveEmployment(subject),
+            // RULEBOOK 1.40.0 §4.4: PAYE days only (the type from the pay record), with this year's adjustments.
+            employment: employment.employment,
             adjustments: leaveAdjustmentsModel.rows(for: [subject.id])
         )
-        return summary.remainingDays ?? 0
+    }
+
+    private func currentRemainingDays(for subject: AppUser) -> Double {
+        remainingLeaveSummary(for: subject)?.remainingDays ?? 0
+    }
+
+    /// The Edit User remaining line: the figure, "Counting leave…" until it is known, or the read error.
+    private func remainingLeaveLine(for subject: AppUser) -> String {
+        if leaveAdjustmentsModel.failed(for: [subject.id]) { return AnnualLeaveAdjustmentsModel.readError }
+        guard let summary = remainingLeaveSummary(for: subject) else { return "Counting leave…" }
+        return "\(AnnualLeavePolicy.formatAllowanceDays(summary.remainingDays ?? 0)) days"
     }
 
     private func parsedRemainingForSave() -> Double? {
@@ -2018,7 +2034,7 @@ struct EditUserView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Remaining this leave year")
                         .font(.subheadline.weight(.semibold))
-                    Text("\(AnnualLeavePolicy.formatAllowanceDays(currentRemainingDays(for: userStore.rosterRow(for: user.id) ?? user))) days")
+                    Text(remainingLeaveLine(for: userStore.rosterRow(for: user.id) ?? user))
                         .font(.body.weight(.semibold))
                         .monospacedDigit()
                         .accessibilityIdentifier("editUser.remainingLeave")

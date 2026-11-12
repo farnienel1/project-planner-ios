@@ -123,8 +123,8 @@ final class Rulebook1400AnnualLeaveTests: XCTestCase {
 
     func testAdjustmentsCountForTheirYearOnlyAndMayTakeRemainingBelowZero() throws {
         let adjustments = [
-            AnnualLeaveAdjustmentRecord(id: "A", userId: "TEST-OP-1", days: -30, reason: "TEST", yearKey: "2026-01-01", createdBy: "TEST-ADMIN-1", createdByName: "TEST Admin", createdAtMs: 1),
-            AnnualLeaveAdjustmentRecord(id: "B", userId: "TEST-OP-1", days: 10, reason: "TEST", yearKey: "2025-01-01", createdBy: "TEST-ADMIN-1", createdByName: "TEST Admin", createdAtMs: 2),
+            AnnualLeaveAdjustmentRecord(id: "A", userId: "TEST-OP-1", days: -30, reason: "TEST", yearKey: "2026-01-01", createdBy: "TEST-ADMIN-1", createdAtMs: 1),
+            AnnualLeaveAdjustmentRecord(id: "B", userId: "TEST-OP-1", days: 10, reason: "TEST", yearKey: "2025-01-01", createdBy: "TEST-ADMIN-1", createdAtMs: 2),
         ]
         let paye = try balance(employment: AnnualLeaveEmployment(employmentType: "paye"), adjustments: adjustments)
         XCTAssertEqual(paye.adjustmentDays, -30)
@@ -139,9 +139,17 @@ final class Rulebook1400AnnualLeaveTests: XCTestCase {
         XCTAssertNil(CanonicalBusinessEngine.annualLeaveAdjustmentValidationError(days: -1.5, reason: "TEST unpaid day"))
         let fields = try XCTUnwrap(CanonicalBusinessEngine.annualLeaveAdjustmentCreateFields(
             userId: "TEST-OP-1", days: 2, reason: " TEST long service ", yearKey: "2026-01-01",
-            createdBy: "TEST-ADMIN-1", createdByName: "TEST Admin"
+            createdBy: "TEST-ADMIN-1", allowedYearKeys: ["2026-01-01"]
         ))
         XCTAssertEqual(fields["reason"] as? String, "TEST long service")
+        // Review r306 #6: no stored author name; never for oneself; only the allowed (current) leave year.
+        XCTAssertNil(fields["createdByName"])
+        XCTAssertNil(CanonicalBusinessEngine.annualLeaveAdjustmentCreateFields(
+            userId: "TEST-OP-1", days: 2, reason: "TEST", yearKey: "2026-01-01", createdBy: "test-op-1", allowedYearKeys: ["2026-01-01"]
+        ))
+        XCTAssertNil(CanonicalBusinessEngine.annualLeaveAdjustmentCreateFields(
+            userId: "TEST-OP-1", days: 2, reason: "TEST", yearKey: "2027-01-01", createdBy: "TEST-ADMIN-1", allowedYearKeys: ["2026-01-01"]
+        ))
         XCTAssertEqual((fields["days"] as? NSNumber)?.doubleValue, 2)
         let read = try XCTUnwrap(CanonicalBusinessEngine.parseAnnualLeaveAdjustmentDocument(
             docId: "ADJ-1",
@@ -164,5 +172,64 @@ final class Rulebook1400AnnualLeaveTests: XCTestCase {
         XCTAssertTrue(CanonicalBusinessEngine.companyActivityNoticeTypes.contains("annual_leave_adjusted"))
         let text = CanonicalBusinessEngine.annualLeaveAdjustedNoticeText(personName: "TEST Olly", actorName: "TEST Mo", days: 2, reason: "TEST")
         XCTAssertEqual(text.title, "Annual leave adjusted")
+        // Review r306 #10: the reason is never in the pushed message; it is the inbox row's detail.
+        XCTAssertFalse(text.message.contains("TEST."), text.message)
+        XCTAssertEqual(text.message, "TEST Mo adjusted TEST Olly's annual leave by +2 days this leave year.")
+        XCTAssertEqual(text.detail, "Reason: TEST")
+        let row = try? XCTUnwrap(CanonicalBusinessEngine.notificationCreateFields(
+            organizationId: "TEST-ORG", type: "annual_leave_adjusted", title: text.title, message: text.message, detail: text.detail,
+            userId: "TEST-ADMIN-1", actorUserId: "TEST-ADMIN-2", relatedId: "TEST-OP-1", requiresPermission: nil,
+            deepLinkUserId: nil, deepLinkWeekStart: nil, dayKey: nil, catalogue: nil, createdAt: 0, storedExists: false
+        ))
+        XCTAssertEqual(row?["detail"] as? String, "Reason: TEST")
+        let parsed = FirebaseBackend.appNotification(documentId: "TEST-N", data: ["type": "annual_leave_adjusted", "message": "m", "detail": "Reason: TEST"], organizationId: "TEST-ORG")
+        XCTAssertEqual(parsed?.detail, "Reason: TEST")
+    }
+
+    // MARK: Review r306
+
+    func testEmploymentTypeComesFromThePayRecordAndAnUnreadableOneCountsTheWholeYear() throws {
+        let person: [String: Any] = ["employmentType": "self_employed"]
+        // privatePay off: the users document; a pay profile is ignored (it may be stale).
+        let off = try XCTUnwrap(CanonicalBusinessEngine.annualLeaveEmploymentInput(
+            person: person, payProfileFields: ["employmentType": "paye"], privatePay: false, payProfileRead: true
+        ))
+        XCTAssertEqual(off?.employmentType, "self_employed")
+        // privatePay on: the pay profile wins.
+        let on = try XCTUnwrap(CanonicalBusinessEngine.annualLeaveEmploymentInput(
+            person: [:], payProfileFields: ["employmentType": "PAYE"], privatePay: true, payProfileRead: true
+        ))
+        XCTAssertEqual(on?.employmentType, "PAYE")
+        // Unreadable: nil — the balance then counts the whole year (never "no allowance").
+        let refused = try XCTUnwrap(CanonicalBusinessEngine.annualLeaveEmploymentInput(
+            person: [:], payProfileFields: nil, privatePay: true, payProfileRead: false
+        ))
+        XCTAssertNil(refused)
+        let whole = try balance(employment: nil, adjustments: [])
+        XCTAssertTrue(whole.hasAllowance)
+        // "PAYE" in capitals reads as PAYE (review r306 #4).
+        let capitals = try balance(employment: AnnualLeaveEmployment(employmentType: "PAYE"), adjustments: [])
+        XCTAssertTrue(capitals.hasAllowance)
+    }
+
+    func testBalanceNotesNameTheTypeOnlyForPayViewersAndTheBalanceCarriesTheShownSums() throws {
+        let named = CanonicalBusinessEngine.annualLeaveBalanceNotes(hasAllowance: true, proRata: true, notCountedTaken: 2, showsEmploymentType: true)
+        let neutral = CanonicalBusinessEngine.annualLeaveBalanceNotes(hasAllowance: true, proRata: true, notCountedTaken: 2, showsEmploymentType: false)
+        XCTAssertTrue(named.notCounted?.contains("self-employed") == true)
+        XCTAssertFalse(neutral.notCounted?.contains("self-employed") ?? true)
+        XCTAssertFalse(neutral.proRata?.contains("PAYE") ?? true)
+        let selfEmployed = try balance(employment: AnnualLeaveEmployment(employmentType: "self_employed"), adjustments: [])
+        XCTAssertEqual(selfEmployed.shownTaken, selfEmployed.taken)
+        XCTAssertEqual(selfEmployed.notCountedTaken, 0)
+    }
+
+    func testTheAdjustmentAuthorIsNamedFromTheRoster() {
+        let rows = roster.map(AnnualLeavePersonBuilder.teamCandidate)
+        let first = roster[0]
+        XCTAssertEqual(
+            CanonicalBusinessEngine.annualLeaveAdjustmentAuthorName(createdBy: first.id.lowercased(), roster: rows),
+            "\(first.firstName) \(first.surname)".trimmingCharacters(in: .whitespaces)
+        )
+        XCTAssertEqual(CanonicalBusinessEngine.annualLeaveAdjustmentAuthorName(createdBy: "TEST-GONE", roster: rows), "Someone")
     }
 }

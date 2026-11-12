@@ -197,10 +197,13 @@ enum MyProfileSummaryInput {
         bookings: [Booking],
         managerBookings: [ManagerSiteBooking],
         leaveAdjustments: [AnnualLeaveAdjustmentRecord] = [],
+        /// RULEBOOK 1.40.0 (review r306 #2): the employment type from the pay record (`AnnualLeaveEmploymentModel`);
+        /// `.some(nil)` when unreadable (the whole year counts). Omitted: the users document's fields.
+        leaveEmployment: AnnualLeaveEmployment?? = nil,
         now: Date = Date()
     ) -> [String: Any] {
         func optional(_ value: String?) -> Any { value.map { $0 as Any } ?? NSNull() }
-        return [
+        var input: [String: Any] = [
             // Floored to the minute: every figure depends only on the organisation day, and a whole-minute instant
             // keeps the memo key (the exact input) stable across redraws instead of changing every millisecond.
             "nowMs": nowMsFlooredToMinute(now),
@@ -248,5 +251,7 @@ enum MyProfileSummaryInput {
             },
             "policyState": CanonicalBusinessEngine.openOrganizationPayrollPolicyState ?? [:],
         ]
+        if let leaveEmployment { input["leaveEmployment"] = leaveEmployment.map { $0.json as Any } ?? NSNull() }
+        return input
     }
 }

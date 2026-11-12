@@ -127,6 +127,15 @@ struct NotificationRowView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .lineLimit(isMessageExpanded ? nil : 6)
 
+                // RULEBOOK 1.40.0 §13: inbox-only detail (never pushed), e.g. the reason for a leave adjustment.
+                if let detail = notification.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 if messageExceedsPreview {
                     Button(isMessageExpanded ? "Show less" : "Show more") {
                         withAnimation(.easeInOut(duration: 0.2)) {

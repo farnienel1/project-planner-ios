@@ -146,14 +146,14 @@ nonisolated enum AnnualLeavePolicy {
             entitlementDays: balance.hasAllowance ? balance.allowanceBeforeAdjustments + balance.adjustmentDays : 0,
             carryOverDays: balance.carriedForward,
             // With an allowance, the leave that comes out of it (PAYE days only); otherwise every day.
-            takenDays: balance.hasAllowance ? balance.allowanceTaken : balance.taken,
-            pendingDays: balance.hasAllowance ? balance.allowancePending : balance.pending,
+            takenDays: balance.shownTaken,
+            pendingDays: balance.shownPending,
             remainingDays: balance.remaining,
             hasAllowance: balance.hasAllowance,
             usedThisYear: balance.usedThisYear,
             yearKey: balance.yearKey,
             adjustmentDays: balance.adjustmentDays,
-            notCountedTakenDays: balance.hasAllowance ? max(0, balance.taken - balance.allowanceTaken) : 0,
+            notCountedTakenDays: balance.notCountedTaken,
             proRata: balance.proRata
         )
     }

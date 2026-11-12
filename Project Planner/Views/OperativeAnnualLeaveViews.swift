@@ -563,6 +563,8 @@ struct OperativeAnnualLeaveCalendarView: View {
     @State private var bookingPendingRemoval: HolidayBooking?
     /// RULEBOOK 1.40.0 §4.4: this person's manual adjustments (live while the page is open).
     @StateObject private var adjustmentsModel = AnnualLeaveAdjustmentsModel()
+    /// RULEBOOK 1.40.0 (review r306 #2): the employment type from the person's pay record.
+    @StateObject private var employmentModel = AnnualLeaveEmploymentModel()
 
     /// Leave days are organisation business days (§1).
     private var calendar: Calendar { OrganizationRulebookContext.calendar }
@@ -630,8 +632,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             subject: subject,
             days: days,
             reason: reason,
-            yearKey: yearKey,
-            actorName: actorName
+            yearKey: yearKey
         )
         await notificationService.notifyAnnualLeaveAdjusted(
             personUserId: subject.id,
@@ -663,8 +664,20 @@ struct OperativeAnnualLeaveCalendarView: View {
                 headerCard
 
                 VStack(alignment: .leading, spacing: 18) {
-                    if let summary = annualLeaveSummary {
-                        AnnualLeaveBalanceHero(summary: summary, pendingCaption: "Awaiting approval")
+                    if canViewAdjustments, let subject = leaveProfileUser,
+                       adjustmentsModel.failed(for: [subject.id]) {
+                        // Review r306 #9: a refused read is an error, never a balance without the adjustments.
+                        Text(AnnualLeaveAdjustmentsModel.readError)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(AnnualLeavePalette.red)
+                            .padding(.horizontal, 16)
+                            .accessibilityIdentifier("operativeAnnualLeave.adjustmentsError")
+                    } else if let summary = annualLeaveSummary {
+                        AnnualLeaveBalanceHero(
+                            summary: summary,
+                            pendingCaption: "Awaiting approval",
+                            showsEmploymentType: leaveProfileUser.map { userStore.canViewPay(of: $0, context: .profile) } ?? true
+                        )
                         if canAdjustLeave && summary.hasAllowance {
                             AnnualLeaveAdjustmentForm(
                                 personName: person.displayName,
@@ -680,7 +693,8 @@ struct OperativeAnnualLeaveCalendarView: View {
                                 adjustments: personAdjustments,
                                 yearKey: summary.yearKey,
                                 showAuthor: true,
-                                hasAllowance: summary.hasAllowance
+                                hasAllowance: summary.hasAllowance,
+                                roster: userStore.organizationUsers.map(AnnualLeavePersonBuilder.teamCandidate)
                             )
                         }
                     }
@@ -1017,6 +1031,14 @@ struct OperativeAnnualLeaveCalendarView: View {
     private var annualLeaveSummary: AnnualLeaveUsageSummary? {
         let defaults = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let user = leaveProfileUser
+        // Review r306 #2 / #9: no figure until the pay record and (when this viewer reads them) the adjustments load.
+        var employment: AnnualLeaveEmployment? = AnnualLeaveEmployment(employmentType: "self_employed")
+        if let user {
+            let answer = employmentModel.employment(for: user, backend: firebaseBackend)
+            guard answer.ready else { return nil }
+            employment = answer.employment
+            if canViewAdjustments, !adjustmentsModel.isLoaded(for: [user.id]) { return nil }
+        }
         return AnnualLeavePolicy.usageSummary(
             bookings: personHolidayBookings,
             daysPerYear: user?.annualLeaveDaysPerYear ?? defaults.daysPerYear,
@@ -1033,7 +1055,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             yearAllowanceKey: user?.annualLeaveYearAllowanceKey,
             employmentStartDayKey: user?.employmentStartDate,
             // RULEBOOK 1.40.0 §4.4: PAYE days only (a catalogue row with no account is self-employed), plus adjustments.
-            employment: user.map { AnnualLeaveEmployment($0) } ?? AnnualLeaveEmployment(employmentType: "self_employed"),
+            employment: employment,
             adjustments: personAdjustments
         )
     }
