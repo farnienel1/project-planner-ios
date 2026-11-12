@@ -82,6 +82,19 @@ class ProjectStore: ObservableObject {
     /// The clock for `confirmedLiveJobs` (tests move it).
     var now: () -> Date = { Date() }
 
+    /// RULEBOOK 1.38.0 §27 self-heal (review fix): a data-check reload of one collection forgets the jobs of that
+    /// collection a server read confirmed recently, so a job deleted on another device within
+    /// `confirmedJobKeepSeconds` leaves on the reloaded listener's snapshot instead of being kept as "confirmed".
+    func forgetConfirmedJobs(smallWorks: Bool) {
+        confirmedLiveJobs = Self.confirmedJobsKept(confirmedLiveJobs, forgetting: smallWorks ? .smallWorks : .projects)
+    }
+
+    /// `confirmed` without the entries of `kind` (keys are `collection|id`, `jobKey`). Pure, for tests.
+    static func confirmedJobsKept(_ confirmed: [String: Date], forgetting kind: JobKind) -> [String: Date] {
+        let prefix = "\(kind.rawValue)|"
+        return confirmed.filter { !$0.key.hasPrefix(prefix) }
+    }
+
     private static func jobKey(_ job: Project) -> String {
         "\(job.sourceCollection.rawValue)|\(job.id.uuidString)"
     }
@@ -637,8 +650,32 @@ class ProjectStore: ObservableObject {
         return merged
     }
 
-    /// One collection's slice of `projects` (projects or small works) from a listener snapshot.
-    func applyLiveWorkSlice(_ incoming: [Project], smallWorks: Bool, fromCache: Bool, rowCount: Int) {
+    /// The result of one listener snapshot for one collection's slice (`liveWorkSliceResult`).
+    struct LiveWorkSliceResult {
+        /// The store's job list after the snapshot; nil when the slice did not change.
+        var projects: [Project]?
+        /// The last read of the `smallWorks` collection (`ProjectWorksMerge.smallWorksList`); nil when unchanged.
+        var smallWorksDocuments: [Project]?
+        /// 1.37.1: jobs a server snapshot dropped that the store reads again from the server (`confirmJobs`).
+        var toConfirm: [Project] = []
+    }
+
+    /// One collection's slice of `projects` (projects or small works) from a listener snapshot — the pure part of
+    /// `applyLiveWorkSlice`, so the data-parity fixture (RULEBOOK 1.38.0 §27, `DataParityFixtureTests`) runs this
+    /// exact code. Nil when the snapshot must not change anything (`LiveSnapshotMerge.apply`). `keepDropped` says
+    /// whether a job a server snapshot dropped stays because a server read confirmed it recently (1.37.1); the rest
+    /// of the dropped jobs are returned in `toConfirm` when `wholeCollection` is true.
+    static func liveWorkSliceResult(
+        projects: [Project],
+        smallWorksDocuments: [Project],
+        incoming: [Project],
+        smallWorks: Bool,
+        fromCache: Bool,
+        rowCount: Int,
+        pendingCreateIds: Set<UUID>,
+        wholeCollection: Bool = false,
+        keepDropped: (Project) -> Bool = { _ in false }
+    ) -> LiveWorkSliceResult? {
         let existingSlice = projects.filter { ($0.isSmallWorksDocument) == smallWorks }
         guard var nextSlice = LiveSnapshotMerge.apply(
             existing: existingSlice,
@@ -646,40 +683,65 @@ class ProjectStore: ObservableObject {
             fromCache: fromCache,
             rowCount: rowCount,
             collection: smallWorks ? "smallWorks" : "projects"
-        ) else { return }
-        if !fromCache { liveServerSnapshots[smallWorks, default: 0] += 1 }
+        ) else { return nil }
+        var result = LiveWorkSliceResult()
         if !fromCache {
             // A job a server read confirmed recently stays (no flicker, no read); any other dropped job is read again.
-            var toConfirm: [Project] = []
-            let wholeCollection = readsWholeJobCollection(smallWorks: smallWorks)
             for job in ProjectWorksMerge.removedRows(existingSlice: existingSlice, nextSlice: nextSlice)
                 where !pendingCreateIds.contains(job.id) {
-                let key = Self.jobKey(job)
-                if wholeCollection, !locallyDeletedJobKeys.contains(key),
-                   let confirmedAt = confirmedLiveJobs[key],
-                   now().timeIntervalSince(confirmedAt) < Self.confirmedJobKeepSeconds {
-                    NSLog(
-                        "JOB_SNAPSHOT_DROPPED_CONFIRMED_DOCUMENT collection=%@ id=%@ kept (confirmed %.0f s ago)",
-                        smallWorks ? "smallWorks" : "projects",
-                        job.documentId,
-                        now().timeIntervalSince(confirmedAt)
-                    )
+                if wholeCollection, keepDropped(job) {
                     nextSlice.append(job)
                 } else {
-                    toConfirm.append(job)
+                    result.toConfirm.append(job)
                 }
             }
-            if !toConfirm.isEmpty, wholeCollection { confirmJobs(toConfirm, smallWorks: smallWorks) }
+            if !wholeCollection { result.toConfirm = [] }
         }
-        if smallWorks, smallWorksDocuments != nextSlice { smallWorksDocuments = nextSlice }
+        if smallWorks, smallWorksDocuments != nextSlice { result.smallWorksDocuments = nextSlice }
         let incomingIds = Set(nextSlice.map(\.id))
         nextSlice += existingSlice.filter { pendingCreateIds.contains($0.id) && !incomingIds.contains($0.id) }
-        guard nextSlice != existingSlice else { return }
-        // 1.37.1: beside a new projects slice, the small works documents a projects twin had hidden come back.
-        let others = smallWorks
-            ? projects.filter { !$0.isSmallWorksDocument }
-            : ProjectWorksMerge.smallWorksBesideProjects(store: projects, smallWorksDocuments: smallWorksDocuments)
-        projects = ProjectWorksMerge.uniqueWorks(others + nextSlice)
+        if nextSlice != existingSlice {
+            // 1.37.1: beside a new projects slice, the small works documents a projects twin had hidden come back.
+            let others = smallWorks
+                ? projects.filter { !$0.isSmallWorksDocument }
+                : ProjectWorksMerge.smallWorksBesideProjects(store: projects, smallWorksDocuments: result.smallWorksDocuments ?? smallWorksDocuments)
+            result.projects = ProjectWorksMerge.uniqueWorks(others + nextSlice)
+        }
+        return result
+    }
+
+    /// One collection's slice of `projects` (projects or small works) from a listener snapshot.
+    func applyLiveWorkSlice(_ incoming: [Project], smallWorks: Bool, fromCache: Bool, rowCount: Int) {
+        let wholeCollection = fromCache ? false : readsWholeJobCollection(smallWorks: smallWorks)
+        let nowDate = now()
+        guard let result = Self.liveWorkSliceResult(
+            projects: projects,
+            smallWorksDocuments: smallWorksDocuments,
+            incoming: incoming,
+            smallWorks: smallWorks,
+            fromCache: fromCache,
+            rowCount: rowCount,
+            pendingCreateIds: pendingCreateIds,
+            wholeCollection: wholeCollection,
+            keepDropped: { job in
+                let key = Self.jobKey(job)
+                guard !self.locallyDeletedJobKeys.contains(key),
+                      let confirmedAt = self.confirmedLiveJobs[key],
+                      nowDate.timeIntervalSince(confirmedAt) < Self.confirmedJobKeepSeconds else { return false }
+                NSLog(
+                    "JOB_SNAPSHOT_DROPPED_CONFIRMED_DOCUMENT collection=%@ id=%@ kept (confirmed %.0f s ago)",
+                    smallWorks ? "smallWorks" : "projects",
+                    job.documentId,
+                    nowDate.timeIntervalSince(confirmedAt)
+                )
+                return true
+            }
+        ) else { return }
+        if !fromCache { liveServerSnapshots[smallWorks, default: 0] += 1 }
+        if !result.toConfirm.isEmpty { confirmJobs(result.toConfirm, smallWorks: smallWorks) }
+        if let documents = result.smallWorksDocuments { smallWorksDocuments = documents }
+        guard let next = result.projects else { return }
+        projects = next
         if !fromCache { lastWorkLoadUnreliable = false }
         persistLiveSnapshotLocally()
     }
