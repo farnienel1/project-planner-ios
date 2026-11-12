@@ -76,10 +76,14 @@ struct PayrollHoursResult: Equatable {
         }
     }
 
-    /// The paid hours of the multiplied segments (outside the window, or every hour at N×), as the pay rule prices
-    /// them: Sunday 07:30–14:00 every hour ×2 → 13; a weekday 06:30–16:30 → 3 (2h × 1.5).
-    var paidOvertimeHours: Double {
-        segments.filter { $0.kind != .standardWindow }.reduce(0) { $0 + $1.paidHours }
+    /// This result as `scheduleCellHours` reads it (`CanonicalBusinessEngine.scheduleCellHours`, RULEBOOK 1.37.0 §21):
+    /// the total and each segment's kind and paid hours. A mapping, not a calculation — the script sums the hours at a
+    /// multiplier (the Swift copy `paidOvertimeHours` was removed).
+    var scheduleCellHoursInput: RulebookScheduleCellHoursInput {
+        RulebookScheduleCellHoursInput(
+            totalPaidHours: totalPaidHours,
+            segments: segments.map { RulebookScheduleCellHoursInput.Segment(kind: $0.kind.scriptName, paidHours: $0.paidHours) }
+        )
     }
 
     /// RULEBOOK 1.20.2 §6/§10 `bookingHoursLabel`: the booking's hours as the pay rule gives them for its day (never

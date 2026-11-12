@@ -62,6 +62,66 @@ private struct ListensWhileOpenModifier: ViewModifier {
     }
 }
 
+/// Several listeners on one `LIVE_COLLECTIONS` row while the view is on screen (one per query; keys `keyPrefix.<id>`),
+/// for a screen whose read plan is more than one query (pay history under `rateHistoryQueryPlan` `people`). Each server
+/// snapshot hands that query's rows to `onRows`; listeners no longer in `queries` are removed, all of them when the view
+/// goes, and `OrgLiveListeners` drops them on an organisation switch (re-attached here for the new one).
+private struct ListensWhileOpenQueriesModifier: ViewModifier {
+    let collectionId: String
+    let keyPrefix: String
+    let firebaseBackend: FirebaseBackend
+    let queries: [(key: String, query: (DocumentReference) -> Query)]
+    let onRows: @MainActor (_ queryKey: String, _ rows: LiveDocumentRows) -> Void
+
+    @State private var attachedKeys: Set<String> = []
+
+    private var organizationId: String { firebaseBackend.currentOrganization?.firestoreDocumentId ?? "" }
+    private var plannedKeys: [String] { queries.map(\.key) }
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { attach() }
+            .onDisappear { detachAll() }
+            .onChange(of: organizationId) { _, _ in attach() }
+            .onChange(of: plannedKeys) { _, _ in attach() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                attach()
+            }
+    }
+
+    private func listenerKey(_ queryKey: String) -> String { "\(keyPrefix).\(queryKey)" }
+
+    private func attach() {
+        assert(IOSLiveListenerCoverage.listeners[collectionId] != nil, "\(collectionId) is not in IOSLiveListenerCoverage")
+        let wanted = Set(plannedKeys)
+        for stale in attachedKeys.subtracting(wanted) { firebaseBackend.stopLiveListener(key: listenerKey(stale)) }
+        let orgId = organizationId
+        guard !orgId.isEmpty else {
+            attachedKeys = []
+            return
+        }
+        for entry in queries {
+            let queryKey = entry.key
+            let onRows = onRows
+            firebaseBackend.listenOrganizationQuery(
+                key: listenerKey(queryKey),
+                organizationId: orgId,
+                query: entry.query
+            ) { rows, fromCache in
+                // Only server data: a cache snapshot is what the screen already loaded.
+                guard !fromCache else { return }
+                onRows(queryKey, rows)
+            }
+        }
+        attachedKeys = wanted
+    }
+
+    private func detachAll() {
+        for key in attachedKeys.union(plannedKeys) { firebaseBackend.stopLiveListener(key: listenerKey(key)) }
+        attachedKeys = []
+    }
+}
+
 extension View {
     /// Runs `action` each time the app returns to the foreground while this view is on screen.
     func reloadsOnForeground(_ action: @escaping @MainActor () async -> Void) -> some View {
@@ -86,6 +146,25 @@ extension View {
             firebaseBackend: firebaseBackend,
             query: query,
             action: action
+        ))
+    }
+
+    /// While this view is on screen it holds one listener per entry of `queries` (keys `keyPrefix.<entry key>`) under the
+    /// open organisation, for the `LIVE_COLLECTIONS` row `collectionId`; each server snapshot hands that entry's rows to
+    /// `onRows`. Entries that leave `queries` are removed; all are removed when the view disappears.
+    func listensWhileOpen(
+        _ collectionId: String,
+        keyPrefix: String,
+        firebaseBackend: FirebaseBackend,
+        queries: [(key: String, query: (DocumentReference) -> Query)],
+        onRows: @escaping @MainActor (_ queryKey: String, _ rows: LiveDocumentRows) -> Void
+    ) -> some View {
+        modifier(ListensWhileOpenQueriesModifier(
+            collectionId: collectionId,
+            keyPrefix: keyPrefix,
+            firebaseBackend: firebaseBackend,
+            queries: queries,
+            onRows: onRows
         ))
     }
 }
