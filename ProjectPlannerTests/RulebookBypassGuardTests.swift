@@ -97,7 +97,6 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/OrganisationWorkingHoursView.swift": 2,
             "Views/ProjectDetailView.swift": 6,
             "Views/ProjectsView.swift": 1,
-            "Views/SendToWholesalerView.swift": 1,
             "Views/WarningsDetailView.swift": 3,
             "Views/WholesalersRevampViews.swift": 1,
             "Views/WorksDashboardCard.swift": 2,
