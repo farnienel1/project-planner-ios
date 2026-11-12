@@ -226,7 +226,13 @@ final class Rulebook1200Tests: XCTestCase {
         let sundayBooking = LogicFixtures.booking(on: sun, slot: .customHours, start: "07:30", end: "14:00")
         XCTAssertEqual(saturdayBooking.payrollHoursResult(policy: policy).paidHoursLabel, "8h")
         XCTAssertEqual(sundayBooking.payrollHoursResult(policy: policy).paidHoursLabel, "13h (6.5h × 2)")
-        XCTAssertEqual(sundayBooking.payrollHoursResult(policy: policy).paidOvertimeHours, 13, accuracy: 0.001)
+        // The tile hours come from the rulebook's `scheduleCellHours` (the Swift `paidOvertimeHours` copy is gone).
+        let sundayCell = try XCTUnwrap(CanonicalBusinessEngine.scheduleCellHours(sundayBooking.payrollHoursResult(policy: policy).scheduleCellHoursInput))
+        XCTAssertEqual(sundayCell.overtimeHours, 13, accuracy: 0.001)
+        XCTAssertEqual(sundayCell.paidHours, 13, accuracy: 0.001)
+        let saturdayCell = try XCTUnwrap(CanonicalBusinessEngine.scheduleCellHours(saturdayBooking.payrollHoursResult(policy: policy).scheduleCellHoursInput))
+        XCTAssertEqual(saturdayCell.overtimeHours, 0, accuracy: 0.001)
+        XCTAssertEqual(saturdayCell.paidHours, 8, accuracy: 0.001)
     }
 
     func testWeekdayOvertimeLabelAndQuarterHoursAreNotRounded() throws {
