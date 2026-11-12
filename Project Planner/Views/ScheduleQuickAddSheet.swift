@@ -13,6 +13,8 @@ struct ScheduleQuickAddSheet: View {
     let policy: OrgPayrollTimePolicy
     let clocks: ScheduleQuickAddClocks?
     let existingPaidHours: Double
+    /// RULEBOOK 1.39.0 `bookingShortfall`: the person's existing bookings that day (`ScheduleWeekGrid.coverageRows`).
+    let existingCoverageRows: [[String: Any]]
     let showsNotes: Bool
     let onSave: (ScheduleQuickAddDraft) async -> String?
     let onCancel: () -> Void
@@ -33,6 +35,7 @@ struct ScheduleQuickAddSheet: View {
         policy: OrgPayrollTimePolicy,
         clocks: ScheduleQuickAddClocks?,
         existingPaidHours: Double,
+        existingCoverageRows: [[String: Any]] = [],
         showsNotes: Bool,
         onSave: @escaping (ScheduleQuickAddDraft) async -> String?,
         onCancel: @escaping () -> Void,
@@ -44,6 +47,7 @@ struct ScheduleQuickAddSheet: View {
         self.policy = policy
         self.clocks = clocks
         self.existingPaidHours = existingPaidHours
+        self.existingCoverageRows = existingCoverageRows
         self.showsNotes = showsNotes
         self.onSave = onSave
         self.onCancel = onCancel
@@ -222,10 +226,20 @@ struct ScheduleQuickAddSheet: View {
             breakIncluded: true
         )
         let total = existingPaidHours + paid
-        let missing = max(0, max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0) - total)
+        // RULEBOOK 1.39.0 `bookingShortfall` (review 11 Nov): how much of the day's working time the existing bookings
+        // and this one leave unbooked, by coverage (lunch window excluded) — never paid hours; none on a day paid every
+        // hour at a multiplier. Replaces "Missing to standard day" (the weekday paid day).
+        let shortfall = CanonicalBusinessEngine.bookingShortfall(
+            on: day, bookings: existingCoverageRows + [CanonicalBusinessEngine.shortfallRow(probe)], fallbackPolicy: policy
+        )
+        // RULEBOOK 1.39.0 `bookingHoursExplanation`: the weekday rule and the steps behind the figures.
+        let weekdaySections = CanonicalBusinessEngine.weekdayExplanationSections(
+            on: [day], start: range.start, end: range.end, isBreakRemoved: false, fallbackPolicy: policy
+        )
         // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a Saturday or Sunday shows the day as the pay rule prices it in
         // place of the standard / overtime lines (memoised by input in the wrapper). Saved with the break kept.
-        let weekendLines = CanonicalBusinessEngine.collapsedBreakdownLines(
+        // 1.39.0: each row with the words that explain it (`collapsedBreakdownSections`).
+        let weekendLines = CanonicalBusinessEngine.collapsedBreakdownSections(
             CanonicalBusinessEngine.weekendBookingBreakdown(
                 on: [day],
                 start: range.start,
@@ -249,20 +263,16 @@ struct ScheduleQuickAddSheet: View {
                     if detail.showsBreakLine {
                         breakdownLine("Break", value: "−\(ScheduleCoverageFormat.hours(detail.breakDeductionHours))h", color: ProjectWorksRevampColors.requiredPillFg)
                     }
+                    BookingBreakdownSectionsView(sections: weekdaySections)
                 } else {
-                    ForEach(weekendLines, id: \.self) { line in
-                        Text(line)
-                            .font(.system(size: 12, weight: .semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(ProjectWorksRevampColors.ink)
-                            .accessibilityIdentifier("booking.weekendBreakdownRow")
-                    }
+                    BookingBreakdownSectionsView(sections: weekendLines)
                 }
                 breakdownLine("Existing booked", value: "\(ScheduleCoverageFormat.hours(existingPaidHours))h", color: ProjectWorksRevampColors.muted)
                 breakdownLine("New booking", value: "\(ScheduleCoverageFormat.hours(paid))h", color: ProjectWorksRevampColors.activeGreen)
                 breakdownLine("Total booked", value: "\(ScheduleCoverageFormat.hours(total))h", color: ProjectWorksRevampColors.ink)
-                if missing > 0.05 {
-                    breakdownLine("Missing to standard day", value: "\(ScheduleCoverageFormat.hours(missing))h", color: ProjectWorksRevampColors.upcomingAmber)
+                if let shortfall {
+                    breakdownLine(shortfall.label, value: shortfall.value, color: ProjectWorksRevampColors.upcomingAmber)
+                        .accessibilityIdentifier("booking.shortfall")
                 }
             }
             .padding(12)

@@ -213,6 +213,13 @@ var ProjectPlannerCanonical = (() => {
     MATERIAL_WHATSAPP_ITEM_LIMIT: () => MATERIAL_WHATSAPP_ITEM_LIMIT,
     MATERIAL_WORKFLOW_STATUSES: () => MATERIAL_WORKFLOW_STATUSES,
     MIN_HALF_DAY_MINUTES: () => MIN_HALF_DAY_MINUTES,
+    MY_SCHEDULE_CLASH_APPROVED_MESSAGE: () => MY_SCHEDULE_CLASH_APPROVED_MESSAGE,
+    MY_SCHEDULE_CLASH_APPROVED_TITLE: () => MY_SCHEDULE_CLASH_APPROVED_TITLE,
+    MY_SCHEDULE_CLASH_ASK_MANAGER: () => MY_SCHEDULE_CLASH_ASK_MANAGER,
+    MY_SCHEDULE_CLASH_DISMISSED: () => MY_SCHEDULE_CLASH_DISMISSED,
+    MY_SCHEDULE_CLASH_NOT_IN_PERIOD: () => MY_SCHEDULE_CLASH_NOT_IN_PERIOD,
+    MY_SCHEDULE_CLASH_OPEN_WARNINGS: () => MY_SCHEDULE_CLASH_OPEN_WARNINGS,
+    MY_SCHEDULE_CLASH_TITLE: () => MY_SCHEDULE_CLASH_TITLE,
     MY_WORKS_PICKS_COLLECTION: () => MY_WORKS_PICKS_COLLECTION,
     MY_WORKS_PICKS_MAX: () => MY_WORKS_PICKS_MAX,
     NOTIFICATION_CATALOG: () => NOTIFICATION_CATALOG,
@@ -518,8 +525,11 @@ var ProjectPlannerCanonical = (() => {
     bankHolidayRegionsForCountry: () => bankHolidayRegionsForCountry,
     billingAccessFields: () => billingAccessFields,
     bookableJobs: () => bookableJobs,
+    bookedWithOvertimeText: () => bookedWithOvertimeText,
     bookedWorkedHours: () => bookedWorkedHours,
     bookingBelongsToOrganization: () => bookingBelongsToOrganization,
+    bookingBreakDeductionText: () => bookingBreakDeductionText,
+    bookingBreakText: () => bookingBreakText,
     bookingClock: () => bookingClock,
     bookingCreatedRecipients: () => bookingCreatedRecipients,
     bookingDateMs: () => bookingDateMs,
@@ -529,7 +539,10 @@ var ProjectPlannerCanonical = (() => {
     bookingDeleteSignedTimesheetWarning: () => bookingDeleteSignedTimesheetWarning,
     bookingHealthRows: () => bookingHealthRows,
     bookingHoursChangedRecipients: () => bookingHoursChangedRecipients,
+    bookingHoursCountText: () => bookingHoursCountText,
+    bookingHoursExplanation: () => bookingHoursExplanation,
     bookingHoursLabel: () => bookingHoursLabel,
+    bookingHoursTiles: () => bookingHoursTiles,
     bookingIdsForAccount: () => bookingIdsForAccount,
     bookingIdsForPerson: () => bookingIdsForPerson,
     bookingJobCollectionFields: () => bookingJobCollectionFields,
@@ -545,6 +558,7 @@ var ProjectPlannerCanonical = (() => {
     bookingReplayRefusedIsFinal: () => bookingReplayRefusedIsFinal,
     bookingRequestClashIds: () => bookingRequestClashIds,
     bookingRequestIdentity: () => bookingRequestIdentity,
+    bookingShortfall: () => bookingShortfall,
     bookingStandardDayOn: () => bookingStandardDayOn,
     bookingTombstonePath: () => bookingTombstonePath,
     bookingTombstoneWriteFields: () => bookingTombstoneWriteFields,
@@ -910,6 +924,7 @@ var ProjectPlannerCanonical = (() => {
     multipliedHoursText: () => multipliedHoursText,
     myProfileBankHolidayRange: () => myProfileBankHolidayRange,
     myProfileSummary: () => myProfileSummary,
+    myScheduleClashMarkers: () => myScheduleClashMarkers,
     myWorksDefaultIds: () => myWorksDefaultIds,
     myWorksEmptyActionLabel: () => myWorksEmptyActionLabel,
     myWorksEmptyTitle: () => myWorksEmptyTitle,
@@ -970,6 +985,7 @@ var ProjectPlannerCanonical = (() => {
     offlineDeleteRefusalDecision: () => offlineDeleteRefusalDecision,
     offlineDeleteReplayDecision: () => offlineDeleteReplayDecision,
     offlineLastUpdatedLabel: () => offlineLastUpdatedLabel,
+    onSiteHoursText: () => onSiteHoursText,
     openVariationCount: () => openVariationCount,
     operativeClashGroups: () => operativeClashGroups,
     operativeJobIds: () => operativeJobIds,
@@ -1023,6 +1039,7 @@ var ProjectPlannerCanonical = (() => {
     overtimeForBooking: () => overtimeForBooking,
     overtimeGenerateReady: () => overtimeGenerateReady,
     overtimeHubAccess: () => overtimeHubAccess,
+    overtimeIncludedText: () => overtimeIncludedText,
     overtimeLineBaselineChoice: () => overtimeLineBaselineChoice,
     overtimeLineChoice: () => overtimeLineChoice,
     overtimeLineHours: () => overtimeLineHours,
@@ -1064,6 +1081,7 @@ var ProjectPlannerCanonical = (() => {
     overtimeStrikeOutcome: () => overtimeStrikeOutcome,
     overtimeSubmitLines: () => overtimeSubmitLines,
     overtimeSubmitReady: () => overtimeSubmitReady,
+    overtimeTotalText: () => overtimeTotalText,
     overtimeUserSubjects: () => overtimeUserSubjects,
     paidHoursForNamedSlot: () => paidHoursForNamedSlot,
     parseAnnualLeaveDefaults: () => parseAnnualLeaveDefaults,
@@ -1301,6 +1319,7 @@ var ProjectPlannerCanonical = (() => {
     rulebookStamp: () => rulebookStamp,
     rulebookVersionLabel: () => rulebookVersionLabel,
     sameNamePersonContactLabel: () => sameNamePersonContactLabel,
+    saveHoursLabel: () => saveHoursLabel,
     scheduleCellHours: () => scheduleCellHours,
     scheduleCellKind: () => scheduleCellKind,
     scheduleOptionsWriteFields: () => scheduleOptionsWriteFields,
@@ -3159,18 +3178,18 @@ var ProjectPlannerCanonical = (() => {
     const FNV_OFFSET = BigInt("14695981039346656037");
     const FNV_PRIME = BigInt("1099511628211");
     let h1 = FNV_OFFSET;
-    let h2 = FNV_PRIME;
+    let h22 = FNV_PRIME;
     const bytes = utf8Bytes(trimmed6);
     for (const byte of bytes) {
       h1 = (h1 ^ BigInt(byte)) & MASK64;
       h1 = h1 * FNV_PRIME & MASK64;
-      h2 = (h2 ^ BigInt(byte)) & MASK64;
-      h2 = h2 * FNV_OFFSET & MASK64;
+      h22 = (h22 ^ BigInt(byte)) & MASK64;
+      h22 = h22 * FNV_OFFSET & MASK64;
     }
     const out = new Array(16).fill(0);
     for (let index = 0; index < 8; index += 1) {
       out[index] = Number(h1 >> BigInt(8 * index) & BigInt(255));
-      out[index + 8] = Number(h2 >> BigInt(8 * index) & BigInt(255));
+      out[index + 8] = Number(h22 >> BigInt(8 * index) & BigInt(255));
     }
     out[6] = out[6] & 15 | 80;
     out[8] = out[8] & 63 | 128;
@@ -4726,10 +4745,10 @@ var ProjectPlannerCanonical = (() => {
   }
   function hoursMinutesText(totalMinutes) {
     const minutes = Math.max(0, Math.round(totalMinutes));
-    const h = Math.floor(minutes / 60);
+    const h3 = Math.floor(minutes / 60);
     const m = minutes % 60;
-    if (h === 0) return `${m}m`;
-    return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, "0")}m`;
+    if (h3 === 0) return `${m}m`;
+    return m === 0 ? `${h3}h` : `${h3}h${String(m).padStart(2, "0")}m`;
   }
   function weekdayPaidDayPreview(policy) {
     const day = standardDayWindow(policy);
@@ -4738,8 +4757,8 @@ var ProjectPlannerCanonical = (() => {
     const breakPaid = policy.breakPaid === true;
     const paidHours = derivedWeekdayPaidHours(policy);
     const range = `${formatClockMinutes(day.start)}\u2013${formatClockMinutes(day.end)}`;
-    const dayText = hoursMinutesText(dayMinutes);
-    const line = breakMinutes <= 0 ? `${range} = ${dayText}` : breakPaid ? `${range} = ${dayText}, ${breakMinutes} min break paid = ${dayText}` : `${range} = ${dayText} \u2212 ${breakMinutes} min unpaid break = ${hoursMinutesText(paidHours * 60)}`;
+    const dayText2 = hoursMinutesText(dayMinutes);
+    const line = breakMinutes <= 0 ? `${range} = ${dayText2}` : breakPaid ? `${range} = ${dayText2}, ${breakMinutes} min break paid = ${dayText2}` : `${range} = ${dayText2} \u2212 ${breakMinutes} min unpaid break = ${hoursMinutesText(paidHours * 60)}`;
     return { start: formatClockMinutes(day.start), end: formatClockMinutes(day.end), dayMinutes, breakMinutes, breakPaid, paidHours, line };
   }
   function payrollPolicyToFirestore(policy) {
@@ -4839,14 +4858,14 @@ var ProjectPlannerCanonical = (() => {
   function clockMinutesOf(value) {
     const text34 = coverageClock(value);
     if (!text34) return null;
-    const [h, m] = text34.split(":").map(Number);
-    return h * 60 + m;
+    const [h3, m] = text34.split(":").map(Number);
+    return h3 * 60 + m;
   }
   function coverageClock(value) {
     const text34 = typeof value === "string" ? value.trim() : "";
     if (!COVERAGE_CLOCK_RE.test(text34)) return null;
-    const [h, m] = text34.split(":").map(Number);
-    return h >= 0 && h < 24 && m >= 0 && m < 60 ? `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}` : null;
+    const [h3, m] = text34.split(":").map(Number);
+    return h3 >= 0 && h3 < 24 && m >= 0 && m < 60 ? `${String(h3).padStart(2, "0")}:${String(m).padStart(2, "0")}` : null;
   }
   function parseWeekendCoverage(value, includeWeekends) {
     const raw = asSettingsRecord(value) ?? {};
@@ -10981,8 +11000,8 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/rulebookStamp.ts
   function rulebookStamp() {
     return {
-      version: true ? "1.38.0" : "",
-      sha256: true ? "d6d2d6e8c4836d644ef97825dfdca8a919bea5d1c7f5ca69fafcae3bf6e4828a" : ""
+      version: true ? "1.39.0" : "",
+      sha256: true ? "ff316930fe06e1fd5f289aa61d6533879389037877f3564fa83234967c1f0c33" : ""
     };
   }
   function rulebookVersionLabel(version) {
@@ -15523,6 +15542,214 @@ var ProjectPlannerCanonical = (() => {
     return input.viewerIsAdmin === true && input.dataCheckPanelEnabled === true;
   }
 
+  // lib/canonical/bookingHoursExplanation.ts
+  var WEEKDAY_NAMES = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  function round(hours) {
+    return Math.round((Number(hours) || 0) * 100) / 100;
+  }
+  function h(hours) {
+    return `${round(hours)}h`;
+  }
+  function times(multiplier) {
+    return `${round(multiplier)}`;
+  }
+  function isPolicyState(value) {
+    return Boolean(value && typeof value === "object" && "current" in value && "scheduled" in value);
+  }
+  function dayPolicyOf(policy, dayKey) {
+    return isPolicyState(policy) ? payrollTimePolicyForDayFromState(policy, dayKey) : policy;
+  }
+  function validDayKey(dayKey) {
+    const key5 = String(dayKey ?? "").trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(key5) ? key5 : null;
+  }
+  function clockSpanHours(row2) {
+    const start = parseClockMinutes(row2.clockStart ?? null);
+    const end = parseClockMinutes(row2.clockEnd ?? null);
+    if (start == null || end == null) return null;
+    const minutes = end > start ? end - start : end + 24 * 60 - start;
+    return minutes > 0 ? minutes / 60 : null;
+  }
+  function rangeOf(row2) {
+    return row2.clockStart && row2.clockEnd ? `${row2.clockStart}\u2013${row2.clockEnd}` : null;
+  }
+  function breakSuffix(policy, dayKey, zone3) {
+    const dayBreak = payrollBreakOnDay(policy, dayKey, zone3);
+    if (!dayBreak || !(dayBreak.minutes > 0)) return "";
+    const window = `${formatClockMinutes(dayBreak.start)}\u2013${formatClockMinutes(dayBreak.end)}`;
+    return unpaidBreakAppliesOnDay(policy, dayKey, zone3) ? `, unpaid break ${window} (${dayBreak.minutes} min)` : `, paid break ${window} (${dayBreak.minutes} min)`;
+  }
+  function weekdayBreakText(policy, dayKey, zone3) {
+    const dayBreak = payrollBreakOnDay(policy, dayKey, zone3);
+    if (!dayBreak || !(dayBreak.minutes > 0)) return "";
+    const window = `${formatClockMinutes(dayBreak.start)}\u2013${formatClockMinutes(dayBreak.end)}`;
+    return unpaidBreakAppliesOnDay(policy, dayKey, zone3) ? ` \u2212 ${dayBreak.minutes} min unpaid break (${window})` : `, ${dayBreak.minutes} min break paid (${window})`;
+  }
+  function dayRule(policy, dayKey, zone3) {
+    const iso = isoWeekdayOfDayKey(dayKey, zone3);
+    const label = WEEKDAY_NAMES[iso] || dayKey;
+    const rate = payrollOutsideMultiplier({}, iso, policy);
+    const weekend = weekendRuleForIsoWeekday(iso, policy);
+    const brk = weekend ? breakSuffix(policy, dayKey, zone3) : "";
+    if (weekend) {
+      const window = weekend.allHoursAtMultiplierMode ? null : weekendFullDayWindow(policy, weekend);
+      if (!window) return { kind: "weekendAllHours", rule: `${label} every hour at ${times(rate)}\xD7${brk}`, fullDayHours: null, windowHours: null };
+      const countsAs2 = Number(weekend.countsAsStandardHours ?? policy.standardPaidHours) || 0;
+      return {
+        kind: "weekendWindow",
+        rule: `${label} full day: ${formatClockMinutes(window.start)}\u2013${formatClockMinutes(window.end)} counts as ${h(countsAs2)}, hours outside it at ${times(rate)}\xD7${brk}`,
+        fullDayHours: round(countsAs2),
+        windowHours: (window.end - window.start) / 60
+      };
+    }
+    const paidDay = Number(weekdayPaidHours(policy)) || 0;
+    const start = parseClockMinutes(policy.standardDayStart);
+    const end = parseClockMinutes(policy.standardDayEnd);
+    const span = start != null && end != null && end > start ? `${formatClockMinutes(start)}\u2013${formatClockMinutes(end)}` : "the working day";
+    return {
+      kind: "weekday",
+      rule: `${label} full day: ${span}${weekdayBreakText(policy, dayKey, zone3)} = ${h(paidDay)}, hours outside it at ${times(rate)}\xD7`,
+      fullDayHours: round(paidDay),
+      windowHours: start != null && end != null && end > start ? (end - start) / 60 : null
+    };
+  }
+  function bookingHoursExplanation(policy, dayKey, booking, timeZone) {
+    const key5 = validDayKey(dayKey);
+    if (!policy || !key5 || !booking) return null;
+    const zone3 = zoneOrLondon(timeZone);
+    const startMinutes = parseClockMinutes(booking.workStartTime ?? null);
+    const endMinutes = parseClockMinutes(booking.workEndTime ?? null);
+    const slot = String(booking.timeSlot ?? "").trim() || "CUSTOM_HOURS";
+    const custom = /custom/i.test(slot);
+    if (custom && (startMinutes == null || endMinutes == null || startMinutes === endMinutes)) return null;
+    const dayPolicy = dayPolicyOf(policy, key5);
+    const paid = payrollHoursResult({
+      booking: {
+        timeSlot: slot,
+        workStartTime: startMinutes == null ? booking.workStartTime : formatClockMinutes(startMinutes),
+        workEndTime: endMinutes == null ? booking.workEndTime : formatClockMinutes(endMinutes),
+        isBreakRemoved: booking.isBreakRemoved === true,
+        otMultiplierOverride: booking.otMultiplierOverride ?? null
+      },
+      dayKey: key5,
+      policy: dayPolicy,
+      timeZone: zone3
+    });
+    const iso = isoWeekdayOfDayKey(key5, zone3);
+    const label = WEEKDAY_NAMES[iso] || key5;
+    const ruleOfDay = dayRule(dayPolicy, key5, zone3);
+    const { kind, fullDayHours, windowHours } = ruleOfDay;
+    const own = Number(booking.otMultiplierOverride);
+    const orgRate = payrollOutsideMultiplier({}, isoWeekdayOfDayKey(key5, zone3), dayPolicy);
+    const rule = Number.isFinite(own) && own > 0 && Math.abs(own - orgRate) > 1e-4 ? `${ruleOfDay.rule}; this booking's own overtime rate is ${times(own)}\xD7` : ruleOfDay.rule;
+    const total = round(paid.totalPaidHours);
+    const steps = [];
+    let parts2 = 0;
+    let breaks = 0;
+    const segments = [...paid.segments].sort((a, b) => {
+      const sa = parseClockMinutes(a.clockStart ?? null);
+      const sb = parseClockMinutes(b.clockStart ?? null);
+      return sa == null || sb == null ? 0 : sa - sb;
+    });
+    if (total <= 1e-3 && segments.every((row2) => !(row2.paidHours > 1e-3))) {
+      const range = startMinutes != null && endMinutes != null ? `${formatClockMinutes(startMinutes)}\u2013${formatClockMinutes(endMinutes)}` : label;
+      const insideBreak = unpaidBreakAppliesOnDay(dayPolicy, key5, zone3) && booking.isBreakRemoved !== true;
+      steps.push(insideBreak ? `${range} is inside the unpaid break = 0h` : `${range} = 0h`);
+      return { dayKey: key5, weekdayLabel: label, kind, rule, steps, summary: steps[0], totalPaidHours: 0, fullDayHours };
+    }
+    const dayBreak = payrollBreakOnDay(dayPolicy, key5, zone3);
+    const unpaidApplies = unpaidBreakAppliesOnDay(dayPolicy, key5, zone3);
+    const breakNote = (row2, brk) => {
+      if (brk > 0) return `less ${Math.round(brk * 60)} min unpaid break`;
+      const start = parseClockMinutes(row2.clockStart ?? null);
+      const end = parseClockMinutes(row2.clockEnd ?? null);
+      if (!dayBreak || !(dayBreak.minutes > 0) || start == null || end == null) return "";
+      const covers = Math.min(end > start ? end : end + 24 * 60, dayBreak.end) > Math.max(start, dayBreak.start);
+      if (!covers) return "";
+      if (!unpaidApplies) return `${dayBreak.minutes} min paid break, not deducted`;
+      return booking.isBreakRemoved === true ? "no unpaid break on this booking" : "";
+    };
+    const summaryParts = [];
+    let multipliedBreak = false;
+    for (const row2 of segments) {
+      const brk = round(row2.unpaidBreakHours ?? 0);
+      const range = rangeOf(row2);
+      const prefix = parts2 > 0 ? "+ " : "";
+      if (row2.kind === "standardWindow") {
+        const clock3 = clockSpanHours(row2) ?? row2.workedHours + (row2.unpaidBreakHours ?? 0);
+        const note = breakNote(row2, brk);
+        if (kind === "weekendWindow") {
+          const credited = row2.baseHours + (row2.unpaidBreakHours ?? 0);
+          const full = fullDayHours != null && Math.abs(round(credited) - fullDayHours) < 1e-3;
+          if (full) {
+            const why = brk > 0 ? `full day ${h(credited)}, ${note}` : note ? `full day, ${note}` : "full day";
+            steps.push(`${prefix}${range ?? label} = ${h(row2.baseHours)} (${why})`);
+            summaryParts.push(`${h(row2.baseHours)} (${why})`);
+          } else if (windowHours && fullDayHours != null && range) {
+            const proRata = `${h(fullDayHours)} \xD7 ${round(clock3)} \xF7 ${round(windowHours)} = ${h(credited)}`;
+            const tail = brk > 0 ? `, ${note} = ${h(row2.baseHours)}` : note ? ` (${note})` : "";
+            steps.push(`${prefix}Booked ${range} = ${h(clock3)} of the ${h(windowHours)} window \u2192 ${proRata}${tail}`);
+            summaryParts.push(`${proRata}${tail} (part of the ${h(windowHours)} window)`);
+          } else {
+            steps.push(`${prefix}${range ?? label} = ${h(row2.baseHours)}${note ? ` (${note})` : ""}`);
+            summaryParts.push(`${h(row2.baseHours)}${note ? ` (${note})` : ""}`);
+          }
+        } else {
+          const why = note ? `day, ${note}` : "day";
+          steps.push(`${prefix}${range ?? label} = ${h(row2.baseHours)} (${why})`);
+          summaryParts.push(`${h(row2.baseHours)} (${why})`);
+        }
+        parts2 += 1;
+      } else {
+        const clock3 = clockSpanHours(row2) ?? row2.baseHours + (row2.multiplier > 0 ? (row2.unpaidBreakHours ?? 0) / row2.multiplier : 0);
+        const multiplied = clock3 * row2.multiplier;
+        steps.push(`${prefix}${range ?? label} = ${h(clock3)} \xD7 ${times(row2.multiplier)} = ${h(multiplied)}`);
+        if (brk > 0) {
+          steps.push(`\u2212 ${h(brk)} unpaid break`);
+          multipliedBreak = true;
+        }
+        summaryParts.push(`${h(clock3)} \xD7 ${times(row2.multiplier)} = ${h(multiplied)}${brk > 0 ? ` \u2212 ${h(brk)} unpaid break` : ""}`);
+        parts2 += 1;
+      }
+    }
+    if (parts2 > 1 || multipliedBreak) steps.push(`\u2192 ${h(total)}`);
+    const whole = startMinutes != null && endMinutes != null ? `${formatClockMinutes(startMinutes)}\u2013${formatClockMinutes(endMinutes)}` : label;
+    const summary = `${whole} = ${summaryParts.join(" + ")}${parts2 > 1 || multipliedBreak ? ` \u2192 ${h(total)}` : ""}`;
+    return { dayKey: key5, weekdayLabel: label, kind, rule, steps, summary, totalPaidHours: total, fullDayHours };
+  }
+  function bookingShortfall(policy, dayKey, bookings, timeZone) {
+    const key5 = validDayKey(dayKey);
+    if (!policy || !key5 || !Array.isArray(bookings)) return null;
+    const zone3 = zoneOrLondon(timeZone);
+    const dayPolicy = dayPolicyOf(policy, key5);
+    const iso = isoWeekdayOfDayKey(key5, zone3);
+    const label = WEEKDAY_NAMES[iso] || key5;
+    const rows3 = bookings.filter(Boolean).map((booking) => ({
+      timeSlot: booking.timeSlot ?? "CUSTOM_HOURS",
+      workStartTime: booking.workStartTime ?? null,
+      workEndTime: booking.workEndTime ?? null
+    }));
+    const weekend = weekendRuleForIsoWeekday(iso, dayPolicy);
+    let window;
+    let coverage;
+    if (weekend) {
+      if (weekend.allHoursAtMultiplierMode) return null;
+      window = weekendFullDayWindow(dayPolicy, weekend);
+      if (!window) return null;
+      const lunch = payrollBreakOnDay(dayPolicy, key5, zone3);
+      coverage = windowCoverage(window, dayPolicy, rows3, lunch && lunch.end > lunch.start ? { start: lunch.start, end: lunch.end } : null);
+    } else {
+      const start = parseClockMinutes(dayPolicy.standardDayStart);
+      const end = parseClockMinutes(dayPolicy.standardDayEnd);
+      window = start != null && end != null && end > start ? { start, end } : null;
+      coverage = standardDayCoverage(dayPolicy, rows3);
+    }
+    const missing = round(coverage.missingHours);
+    if (!(missing >= 0.05)) return null;
+    const span = window ? ` (${formatClockMinutes(window.start)}\u2013${formatClockMinutes(window.end)})` : "";
+    return { label: `Short of a full ${label}${span}`, fullDayHours: round(coverage.requiredHours), missingHours: missing, value: h(missing) };
+  }
+
   // lib/canonical/bookingSlots.ts
   var WEEKDAY_TIME_SLOTS = ["FULL DAY", "CUSTOM"];
   var WEEKEND_TIME_SLOTS = ["CUSTOM"];
@@ -15595,7 +15822,7 @@ var ProjectPlannerCanonical = (() => {
     if (!body) return null;
     return `${iso === 6 ? "Saturday" : "Sunday"}${body}`;
   }
-  function isPolicyState(value) {
+  function isPolicyState2(value) {
     return Boolean(value && typeof value === "object" && "current" in value && "scheduled" in value);
   }
   function weekendBookingNotes(policy, dayKeys, timeZone) {
@@ -15609,7 +15836,7 @@ var ProjectPlannerCanonical = (() => {
     for (const key5 of keys) {
       const iso = isoWeekdayOf(key5, timeZone);
       if (iso !== 6 && iso !== 7) continue;
-      const dayPolicy = isPolicyState(policy) ? payrollTimePolicyForDayFromState(policy, key5) : policy;
+      const dayPolicy = isPolicyState2(policy) ? payrollTimePolicyForDayFromState(policy, key5) : policy;
       const body = weekendNoteBody(dayPolicy, iso);
       if (body && !bodies[iso].includes(body)) bodies[iso].push(body);
     }
@@ -15623,7 +15850,7 @@ var ProjectPlannerCanonical = (() => {
       new Set((dayKeys || []).map((key5) => String(key5 || "").trim()).filter((key5) => /^\d{4}-\d{2}-\d{2}$/.test(key5)))
     ).sort();
     if (keys.length === 0) return null;
-    const policyOn = (key5) => !policy ? null : isPolicyState(policy) ? payrollTimePolicyForDayFromState(policy, key5) : policy;
+    const policyOn = (key5) => !policy ? null : isPolicyState2(policy) ? payrollTimePolicyForDayFromState(policy, key5) : policy;
     const standardDay = (key5) => {
       const day = halfDayWindows(policyOn(key5)).day;
       return { start: formatClockMinutes(day.start), end: formatClockMinutes(day.end) };
@@ -15641,7 +15868,7 @@ var ProjectPlannerCanonical = (() => {
     }
     return { ...standardDay(ordered[0]), kind: "weekend" };
   }
-  var WEEKDAY_NAMES = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  var WEEKDAY_NAMES2 = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
   function roundHours(hours) {
     return Math.round(hours * 100) / 100;
   }
@@ -15656,7 +15883,7 @@ var ProjectPlannerCanonical = (() => {
       new Set((dayKeys || []).map((key5) => String(key5 || "").trim()).filter((key5) => /^\d{4}-\d{2}-\d{2}$/.test(key5)))
     ).sort();
     return keys.map((dayKey) => {
-      const dayPolicy = isPolicyState(policy) ? payrollTimePolicyForDayFromState(policy, dayKey) : policy;
+      const dayPolicy = isPolicyState2(policy) ? payrollTimePolicyForDayFromState(policy, dayKey) : policy;
       const iso = isoWeekdayOf(dayKey, timeZone);
       const paid = payrollHoursResult({
         booking: { timeSlot: "CUSTOM_HOURS", workStartTime: startText, workEndTime: endText, isBreakRemoved: isBreakRemoved === true },
@@ -15677,7 +15904,7 @@ var ProjectPlannerCanonical = (() => {
       const breakInStandard = roundHours(Math.max(0, paid.unpaidBreakHours - outside.outsideBreakHours));
       const credit = weekend ? Number(weekend.countsAsStandardHours ?? dayPolicy.standardPaidHours) : NaN;
       const fullDay = windowDay && standardHours > 0 && Math.abs(standardHours - roundHours(credit)) < 1e-3;
-      const label = WEEKDAY_NAMES[iso] || dayKey;
+      const label = WEEKDAY_NAMES2[iso] || dayKey;
       let line = `${label} ${startText}\u2013${endText} = `;
       if (unpaidBreakHours > 0) {
         const parts2 = [];
@@ -15719,6 +15946,12 @@ var ProjectPlannerCanonical = (() => {
         lines.push({ kind: "outside", label: "Outside hours", value: `${hoursText(overtimeHours)} \xD7 ${multiplier}` });
       }
       lines.push({ kind: "total", label: "Total paid hours", value: hoursText(total) });
+      const explained = bookingHoursExplanation(
+        dayPolicy,
+        dayKey,
+        { timeSlot: "CUSTOM_HOURS", workStartTime: startText, workEndTime: endText, isBreakRemoved: isBreakRemoved === true },
+        timeZone
+      );
       return {
         dayKey,
         weekdayLabel: label,
@@ -15732,7 +15965,8 @@ var ProjectPlannerCanonical = (() => {
         paidHoursEquivalent: total,
         unpaidBreakHours,
         line,
-        lines
+        lines,
+        explanation: { rule: explained?.rule ?? "", steps: explained?.steps ?? [] }
       };
     });
   }
@@ -15829,6 +16063,223 @@ var ProjectPlannerCanonical = (() => {
       return { hours: total, label: `${hoursText(total)} (${parts2})` };
     }
     return { hours: total, label: hoursText(total) };
+  }
+
+  // lib/canonical/bookingHoursText.ts
+  function round2(hours) {
+    return Math.round((Number(hours) || 0) * 100) / 100;
+  }
+  function num(hours) {
+    return `${round2(hours)}`;
+  }
+  function h2(hours) {
+    return `${round2(hours)}h`;
+  }
+  function multiplierOf(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+  function overtimeTotalText(input) {
+    const clock3 = Math.max(0, Number(input?.clockHours) || 0);
+    if (!(round2(clock3) > 0)) return "";
+    const n = multiplierOf(input?.multiplier);
+    const brk = Math.max(0, Number(input?.breakHours) || 0);
+    const total = h2(Math.max(0, clock3 * n - brk));
+    return round2(brk) > 0 ? `${h2(clock3)} OT \xD7 ${round2(n)} \u2212 ${h2(brk)} break = ${total}` : `${h2(clock3)} OT \xD7 ${round2(n)} = ${total}`;
+  }
+  function overtimeIncludedText(input) {
+    const text34 = overtimeTotalText(input);
+    return text34 ? `incl. ${text34}` : "";
+  }
+  function bookedWithOvertimeText(input) {
+    const booked = `${h2(Math.max(0, Number(input?.bookedHours) || 0))} booked`;
+    const clock3 = Math.max(0, Number(input?.clockHours) || 0);
+    if (!(round2(clock3) > 0)) return booked;
+    if (input?.multiplier == null) return `${booked} (incl. ${h2(clock3)} OT)`;
+    return `${booked} (incl. ${h2(clock3)} OT \xD7 ${round2(multiplierOf(input.multiplier))})`;
+  }
+  function bookingHoursCountText(hours) {
+    const value = round2(Math.max(0, Number(hours) || 0));
+    return `${value} ${value === 1 ? "hour" : "hours"}`;
+  }
+  function onSiteHoursText(input) {
+    const onSite = Number(input?.onSiteHours);
+    return Number.isFinite(onSite) && onSite > 0 ? `${bookingHoursCountText(input.hours)} \xB7 ${h2(onSite)} on site` : bookingHoursCountText(input?.hours);
+  }
+  function saveHoursLabel(hours) {
+    return `Save \xB7 ${bookingHoursCountText(hours)}`;
+  }
+  function isPolicyState3(value) {
+    return Boolean(value && typeof value === "object" && "current" in value && "scheduled" in value);
+  }
+  function dayPolicyOf2(policy, dayKey) {
+    return isPolicyState3(policy) ? payrollTimePolicyForDayFromState(policy, dayKey) : policy;
+  }
+  function bookingBreakText(policy, dayKey, timeZone) {
+    const key5 = String(dayKey ?? "").trim();
+    if (!policy || !/^\d{4}-\d{2}-\d{2}$/.test(key5)) return null;
+    const zone3 = zoneOrLondon(timeZone);
+    const dayPolicy = dayPolicyOf2(policy, key5);
+    const dayBreak = payrollBreakOnDay(dayPolicy, key5, zone3);
+    if (!dayBreak || !(dayBreak.minutes > 0)) return null;
+    const window = `${formatClockMinutes(dayBreak.start)}\u2013${formatClockMinutes(dayBreak.end)}`;
+    const paid = !unpaidBreakAppliesOnDay(dayPolicy, key5, zone3);
+    const label = paid ? `${dayBreak.minutes} min paid break ${window} (not deducted)` : `${dayBreak.minutes} min unpaid break ${window}`;
+    return {
+      minutes: dayBreak.minutes,
+      window,
+      paid,
+      label,
+      deducted: paid ? label : `${dayBreak.minutes} mins deducted ${window}`,
+      toggleLabel: `Take off unpaid break (${dayBreak.minutes} min, ${window})`
+    };
+  }
+  function bookingBreakDeductionText(policy, dayKey, booking, timeZone) {
+    const key5 = String(dayKey ?? "").trim();
+    if (!policy || !booking || !/^\d{4}-\d{2}-\d{2}$/.test(key5)) return null;
+    const zone3 = zoneOrLondon(timeZone);
+    const dayPolicy = dayPolicyOf2(policy, key5);
+    const result2 = payrollHoursResult({ booking, dayKey: key5, policy: dayPolicy, timeZone: zone3 });
+    const minutes = Math.round((Number(result2.unpaidBreakHours) || 0) * 60);
+    if (!(minutes > 0)) return null;
+    const dayBreak = payrollBreakOnDay(dayPolicy, key5, zone3);
+    const start = parseClockMinutes(booking.workStartTime ?? null);
+    const end = parseClockMinutes(booking.workEndTime ?? null);
+    if (!dayBreak || start == null || end == null) return `${minutes} mins deducted`;
+    const from = Math.max(start, dayBreak.start);
+    const to = Math.min(end > start ? end : end + 24 * 60, dayBreak.end);
+    const whole = from <= dayBreak.start && to >= dayBreak.end;
+    const span = `${formatClockMinutes(Math.min(from, to))}\u2013${formatClockMinutes(to)}`;
+    return whole ? `${minutes} mins deducted ${span}` : `${minutes} mins deducted (${span} covered)`;
+  }
+  function bookingHoursTiles(policy, dayKey, booking, timeZone) {
+    const key5 = String(dayKey ?? "").trim();
+    if (!policy || !booking || !/^\d{4}-\d{2}-\d{2}$/.test(key5)) return [];
+    const zone3 = zoneOrLondon(timeZone);
+    const result2 = payrollHoursResult({ booking, dayKey: key5, policy: dayPolicyOf2(policy, key5), timeZone: zone3 });
+    const outside = payrollOutsideClockHours(result2);
+    const standardBreak = Math.max(0, result2.unpaidBreakHours - outside.outsideBreakHours);
+    const tiles = [];
+    const standardBefore = result2.standardHours + standardBreak;
+    if (round2(standardBefore) > 0) {
+      tiles.push({
+        kind: "standard",
+        value: num(standardBefore),
+        label: round2(standardBreak) > 0 ? `Standard (\u2212${num(standardBreak)} break)` : "Standard",
+        paidHours: round2(result2.standardHours)
+      });
+    }
+    if (round2(outside.outsideClockHours) > 0) {
+      tiles.push({
+        kind: "overtime",
+        value: num(outside.outsideClockHours),
+        label: round2(outside.outsideBreakHours) > 0 ? `OT (\u2212${num(outside.outsideBreakHours)} break)` : "OT",
+        paidHours: round2(result2.outsideHours * result2.outsideMultiplier)
+      });
+    }
+    return tiles;
+  }
+
+  // lib/canonical/myScheduleClash.ts
+  var MY_SCHEDULE_CLASH_TITLE = "Booking clash";
+  var MY_SCHEDULE_CLASH_APPROVED_TITLE = "Clash approved";
+  var MY_SCHEDULE_CLASH_APPROVED_MESSAGE = "This clash was already approved. The booking will have to be adjusted manually.";
+  var MY_SCHEDULE_CLASH_ASK_MANAGER = "Ask your manager to review this clash.";
+  var MY_SCHEDULE_CLASH_OPEN_WARNINGS = "Open Warnings";
+  var MY_SCHEDULE_CLASH_NOT_IN_PERIOD = "This clash isn't in the current Warnings period.";
+  var MY_SCHEDULE_CLASH_DISMISSED = "This clash was dismissed in Warnings.";
+  var WEEKDAYS2 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var MONTHS2 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function dayText(dayKey) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dayKey || ""));
+    if (!match) return String(dayKey || "");
+    const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    return `${WEEKDAYS2[date.getUTCDay()]} ${date.getUTCDate()} ${MONTHS2[date.getUTCMonth()]}`;
+  }
+  function timesText(booking) {
+    const start = parseClockMinutes(booking.workStartTime ?? null);
+    const end = parseClockMinutes(booking.workEndTime ?? null);
+    if (start != null && end != null) return `${formatClockMinutes(start)}\u2013${formatClockMinutes(end)}`;
+    const slot = String(booking.timeSlot ?? "").trim().toUpperCase();
+    if (slot === "AM") return "AM";
+    if (slot === "PM") return "PM";
+    return "Full day";
+  }
+  function describe(booking) {
+    const place = String(booking.placeLabel ?? "").trim();
+    return [dayText(booking.dayKey), place, timesText(booking)].filter(Boolean).join(" \xB7 ");
+  }
+  function myScheduleClashMarkers(input) {
+    const operativeBookings = [...input?.operativeBookings || []];
+    const managerBookings = [...input?.managerBookings || []];
+    const people = input?.people || { accounts: [], operatives: [] };
+    const managerIds = [...input?.managerIds || []];
+    const day = input?.day ?? null;
+    const decisions = input?.decisions ?? null;
+    const markers = /* @__PURE__ */ new Map();
+    const describeById = /* @__PURE__ */ new Map();
+    for (const booking of operativeBookings) describeById.set(String(booking.id), describe(booking));
+    for (const booking of managerBookings) describeById.set(String(booking.id), describe(booking));
+    const jobOf = /* @__PURE__ */ new Map();
+    for (const booking of operativeBookings) if (booking.projectId) jobOf.set(String(booking.id), String(booking.projectId));
+    for (const booking of managerBookings) if (booking.jobId) jobOf.set(String(booking.id), String(booking.jobId));
+    const inScope = (bookingIds) => isWarningRowInScope(input?.scope ?? null, {
+      personIds: [...input?.viewerIds || []],
+      email: input?.viewerEmail ?? null,
+      jobIds: bookingIds.map((id2) => jobOf.get(id2) ?? null)
+    });
+    const scanDays = new Set((input?.scanDayKeys || []).map((key5) => String(key5)));
+    const staff = input?.canOpenWarnings === true;
+    const add = (bookingIds, approved, listed) => {
+      const scoped = staff && inScope(bookingIds);
+      const open = !approved && scoped && listed === "listed";
+      const note = open ? "" : !scoped ? MY_SCHEDULE_CLASH_ASK_MANAGER : listed === "dismissed" ? MY_SCHEDULE_CLASH_DISMISSED : MY_SCHEDULE_CLASH_NOT_IN_PERIOD;
+      for (const bookingId of bookingIds) {
+        const others = bookingIds.filter((id2) => id2 !== bookingId);
+        const lines = others.map((id2) => describeById.get(id2) ?? id2);
+        const existing = markers.get(bookingId);
+        if (existing && existing.state === "clash" && approved) continue;
+        markers.set(
+          bookingId,
+          approved ? {
+            bookingId,
+            state: "approved",
+            otherBookingIds: others,
+            canOpenWarnings: false,
+            title: MY_SCHEDULE_CLASH_APPROVED_TITLE,
+            message: MY_SCHEDULE_CLASH_APPROVED_MESSAGE,
+            actionLabel: null
+          } : {
+            bookingId,
+            state: "clash",
+            otherBookingIds: others,
+            canOpenWarnings: open,
+            title: MY_SCHEDULE_CLASH_TITLE,
+            message: `This booking overlaps ${lines.join("; ")}.${note ? ` ${note}` : ""}`,
+            actionLabel: open ? MY_SCHEDULE_CLASH_OPEN_WARNINGS : null
+          }
+        );
+      }
+    };
+    const listedOn = (dayKey, dismissed) => {
+      if (decisions == null || !scanDays.has(dayKey)) return "notInPeriod";
+      return dismissed ? "dismissed" : "listed";
+    };
+    for (const group of operativeClashGroups({ operativeBookings, people, managerIds, day })) {
+      const approved = decisions != null && isClashGroupApproved(group, decisions);
+      const hidden = decisions != null && isClashGroupApproved(group, { resolvedKeys: decisions.resolvedKeys, acceptedClashes: decisions.acceptedClashes });
+      add([...group.bookingIds], approved, listedOn(group.dayKey, hidden));
+    }
+    for (const group of managerClashGroups({ managerBookings, operativeBookings, people, managerIds, day })) {
+      const approved = decisions != null && isClashApproved(group, decisions);
+      const hidden = decisions != null && !isWarningActive({ resolutionKey: group.resolutionKey, bookingAId: group.bookingAId, bookingBId: group.bookingBId }, decisions);
+      add(
+        group.items.map((item) => item.bookingId),
+        approved,
+        listedOn(group.dayKey, hidden)
+      );
+    }
+    return [...markers.values()].sort((a, b) => a.bookingId.localeCompare(b.bookingId));
   }
 
   // lib/canonical/emailChange.ts
@@ -16643,22 +17094,22 @@ var ProjectPlannerCanonical = (() => {
         if (timesheetEntryDecision(sheet, entry).decision === "pending") pendingEntries += 1;
       }
     }
-    const round = (value) => roundPennies(value);
+    const round3 = (value) => roundPennies(value);
     const roundHours2 = (value) => Math.round(value * 100) / 100;
     return {
       hours: roundHours2(hours),
       standardHours: roundHours2(standardHours),
       overtimeHours: roundHours2(overtimeHours),
-      labour: round(labour),
-      standardLabour: round(standardLabour),
-      overtimeLabour: round(overtimeLabour),
-      priceWork: round(priceWork),
-      expenses: round(expenses),
-      extras: round(priceWork + expenses),
-      total: round(labour + priceWork + expenses),
-      submittedPriceWork: round(submittedPriceWork),
-      submittedExpenses: round(submittedExpenses),
-      submittedExtras: round(submittedPriceWork + submittedExpenses),
+      labour: round3(labour),
+      standardLabour: round3(standardLabour),
+      overtimeLabour: round3(overtimeLabour),
+      priceWork: round3(priceWork),
+      expenses: round3(expenses),
+      extras: round3(priceWork + expenses),
+      total: round3(labour + priceWork + expenses),
+      submittedPriceWork: round3(submittedPriceWork),
+      submittedExpenses: round3(submittedExpenses),
+      submittedExtras: round3(submittedPriceWork + submittedExpenses),
       pendingEntries,
       source: rows3.some((row2) => row2.source === "override") || hasOverride(sheet) ? "override" : "live",
       invoiceRowCount: rows3.length
@@ -16883,7 +17334,7 @@ var ProjectPlannerCanonical = (() => {
   }
 
   // lib/canonical/managerCoverage.ts
-  function round2(value) {
+  function round22(value) {
     return Math.round(value * 100) / 100;
   }
   function managerCoverageHours(input) {
@@ -16899,7 +17350,7 @@ var ProjectPlannerCanonical = (() => {
     }
     const blocks = mergeMinuteIntervals(intervals).map((block) => ({ start: block.start, end: block.end }));
     const base = {
-      paidDayHours: round2(paidDay),
+      paidDayHours: round22(paidDay),
       blocks,
       requiredHours: coverage.requiredHours,
       coveredHours: coverage.coveredHours,
@@ -16912,7 +17363,7 @@ var ProjectPlannerCanonical = (() => {
     );
     const day = standardDayWindow(policy);
     const spansDay = blocks.some((block) => block.start <= day.start && block.end >= day.end);
-    if (plainFullDay || spansDay) return { ...base, paidHours: round2(paidDay) };
+    if (plainFullDay || spansDay) return { ...base, paidHours: round22(paidDay) };
     let paid = 0;
     for (const block of blocks) {
       const noBreak = intervals.some((row2) => row2.noBreak && row2.start < block.end && row2.end > block.start);
@@ -16929,7 +17380,7 @@ var ProjectPlannerCanonical = (() => {
       });
       paid += result2.workedHours;
     }
-    return { ...base, paidHours: round2(paid) };
+    return { ...base, paidHours: round22(paid) };
   }
   function bookedWorkedHours(input) {
     const bookings = (input.bookings || []).filter(Boolean);
@@ -16962,7 +17413,7 @@ var ProjectPlannerCanonical = (() => {
         timeZone: input.timeZone
       }).workedHours;
     }
-    return round2(worked);
+    return round22(worked);
   }
 
   // lib/canonical/rosterLists.ts
@@ -17253,9 +17704,9 @@ var ProjectPlannerCanonical = (() => {
   }
   function jobScheduleLeaveMarks(input) {
     const dayKeys = (input?.dayKeys || []).filter((d) => typeof d === "string" && d.trim() !== "").map((d) => d.trim());
-    const holidays = (input?.holidays || []).filter((h) => {
-      if (!h || typeof h !== "object") return false;
-      const status = normalizeHolidayStatus(h.status);
+    const holidays = (input?.holidays || []).filter((h3) => {
+      if (!h3 || typeof h3 !== "object") return false;
+      const status = normalizeHolidayStatus(h3.status);
       return status === "approved" || status === "pending";
     });
     const roster = input?.roster || [];
@@ -17281,7 +17732,7 @@ var ProjectPlannerCanonical = (() => {
         const k = key3(value);
         return k !== "" && ids.has(k);
       };
-      const mine = ids.size === 0 ? [] : holidays.filter((h) => has2(h.userId) || has2(h.operativeId));
+      const mine = ids.size === 0 ? [] : holidays.filter((h3) => has2(h3.userId) || has2(h3.operativeId));
       const days = dayKeys.map((dayKey) => {
         if (mine.length === 0) return noneMark(dayKey);
         const result2 = leaveDayKind(mine, dayKey, input?.timeZone, input?.nonWorkingDayKeys);
@@ -17294,15 +17745,15 @@ var ProjectPlannerCanonical = (() => {
           const halfState = (slot2) => {
             let state2 = null;
             let id2 = null;
-            for (const h of mine) {
-              if (normalizeHolidayTimeSlot(h.timeSlot) !== slot2) continue;
-              const one = leaveDayKind([h], dayKey, input?.timeZone, input?.nonWorkingDayKeys).kind;
+            for (const h3 of mine) {
+              if (normalizeHolidayTimeSlot(h3.timeSlot) !== slot2) continue;
+              const one = leaveDayKind([h3], dayKey, input?.timeZone, input?.nonWorkingDayKeys).kind;
               if (one === "approvedHalf" && state2 !== "approved") {
                 state2 = "approved";
-                id2 = String(h.id ?? "").trim() || null;
+                id2 = String(h3.id ?? "").trim() || null;
               } else if (one === "pendingHalf" && state2 === null) {
                 state2 = "pending";
-                id2 = String(h.id ?? "").trim() || null;
+                id2 = String(h3.id ?? "").trim() || null;
               }
             }
             return { state: state2, id: id2 };
@@ -17324,8 +17775,8 @@ var ProjectPlannerCanonical = (() => {
         }
         const pending = kind === "pendingFull" || kind === "pendingHalf";
         const half = kind === "approvedHalf" || kind === "pendingHalf";
-        const record14 = (result2.recordId ? mine.find((h) => String(h.id ?? "").trim() === result2.recordId) : void 0) ?? mine.find((h) => {
-          const slot2 = normalizeHolidayTimeSlot(h.timeSlot);
+        const record14 = (result2.recordId ? mine.find((h3) => String(h3.id ?? "").trim() === result2.recordId) : void 0) ?? mine.find((h3) => {
+          const slot2 = normalizeHolidayTimeSlot(h3.timeSlot);
           return half ? slot2 !== "FULL DAY" : slot2 === "FULL DAY";
         });
         const slot = mixedSlot ?? (half ? normalizeHolidayTimeSlot(record14?.timeSlot) === "PM" ? "PM" : "AM" : "FULL DAY");
@@ -17826,11 +18277,11 @@ var ProjectPlannerCanonical = (() => {
   function text25(value) {
     return value == null ? "" : String(value).trim();
   }
-  function round22(value) {
+  function round23(value) {
     return Math.round((Number(value) || 0) * 100) / 100;
   }
   function hoursText2(hours) {
-    return `${round22(hours)}h`;
+    return `${round23(hours)}h`;
   }
   function clockOf(value) {
     const minutes = parseClockMinutes(text25(value));
@@ -17849,7 +18300,7 @@ var ProjectPlannerCanonical = (() => {
   function isCancelled(booking) {
     return normalizeBookingStatus(booking.status) === "Cancelled";
   }
-  function multiplierOf(value) {
+  function multiplierOf2(value) {
     const n = Number(value);
     return value != null && value !== "" && Number.isFinite(n) && n > 0 ? n : null;
   }
@@ -17870,7 +18321,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function overtimeBookingFingerprint(booking) {
     if (!booking) return "";
-    const rate = multiplierOf(booking.otMultiplierOverride);
+    const rate = multiplierOf2(booking.otMultiplierOverride);
     const status = (normalizeBookingStatus(booking.status) ?? (text25(booking.status) || "Confirmed")).toLowerCase();
     return [
       text25(booking.dayKey),
@@ -17909,14 +18360,14 @@ var ProjectPlannerCanonical = (() => {
     if (multiplied.clockHours * 60 < min - 0.01 || !(multiplied.clockHours > 0)) return null;
     const window = payrollDayWindows(policy, booking.dayKey, zone3).paidWindow;
     return {
-      clockHours: round22(multiplied.clockHours),
+      clockHours: round23(multiplied.clockHours),
       multiplier: multiplied.multiplier,
-      breakHours: round22(multiplied.breakHours),
-      overtimeHours: round22(multiplied.paidHours),
+      breakHours: round23(multiplied.breakHours),
+      overtimeHours: round23(multiplied.paidHours),
       text: multiplied.text,
       dayWindow: window ? `${formatClockMinutes(window.start)}\u2013${formatClockMinutes(window.end)}` : null,
       organizationMultiplier: payrollOutsideMultiplier({}, isoWeekdayOfDayKey(booking.dayKey, zone3), policy),
-      customMultiplier: multiplierOf(booking.otMultiplierOverride)
+      customMultiplier: multiplierOf2(booking.otMultiplierOverride)
     };
   }
   var OVERTIME_REVIEW_DECISIONS = [
@@ -17968,10 +18419,10 @@ var ProjectPlannerCanonical = (() => {
       action: action === "edit" || action === "strike" ? action : "keep",
       proposedStart: clockOf(row2.proposedStart) || null,
       proposedEnd: clockOf(row2.proposedEnd) || null,
-      proposedMultiplier: multiplierOf(row2.proposedMultiplier),
+      proposedMultiplier: multiplierOf2(row2.proposedMultiplier),
       cancel: row2.cancel === true,
-      overtimeHoursBefore: round22(Number(row2.overtimeHoursBefore) || 0),
-      overtimeHoursAfter: round22(Number(row2.overtimeHoursAfter) || 0)
+      overtimeHoursBefore: round23(Number(row2.overtimeHoursBefore) || 0),
+      overtimeHoursAfter: round23(Number(row2.overtimeHoursAfter) || 0)
     };
   }
   function parseDecision(raw) {
@@ -17984,7 +18435,7 @@ var ProjectPlannerCanonical = (() => {
       const start = clockOf(row2.start);
       const end = clockOf(row2.end);
       if (!start || !end) return null;
-      return { action: "edit", start, end, multiplier: multiplierOf(row2.multiplier) };
+      return { action: "edit", start, end, multiplier: multiplierOf2(row2.multiplier) };
     }
     return null;
   }
@@ -18186,7 +18637,7 @@ var ProjectPlannerCanonical = (() => {
     return line.figures?.overtimeHours ?? 0;
   }
   function overtimeLinesTotal(lines) {
-    return round22(lines.reduce((sum, line) => sum + overtimeLineHours(line), 0));
+    return round23(lines.reduce((sum, line) => sum + overtimeLineHours(line), 0));
   }
   function overtimeStrikeOutcome(input) {
     const booking = input.booking;
@@ -18225,7 +18676,7 @@ var ProjectPlannerCanonical = (() => {
       set.timeSlot = "CUSTOM_HOURS";
     }
     if (change.kind === "edit" && change.multiplier !== void 0) {
-      const stored = multiplierOf(booking.otMultiplierOverride);
+      const stored = multiplierOf2(booking.otMultiplierOverride);
       if (change.multiplier == null) {
         if (booking.otMultiplierOverride != null) remove.push("otMultiplierOverride");
       } else if (stored !== Number(change.multiplier)) {
@@ -18264,14 +18715,14 @@ var ProjectPlannerCanonical = (() => {
       show: Boolean(figures),
       organizationMultiplier,
       organizationLabel: `Organisation (\xD7${organizationMultiplier})`,
-      customMultiplier: multiplierOf(input.booking?.otMultiplierOverride),
+      customMultiplier: multiplierOf2(input.booking?.otMultiplierOverride),
       steps: [...OVERTIME_MULTIPLIER_STEPS]
     };
   }
   function overtimeMultiplierWriteFields(stored, next) {
     if (next == null) return { set: {}, remove: stored != null ? ["otMultiplierOverride"] : [] };
     if (!overtimeMultiplierValid(next)) return { set: {}, remove: [] };
-    return multiplierOf(stored) === Number(next) ? { set: {}, remove: [] } : { set: { otMultiplierOverride: Number(next) }, remove: [] };
+    return multiplierOf2(stored) === Number(next) ? { set: {}, remove: [] } : { set: { otMultiplierOverride: Number(next) }, remove: [] };
   }
   function canEditOwnBookingOvertime(input) {
     const viewer = input.viewer;
@@ -18367,7 +18818,7 @@ var ProjectPlannerCanonical = (() => {
       base.action = "edit";
       base.proposedStart = clockOf(proposal.start);
       base.proposedEnd = clockOf(proposal.end);
-      base.proposedMultiplier = multiplierOf(proposal.multiplier);
+      base.proposedMultiplier = multiplierOf2(proposal.multiplier);
     } else {
       const outcome = overtimeStrikeOutcome({ booking, organization: input.organization, timeZone: input.timeZone });
       if (outcome.kind === "notAllowed" || outcome.kind === "none") return outcome.kind === "none" ? base : null;
@@ -18817,8 +19268,8 @@ var ProjectPlannerCanonical = (() => {
       kind: "overtime",
       lines,
       totals: {
-        overtimeHours: round22(lines.reduce((sum, line) => sum + line.overtimeHours, 0)),
-        clockHours: round22(lines.reduce((sum, line) => sum + line.clockHours, 0)),
+        overtimeHours: round23(lines.reduce((sum, line) => sum + line.overtimeHours, 0)),
+        clockHours: round23(lines.reduce((sum, line) => sum + line.clockHours, 0)),
         lineCount: lines.length
       },
       generatedBy: text25(input.generatedBy)
@@ -18840,7 +19291,7 @@ var ProjectPlannerCanonical = (() => {
       const now = current.get(idKey(line.bookingId));
       if (!now) return true;
       if (text25(line.fingerprint) && text25(line.fingerprint) !== text25(now.fingerprint)) return true;
-      if (round22(line.overtimeHours) !== round22(now.overtimeHours)) return true;
+      if (round23(line.overtimeHours) !== round23(now.overtimeHours)) return true;
     }
     return false;
   }
@@ -18857,10 +19308,10 @@ var ProjectPlannerCanonical = (() => {
         jobName: text25(r.jobName),
         start: clockOf(r.start),
         end: clockOf(r.end),
-        clockHours: round22(Number(r.clockHours) || 0),
+        clockHours: round23(Number(r.clockHours) || 0),
         multiplier: Number(r.multiplier) > 0 ? Number(r.multiplier) : 1,
-        breakHours: round22(Number(r.breakHours) || 0),
-        overtimeHours: round22(Number(r.overtimeHours) || 0),
+        breakHours: round23(Number(r.breakHours) || 0),
+        overtimeHours: round23(Number(r.overtimeHours) || 0),
         text: text25(r.text),
         fingerprint: text25(r.fingerprint),
         state: text25(r.state),
@@ -18880,8 +19331,8 @@ var ProjectPlannerCanonical = (() => {
       kind: "overtime",
       lines,
       totals: {
-        overtimeHours: round22(Number(totals.overtimeHours) || lines.reduce((sum, line) => sum + line.overtimeHours, 0)),
-        clockHours: round22(Number(totals.clockHours) || lines.reduce((sum, line) => sum + line.clockHours, 0)),
+        overtimeHours: round23(Number(totals.overtimeHours) || lines.reduce((sum, line) => sum + line.overtimeHours, 0)),
+        clockHours: round23(Number(totals.clockHours) || lines.reduce((sum, line) => sum + line.clockHours, 0)),
         lineCount: Number(totals.lineCount) || lines.length
       },
       generatedBy: text25(row2.generatedBy),
@@ -18961,8 +19412,8 @@ var ProjectPlannerCanonical = (() => {
   }
   var OVERTIME_RATE_CHANGED_MARK = "changed from organisation rate";
   function overtimeMultiplierText(input) {
-    const brk = round22(Number(input.breakHours) || 0);
-    return `${hoursText2(input.clockHours)} at \xD7${round22(input.multiplier)}${brk > 0 ? ` \u2212 ${hoursText2(brk)} break` : ""} = ${hoursText2(input.overtimeHours)}`;
+    const brk = round23(Number(input.breakHours) || 0);
+    return `${hoursText2(input.clockHours)} at \xD7${round23(input.multiplier)}${brk > 0 ? ` \u2212 ${hoursText2(brk)} break` : ""} = ${hoursText2(input.overtimeHours)}`;
   }
   function weeklyReportPayeOvertime(input) {
     const zone3 = zoneOrLondon(input.timeZone);
@@ -18988,9 +19439,9 @@ var ProjectPlannerCanonical = (() => {
           changedFromOrganization: changed,
           overtimeHours: 0
         };
-        row2.clockHours = round22(row2.clockHours + figures.clockHours);
-        row2.breakHours = round22(row2.breakHours + figures.breakHours);
-        row2.overtimeHours = round22(row2.overtimeHours + figures.overtimeHours);
+        row2.clockHours = round23(row2.clockHours + figures.clockHours);
+        row2.breakHours = round23(row2.breakHours + figures.breakHours);
+        row2.overtimeHours = round23(row2.overtimeHours + figures.overtimeHours);
         rows3.set(key5, row2);
       }
     }
@@ -19057,14 +19508,14 @@ var ProjectPlannerCanonical = (() => {
     const minutes = parseClockMinutes(text26(value));
     return minutes == null ? "" : formatClockMinutes(minutes);
   }
-  function multiplierOf2(value) {
+  function multiplierOf3(value) {
     const n = Number(value);
     return value != null && value !== "" && Number.isFinite(n) && n > 0 ? n : null;
   }
   function normalChoice(choice) {
     if (!choice || typeof choice !== "object") return OVERTIME_EMPTY_CHOICE;
     const mark = choice.mark === "tick" || choice.mark === "cross" ? choice.mark : "none";
-    const edit = choice.edit && clock(choice.edit.start) && clock(choice.edit.end) ? { start: clock(choice.edit.start), end: clock(choice.edit.end), multiplier: multiplierOf2(choice.edit.multiplier) } : null;
+    const edit = choice.edit && clock(choice.edit.start) && clock(choice.edit.end) ? { start: clock(choice.edit.start), end: clock(choice.edit.end), multiplier: multiplierOf3(choice.edit.multiplier) } : null;
     return { mark, edit: mark === "cross" ? null : edit };
   }
   function overtimeChoiceAfter(choice, event) {
@@ -19076,7 +19527,7 @@ var ProjectPlannerCanonical = (() => {
         return now.mark === "cross" ? { mark: "none", edit: null } : { mark: "cross", edit: null };
       case "cog": {
         if (overtimeEditValidationError(event)) return now;
-        return { mark: "none", edit: { start: clock(event.start), end: clock(event.end), multiplier: multiplierOf2(event.multiplier) } };
+        return { mark: "none", edit: { start: clock(event.start), end: clock(event.end), multiplier: multiplierOf3(event.multiplier) } };
       }
       case "reset":
         return OVERTIME_EMPTY_CHOICE;
@@ -19208,7 +19659,7 @@ var ProjectPlannerCanonical = (() => {
           timeZone: input.timeZone,
           start: text26(input.booking.workStartTime),
           end: text26(input.booking.workEndTime),
-          multiplier: multiplierOf2(input.booking.otMultiplierOverride)
+          multiplier: multiplierOf3(input.booking.otMultiplierOverride)
         });
         oldFigure = preview.beforeText;
         if (choice.mark === "cross" && input.role === "person") {
@@ -19221,7 +19672,7 @@ var ProjectPlannerCanonical = (() => {
               timeZone: input.timeZone,
               start: outcome.start,
               end: outcome.end,
-              multiplier: multiplierOf2(input.booking.otMultiplierOverride)
+              multiplier: multiplierOf3(input.booking.otMultiplierOverride)
             });
             newFigure = trimmed6.afterText;
           }
@@ -19369,13 +19820,13 @@ var ProjectPlannerCanonical = (() => {
   function record11(value) {
     return value && typeof value === "object" && !Array.isArray(value) ? value : {};
   }
-  function round23(value) {
+  function round24(value) {
     return Math.round((Number(value) || 0) * 100) / 100;
   }
   function amountOf2(value) {
     if (value == null || value === "") return null;
     const n = typeof value === "string" ? Number(value.replace(/[^0-9.-]/g, "")) : Number(value);
-    return Number.isFinite(n) ? round23(n) : null;
+    return Number.isFinite(n) ? round24(n) : null;
   }
   function isDayKey2(value) {
     if (typeof value !== "string" || !DAY_KEY9.test(value)) return false;
@@ -19642,7 +20093,7 @@ var ProjectPlannerCanonical = (() => {
     );
   }
   function payeClaimsTotal(items) {
-    return round23((items || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
+    return round24((items || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0));
   }
   function payeClaimReportReady(items) {
     return (items || []).length > 0;
@@ -19689,7 +20140,7 @@ var ProjectPlannerCanonical = (() => {
             title: entry.title,
             details: entry.details,
             jobNumber: entry.jobNumber,
-            amount: round23(entry.managerRevisedAmount ?? entry.amount),
+            amount: round24(entry.managerRevisedAmount ?? entry.amount),
             startDate: day,
             endDate: day,
             approvedByName: "",
@@ -19710,7 +20161,7 @@ var ProjectPlannerCanonical = (() => {
             title: entry.title,
             details: entry.details,
             jobNumber: entry.jobNumber,
-            amount: round23(entry.managerRevisedAmount ?? entry.amount),
+            amount: round24(entry.managerRevisedAmount ?? entry.amount),
             startDate: start,
             endDate: end,
             approvedByName: entry.agreedManagerName,
@@ -19731,7 +20182,7 @@ var ProjectPlannerCanonical = (() => {
       startDate: item.kind === "expense" ? item.date : item.startDate,
       endDate: item.kind === "expense" ? item.date : item.endDate || item.startDate,
       approvedByName: item.kind === "priceWork" ? item.approvedByName : "",
-      amount: round23(item.amount),
+      amount: round24(item.amount),
       evidence: item.evidence.map((entry) => ({ ...entry }))
     }));
     return {
@@ -21483,7 +21934,7 @@ var ProjectPlannerCanonical = (() => {
   function isState2(value) {
     return Boolean(value && typeof value === "object" && "current" in value && value.current);
   }
-  function round24(value) {
+  function round25(value) {
     return Math.round(value * 100) / 100;
   }
   function profileDayKey(input) {
@@ -21578,7 +22029,7 @@ var ProjectPlannerCanonical = (() => {
     const hoursThisWeek = {
       startDayKey: week.startDayKey,
       endDayKey: week.endDayKey,
-      hours: round24(days.reduce((sum, row2) => sum + row2.hours, 0)),
+      hours: round25(days.reduce((sum, row2) => sum + row2.hours, 0)),
       days
     };
     const viewer = { id: accountId || null, email: email || null };
