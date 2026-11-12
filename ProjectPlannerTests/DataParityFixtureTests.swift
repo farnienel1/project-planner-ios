@@ -207,6 +207,53 @@ final class DataParityFixtureTests: XCTestCase {
         XCTAssertEqual(DataParityListenerLedger.merge(existing: ["a", "b"], incoming: ["b"], fromCache: false), ["b"])
     }
 
+    /// Review fix (re-review 1): a cache-first listener whose server confirmation changes no document raises only a
+    /// metadata snapshot. The ledger must learn the server answered from it, and the store must not see it.
+    func testAMetadataOnlySnapshotTellsTheLedgerTheServerAnswered() throws {
+        XCTAssertFalse(DataParityListenerLedger.isMetadataOnly(documentChangeCount: 0, deliveredBefore: false), "the first snapshot is the load")
+        XCTAssertTrue(DataParityListenerLedger.isMetadataOnly(documentChangeCount: 0, deliveredBefore: true))
+        XCTAssertFalse(DataParityListenerLedger.isMetadataOnly(documentChangeCount: 2, deliveredBefore: true))
+        XCTAssertFalse(
+            DataParityListenerLedger.isMetadataOnly(documentChangeCount: 0, deliveredBefore: true, heldIdsChanged: true),
+            "a server snapshot that drops ids a cache snapshot kept is the collection, passed to the store"
+        )
+
+        let ledger = DataParityListenerLedger()
+        let generation = ledger.begin(key: "clients", organizationId: "org-parity", sourceCount: 1)
+        ledger.record(key: "clients", generation: generation, source: 0, ids: ["a", "B"], fromCache: true, hasPendingWrites: true)
+        let cached = try XCTUnwrap(ledger.snapshot(key: "clients", organizationId: "ORG-PARITY"))
+        XCTAssertFalse(cached.serverSnapshot)
+        XCTAssertTrue(cached.pendingWrites)
+        // The metadata-only server confirmation: same documents, from the server, write acknowledged.
+        let changed = ledger.record(key: "clients", generation: generation, source: 0, ids: ["a", "B"], fromCache: false, hasPendingWrites: false)
+        XCTAssertFalse(changed)
+        let answered = try XCTUnwrap(ledger.snapshot(key: "clients", organizationId: "org-parity"))
+        XCTAssertTrue(answered.serverSnapshot)
+        XCTAssertFalse(answered.pendingWrites)
+        XCTAssertEqual(answered.ids, ["a", "B"])
+        // A replaced listener's late callback is ignored; another organisation reads nothing.
+        _ = ledger.begin(key: "clients", organizationId: "org-parity", sourceCount: 1)
+        ledger.record(key: "clients", generation: generation, source: 0, ids: ["stale"], fromCache: false, hasPendingWrites: false)
+        XCTAssertEqual(ledger.snapshot(key: "clients", organizationId: "org-parity")?.ids, [])
+        XCTAssertNil(ledger.snapshot(key: "clients", organizationId: "org-other"))
+    }
+
+    /// Review fix (re-review 2): a heal never runs after the open organisation changed during the check's waits.
+    func testHealRunsOnlyInTheOrganisationTheCheckRanIn() {
+        XCTAssertTrue(DataParityMonitor.healAllowed(checkedOrganizationId: "org-1", currentOrganizationId: "ORG-1"))
+        XCTAssertFalse(DataParityMonitor.healAllowed(checkedOrganizationId: "org-1", currentOrganizationId: "org-2"))
+        XCTAssertFalse(DataParityMonitor.healAllowed(checkedOrganizationId: "org-1", currentOrganizationId: nil))
+        XCTAssertFalse(DataParityMonitor.healAllowed(checkedOrganizationId: "", currentOrganizationId: ""))
+    }
+
+    /// Review fix (re-review 3): healing one job collection forgets only that collection's recently confirmed jobs.
+    func testHealingAJobCollectionForgetsItsConfirmedJobs() {
+        let now = Date()
+        let confirmed: [String: Date] = ["projects|A": now, "projects|B": now, "smallWorks|C": now]
+        XCTAssertEqual(ProjectStore.confirmedJobsKept(confirmed, forgetting: .projects).keys.sorted(), ["smallWorks|C"])
+        XCTAssertEqual(ProjectStore.confirmedJobsKept(confirmed, forgetting: .smallWorks).keys.sorted(), ["projects|A", "projects|B"])
+    }
+
     func testTwoLooksBeforeAReload() throws {
         let first = try XCTUnwrap(CanonicalBusinessEngine.dataParityCheck(lists: [
             RulebookDataParityListInput(key: "projects", serverCount: 7, localIds: ["a", "b", "c", "d", "e", "f"]),

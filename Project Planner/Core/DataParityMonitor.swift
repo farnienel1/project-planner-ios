@@ -191,7 +191,13 @@ final class DataParityMonitor: ObservableObject {
         }
         var recheck: RulebookDataParityResult?
         if !confirmed.reloadKeys.isEmpty {
-            for key in confirmed.reloadKeys { await heal(key: key, organizationId: orgId) }
+            for key in confirmed.reloadKeys {
+                // The waits above take seconds: never stop the new company's listener and attach the old one.
+                guard Self.healAllowed(checkedOrganizationId: orgId, currentOrganizationId: firebaseBackend.currentOrganization?.firestoreDocumentId) else {
+                    return
+                }
+                await heal(key: key, organizationId: orgId)
+            }
             try? await Task.sleep(nanoseconds: healSettleNanoseconds)
             recheck = await compare(keys: confirmed.reloadKeys, organizationId: orgId)
         }
@@ -303,10 +309,25 @@ final class DataParityMonitor: ObservableObject {
 
     // MARK: Self-heal
 
+    /// Whether a heal for the organisation the check ran in may still run: only while it is the open organisation.
+    nonisolated static func healAllowed(checkedOrganizationId: String, currentOrganizationId: String?) -> Bool {
+        let checked = checkedOrganizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !checked.isEmpty, let current = currentOrganizationId else { return false }
+        return checked.lowercased() == current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
     private func heal(key: String, organizationId orgId: String) async {
-        guard let firebaseBackend else { return }
+        guard let firebaseBackend,
+              Self.healAllowed(checkedOrganizationId: orgId, currentOrganizationId: firebaseBackend.currentOrganization?.firestoreDocumentId) else {
+            return
+        }
         switch key {
-        case "projects", "smallWorks", "clients":
+        case "projects", "smallWorks":
+            // A job deleted elsewhere but "confirmed" by a recent server read would otherwise survive the reload.
+            projectStore?.forgetConfirmedJobs(smallWorks: key == "smallWorks")
+            firebaseBackend.stopLiveListener(key: key)
+            projectStore?.startLiveUpdates(organizationId: orgId)
+        case "clients":
             firebaseBackend.stopLiveListener(key: key)
             projectStore?.startLiveUpdates(organizationId: orgId)
         case "operatives", "managers":

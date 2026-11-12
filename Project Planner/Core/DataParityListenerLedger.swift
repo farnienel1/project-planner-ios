@@ -62,17 +62,22 @@ nonisolated final class DataParityListenerLedger: @unchecked Sendable {
         return nextGeneration
     }
 
-    /// One snapshot of part `source`. Ignored when a newer listener replaced this one.
-    func record(key: String, generation: Int, source: Int, ids: [String], fromCache: Bool, hasPendingWrites: Bool) {
+    /// One snapshot of part `source`. Ignored when a newer listener replaced this one. Returns true when the part's
+    /// held ids changed (a server snapshot dropping ids a cache snapshot had kept, for example).
+    @discardableResult
+    func record(key: String, generation: Int, source: Int, ids: [String], fromCache: Bool, hasPendingWrites: Bool) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard var entry = entries[key], entry.generation == generation else { return }
+        guard var entry = entries[key], entry.generation == generation else { return false }
         var part = entry.sources[source] ?? Source()
+        let before = part.ids
         part.ids = Self.merge(existing: part.ids, incoming: ids, fromCache: fromCache)
+        let changed = Set(before) != Set(part.ids)
         part.pending = hasPendingWrites
         part.server = part.server || !fromCache
         part.failed = false
         entry.sources[source] = part
         entries[key] = entry
+        return changed
     }
 
     /// Part `source` was refused by the server: its last ids stay (that is what the app shows).
@@ -114,6 +119,17 @@ nonisolated final class DataParityListenerLedger: @unchecked Sendable {
         )
     }
 
+    /// A snapshot raised only because its metadata changed (`includeMetadataChanges`: the server confirmed the cached
+    /// copy, or this device's write was acknowledged) — no document was added, changed or removed. The listener
+    /// records it here (so `serverSnapshot` / `pendingWrites` stay true to the server) and does not pass it to its
+    /// store: a store sees exactly the snapshots it saw before metadata changes were switched on. The first snapshot
+    /// is never metadata-only (it is the listener's load, even when the collection is empty).
+    /// A server snapshot whose ids differ from what the listener held (`heldIdsChanged`: rows a cache snapshot had
+    /// kept) is not metadata-only: it is the collection and is passed on, so the store drops them too.
+    static func isMetadataOnly(documentChangeCount: Int, deliveredBefore: Bool, heldIdsChanged: Bool = false) -> Bool {
+        deliveredBefore && documentChangeCount == 0 && !heldIdsChanged
+    }
+
     /// The `LiveSnapshotMerge.apply` rule on document ids: a server snapshot is the collection; a cache snapshot never
     /// empties a list and a shorter one only adds ids. Pure, so `DataParityFixtureTests` runs this exact code.
     static func merge(existing: [String], incoming: [String], fromCache: Bool) -> [String] {
@@ -128,5 +144,27 @@ nonisolated final class DataParityListenerLedger: @unchecked Sendable {
 
     private static func sameOrganization(_ a: String, _ b: String) -> Bool {
         a.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == b.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
+/// Whether a listener (or one part of a planned listener) has passed a snapshot to its store yet
+/// (`DataParityListenerLedger.isMetadataOnly`). Snapshot callbacks run on Firestore's queue.
+nonisolated final class SnapshotDeliveredFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var delivered = false
+
+    init() {}
+
+    /// Returns whether a snapshot was delivered before, and marks this one delivered.
+    func markDelivered() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let before = delivered
+        delivered = true
+        return before
+    }
+
+    var wasDelivered: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return delivered
     }
 }

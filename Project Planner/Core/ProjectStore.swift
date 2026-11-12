@@ -82,6 +82,19 @@ class ProjectStore: ObservableObject {
     /// The clock for `confirmedLiveJobs` (tests move it).
     var now: () -> Date = { Date() }
 
+    /// RULEBOOK 1.38.0 §27 self-heal (review fix): a data-check reload of one collection forgets the jobs of that
+    /// collection a server read confirmed recently, so a job deleted on another device within
+    /// `confirmedJobKeepSeconds` leaves on the reloaded listener's snapshot instead of being kept as "confirmed".
+    func forgetConfirmedJobs(smallWorks: Bool) {
+        confirmedLiveJobs = Self.confirmedJobsKept(confirmedLiveJobs, forgetting: smallWorks ? .smallWorks : .projects)
+    }
+
+    /// `confirmed` without the entries of `kind` (keys are `collection|id`, `jobKey`). Pure, for tests.
+    static func confirmedJobsKept(_ confirmed: [String: Date], forgetting kind: JobKind) -> [String: Date] {
+        let prefix = "\(kind.rawValue)|"
+        return confirmed.filter { !$0.key.hasPrefix(prefix) }
+    }
+
     private static func jobKey(_ job: Project) -> String {
         "\(job.sourceCollection.rawValue)|\(job.id.uuidString)"
     }

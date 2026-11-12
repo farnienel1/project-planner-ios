@@ -326,8 +326,11 @@ extension FirebaseBackend {
         // RULEBOOK 1.38.0 §27: what this listener received, by stored document id, for the data check.
         let ledger = DataParityListenerLedger.shared
         let generation = ledger.begin(key: key, organizationId: orgId, sourceCount: 1)
+        let delivered = SnapshotDeliveredFlag()
+        // Metadata changes are on only so the data check learns when the server answered (a cache-first listener
+        // whose server confirmation changes no document raises nothing otherwise); such snapshots stop at the ledger.
         let registration = makeQuery(db.collection("organizations").document(orgId))
-            .addSnapshotListener { [weak self] snapshot, error in
+            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snapshot, error in
                 if let error {
                     NSLog("LIVE_LISTENER_FAILED key=%@ org=%@ error=%@", key, orgId, error.localizedDescription)
                     ledger.markFailed(key: key, generation: generation, source: 0)
@@ -338,7 +341,7 @@ extension FirebaseBackend {
                 }
                 guard let snapshot else { return }
                 let fromCache = snapshot.metadata.isFromCache
-                ledger.record(
+                let heldIdsChanged = ledger.record(
                     key: key,
                     generation: generation,
                     source: 0,
@@ -346,6 +349,12 @@ extension FirebaseBackend {
                     fromCache: fromCache,
                     hasPendingWrites: snapshot.metadata.hasPendingWrites
                 )
+                if DataParityListenerLedger.isMetadataOnly(
+                    documentChangeCount: snapshot.documentChanges.count,
+                    deliveredBefore: delivered.wasDelivered,
+                    heldIdsChanged: heldIdsChanged
+                ) { return }
+                _ = delivered.markDelivered()
                 let rows: LiveDocumentRows = snapshot.documents.map { (id: $0.documentID, data: $0.data()) }
                 Task { @MainActor in
                     guard let self, self.acceptsLiveSnapshot(organizationId: orgId) else { return }
