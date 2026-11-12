@@ -7700,7 +7700,9 @@ class FirebaseBackend: ObservableObject {
         // 1.33.1: bounded wait for the server's confirmation (`FirestoreWriteAck`); the write itself is unchanged.
         let stampedCreate = WriteMetadata.stamped(bookingData, userId: uid)
         try await FirestoreWriteAck.run(timeoutSeconds: ackTimeoutSeconds, pendingKey: ref.path) { try await ref.setData(stampedCreate, merge: true) }
-
+        print("🔥🔥🔥 DEBUG: Booking saved successfully to Firebase")
+    }
+    
     /// RULEBOOK 1.41.0 §5 (`CanonicalBusinessEngine.bookingReplaceWrites`): the new booking and each replaced
     /// booking's delete with its tombstone, in ONE Firestore transaction that first re-reads every replaced booking and
     /// its tombstone (review 1.41 #3): one gone or tombstoned refuses with `BookingReplaceMessages.alreadyGone`, one
