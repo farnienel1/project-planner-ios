@@ -168,10 +168,10 @@ final class Rulebook1410Tests: XCTestCase {
         XCTAssertTrue(backend.contains("CanonicalBusinessEngine.bookingReplaceWrites("))
         // Review 1.41 #3, #4: one transaction that re-reads each replaced booking and its tombstone and compares the
         // fingerprint the person was shown, bounded by the write wait (never queued for a later replay).
-        XCTAssertTrue(backend.contains("try await FirestoreWriteAck.run(timeoutSeconds: FirestoreWriteAck.defaultTimeoutSeconds) {"))
+        XCTAssertTrue(backend.contains("try await FirestoreWriteAck.run(\n                timeoutSeconds: FirestoreWriteAck.defaultTimeoutSeconds,"))
         XCTAssertTrue(backend.contains("live = try transaction.getDocument(row.ref)"))
         XCTAssertTrue(backend.contains("tombstone = try transaction.getDocument(row.tombstoneRef)"))
-        XCTAssertTrue(backend.contains("if BookingWritePatch.stored(data, collection: row.collection) != row.expected { return \"changed\" as NSString }"))
+        XCTAssertTrue(backend.contains("let liveFingerprint = BookingWritePatch.stored(data, collection: row.collection)"))
         XCTAssertTrue(backend.contains("throw Self.bookingReplaceError(BookingReplaceMessages.notConfirmed)"))
         // Re-review #4: an empty fingerprint never counts as unchanged; #5: a late commit still sends the follow-ups.
         XCTAssertTrue(backend.contains("if row.expected.isEmpty || liveFingerprint.isEmpty || liveFingerprint != row.expected {"))
