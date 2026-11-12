@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import FirebaseAuth
 #if canImport(Network)
 import Network
 #endif
