@@ -274,9 +274,21 @@ extension FirebaseBackend {
         fromDocument: @escaping (DocumentSnapshot) -> Doc?,
         documentId: @escaping (Doc) -> String,
         onRefused: (@MainActor () -> Void)? = nil,
+        parity: (key: String, organizationId: String)? = nil,
         onChange: @escaping @MainActor (_ docs: [Doc], _ fromCache: Bool) -> Void
     ) -> ListenerRegistration {
         let registration = CompositeListenerRegistration()
+        // RULEBOOK 1.38.0 §27: what each part received, by stored document id, for the data check.
+        let ledger = DataParityListenerLedger.shared
+        let generation = parity.map { ledger.begin(key: $0.key, organizationId: $0.organizationId, sourceCount: sources.count) }
+        func ledgerRecord(_ index: Int, _ ids: [String], _ fromCache: Bool, _ pending: Bool) {
+            guard let parity, let generation else { return }
+            ledger.record(key: parity.key, generation: generation, source: index, ids: ids, fromCache: fromCache, hasPendingWrites: pending)
+        }
+        func ledgerFailed(_ index: Int) {
+            guard let parity, let generation else { return }
+            ledger.markFailed(key: parity.key, generation: generation, source: index)
+        }
         guard !sources.isEmpty else {
             Task { @MainActor in onChange([], false) }
             return registration
@@ -295,6 +307,7 @@ extension FirebaseBackend {
                         return
                     }
                     NSLog("PLANNED_LISTENER_FAILED label=%@ source=%d attempt=%d error=%@", label, index, attempt, error.localizedDescription)
+                    ledgerFailed(index)
                     // Counted as answered (from cache), so the other sources can still add their rows.
                     deliver(index, [], true)
                     // RULEBOOK 1.26.0: refused by the rules (a security switch the plan did not know about yet, or a
@@ -316,6 +329,7 @@ extension FirebaseBackend {
                     return
                 }
                 guard let snapshot else { return }
+                ledgerRecord(index, snapshot.documents.map(\.documentID), snapshot.metadata.isFromCache, snapshot.metadata.hasPendingWrites)
                 deliver(index, snapshot.documents.map(fromQueryDocument), snapshot.metadata.isFromCache)
             }
             registration.set(index, listener)
@@ -334,6 +348,7 @@ extension FirebaseBackend {
                         return
                     }
                     guard let snapshot else { return }
+                    ledgerRecord(index, snapshot.exists ? [snapshot.documentID] : [], snapshot.metadata.isFromCache, snapshot.metadata.hasPendingWrites)
                     let doc = snapshot.exists ? fromDocument(snapshot) : nil
                     deliver(index, doc.map { [$0] } ?? [], snapshot.metadata.isFromCache)
                 }
@@ -384,7 +399,8 @@ extension FirebaseBackend {
                 // Keep this listener (it retries on backoff) but let the next re-plan replace it — only this one,
                 // never a newer replacement.
                 if let token = tokenBox.value { registry.markForReattach(key: key, token: token) }
-            }
+            },
+            parity: (key: key, organizationId: orgId)
         ) { [weak self] rows, fromCache in
             guard let self, self.acceptsLiveSnapshot(organizationId: orgId) else { return }
             onChange(rows, fromCache)

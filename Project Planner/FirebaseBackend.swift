@@ -394,6 +394,8 @@ class FirebaseBackend: ObservableObject {
     func stopScheduleLiveListeners() {
         dataParityBookingsListenStart = nil
         dataParityManagerScheduleListenStart = nil
+        DataParityListenerLedger.shared.end(key: "bookings")
+        DataParityListenerLedger.shared.end(key: "managerSiteBookings")
         bookingsLiveListener?.remove()
         bookingsLiveListener = nil
         bookingsLiveListenerTarget = nil
@@ -403,6 +405,7 @@ class FirebaseBackend: ObservableObject {
         managerScheduleLiveListenerTarget = nil
         managerScheduleLiveRequest = nil
         liveListeners.removeAll()
+        DataParityListenerLedger.shared.removeAll()
         JobAccessContext.resetForOrganizationSwitch()
     }
 
@@ -8073,7 +8076,8 @@ class FirebaseBackend: ObservableObject {
                 // lets the next re-plan replace it (removing it cancels the pending retry, so never two listeners).
                 guard let self, self.bookingsLiveListenerTarget == target else { return }
                 self.bookingsLiveListenerTarget = nil
-            }
+            },
+            parity: (key: "bookings", organizationId: orgId)
         ) { [weak self] documents, fromCache in
             guard let self else { return }
             let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
@@ -8300,7 +8304,8 @@ class FirebaseBackend: ObservableObject {
                 // Same as bookings: keep retrying, and let the next re-plan replace it.
                 guard let self, self.managerScheduleLiveListenerTarget == target else { return }
                 self.managerScheduleLiveListenerTarget = nil
-            }
+            },
+            parity: (key: "managerSiteBookings", organizationId: orgId)
         ) { [weak self] documents, fromCache in
             guard let self else { return }
             let currentOrganizationId = self.currentOrganization?.firestoreDocumentId

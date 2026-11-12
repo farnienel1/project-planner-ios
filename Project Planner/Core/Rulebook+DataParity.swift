@@ -7,6 +7,7 @@
 //    - `DATA_PARITY_CHECKS` — the lists checked;
 //    - `dataParityCheck` — server count vs device count per list → mismatches and the lists to reload;
 //    - `dataParityCheckDue` — the throttle (never offline; Check now always);
+//    - `dataParityConfirm`, `DATA_PARITY_CONFIRM_DELAY_MS` — the two-look rule before anything is re-read;
 //    - `dataParityLogEntry`, `dataParityLogAppend` — the device-local record of a check and its re-check;
 //    - `dataParitySummary` — the Settings → Data health text (organisation zone).
 //  Nothing is decided here. When the script does not answer, no list is compared and nothing is reloaded.
@@ -42,7 +43,7 @@ nonisolated struct RulebookDataParityListInput: Sendable {
     var localIds: [String]?
     /// Documents the reader leaves out but the server counts (the legacy placeholder job document).
     var readerDroppedCount: Int = 0
-    /// `notListening` / `documentReads`, when the app did not ask.
+    /// `notListening`, `documentReads`, `pendingWrites` or `awaitingServerSnapshot`, when the app did not compare.
     var skipped: String?
 
     var json: [String: Any] {
@@ -89,6 +90,27 @@ extension CanonicalBusinessEngine {
     private nonisolated static func dataParityChecksConstant() -> [[String: Any]]? {
         guard let rows = constant("DATA_PARITY_CHECKS", as: [RulebookDataParityCheckRow].self) else { return nil }
         return rows.map { ["key": $0.key, "collection": $0.collection, "scope": $0.scope, "windowed": $0.windowed, "label": $0.label] }
+    }
+
+    /// `DATA_PARITY_CONFIRM_DELAY_MS` (5 seconds when the script did not load): the wait before the second look.
+    nonisolated static var dataParityConfirmDelayMs: Double {
+        constant("DATA_PARITY_CONFIRM_DELAY_MS", as: Double.self) ?? 5_000
+    }
+
+    /// `dataParityConfirm({ first, confirm })`: the two-look rule — only the lists the second look found different
+    /// again are re-read. Nil when the script does not answer (nothing is re-read then).
+    nonisolated static func dataParityConfirm(
+        first: RulebookDataParityResult,
+        confirm: RulebookDataParityResult?
+    ) -> RulebookDataParityResult? {
+        let input: [String: Any] = ["first": first.raw, "confirm": confirm.map { $0.raw as Any } ?? NSNull()]
+        guard let raw = callJSON("dataParityConfirm", arguments: [input]) as? [String: Any] else { return nil }
+        return RulebookDataParityResult(
+            ok: raw["ok"] as? Bool ?? false,
+            reloadKeys: raw["reloadKeys"] as? [String] ?? [],
+            checkedKeys: raw["checked"] as? [String] ?? [],
+            raw: raw
+        )
     }
 
     /// `DATA_PARITY_MIN_INTERVAL_MS` (10 minutes when the script did not load).

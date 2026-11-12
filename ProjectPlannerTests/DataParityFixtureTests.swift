@@ -8,7 +8,10 @@ import XCTest
 /// `ProjectWorksMerge.uniqueWorks`) and `ProjectWorksMerge.smallWorksList`, `BookingStore.liveBookingsMerge`, and
 /// `UserStore.liveRosterMerge` with the full reload a server removal triggers — and after every step the held lists
 /// must be exactly `expectedHeld`, `worksListMembership` of the held jobs `expectedVisible`, and `dataParityCheck`
-/// against the database `expectedParityMismatches`. Web runs the same file (`lib/dataParity/dataParityFixture.test.ts`).
+/// against the database `expectedParityMismatches`. `rawLists` (operatives, managers, clients) are held as the
+/// listener's documents through `DataParityListenerLedger.merge` — what `DataParityMonitor` counts — compared with case
+/// kept, and the check is fed exactly what the monitor feeds it (the listener's ids for bookings and the raw lists,
+/// the store's list plus the listener's placeholder for jobs). Web runs the same file (`lib/dataParity/dataParityFixture.test.ts`).
 /// A failure here is an iOS loading layer that drops or keeps a record the database does not agree with. Test data only.
 @MainActor
 final class DataParityFixtureTests: XCTestCase {
@@ -46,6 +49,8 @@ final class DataParityFixtureTests: XCTestCase {
         let fixture = try loadFixture()
         let organizationId = try XCTUnwrap(fixture["organizationId"] as? String)
         let lists = try XCTUnwrap(fixture["lists"] as? [String])
+        let rawLists = fixture["rawLists"] as? [String] ?? []
+        XCTAssertEqual(rawLists, ["operatives", "managers", "clients"])
         let initial = try XCTUnwrap(fixture["initialDatabase"] as? [String: Any])
         var database: [String: Rows] = [:]
         for list in lists { database[list] = rows(initial[list]) }
@@ -55,6 +60,8 @@ final class DataParityFixtureTests: XCTestCase {
         var heldBookings: [Booking] = []
         var rosterDocuments: [AppUser] = []
         var rosterSeen: [String: String] = [:]
+        // What each listener received, by stored id (`DataParityListenerLedger`), as the monitor counts it.
+        var listenerIds: [String: [String]] = [:]
 
         func fingerprint(_ data: [String: Any]) -> String {
             let json = try? JSONSerialization.data(withJSONObject: data, options: [.sortedKeys])
@@ -78,6 +85,11 @@ final class DataParityFixtureTests: XCTestCase {
                 let fromCache = source == "cache"
                 let wanted = Set(event["ids"] as? [String] ?? [])
                 let snapshot: Rows = fromCache ? (database[list] ?? []).filter { wanted.contains($0.id) } : (database[list] ?? [])
+                listenerIds[list] = DataParityListenerLedger.merge(
+                    existing: listenerIds[list] ?? [],
+                    incoming: snapshot.map(\.id),
+                    fromCache: fromCache
+                )
                 switch list {
                 case "projects", "smallWorks":
                     let smallWorks = list == "smallWorks"
@@ -114,6 +126,8 @@ final class DataParityFixtureTests: XCTestCase {
                     if removed && !fromCache {
                         rosterDocuments = users(from: database["users"] ?? [], organizationId: organizationId)
                     }
+                case _ where rawLists.contains(list):
+                    break // held as the listener's documents (`listenerIds`)
                 default:
                     XCTFail("\(stepId): unknown list \(list)")
                 }
@@ -121,16 +135,26 @@ final class DataParityFixtureTests: XCTestCase {
 
             let heldProjects = projects.filter { !$0.isSmallWorksDocument }
             let heldSmallWorks = ProjectWorksMerge.smallWorksList(store: projects, smallWorksDocuments: smallWorksDocuments)
-            let held: [String: [String]] = [
+            var held: [String: [String]] = [
                 "projects": lowerSorted(heldProjects.map(\.documentId)),
                 "smallWorks": lowerSorted(heldSmallWorks.map(\.documentId)),
                 "users": lowerSorted(rosterDocuments.map(\.id)),
                 "bookings": lowerSorted(heldBookings.map(\.documentKey)),
             ]
+            // rawLists keep their stored case: two ids that differ only in case are two documents.
+            for list in rawLists { held[list] = (listenerIds[list] ?? []).sorted() }
             let expectedHeld = step["expectedHeld"] as? [String: [String]] ?? [:]
             for list in lists {
-                XCTAssertEqual(held[list], lowerSorted(expectedHeld[list] ?? []), "\(stepId): \(list) — \(step["description"] as? String ?? "")")
+                let expected = rawLists.contains(list) ? (expectedHeld[list] ?? []).sorted() : lowerSorted(expectedHeld[list] ?? [])
+                XCTAssertEqual(held[list], expected, "\(stepId): \(list) — \(step["description"] as? String ?? "")")
             }
+            // What `DataParityMonitor` gives `dataParityCheck` (ids as stored, never case-folded).
+            var counted: [String: [String]] = [
+                "projects": heldProjects.map(\.documentId),
+                "smallWorks": heldSmallWorks.map(\.documentId),
+                "users": rosterDocuments.map(\.id),
+            ]
+            for list in ["bookings"] + rawLists { counted[list] = listenerIds[list] ?? [] }
             let expectedVisible = step["expectedVisible"] as? [String: [String]] ?? [:]
             XCTAssertEqual(
                 lowerSorted(CanonicalBusinessEngine.worksListMembership(heldProjects, kind: .projects).map(\.documentId)),
@@ -144,15 +168,58 @@ final class DataParityFixtureTests: XCTestCase {
             )
             let check = try XCTUnwrap(CanonicalBusinessEngine.dataParityCheck(lists: lists.map { list in
                 let documents = database[list] ?? []
+                let isJobs = list == "projects" || list == "smallWorks"
                 return RulebookDataParityListInput(
                     key: list,
                     serverCount: documents.count,
-                    localIds: held[list],
-                    readerDroppedCount: documents.filter { $0.id == "INITIAL-PLACEHOLDER" }.count
+                    localIds: counted[list],
+                    readerDroppedCount: isJobs ? (listenerIds[list] ?? []).filter { $0 == "INITIAL-PLACEHOLDER" }.count : 0
                 )
             }), "\(stepId): dataParityCheck did not answer")
             XCTAssertEqual(check.reloadKeys, step["expectedParityMismatches"] as? [String] ?? [], "\(stepId): data check")
         }
+    }
+
+    /// A data check that counted the store's filtered list or folded id case would report a difference that is not
+    /// there; the listener's ids by stored id match the server.
+    func testTheCheckCountsStoredIdsNotTheFilteredStoreList() throws {
+        let fixture = try loadFixture()
+        let initial = try XCTUnwrap(fixture["initialDatabase"] as? [String: Any])
+        for list in fixture["rawLists"] as? [String] ?? [] {
+            let raw = rows(initial[list]).map(\.id)
+            let held = DataParityListenerLedger.merge(existing: [], incoming: raw, fromCache: false)
+            XCTAssertEqual(
+                CanonicalBusinessEngine.dataParityCheck(lists: [RulebookDataParityListInput(key: list, serverCount: raw.count, localIds: held)])?.reloadKeys,
+                [],
+                list
+            )
+            let folded = Array(Set(raw.map { $0.lowercased() }))
+            if folded.count < raw.count {
+                XCTAssertEqual(
+                    CanonicalBusinessEngine.dataParityCheck(lists: [RulebookDataParityListInput(key: list, serverCount: raw.count, localIds: folded)])?.reloadKeys,
+                    [list]
+                )
+            }
+        }
+        // A cache snapshot never drops an id; a server snapshot does.
+        XCTAssertEqual(DataParityListenerLedger.merge(existing: ["a", "b"], incoming: ["b"], fromCache: true), ["a", "b"])
+        XCTAssertEqual(DataParityListenerLedger.merge(existing: ["a", "b"], incoming: [], fromCache: true), ["a", "b"])
+        XCTAssertEqual(DataParityListenerLedger.merge(existing: ["a", "b"], incoming: ["b"], fromCache: false), ["b"])
+    }
+
+    func testTwoLooksBeforeAReload() throws {
+        let first = try XCTUnwrap(CanonicalBusinessEngine.dataParityCheck(lists: [
+            RulebookDataParityListInput(key: "projects", serverCount: 7, localIds: ["a", "b", "c", "d", "e", "f"]),
+            RulebookDataParityListInput(key: "clients", serverCount: 2, localIds: ["x"]),
+        ]))
+        XCTAssertEqual(first.reloadKeys, ["projects", "clients"])
+        let second = CanonicalBusinessEngine.dataParityCheck(lists: [
+            RulebookDataParityListInput(key: "projects", serverCount: 7, localIds: ["a", "b", "c", "d", "e", "f"]),
+            RulebookDataParityListInput(key: "clients", serverCount: 2, localIds: ["x", "y"]),
+        ])
+        XCTAssertEqual(CanonicalBusinessEngine.dataParityConfirm(first: first, confirm: second)?.reloadKeys, ["projects"])
+        XCTAssertEqual(CanonicalBusinessEngine.dataParityConfirm(first: first, confirm: nil)?.reloadKeys, [])
+        XCTAssertGreaterThan(CanonicalBusinessEngine.dataParityConfirmDelayMs, 0)
     }
 
     func testTheCheckPanelIsHiddenUnlessTheSwitchIsOn() {

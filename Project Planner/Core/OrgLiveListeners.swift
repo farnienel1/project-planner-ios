@@ -323,10 +323,14 @@ extension FirebaseBackend {
         let registry = liveListeners
         guard registry.needsAttach(key: key, target: target) else { return }
         let token = LiveListenerToken()
+        // RULEBOOK 1.38.0 §27: what this listener received, by stored document id, for the data check.
+        let ledger = DataParityListenerLedger.shared
+        let generation = ledger.begin(key: key, organizationId: orgId, sourceCount: 1)
         let registration = makeQuery(db.collection("organizations").document(orgId))
             .addSnapshotListener { [weak self] snapshot, error in
                 if let error {
                     NSLog("LIVE_LISTENER_FAILED key=%@ org=%@ error=%@", key, orgId, error.localizedDescription)
+                    ledger.markFailed(key: key, generation: generation, source: 0)
                     Task { @MainActor in
                         if let value = token.value { registry.remove(key: key, token: value) }
                     }
@@ -334,6 +338,14 @@ extension FirebaseBackend {
                 }
                 guard let snapshot else { return }
                 let fromCache = snapshot.metadata.isFromCache
+                ledger.record(
+                    key: key,
+                    generation: generation,
+                    source: 0,
+                    ids: snapshot.documents.map(\.documentID),
+                    fromCache: fromCache,
+                    hasPendingWrites: snapshot.metadata.hasPendingWrites
+                )
                 let rows: LiveDocumentRows = snapshot.documents.map { (id: $0.documentID, data: $0.data()) }
                 Task { @MainActor in
                     guard let self, self.acceptsLiveSnapshot(organizationId: orgId) else { return }
@@ -381,6 +393,7 @@ extension FirebaseBackend {
     /// Stops one keyed listener (a screen that listened while open has closed).
     func stopLiveListener(key: String) {
         liveListeners.remove(key: key)
+        DataParityListenerLedger.shared.end(key: key)
     }
 
     /// Live `materialSendRecords` for one job while its order history is open (`parseMaterialSendRecordDocument`
