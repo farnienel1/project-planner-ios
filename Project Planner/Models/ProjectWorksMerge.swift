@@ -71,6 +71,49 @@ enum ProjectWorksMerge {
         return list
     }
 
+    /// 1.37.1 (owner report 11 Nov: C716's stale `projects` copy deleted). The rows that stand beside a new `projects`
+    /// slice: the store's small works rows, plus every small works document of the last small works read whose id is
+    /// not among them. A small works document whose id a projects document held was folded into that project by
+    /// `uniqueWorks`; when the projects copy goes, it comes back here instead of leaving the store (job lookups,
+    /// pickers and Home) until another small works snapshot or a restart.
+    ///
+    /// Invariant (tested): the result holds only small works rows (never a `projects` row) and each id at most once; the
+    /// store's own small works rows come first and win over a `smallWorksDocuments` copy. `uniqueWorks` then keeps a
+    /// project over a small works row of the same id, so a live twin stays folded. `smallWorksDocuments` must lose a job
+    /// deleted on this device (`ProjectStore.deleteProject` trims it), or this would bring it back.
+    static func smallWorksBesideProjects(store: [Project], smallWorksDocuments: [Project]) -> [Project] {
+        var rows = store.filter { $0.isSmallWorksDocument }
+        var listed = Set(rows.map(\.id))
+        for document in smallWorksDocuments where document.isSmallWorksDocument && listed.insert(document.id).inserted {
+            rows.append(document)
+        }
+        return rows
+    }
+
+    /// 1.37.1 (owner report 11 Nov: 1 Carnaby Street missing on iOS until a cold start). The rows a server snapshot of
+    /// one collection no longer holds. Nothing else in a session reads that collection again, so each one is checked
+    /// with a server read of its own document before it leaves the store for good (`ProjectStore.confirmJobs`).
+    static func removedRows(existingSlice: [Project], nextSlice: [Project]) -> [Project] {
+        let kept = Set(nextSlice.map { "\($0.sourceCollection.rawValue)|\($0.id.uuidString)" })
+        return existingSlice.filter { !kept.contains("\($0.sourceCollection.rawValue)|\($0.id.uuidString)") }
+    }
+
+    /// 1.37.1: what a one-off load (`ProjectStore.loadData`) does with its read of one collection. Without a listener
+    /// server snapshot during the read, the read is the slice (`slice` = `remote`; nothing to confirm). With one, the
+    /// live slice is newer and stays (`slice` nil: keep what the store has), and every job the read holds that the live
+    /// slice lacks is returned in `toConfirm` for a server read of its own document — so pull-to-refresh and Force
+    /// Reload still heal a short list, but an older read (possibly the device cache) never replaces live data.
+    static func loadSlice(
+        remote: [Project]?,
+        liveServerSnapshotDuringLoad: Bool,
+        currentSlice: [Project]
+    ) -> (slice: [Project]?, toConfirm: [Project]) {
+        guard liveServerSnapshotDuringLoad else { return (remote, []) }
+        guard let remote else { return (nil, []) }
+        let listed = Set(currentSlice.map { "\($0.sourceCollection.rawValue)|\($0.id.uuidString)" })
+        return (nil, remote.filter { !listed.contains("\($0.sourceCollection.rawValue)|\($0.id.uuidString)") })
+    }
+
     /// Merge one collection (projects or small works) without letting an empty/failed
     /// remote snapshot wipe jobs that are already in memory or on disk.
     static func mergeWorkSlice(

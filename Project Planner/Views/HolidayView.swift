@@ -340,16 +340,26 @@ struct HolidayView: View {
                 Text(bankHolidayTooltip ?? "")
                     .font(.body)
                     .foregroundStyle(AnnualLeavePalette.ink2)
-                Button("Close") { bankHolidayTooltip = nil }
-                    .accessibilityIdentifier("leave.close")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(AnnualLeavePalette.soft)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // The whole pill is the button: the padding and fill sit inside the label, so a tap anywhere on it
+                // closes the sheet. Before, they were outside the Button and only the word "Close" took the tap.
+                Button {
+                    bankHolidayTooltip = nil
+                } label: {
+                    Text("Close")
+                        .font(.headline)
+                        .foregroundStyle(Color.accentColor)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(AnnualLeavePalette.soft)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("leave.close")
             }
             .padding(20)
-            .presentationDetents([.height(220)])
+            // `.medium` lets the sheet grow when larger text pushes the button past 220 points.
+            .presentationDetents([.height(220), .medium])
         }
         .onChange(of: userStore.currentUser?.id) { _, _ in
             if !(isRequestMode || canApproveRequests), activeSection != .calendar {
@@ -618,7 +628,7 @@ struct HolidayView: View {
                     Text("\(away)")
                         .font(.system(.largeTitle, design: .rounded).weight(.bold))
                         .monospacedDigit()
-                    Text("away today")
+                    Text("Away today")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(PPColor.onNavySecondary)
                 }

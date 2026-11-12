@@ -49,6 +49,42 @@ class ProjectStore: ObservableObject {
     /// Jobs and clients this device just created whose save has not finished. A listener snapshot taken before
     /// the create reached Firestore must not drop them (the create would then never be written).
     private var pendingCreateIds = Set<UUID>()
+    /// Server snapshots each job listener delivered (`false` projects, `true` small works). `loadData` compares the
+    /// count before and after its read, so an older one-off read never replaces a newer listener snapshot.
+    private var liveServerSnapshots: [Bool: Int] = [:]
+    /// Jobs this device deleted (`collection|id`): a removal check never puts one back.
+    private var locallyDeletedJobKeys = Set<String>()
+    /// Bumped on an organisation switch: a removal check started for the previous company never restores into the next.
+    private var organizationEpoch = 0
+
+    /// What a server read of one job document found (`confirmJobs`).
+    enum ServerJobRead: Equatable {
+        case exists(Project)
+        case gone
+        /// The read failed (offline, refused): nothing is concluded and the row stays removed.
+        case unknown
+    }
+
+    /// Reads one job document from the server (never the device cache). Tests replace it; the app uses
+    /// `FirebaseBackend.readJobDocumentFromServer`.
+    var serverJobRead: ((_ smallWorks: Bool, _ documentId: String) async -> ServerJobRead)?
+    /// The last removal check, so tests can wait for it.
+    private(set) var removalCheckTask: Task<Void, Never>?
+    /// Whether this viewer's job listener reads the whole collection (`jobQueryPlan` "all"). Tests replace it; the app
+    /// asks `FirebaseBackend.jobReadSources`.
+    var readsWholeJobCollectionCheck: ((_ smallWorks: Bool) -> Bool)?
+    /// Jobs (`collection|id`) a server read confirmed still exist after a snapshot dropped them, with when. Within
+    /// `confirmedJobKeepSeconds` a later snapshot that drops one again keeps it without another read (no flicker and no
+    /// read loop while the listener's view still lacks it); after that it is read again. A `.gone` read or a local
+    /// delete removes the entry.
+    private var confirmedLiveJobs: [String: Date] = [:]
+    static let confirmedJobKeepSeconds: TimeInterval = 300
+    /// The clock for `confirmedLiveJobs` (tests move it).
+    var now: () -> Date = { Date() }
+
+    private static func jobKey(_ job: Project) -> String {
+        "\(job.sourceCollection.rawValue)|\(job.id.uuidString)"
+    }
 
     private func isPermissionDeniedError(_ error: Error?) -> Bool {
         guard let nsError = error as NSError? else { return false }
@@ -226,7 +262,8 @@ class ProjectStore: ObservableObject {
                         print("🔥🔥🔥 DEBUG: Organization name: \(firebaseBackend.currentOrganization?.name ?? "N/A")")
                         
                         // Load projects/small works from Firebase, but never wipe existing in-memory data on failed reads.
-                        let existingProjectsBeforeLoad = self.projects
+                        // 1.37.1: a listener server snapshot that arrives while this read runs is newer than it.
+                        let (liveProjectsAtStart, liveSmallWorksAtStart) = self.liveServerSnapshotCounts
                         async let projectsOutcome: Result<[Project], Error> = {
                             do {
                                 let items = try await withTimeout(seconds: 10) {
@@ -308,21 +345,13 @@ class ProjectStore: ObservableObject {
                         let cachedProjects = diskCache.projects.filter { !$0.isSmallWorksDocument }
                         let cachedSmallWorks = diskCache.projects.filter { $0.isSmallWorksDocument }
                         guard loadGeneration == generation else { return }
-                        var merged = existingProjectsBeforeLoad
-                        merged = ProjectWorksMerge.mergeWorkSlice(
-                            existingAll: merged,
-                            remoteSlice: projectsLoaded ? firebaseProjects : nil,
-                            cachedSlice: cachedProjects,
-                            isSmallWorks: false
+                        let merged = self.applyWorkLoad(
+                            remoteProjects: projectsLoaded ? firebaseProjects : nil,
+                            remoteSmallWorks: smallWorksLoaded ? firebaseSmallWorks : nil,
+                            liveSnapshotsAtStart: (projects: liveProjectsAtStart, smallWorks: liveSmallWorksAtStart),
+                            cachedProjects: cachedProjects,
+                            cachedSmallWorks: cachedSmallWorks
                         )
-                        merged = ProjectWorksMerge.mergeWorkSlice(
-                            existingAll: merged,
-                            remoteSlice: smallWorksLoaded ? firebaseSmallWorks : nil,
-                            cachedSlice: cachedSmallWorks,
-                            isSmallWorks: true
-                        )
-                        if smallWorksLoaded { self.smallWorksDocuments = firebaseSmallWorks }
-                        self.projects = merged
                         let usedFallback =
                             (!projectsLoaded || (firebaseProjects.isEmpty && merged.contains { !$0.isSmallWorksDocument })) ||
                             (!smallWorksLoaded || (firebaseSmallWorks.isEmpty && merged.contains { $0.isSmallWorksDocument }))
@@ -558,17 +587,71 @@ class ProjectStore: ObservableObject {
         }
     }
 
+    /// The listener server snapshots counted so far (`projects`, `smallWorks`); `loadData` records them before its read.
+    var liveServerSnapshotCounts: (projects: Int, smallWorks: Int) {
+        (liveServerSnapshots[false, default: 0], liveServerSnapshots[true, default: 0])
+    }
+
+    /// 1.37.1: puts a one-off load's reads into the store and returns the store. It starts from the store as it is now,
+    /// not as it was before the read. A collection whose listener delivered a server snapshot during the read keeps that
+    /// live slice (the read is older and may be the device cache, `ProjectWorksMerge.loadSlice`), and each job the read
+    /// holds that the live slice lacks is confirmed with a server read of its own document (`confirmJobs`), so
+    /// pull-to-refresh and Force Reload still heal a short list. Nil `remote…` means that read failed.
+    @discardableResult
+    func applyWorkLoad(
+        remoteProjects: [Project]?,
+        remoteSmallWorks: [Project]?,
+        liveSnapshotsAtStart: (projects: Int, smallWorks: Int),
+        cachedProjects: [Project] = [],
+        cachedSmallWorks: [Project] = []
+    ) -> [Project] {
+        let liveNow = liveServerSnapshotCounts
+        let projectsLoad = ProjectWorksMerge.loadSlice(
+            remote: remoteProjects,
+            liveServerSnapshotDuringLoad: liveNow.projects != liveSnapshotsAtStart.projects,
+            currentSlice: projects.filter { !$0.isSmallWorksDocument }
+        )
+        let liveSmallWorksDuringLoad = liveNow.smallWorks != liveSnapshotsAtStart.smallWorks
+        let smallWorksLoad = ProjectWorksMerge.loadSlice(
+            remote: remoteSmallWorks,
+            liveServerSnapshotDuringLoad: liveSmallWorksDuringLoad,
+            currentSlice: projects.filter { $0.isSmallWorksDocument }
+        )
+        var merged = projects
+        merged = ProjectWorksMerge.mergeWorkSlice(
+            existingAll: merged,
+            remoteSlice: projectsLoad.slice,
+            cachedSlice: cachedProjects,
+            isSmallWorks: false
+        )
+        merged = ProjectWorksMerge.mergeWorkSlice(
+            existingAll: merged,
+            remoteSlice: smallWorksLoad.slice,
+            cachedSlice: cachedSmallWorks,
+            isSmallWorks: true
+        )
+        if let remoteSmallWorks, !liveSmallWorksDuringLoad { smallWorksDocuments = remoteSmallWorks }
+        projects = merged
+        if !projectsLoad.toConfirm.isEmpty { confirmJobs(projectsLoad.toConfirm, smallWorks: false) }
+        if !smallWorksLoad.toConfirm.isEmpty { confirmJobs(smallWorksLoad.toConfirm, smallWorks: true) }
+        return merged
+    }
+
     /// The result of one listener snapshot for one collection's slice (`liveWorkSliceResult`).
     struct LiveWorkSliceResult {
         /// The store's job list after the snapshot; nil when the slice did not change.
         var projects: [Project]?
         /// The last read of the `smallWorks` collection (`ProjectWorksMerge.smallWorksList`); nil when unchanged.
         var smallWorksDocuments: [Project]?
+        /// 1.37.1: jobs a server snapshot dropped that the store reads again from the server (`confirmJobs`).
+        var toConfirm: [Project] = []
     }
 
     /// One collection's slice of `projects` (projects or small works) from a listener snapshot — the pure part of
     /// `applyLiveWorkSlice`, so the data-parity fixture (RULEBOOK 1.38.0 §27, `DataParityFixtureTests`) runs this
-    /// exact code. Nil when the snapshot must not change anything (`LiveSnapshotMerge.apply`).
+    /// exact code. Nil when the snapshot must not change anything (`LiveSnapshotMerge.apply`). `keepDropped` says
+    /// whether a job a server snapshot dropped stays because a server read confirmed it recently (1.37.1); the rest
+    /// of the dropped jobs are returned in `toConfirm` when `wholeCollection` is true.
     static func liveWorkSliceResult(
         projects: [Project],
         smallWorksDocuments: [Project],
@@ -576,7 +659,9 @@ class ProjectStore: ObservableObject {
         smallWorks: Bool,
         fromCache: Bool,
         rowCount: Int,
-        pendingCreateIds: Set<UUID>
+        pendingCreateIds: Set<UUID>,
+        wholeCollection: Bool = false,
+        keepDropped: (Project) -> Bool = { _ in false }
     ) -> LiveWorkSliceResult? {
         let existingSlice = projects.filter { ($0.isSmallWorksDocument) == smallWorks }
         guard var nextSlice = LiveSnapshotMerge.apply(
@@ -587,18 +672,35 @@ class ProjectStore: ObservableObject {
             collection: smallWorks ? "smallWorks" : "projects"
         ) else { return nil }
         var result = LiveWorkSliceResult()
+        if !fromCache {
+            // A job a server read confirmed recently stays (no flicker, no read); any other dropped job is read again.
+            for job in ProjectWorksMerge.removedRows(existingSlice: existingSlice, nextSlice: nextSlice)
+                where !pendingCreateIds.contains(job.id) {
+                if wholeCollection, keepDropped(job) {
+                    nextSlice.append(job)
+                } else {
+                    result.toConfirm.append(job)
+                }
+            }
+            if !wholeCollection { result.toConfirm = [] }
+        }
         if smallWorks, smallWorksDocuments != nextSlice { result.smallWorksDocuments = nextSlice }
         let incomingIds = Set(nextSlice.map(\.id))
         nextSlice += existingSlice.filter { pendingCreateIds.contains($0.id) && !incomingIds.contains($0.id) }
         if nextSlice != existingSlice {
-            let others = projects.filter { ($0.isSmallWorksDocument) != smallWorks }
+            // 1.37.1: beside a new projects slice, the small works documents a projects twin had hidden come back.
+            let others = smallWorks
+                ? projects.filter { !$0.isSmallWorksDocument }
+                : ProjectWorksMerge.smallWorksBesideProjects(store: projects, smallWorksDocuments: result.smallWorksDocuments ?? smallWorksDocuments)
             result.projects = ProjectWorksMerge.uniqueWorks(others + nextSlice)
         }
         return result
     }
 
     /// One collection's slice of `projects` (projects or small works) from a listener snapshot.
-    private func applyLiveWorkSlice(_ incoming: [Project], smallWorks: Bool, fromCache: Bool, rowCount: Int) {
+    func applyLiveWorkSlice(_ incoming: [Project], smallWorks: Bool, fromCache: Bool, rowCount: Int) {
+        let wholeCollection = fromCache ? false : readsWholeJobCollection(smallWorks: smallWorks)
+        let nowDate = now()
         guard let result = Self.liveWorkSliceResult(
             projects: projects,
             smallWorksDocuments: smallWorksDocuments,
@@ -606,13 +708,119 @@ class ProjectStore: ObservableObject {
             smallWorks: smallWorks,
             fromCache: fromCache,
             rowCount: rowCount,
-            pendingCreateIds: pendingCreateIds
+            pendingCreateIds: pendingCreateIds,
+            wholeCollection: wholeCollection,
+            keepDropped: { job in
+                let key = Self.jobKey(job)
+                guard !self.locallyDeletedJobKeys.contains(key),
+                      let confirmedAt = self.confirmedLiveJobs[key],
+                      nowDate.timeIntervalSince(confirmedAt) < Self.confirmedJobKeepSeconds else { return false }
+                NSLog(
+                    "JOB_SNAPSHOT_DROPPED_CONFIRMED_DOCUMENT collection=%@ id=%@ kept (confirmed %.0f s ago)",
+                    smallWorks ? "smallWorks" : "projects",
+                    job.documentId,
+                    nowDate.timeIntervalSince(confirmedAt)
+                )
+                return true
+            }
         ) else { return }
+        if !fromCache { liveServerSnapshots[smallWorks, default: 0] += 1 }
+        if !result.toConfirm.isEmpty { confirmJobs(result.toConfirm, smallWorks: smallWorks) }
         if let documents = result.smallWorksDocuments { smallWorksDocuments = documents }
         guard let next = result.projects else { return }
         projects = next
         if !fromCache { lastWorkLoadUnreliable = false }
         persistLiveSnapshotLocally()
+    }
+
+    /// True when this viewer's job listener is the whole collection (`jobQueryPlan` "all": admins and managers). An
+    /// operative's plan is single documents, and a job that leaves it left on purpose, so nothing is read again.
+    private func readsWholeJobCollection(smallWorks: Bool) -> Bool {
+        if let readsWholeJobCollectionCheck { return readsWholeJobCollectionCheck(smallWorks) }
+        guard let backend = firebaseBackend, let orgId = backend.currentOrganization?.firestoreDocumentId else { return true }
+        return backend.jobReadSources(organizationId: orgId, collection: smallWorks ? "smallWorks" : "projects").signature == "all"
+    }
+
+    /// 1.37.1 (owner report 11 Nov: 1 Carnaby Street missing until a cold start). A server snapshot left these jobs
+    /// out, or a one-off load found them while a listener snapshot without them arrived. The store has no other
+    /// in-session read of the collection, so a snapshot that dropped a job the server still holds (the SDK can drop a
+    /// document from a live query, for example when a rules or token change refuses its re-check) used to keep it off
+    /// every list until the app restarted. Each one is read again from the server; one that still exists is put back
+    /// (the read also refreshes the device cache, so the listener's next snapshot holds it) and remembered for
+    /// `confirmedJobKeepSeconds`.
+    ///
+    /// Nothing is restored when, after the read: the organisation changed (epoch or open organisation id), the viewer
+    /// no longer reads the whole collection (a manager made an operative: the per-document plan would never remove it),
+    /// the job was deleted on this device, the server said it is gone or the read failed. When a newer server snapshot of
+    /// the collection arrived during the read, the job is read once more against it (it would not be checked again:
+    /// that snapshot's removals are taken from a store already without it); a second change skips it.
+    private func confirmJobs(_ candidates: [Project], smallWorks: Bool) {
+        let epoch = organizationEpoch
+        let backend = firebaseBackend
+        let orgId = backend?.currentOrganization?.firestoreDocumentId
+        let read: (Bool, String) async -> ServerJobRead = serverJobRead ?? { small, documentId in
+            guard let backend, let orgId else { return .unknown }
+            return await backend.readJobDocumentFromServer(organizationId: orgId, smallWorks: small, documentId: documentId)
+        }
+        let previous = removalCheckTask
+        removalCheckTask = Task { @MainActor [weak self] in
+            await previous?.value
+            for job in candidates {
+                guard let self else { return }
+                let key = Self.jobKey(job)
+                var restored: Project?
+                for attempt in 1...2 {
+                    guard self.restoreStillAllowed(key: key, epoch: epoch, orgId: orgId, smallWorks: smallWorks) else { break }
+                    let stamp = self.liveServerSnapshots[smallWorks, default: 0]
+                    let result = await read(smallWorks, job.documentId)
+                    guard self.restoreStillAllowed(key: key, epoch: epoch, orgId: orgId, smallWorks: smallWorks) else { break }
+                    switch result {
+                    case .gone:
+                        self.confirmedLiveJobs[key] = nil
+                    case .unknown:
+                        break
+                    case let .exists(fresh):
+                        guard fresh.isSmallWorksDocument == smallWorks else { break }
+                        if self.liveServerSnapshots[smallWorks, default: 0] != stamp {
+                            NSLog(
+                                "JOB_RESTORE_SKIPPED_NEWER_SNAPSHOT collection=%@ id=%@ attempt=%ld",
+                                smallWorks ? "smallWorks" : "projects",
+                                fresh.documentId,
+                                attempt
+                            )
+                            continue
+                        }
+                        restored = fresh
+                    }
+                    break
+                }
+                guard let fresh = restored else { continue }
+                let sameRecord: (Project) -> Bool = { $0.id == fresh.id && $0.sourceCollection == fresh.sourceCollection }
+                if smallWorks, !self.smallWorksDocuments.contains(where: sameRecord) {
+                    self.smallWorksDocuments.append(fresh)
+                }
+                let repeatRestore = self.confirmedLiveJobs[key] != nil
+                self.confirmedLiveJobs[key] = self.now()
+                guard !self.projects.contains(where: sameRecord) else { continue }
+                NSLog(
+                    "JOB_SNAPSHOT_DROPPED_LIVE_DOCUMENT collection=%@ id=%@ restored from a server read%@",
+                    smallWorks ? "smallWorks" : "projects",
+                    fresh.documentId,
+                    repeatRestore ? " (again)" : ""
+                )
+                self.projects = ProjectWorksMerge.uniqueWorks(self.projects + [fresh])
+                self.persistLiveSnapshotLocally()
+            }
+        }
+    }
+
+    /// A removal check may still restore `key`: same organisation (epoch and open organisation id), the viewer still
+    /// reads the whole collection, and the job was not deleted on this device.
+    private func restoreStillAllowed(key: String, epoch: Int, orgId: String?, smallWorks: Bool) -> Bool {
+        organizationEpoch == epoch
+            && firebaseBackend?.currentOrganization?.firestoreDocumentId == orgId
+            && readsWholeJobCollection(smallWorks: smallWorks)
+            && !locallyDeletedJobKeys.contains(key)
     }
 
     private func persistLiveSnapshotLocally() {
@@ -624,6 +832,10 @@ class ProjectStore: ObservableObject {
 
     func discardInMemoryForOrganizationSwitch() {
         loadGeneration += 1
+        organizationEpoch += 1
+        liveServerSnapshots = [:]
+        locallyDeletedJobKeys = []
+        confirmedLiveJobs = [:]
         pendingReloadAfterCurrentLoad = false
         isLoading = false
         finishedLoadOrganizationId = nil
@@ -933,6 +1145,10 @@ class ProjectStore: ObservableObject {
         let projectName = project.siteName
         // Only this collection's row: a project and a small works document may share an id (`smallWorksList`).
         let isSmallWorks = project.isSmallWorksDocument
+        // 1.37.1: a removal check (`confirmJobs`) never puts back a job deleted here, and the small works read
+        // (`smallWorksDocuments`) loses it too, so `smallWorksBesideProjects` cannot bring it back.
+        locallyDeletedJobKeys.insert(Self.jobKey(project))
+        confirmedLiveJobs[Self.jobKey(project)] = nil
         projects.removeAll { $0.id == project.id && ($0.isSmallWorksDocument) == isSmallWorks }
         if isSmallWorks { smallWorksDocuments.removeAll { $0.id == project.id } }
         

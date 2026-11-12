@@ -709,7 +709,11 @@ struct ProjectDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 schedulingNavyHeader
                 VStack(alignment: .leading, spacing: 14) {
-                    schedulingDualActions
+                    // RULEBOOK §2 `canWriteBooking`: one answer per render for both cards.
+                    schedulingDualActions(
+                        mayBookPeople: schedulingTapAction(.scheduleDay(subcontractor: false)) == .openScheduler,
+                        mayBookSub: schedulingTapAction(.scheduleDay(subcontractor: true)) == .openScheduler
+                    )
                         .padding(.top, 16)
                     schedulingWeekOverviewSection
                 }
@@ -871,11 +875,13 @@ struct ProjectDetailView: View {
         return (opIds.count + mgrIds.count, subIds.count)
     }
 
-    private var schedulingDualActions: some View {
+    private func schedulingDualActions(mayBookPeople: Bool, mayBookSub: Bool) -> some View {
         // Both cards share PPBookingActionCardLabel + PPBookingActionCardButtonStyle; the vertical fixedSize lets
         // each card fill the taller card's height so "Book people" and "Book a sub" always match.
+        // RULEBOOK §2 `canWriteBooking`: the cards open the booking screens only where the save would be allowed.
         HStack(alignment: .top, spacing: 10) {
             Button(action: {
+                guard mayBookPeople else { return }
                 scheduleOperativeSeedBooking = nil
                 scheduleOperativeGroupId = nil
                 showingScheduleOperative = true
@@ -884,11 +890,18 @@ struct ProjectDetailView: View {
             }
             .accessibilityIdentifier("projectDetail.person2Fill")
             .buttonStyle(PPBookingActionCardButtonStyle())
-            Button(action: { showingScheduleSubcontractor = true }) {
+            .disabled(!mayBookPeople)
+            .opacity(mayBookPeople ? 1 : 0.4)
+            Button(action: {
+                guard mayBookSub else { return }
+                showingScheduleSubcontractor = true
+            }) {
                 PPBookingActionCardLabel(title: "Book a sub", subtitle: "Subcontractors", symbol: "building.2.fill", family: .people)
             }
             .accessibilityIdentifier("projectDetail.building2Fill")
             .buttonStyle(PPBookingActionCardButtonStyle())
+            .disabled(!mayBookSub)
+            .opacity(mayBookSub ? 1 : 0.4)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -914,7 +927,8 @@ struct ProjectDetailView: View {
         let subRows = schedulingSubcontractorRows
         return VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 0) {
-                schedulingGridHeader
+                // The rows are built once per render and shared with the day counts.
+                schedulingGridHeader(counts: schedulingDayHeadcounts(staffRows: staffRows, subRows: subRows))
                 schedulingSectionLabel(
                     "Operatives & managers",
                     count: staffRows.isEmpty ? nil : "\(staffRows.count) \(staffRows.count == 1 ? "person" : "people")"
@@ -926,16 +940,11 @@ struct ProjectDetailView: View {
                         schedulingPersonGridRow(row)
                     }
                 }
-                schedulingSectionLabel(
-                    "Subcontractors",
-                    count: subRows.isEmpty ? nil : "\(subRows.count)"
-                )
-                .padding(.top, 8)
-                if subRows.isEmpty {
-                    schedulingEmptyRow("No subcontractors booked this week") {
-                        showingScheduleSubcontractor = true
-                    }
-                } else {
+                // Owner 11 Nov: no Subcontractors section on a week with no subcontractor booked; the "Book a sub"
+                // card above is the way in. A week with one shows the section as before.
+                if ScheduleWeekGrid.showsSubcontractorSection(subRows.map(\.person)) {
+                    schedulingSectionLabel("Subcontractors", count: "\(subRows.count)")
+                        .padding(.top, 8)
                     ForEach(subRows) { row in
                         schedulingPersonGridRow(row)
                     }
@@ -1001,8 +1010,8 @@ struct ProjectDetailView: View {
 
     private var schedulingPersonColumnWidth: CGFloat { 92 }
 
-    private var schedulingDayHeadcounts: [Int] {
-        let rows = schedulingOpsAndManagersRows + schedulingSubcontractorRows
+    private func schedulingDayHeadcounts(staffRows: [SchedulingGridPersonRow], subRows: [SchedulingGridPersonRow]) -> [Int] {
+        let rows = staffRows + subRows
         return (0..<weekDays.count).map { index in
             rows.filter { row in
                 guard index < row.days.count else { return false }
@@ -1029,7 +1038,7 @@ struct ProjectDetailView: View {
             operatives: operativeStore.allOperatives,
             users: userStore.organizationUsers
         ).map { person -> (ScheduleWeekPerson, SchedulingGridPersonKind) in
-            let kind: SchedulingGridPersonKind = person.role == .operative
+            let kind: SchedulingGridPersonKind = person.role == .operative || (person.role == .unknown && !person.operativeIds.isEmpty)
                 ? .operative(person.saveOperativeId ?? person.operativeIds.first ?? UUID())
                 : .manager(person.saveUserId ?? person.id)
             return (person, kind)
@@ -1281,9 +1290,8 @@ struct ProjectDetailView: View {
     }
 
     /// Day strip: weekday, date and a count pill per day ("–" when none). Today filled navy, weekends muted.
-    private var schedulingGridHeader: some View {
+    private func schedulingGridHeader(counts: [Int]) -> some View {
         let dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        let counts = schedulingDayHeadcounts
         return HStack(spacing: 4) {
             ForEach(Array(weekDays.enumerated()), id: \.offset) { index, day in
                 let isToday = OrganizationRulebookContext.calendar.isDate(day, inSameDayAs: Date())
@@ -1346,20 +1354,13 @@ struct ProjectDetailView: View {
 
     /// Dashed empty card with the original text; the subcontractor one also offers a Book link (same action as
     /// "Book a sub").
-    private func schedulingEmptyRow(_ message: String, onBook: (() -> Void)? = nil) -> some View {
+    private func schedulingEmptyRow(_ message: String) -> some View {
         HStack(spacing: 8) {
             Text(message)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            if let onBook {
-                Button("Book", action: onBook)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(PPColor.brand)
-                    .accessibilityIdentifier("projectDetail.bookSubEmpty")
-                    .accessibilityHint("Opens Schedule subcontractor")
-            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
@@ -1414,8 +1415,24 @@ struct ProjectDetailView: View {
         .padding(.vertical, 6)
     }
 
+    /// RULEBOOK 1.10.0 §2, §16 `canWriteBooking` for the signed-in account on this job (`ScheduleGridTapGate`): a tap
+    /// opens an editor or quick add only when the save would be allowed; an unknown viewer may do nothing.
+    private func schedulingTapAction(_ tapped: ScheduleGridTapGate.Tapped) -> ScheduleGridTapGate.Action {
+        ScheduleGridTapGate.action(
+            tapped,
+            viewer: userStore.displayJobAccessViewer,
+            job: project,
+            managers: JobAccessContext.managers
+        )
+    }
+
+    private func schedulingManagerTapped(_ booking: ManagerSiteBooking) -> ScheduleGridTapGate.Tapped {
+        .managerBooking(userId: booking.userId, locationType: booking.locationType.rawValue)
+    }
+
     private func handleSchedulingCellTap(row: SchedulingGridPersonRow, day: SchedulingGridDayCell) {
         if let booking = day.operativeBooking {
+            guard schedulingTapAction(.labourBooking) == .edit else { return }
             // 1.33.1 (owner): tapping a person's booking always opens Edit booking for that booking — times on the
             // wheels, Save on the same sheet — even when it was booked with others. Before, a group booking opened the
             // whole Schedule booking screen. The day list's "Edit group" still edits the group.
@@ -1427,6 +1444,7 @@ struct ProjectDetailView: View {
             return
         }
         if let booking = day.managerBooking {
+            guard schedulingTapAction(schedulingManagerTapped(booking)) == .edit else { return }
             bookingEditTarget = .manager(
                 booking: booking,
                 locationTitle: "\(project.jobNumber) \(project.siteName)",
@@ -1435,13 +1453,17 @@ struct ProjectDetailView: View {
             return
         }
         if let booking = day.subcontractorBooking {
+            guard schedulingTapAction(.subcontractorBooking) == .edit else { return }
             subcontractorEditBooking = booking
             return
         }
         if day.kind == .empty, row.role != .subcontractor {
+            let target = ScheduleWeekGrid.saveTarget(for: row.person, jobType: project.isSmallWorksDocument ? .smallWorks : .catA)
+            guard schedulingTapAction(.emptyDay(saveTarget: target)) == .quickAdd else { return }
             quickAddRequest = QuickAddRequest(person: row.person, day: day.date)
             return
         }
+        guard schedulingTapAction(.scheduleDay(subcontractor: row.role == .subcontractor)) == .openScheduler else { return }
         switch row.personKind {
         case .operative, .manager:
             scheduleOperativeSeedBooking = nil
@@ -1457,6 +1479,7 @@ struct ProjectDetailView: View {
         case .blue: return ProjectWorksRevampColors.blue
         case .green: return ProjectWorksRevampColors.activeGreen
         case .purple: return SchedulingV2Palette.subsBtn
+        case .grey: return ProjectWorksRevampColors.muted
         }
     }
 
@@ -1929,6 +1952,7 @@ struct ProjectDetailView: View {
             if isGroup, let groupId = rows.first?.bookingGroupId {
                 VStack(alignment: .leading, spacing: 4) {
                     Button {
+                        guard schedulingTapAction(.scheduleDay(subcontractor: false)) == .openScheduler else { return }
                         scheduleOperativeSeedBooking = nil
                         scheduleOperativeGroupId = groupId
                         showingScheduleOperative = true
@@ -1952,6 +1976,8 @@ struct ProjectDetailView: View {
                     .buttonStyle(.plain)
                     ForEach(rows, id: \.id) { booking in
                         schedulingOperativeBookingRow(booking: booking) {
+                            // Detaching writes the booking: only when the save would be allowed.
+                            guard schedulingTapAction(.labourBooking) == .edit else { return }
                             Task { await detachBookingFromGroupAndEdit(booking) }
                         }
                     }
@@ -1959,6 +1985,7 @@ struct ProjectDetailView: View {
             } else {
                 ForEach(rows, id: \.id) { booking in
                     schedulingOperativeBookingRow(booking: booking) {
+                        guard schedulingTapAction(.labourBooking) == .edit else { return }
                         let name = rosterNameForLabourBooking(
                             operativeId: booking.operativeId,
                             operatives: operativeStore.allOperatives,
@@ -2032,6 +2059,7 @@ struct ProjectDetailView: View {
         let p = firebaseBackend.payrollPolicy(for: booking.date)
         let ot = booking.overtimeHoursBeyondPaidStandard(policy: p)
         return Button {
+            guard schedulingTapAction(schedulingManagerTapped(booking)) == .edit else { return }
             bookingEditTarget = .manager(
                 booking: booking,
                 locationTitle: "\(project.jobNumber) \(project.siteName)",
@@ -2073,6 +2101,7 @@ struct ProjectDetailView: View {
         let initials = PlannerUIInitials.from(name)
         let ot = booking.payrollMirrorBooking().overtimeHoursBeyondPaidStandard(policy: firebaseBackend.payrollPolicy(for: booking.date))
         return Button {
+            guard schedulingTapAction(.subcontractorBooking) == .edit else { return }
             subcontractorEditBooking = booking
         } label: {
             HStack(spacing: 8) {

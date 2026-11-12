@@ -633,6 +633,20 @@ class UserStore: ObservableObject {
         }
     }
 
+    /// Whether the roster and the Operatives list must be fetched again from the server (not the copy saved on this
+    /// phone): the signed-in account's level changed (`rosterListKind`, the rulebook's `permissionLevelOf`) or its ID
+    /// token now carries new claims (RULEBOOK 1.32.4 §16, `.authClaimsDidRefresh`). A demoted admin kept the roster and
+    /// catalogue rows read while they were an admin, so names on the Scheduling grid could no longer be resolved.
+    nonisolated static func rosterNeedsFreshLoad(
+        levelBefore: RulebookRosterListKind?,
+        levelAfter: RulebookRosterListKind?,
+        claimsRefreshed: Bool
+    ) -> Bool {
+        if claimsRefreshed { return true }
+        guard let levelBefore, let levelAfter else { return false }
+        return levelBefore != levelAfter
+    }
+
     /// The fetched roster with every row `parseUserDocument` could not read replaced by the row already on screen
     /// for that id (when there is one). Nothing is decided about the person here.
     static func rosterKeepingReadRows(_ fetched: [AppUser], onScreen: [AppUser]) -> [AppUser] {

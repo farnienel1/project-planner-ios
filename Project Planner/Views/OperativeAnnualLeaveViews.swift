@@ -1037,22 +1037,21 @@ struct OperativeAnnualLeaveCalendarView: View {
     }
 
     private var legendRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                legendDot(color: HolidayChrome.taken, label: "Approved full day")
-                legendDot(color: HolidayChrome.halfDayBooked, label: "Approved half day")
-                legendDot(color: HolidayChrome.pending, label: "Pending")
+        // Owner 11 Nov: wrap by whole item (flow layout), never mid-word.
+        PPWrapLayout(spacing: 12) {
+            legendDot(color: HolidayChrome.taken, label: "Approved full day")
+            legendDot(color: HolidayChrome.halfDayBooked, label: "Approved half day")
+            legendDot(color: HolidayChrome.pending, label: "Pending")
+            HStack(spacing: 4) {
+                Circle().stroke(AnnualLeaveCalendarChrome.weekendStroke, lineWidth: 2).frame(width: 8, height: 8)
+                Text("Weekend")
             }
-            HStack(spacing: 12) {
-                HStack(spacing: 4) {
-                    Circle().stroke(AnnualLeaveCalendarChrome.weekendStroke, lineWidth: 2).frame(width: 8, height: 8)
-                    Text("Weekend")
-                }
-                HStack(spacing: 4) {
-                    Circle().stroke(AnnualLeaveCalendarChrome.bankHolidayStroke, lineWidth: 2).frame(width: 8, height: 8)
-                    Text("Bank holiday")
-                }
+            .fixedSize()
+            HStack(spacing: 4) {
+                Circle().stroke(AnnualLeaveCalendarChrome.bankHolidayStroke, lineWidth: 2).frame(width: 8, height: 8)
+                Text("Bank holiday")
             }
+            .fixedSize()
         }
         .font(.caption2)
         .foregroundStyle(HolidayChrome.muted)
@@ -1063,6 +1062,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             Circle().fill(color).frame(width: 8, height: 8)
             Text(label)
         }
+        .fixedSize()
     }
 
     private var monthNavigator: some View {

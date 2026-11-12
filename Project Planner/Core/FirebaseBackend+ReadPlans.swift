@@ -90,6 +90,28 @@ nonisolated final class CompositeListenerRegistration: NSObject, ListenerRegistr
 }
 
 extension FirebaseBackend {
+    /// 1.37.1 (`ProjectStore.confirmRemovedJobs`): one job document read from the server, never the device cache,
+    /// through the same reader as every job (`jobs(fromDocuments:)`, `parseJobDocument`). A failed read (offline,
+    /// refused) is `.unknown`, so nothing is concluded from it.
+    func readJobDocumentFromServer(organizationId: String, smallWorks: Bool, documentId: String) async -> ProjectStore.ServerJobRead {
+        let orgId = normalizedOrganizationId(organizationId)
+        let id = documentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !orgId.isEmpty, !id.isEmpty, !id.contains("/") else { return .unknown }
+        let ref = db.collection("organizations").document(orgId)
+            .collection(smallWorks ? "smallWorks" : "projects").document(documentId)
+        do {
+            let snapshot = try await ref.getDocument(source: .server)
+            guard snapshot.exists, let data = snapshot.data() else { return .gone }
+            guard let job = Self.jobs(fromDocuments: [(id: snapshot.documentID, data: data)], smallWorks: smallWorks).first else {
+                return .unknown
+            }
+            return .exists(job)
+        } catch {
+            NSLog("JOB_SERVER_READ_FAILED id=%@ error=%@", documentId, error.localizedDescription)
+            return .unknown
+        }
+    }
+
     // MARK: Plans → Firestore
 
     /// The job reads for `collection` (`projects` / `smallWorks`): `jobQueryPlan(viewer, { documentIds })`, with the
