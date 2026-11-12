@@ -35,7 +35,22 @@ extension FirebaseBackend {
 final class AnnualLeaveEmploymentModel: ObservableObject {
     /// Per person (and their stored fields): the answer, `nil` inside meaning unreadable (count the whole year).
     @Published private(set) var answers: [String: AnnualLeaveEmployment?] = [:]
+    /// True once `platformConfig/app` has been read, or after a short wait (then the switches read as off, as elsewhere).
+    @Published private(set) var switchesKnown = SecuritySwitchContext.hasRead
     private var inFlight: Set<String> = []
+    private var waitingForSwitches = false
+
+    /// Waits (at most 5 s) for the security switches to be read, then redraws.
+    private func waitForSwitches() {
+        guard !waitingForSwitches else { return }
+        waitingForSwitches = true
+        Task { [weak self] in
+            for _ in 0..<20 where !SecuritySwitchContext.hasRead {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            self?.switchesKnown = true
+        }
+    }
 
     private static func key(_ user: AppUser) -> String {
         let stored = AnnualLeaveEmployment(user)
@@ -47,6 +62,11 @@ final class AnnualLeaveEmploymentModel: ObservableObject {
     /// once (the users document); while it is on, the first call starts the pay-profile read and returns not ready.
     func employment(for user: AppUser, backend: FirebaseBackend) -> (ready: Bool, employment: AnnualLeaveEmployment?) {
         let stored = AnnualLeaveEmployment(user)
+        // Review r306: never decide "privatePay off" before the switch has been read.
+        if !switchesKnown && !SecuritySwitchContext.hasRead {
+            waitForSwitches()
+            return (false, nil)
+        }
         guard SecuritySwitchContext.privatePay else { return (true, stored) }
         let key = Self.key(user)
         if let answer = answers[key] { return (true, answer) }

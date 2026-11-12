@@ -28,6 +28,7 @@ extension Notification.Name {
 nonisolated enum SecuritySwitchContext {
     nonisolated(unsafe) private static var config: [String: Any]?
     nonisolated(unsafe) private static var configKey = "none"
+    nonisolated(unsafe) private static var hasAnswered = false
     private static let lock = NSLock()
     private static let memo = RulebookAnswerMemo<String, SecuritySwitchState>(limit: 32)
     private static let ghostMemo = RulebookAnswerMemo<String, Bool>(limit: 32)
@@ -48,6 +49,14 @@ nonisolated enum SecuritySwitchContext {
     static var current: SecuritySwitchState { switches(organizationId: OrganizationRulebookContext.organizationId) }
     static var enforcedReads: Bool { current.enforcedReads }
     static var privatePay: Bool { current.privatePay }
+
+    /// Whether `platformConfig/app` has been read (or confirmed missing) since launch. RULEBOOK 1.40.0 (review r306):
+    /// a leave balance waits for it, so it is never worked out on "privatePay off" before the switch is known.
+    static var hasRead: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasAnswered
+    }
 
     /// RULEBOOK 1.34.0 §18 (owner decision 7 Nov "1b"): `ghostAccountsEnabled(platformConfig/app, organizationId)` —
     /// whether the Ghost account toggle may show. Not read yet, a missing document or an unanswered script is off.
@@ -76,6 +85,7 @@ nonisolated enum SecuritySwitchContext {
         lock.lock()
         config = next
         configKey = nextKey
+        hasAnswered = true
         lock.unlock()
         if ghostAccounts != ghostBefore {
             DispatchQueue.main.async {

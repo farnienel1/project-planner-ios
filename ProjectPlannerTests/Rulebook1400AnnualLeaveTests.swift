@@ -207,9 +207,9 @@ final class Rulebook1400AnnualLeaveTests: XCTestCase {
         XCTAssertNil(refused)
         let whole = try balance(employment: nil, adjustments: [])
         XCTAssertTrue(whole.hasAllowance)
-        // "PAYE" in capitals reads as PAYE (review r306 #4).
+        // The stored word stays exact (owner question open): "PAYE" in capitals reads as self-employed, as before.
         let capitals = try balance(employment: AnnualLeaveEmployment(employmentType: "PAYE"), adjustments: [])
-        XCTAssertTrue(capitals.hasAllowance)
+        XCTAssertFalse(capitals.hasAllowance)
     }
 
     func testBalanceNotesNameTheTypeOnlyForPayViewersAndTheBalanceCarriesTheShownSums() throws {
