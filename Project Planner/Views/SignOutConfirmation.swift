@@ -40,8 +40,12 @@ private struct SignOutConfirmationModifier: ViewModifier {
                     Button("Sync now") {
                         isSyncing = true
                         Task { @MainActor in
-                            _ = await OfflineSyncCoordinator.processOutbox(firebaseBackend: firebaseBackend)
-                            await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)
+                            // The device's one sync guard: if a background pass is sending now, this waits for it
+                            // (and runs once more after it) instead of a second pass sending the same items.
+                            await SingleFlight.offlineSync.run {
+                                _ = await OfflineSyncCoordinator.processOutbox(firebaseBackend: firebaseBackend)
+                                await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)
+                            }
                             isSyncing = false
                             if PendingSyncCount.current > 0 {
                                 // Still waiting (offline or refused): ask again with the new count.
@@ -53,7 +57,11 @@ private struct SignOutConfirmationModifier: ViewModifier {
                     }
                     .accessibilityIdentifier("\(idPrefix).syncNow")
                     Button("Sign out anyway", role: .destructive) {
-                        AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
+                        Task { @MainActor in
+                            // Never discard an item while a pass is sending it: wait for that pass first.
+                            await SingleFlight.offlineSync.waitUntilIdle()
+                            AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
+                        }
                     }
                     .accessibilityIdentifier("\(idPrefix).signOutAnyway")
                     Button("Cancel", role: .cancel) { }

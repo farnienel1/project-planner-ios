@@ -31,6 +31,11 @@ enum OutboxRetryPolicy {
         delays[min(max(pass, 0), delays.count - 1)]
     }
 
+    /// A newly queued item restarts the backoff at the first delay.
+    nonisolated static func restartsBackoff(previousRetryable: Int, retryable: Int) -> Bool {
+        retryable > previousRetryable
+    }
+
     nonisolated static func shouldKeepRetrying(retryableOutboxCount: Int, pendingSiteAudits: Int) -> Bool {
         retryableOutboxCount > 0 || pendingSiteAudits > 0
     }
@@ -41,24 +46,42 @@ enum OutboxRetryPolicy {
     }
 }
 
-/// Runs one async operation at a time: a caller that arrives while it runs waits for that run instead of starting
-/// another. Used for the offline sync, which every trigger (timer, foreground, Retry now, pull-to-refresh,
-/// reconnect) reaches.
+/// Runs one async operation at a time. A caller that arrives while it runs is not dropped: it asks for one more
+/// pass after the running one (callers that arrive together share that one trailing pass, which runs the latest
+/// caller's operation) and waits until it has finished. Used for the offline sync, which every trigger reaches.
 @MainActor
 final class SingleFlight {
+    /// The one offline sync of this device: the timer, foreground, Retry now, pull-to-refresh, reconnect and the
+    /// sign-out "Sync now" all run through it, whichever `SmartCacheService` instance asked.
+    static let offlineSync = SingleFlight()
+
     private var running: Task<Void, Never>?
+    private var trailingOperation: (@MainActor () async -> Void)?
 
     var isRunning: Bool { running != nil }
 
     func run(_ operation: @escaping @MainActor () async -> Void) async {
         if let running {
+            trailingOperation = operation
             await running.value
             return
         }
-        let task = Task { @MainActor in await operation() }
+        let task = Task { @MainActor [weak self] in
+            var next: (@MainActor () async -> Void)? = operation
+            while let current = next {
+                await current()
+                next = self?.trailingOperation
+                self?.trailingOperation = nil
+            }
+        }
         running = task
         await task.value
         running = nil
+    }
+
+    /// Returns once no pass is running (used before a sign-out discards what is left).
+    func waitUntilIdle() async {
+        if let running { await running.value }
     }
 }
 
@@ -95,7 +118,10 @@ class SmartCacheService: ObservableObject {
     /// Runs while the outbox has pending entries (`OutboxRetryPolicy`); stops itself when it is empty.
     private var outboxRetryTask: Task<Void, Never>?
     /// Every sync trigger goes through this, so two passes never run at once.
-    private let syncFlight = SingleFlight()
+    private let syncFlight = SingleFlight.offlineSync
+    private var siteAuditCancellable: AnyCancellable?
+    /// Retryable work seen at the last timer check; more than before = something new was queued.
+    private var lastRetryableTotal = 0
 
     // In-memory cache for offline functionality. Values are stored per organisation
     // so a switch cannot satisfy the next company from the previous company's arrays.
@@ -112,6 +138,12 @@ class SmartCacheService: ObservableObject {
         lastSyncedAt = Self.storedLastSync(organizationId: resolvedOrganizationId())
         refreshOutboxCounts()
         outboxCancellable = OfflineOutboxStore.shared.$entries
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshOutboxCounts()
+            }
+        // A site audit saved offline also counts and starts the retry timer.
+        siteAuditCancellable = SiteAuditOfflineStore.shared.$pending
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.refreshOutboxCounts()
@@ -163,18 +195,25 @@ class SmartCacheService: ObservableObject {
     private var retryableWorkCounts: (outbox: Int, siteAudits: Int) {
         (
             OfflineOutboxStore.shared.autoRetryableCount(signedInUserId: firebaseBackend?.currentUser?.uid),
-            SiteAuditOfflineStore.shared.pendingCount
+            SiteAuditOfflineStore.shared.retryableCount
         )
     }
 
     private func updateOutboxRetryTimer() {
         let counts = retryableWorkCounts
+        let total = counts.outbox + counts.siteAudits
+        defer { lastRetryableTotal = total }
         guard OutboxRetryPolicy.shouldKeepRetrying(retryableOutboxCount: counts.outbox, pendingSiteAudits: counts.siteAudits) else {
             outboxRetryTask?.cancel()
             outboxRetryTask = nil
             return
         }
-        guard outboxRetryTask == nil else { return }
+        if outboxRetryTask != nil {
+            // Something new was queued: start the backoff again from 1 minute.
+            guard OutboxRetryPolicy.restartsBackoff(previousRetryable: lastRetryableTotal, retryable: total) else { return }
+            outboxRetryTask?.cancel()
+            outboxRetryTask = nil
+        }
         outboxRetryTask = Task { @MainActor [weak self] in
             var pass = 0
             while !Task.isCancelled {

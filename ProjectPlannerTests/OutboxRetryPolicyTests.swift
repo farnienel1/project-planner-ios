@@ -11,6 +11,7 @@ private final class SendCounter {
 @MainActor
 final class OutboxRetryPolicyTests: XCTestCase {
     override func tearDown() async throws {
+        OfflineSyncCoordinator.replayTestSeam = nil
         for id in OfflineOutboxStore.shared.claimedEntryIds {
             OfflineOutboxStore.shared.releaseEntryClaim(id: id)
         }
@@ -38,40 +39,73 @@ final class OutboxRetryPolicyTests: XCTestCase {
         XCTAssertFalse(OutboxRetryPolicy.shouldRetryNow(retryableOutboxCount: 0, pendingSiteAudits: 0, isOnline: true, isSyncing: false))
     }
 
-    /// Two sync triggers at once (e.g. the timer and Retry now): the second waits for the first; one send.
-    func testTwoConcurrentSyncCallsRunOnePass() async {
+    func testANewlyQueuedItemRestartsTheBackoff() {
+        XCTAssertTrue(OutboxRetryPolicy.restartsBackoff(previousRetryable: 1, retryable: 2))
+        XCTAssertFalse(OutboxRetryPolicy.restartsBackoff(previousRetryable: 2, retryable: 2))
+        XCTAssertFalse(OutboxRetryPolicy.restartsBackoff(previousRetryable: 2, retryable: 1))
+    }
+
+    /// A trigger that arrives while a pass runs is not dropped: one trailing pass runs after it (callers that arrive
+    /// together share it), and every caller returns only after that.
+    func testTriggersDuringAPassCoalesceIntoOneTrailingPass() async {
         let flight = SingleFlight()
-        let sends = SendCounter()
+        let passes = SendCounter()
         let pass: @MainActor () async -> Void = {
-            sends.value += 1
+            passes.value += 1
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         let first = Task { await flight.run(pass) }
+        await Task.yield()
         let second = Task { await flight.run(pass) }
+        let third = Task { await flight.run(pass) }
         await first.value
         await second.value
-        XCTAssertEqual(sends.value, 1)
+        await third.value
+        XCTAssertEqual(passes.value, 2, "the running pass plus one trailing pass")
         XCTAssertFalse(flight.isRunning)
     }
 
-    /// Two outbox passes over the same queued material email (e.g. sign-out's own pass beside the background sync):
-    /// only the pass that claims the entry sends it.
+    /// Two real outbox passes at once (e.g. sign-out's "Sync now" beside the background sync) over one queued
+    /// material email: it is sent once and leaves the queue.
     func testTwoConcurrentOutboxPassesSendAQueuedEmailOnce() async {
         let outbox = OfflineOutboxStore.shared
-        let queuedEmail = UUID()
+        outbox.clearAll()
+        defer {
+            OfflineSyncCoordinator.replayTestSeam = nil
+            outbox.clearAll()
+        }
+        let request = MaterialOrderRequest(
+            projectId: UUID(),
+            projectNumber: "C646",
+            projectName: "Test site",
+            siteAddress: "",
+            materials: [],
+            requestType: .order,
+            sentBy: "Tester",
+            recipientContacts: [],
+            senderName: "Tester",
+            senderEmail: "tester@example.com"
+        )
+        outbox.enqueueSendMaterialRequest(request, sendRecord: nil, organizationId: "TEST-ORG")
+        XCTAssertEqual(outbox.entries.count, 1)
+
         let sends = SendCounter()
-        let outboxPass: @MainActor () async -> Void = {
-            guard outbox.claimEntryForReplay(id: queuedEmail) else { return }
-            defer { outbox.releaseEntryClaim(id: queuedEmail) }
-            try? await Task.sleep(nanoseconds: 50_000_000)
+        OfflineSyncCoordinator.replayTestSeam = .init(signedInUserId: "tester-uid") { _, _ in
+            try? await Task.sleep(nanoseconds: 80_000_000)
             sends.value += 1
         }
-        let a = Task { await outboxPass() }
-        let b = Task { await outboxPass() }
-        await a.value
-        await b.value
-        XCTAssertEqual(sends.value, 1)
-        XCTAssertTrue(outbox.claimEntryForReplay(id: queuedEmail), "released after the pass")
-        outbox.releaseEntryClaim(id: queuedEmail)
+        let backend = FirebaseBackend()
+        Self.retained.append(backend)
+        let a = Task { await OfflineSyncCoordinator.processOutbox(firebaseBackend: backend, outbox: outbox) }
+        let b = Task { await OfflineSyncCoordinator.processOutbox(firebaseBackend: backend, outbox: outbox) }
+        let first = await a.value
+        let second = await b.value
+        XCTAssertEqual(sends.value, 1, "the email is sent once")
+        XCTAssertEqual(first.synced + second.synced, 1)
+        XCTAssertTrue(outbox.entries.isEmpty)
+        XCTAssertTrue(outbox.claimedEntryIds.isEmpty)
     }
+
+    /// Stores are kept alive for the rest of the run (as in WarningInputsReadinessTests).
+    private static var retained: [AnyObject] = []
 }
